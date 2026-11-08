@@ -71,6 +71,14 @@ fn mouse_report_raw_x10(code: u8, col: usize, row: usize) -> Vec<u8> {
 }
 
 impl App {
+    /// The link under a pane-local grid cell, from the pane's visible line.
+    pub(super) fn link_at(&self, id: u64, pane_row: usize, pane_col: usize) -> Option<String> {
+        let pane = self.pane(id)?;
+        let line = pane.session.screen.line_abs(absolute_row(pane, pane_row)?)?;
+        let chars = crate::search::line_chars(&line);
+        crate::links::link_at(&chars, pane_col)
+    }
+
     /// The pane a drag started in: its press set `drag_anchor`, and a motion elsewhere must not extend it.
     fn drag_pane(&self) -> Option<u64> {
         let tab = self.tabs.get(self.active)?;
@@ -170,6 +178,13 @@ impl App {
             .saturating_sub(rect.y0)
             .min(rect.rows.saturating_sub(1));
         let pane_col = col.saturating_sub(rect.x0).min(rect.cols.saturating_sub(1));
+        // Ctrl+click on a link opens it and consumes the click, so the pane keeps its selection.
+        if inside && event.phase == UiActionPhase::Press && event.button == 1 && event.ctrl_down() {
+            if let Some(url) = self.link_at(target, pane_row, pane_col) {
+                let _ = crate::links::open(&url);
+                return true;
+            }
+        }
         if inside && event.phase == UiActionPhase::Press && event.button == 1 {
             // Clicking a pane gives it the keyboard and the cursor.
             self.focus_pane(target);

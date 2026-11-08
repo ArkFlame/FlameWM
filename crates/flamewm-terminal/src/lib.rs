@@ -4,6 +4,7 @@ pub mod app;
 pub mod fetch;
 pub mod glyphs;
 pub mod keys;
+pub mod links;
 pub mod parser;
 pub mod pool;
 pub mod pty;

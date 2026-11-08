@@ -1010,3 +1010,19 @@ fn ctrl_shift_f_finds_text_in_the_focused_pane() {
     app.key(&key("escape"));
     assert!(app.focused_pane().unwrap().search.is_none(), "Escape closes the bar");
 }
+
+/// Ctrl+click resolves the link under the pointer from the pane's visible line. The click itself is
+/// not sent in tests, because it would start `xdg-open`.
+#[test]
+fn link_under_the_pointer_resolves_from_the_visible_line() {
+    let mut app = test_app();
+    app.open_tab(cat()).expect("tab");
+    let id = {
+        let pane = app.focused_pane_mut().expect("pane");
+        crate::parser::Parser::new().advance(b"go https://a.b/c. now\r\n", &mut pane.session.screen);
+        pane.session.id
+    };
+    assert_eq!(app.link_at(id, 0, 5).as_deref(), Some("https://a.b/c"));
+    assert_eq!(app.link_at(id, 0, 0), None, "plain text is not a link");
+    assert_eq!(app.link_at(id, 0, 20), None, "past the link");
+}
