@@ -349,3 +349,11 @@
 - Unresolved: why the runtime pixel ignores the alpha, and whether the harness model or the product is wrong. `wallpaperMeanRgb` is not the explanation (desktop not running in SS07; wallpaperColor `#232629`).
 - Unit test `d8011c04` pins the ui-core function only, not the runtime pixel.
 - Next: trace the glass blur/tint compositing in the shell renderer for the taskbar `background` node.
+
+### Single-scenario triage (`--only`, host :97, Xephyr :98, HEAD 98f0dce2 + ui-core fix)
+- SS07 colour: still FAIL. Surface fix (`98f0dce2`) changes the pixel at surfaceOpacity 67 to (39,66,96), still non-black. Expected black-backdrop (27,53,80). KNOWN_OPEN, see prior entry.
+- SS03 PASS, SS05 PASS, SS11 PASS, SS12 PASS (isolated).
+- SS06 FAIL `snap_preview_consumer`: preview_before true, preview_after false, changed_fraction 1.27, preview_rect 637x752. Not yet proven border-only-by-design. Open.
+- SS17 NOT_RUN in isolation: required matrix rows (x11_acceptance_all, j07_*, scale_scroll_ss10) need the full run. j07_popup canary flake not reproduced (not run 5x).
+- SS15 NOT_RUN in isolation: `disabled_mode_ends_inert` unverified.
+- Harness fix: `--only` now gates SS01/SS02/SS04/SS13/NATIVE_HOTKEY_INPUT (commit fe3a2b5c).
