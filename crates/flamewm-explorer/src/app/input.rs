@@ -54,6 +54,10 @@ impl ExplorerApp {
             }
             // Pressing anywhere outside an open menu closes it.
             if self.context.is_some() {self.context=None;self.menu_overflow=false;self.context_place=None;}
+            // A press outside the address and search fields blurs them like Escape: nothing is committed or navigated.
+            if matches!(self.edit,Some(EditMode::Path|EditMode::Search)) && !action.starts_with("explorer.address") && !action.starts_with("explorer.search") {
+                self.edit=None;self.context_place=None;
+            }
         }
         if let Some(slot)=action.strip_prefix("explorer.row.").and_then(|v|v.parse::<usize>().ok()) {
             match e.phase {
