@@ -19,7 +19,7 @@ mod xshape;
 pub use accel::{
     AccelerationStatus, PixelOp, RENDER_ACCELERATION_SETTING, RenderAcceleration,
     apply_render_backend_setting, blur_rgba, fill_rounded_rect, paint_batch, probe_gpu_renderer,
-    render_acceleration, render_acceleration_status, render_backend_status,
+    release_if_stale, render_acceleration, render_acceleration_status, render_backend_status,
     set_render_acceleration, stroke_rounded_rect,
 };
 pub use lamp::PanelEdge;
