@@ -20,6 +20,10 @@ measured 960x640 defaults `--ss10-wheel-steps 10 --ss10-scrolled-click 751,573`
 
 Runs the isolated native System Settings acceptance matrix in a private
 Xephyr, private D-Bus session and private XDG directories under DIR.
+G1 display evidence is reported by SS08 (output/mode inventory), SS09
+(resolution/refresh mode changes with 15 s Keep/Revert), and SS10 (125%
+fractional scale, unchanged modes, and persistence after WM restart).
+Arrangement, primary, and orientation require separate native coverage.
 DIR must not exist or must be empty. Writes DIR/result.json.
 EOF
 }
