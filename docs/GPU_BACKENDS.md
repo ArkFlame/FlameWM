@@ -179,3 +179,5 @@ Each phase is a small PR with its own acceptance test. Harness rules apply: one 
 - No source was built or run for this document. Every number comes from the existing measurement docs or the commands listed above.
 - Vulkan build cost, Vulkan PSS, and any AMD or Intel behaviour are unmeasured.
 - The RustWebRender match count for GL and Vulkan terms was 1 file (`xrender.rs`), which is XRender and not a GPU backend.
+
+Spec: [GPU_BACKEND_SPEC.md](GPU_BACKEND_SPEC.md) is the implementation-ready specification and supersedes the design sections above.
