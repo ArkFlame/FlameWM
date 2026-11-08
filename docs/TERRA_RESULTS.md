@@ -340,20 +340,51 @@
 - Not verified live: Log out row and its sheet (no session control service on the isolated display); Lock; Confirm pressed (it would run systemctl suspend on the host); Shift+Enter Reveal; watcher delete and rename events.
 - Risk: the Suspend Confirm row was not executed, so the "Confirm runs the action" path is unit-tested only (`quick.rs` run path). Live log-out remains unverified.
 
-## Settings acceptance triage (SS07 / SS17 / SS03 / SS05 / SS06 / SS11 / SS12 / SS15)
+## Settings acceptance triage (SS07 / SS10 / SS17 / SS06 / SS15) — HEAD f02771be
 
-### SS07 taskbar colour: KNOWN_OPEN
-- Symptom: measured bar pixel (40,69,101) vs harness expectation (27,53,80) (`#284F77` alpha 171 over black). `settings_persistence_after_restart` also false. Run: `--only SS07 --display :98` with host `DISPLAY=:97`, exit 1.
-- Evidence: the bar pixel is identical at `surfaceOpacity` 0 and 100 (both (39,69,99), 5 s settle, probe on a throwaway worktree). It changes when `surfaceColor` changes. It is not proportional to `#284F77` at any single alpha over black. Rows above the bar are pure black.
-- Paint path: shell `settings_projection/project.rs:49` projects `dock_fill` (`flamewm-ui-core/src/surface.rs`). Inherit mode delegates to `surface_fill`, whose alpha comes from the glass material. `glass.rs:5` says `glassOpacityPercent` mirrors `surfaceOpacity`.
-- Unresolved: why the runtime pixel ignores the alpha, and whether the harness model or the product is wrong. `wallpaperMeanRgb` is not the explanation (desktop not running in SS07; wallpaperColor `#232629`).
-- Unit test `d8011c04` pins the ui-core function only, not the runtime pixel.
-- Next: trace the glass blur/tint compositing in the shell renderer for the taskbar `background` node.
+### Fixed this round (product + harness)
+- SS07 taskbar colour: PASS. Product bug fixed in `98f0dce2`: `glass.rs` used stale `glassOpacityPercent` over `surfaceOpacity` when not custom. Harness expectation fixed by a solid black wallpaper in the SS07 transaction (backdrop is the desktop layer, `surface_backdrop.rs`). `settings_persistence_after_restart` PASS in the same run.
+- SS06 snap_preview_consumer: harness classifier fixed. Window-sized move outline plus frame (<= +8 x, <= +48 y) is no longer counted as a snap preview. Control check passes. `test_settings_acceptance_ss06.py`.
+- SS15 parser: typed empty GVariant arrays (`<@aa{sv} []>`) count 0. `test_settings_acceptance_ss15.py`.
+- SS10 mode parser: same typed-empty-array cause (`396d2ba6`). `test_settings_acceptance_ss10.py`. SS10 now PASS: 3/3 sub-checks (`scale_changed_snapshot`, `mode_list_unchanged`, `scale_persisted_after_restart`).
+- SS10 config leak (`f02771be`): SS10 left `scale.default=125` in the shared run config, so the SS17 session started at 125% and the `j07_popup` start-button click missed (`opened=0`). SS10 now restores the pre-run `settings.toml` and restarts the owned WM. Verified: SS17 `j07_popup` True in the post-fix run.
 
-### Single-scenario triage (`--only`, host :97, Xephyr :98, HEAD 98f0dce2 + ui-core fix)
-- SS07 colour: still FAIL. Surface fix (`98f0dce2`) changes the pixel at surfaceOpacity 67 to (39,66,96), still non-black. Expected black-backdrop (27,53,80). KNOWN_OPEN, see prior entry.
-- SS03 PASS, SS05 PASS, SS11 PASS, SS12 PASS (isolated).
-- SS06 FAIL `snap_preview_consumer`: preview_before true, preview_after false, changed_fraction 1.27, preview_rect 637x752. Not yet proven border-only-by-design. Open.
-- SS17 NOT_RUN in isolation: required matrix rows (x11_acceptance_all, j07_*, scale_scroll_ss10) need the full run. j07_popup canary flake not reproduced (not run 5x).
-- SS15 NOT_RUN in isolation: `disabled_mode_ends_inert` unverified.
-- Harness fix: `--only` now gates SS01/SS02/SS04/SS13/NATIVE_HOTKEY_INPUT (commit fe3a2b5c).
+### j07_popup flake (SS17 row)
+- Before SS10 passed: 5/5 `j07_popup` True (no scale change).
+- SS10 running (pre-`f02771be`): 2/2 `j07_popup` False, `opened=0`. Root cause is the config leak above.
+- Post-fix: `j07_popup` True (SS10,SS17 run and SS17-alone run). Only one post-fix sample, so the flake is not statistically cleared.
+
+### SS17 scale_scroll_ss10: NOT_RUN (open)
+- SS17 needs `scale_scroll_ss10`, which SS10 exposes only as `details.scroll` (a wheel-scroll exit code). The Displays page lists 0 modes on this host, so no scroll runs and no `scroll` detail exists. The row cannot be satisfied on this host. Not weakened.
+
+### Full matrix, no `--only` (HEAD f02771be, host :97, Xephyr :98, `$S/run-full/result.json`): VERDICT FAIL, exit 1
+| Scenario | Status | Note |
+|---|---|---|
+| SS00 | PASS | |
+| SS01 | PASS | |
+| SS02 | PASS | |
+| SS03 | PASS | |
+| SS04 | PASS | |
+| SS05 | FAIL | wallpaper chooser: success_applied_without_input, cancel_preserved_without_error |
+| SS06 | NOT_RUN | desktop_visual_consumer unverified |
+| SS07 | NOT_RUN | taskbar_visual_consumer unverified (colour check itself passed in isolation) |
+| SS08 | ENVIRONMENT_BLOCKED | multi-output RandR not available on this host |
+| SS09 | PASS | source test evidence only |
+| SS10 | NOT_RUN | scale check unverified in the full run (PASS in isolation) |
+| SS11 | PASS | |
+| SS12 | FAIL | hotkey contract: clear_reset_persisted |
+| SS13 | PASS | |
+| SS14 | FAIL | external update: settings_visible_without_input, signal_loss_recovery |
+| SS15 | FAIL | disabled_mode_ends_inert, settings_survived_keyboard_escape (PASS in isolation) |
+| SS16 | FAIL | static gate verify_rwr_promotion=1 |
+| SS17 | NOT_RUN | scale_scroll_ss10 (see above) |
+| SS18 | NOT_RUN | needs `--ss18-installed-result` |
+| SS19 | FAIL | stability: external_update_responsive |
+
+Isolated-vs-full differences (SS06, SS07, SS10, SS15) indicate order-dependent state in the full run. Not yet investigated.
+
+### Open
+- SS05, SS12, SS14, SS15, SS16, SS19: FAIL in the full run. Not yet triaged.
+- SS15 `disabled_mode_ends_inert`: passes in isolation, fails in the full run.
+- Full-run NOT_RUN sub-checks (SS06 `desktop_visual_consumer`, SS07 `taskbar_visual_consumer`, SS10) need a root cause, not a harness relaxation.
+- Gates: `tools/architecture_guard.py` exit 0 (76 ratified violations). `cargo check --workspace` exit 0, 0 warnings (last fresh build; cache hit on the final re-check).
