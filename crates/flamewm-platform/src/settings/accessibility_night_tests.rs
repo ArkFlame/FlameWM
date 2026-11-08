@@ -117,3 +117,11 @@ fn unknown_night_shift_mode_is_rejected() {
     let error = load("revision=2\nnightShiftMode=dusk\n").expect_err("bad mode");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
 }
+
+#[test]
+fn sticky_keys_rejects_non_boolean_values() {
+    for value in ["maybe", "2", "enabled"] {
+        let text = format!("revision=2\nstickyKeys={value}\n");
+        assert!(load(&text).is_err(), "stickyKeys={value} must be rejected");
+    }
+}

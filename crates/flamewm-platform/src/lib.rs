@@ -14,6 +14,7 @@ pub mod scale;
 pub mod services;
 pub mod settings;
 pub mod shortcuts;
+pub mod sticky_keys;
 mod storage;
 pub mod system;
 pub mod task;
