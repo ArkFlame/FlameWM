@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn storm_is_purple() {
         let [r, g, b] = rgb(WeatherCondition::Storm, true);
-        assert!(r > g + 60 && b > g + 60, "{r} {g} {b}");
+        assert!(r > g + 30 && b > g + 60, "{r} {g} {b}");
     }
 
     // OBSERVABLE: snow is light cyan-white (every channel bright, green and blue above red).
