@@ -397,4 +397,14 @@ mod tests {
         unpremultiply_swapped_in_place(&mut opaque);
         assert_eq!(opaque, [10, 20, 30, 255]);
     }
+
+    #[test]
+    fn unpremultiply_recovers_straight_color_at_partial_alpha() {
+        // Straight (128, 0, 0) at alpha 128 is stored premultiplied as (64, 0, 0, 128).
+        let mut half = [64, 0, 0, 128, 0, 0, 0, 1];
+        unpremultiply_swapped_in_place(&mut half);
+        assert_eq!(&half[..4], &[128, 0, 0, 128]);
+        // Nearly transparent pixels keep their rounded color and never exceed 255.
+        assert_eq!(&half[4..], &[0, 0, 0, 1]);
+    }
 }
