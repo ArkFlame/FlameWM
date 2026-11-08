@@ -150,6 +150,7 @@ mod tests {
         "fonts",
         "accessibility",
         "hotkeys",
+        "startup",
         "assistant",
         "about",
     ];

@@ -515,6 +515,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::FileManagerCycle => {
                 self.file_manager_label = file_manager::toggle()?;
             }
+            SettingsAction::StartupToggle(slot) => startup_page::toggle(slot)?,
+            SettingsAction::StartupRemove(slot) => startup_page::remove(slot)?,
             SettingsAction::NativeKeyEvent => {}
             SettingsAction::ApiKeyFocus => {
                 if self.api_key_draft.is_none() {

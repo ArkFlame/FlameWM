@@ -45,6 +45,8 @@ impl AppearanceTab {
 /// markup coverage test can check each `data-action` without side effects.
 pub(crate) enum SettingsAction {
     FileManagerCycle,
+    StartupToggle(usize),
+    StartupRemove(usize),
     Page(SettingsPage),
     AccentSwatch(&'static str),
     /// Shows one Appearance sub-page from the nav.
@@ -192,6 +194,7 @@ pub(crate) fn page(value: &str) -> Option<SettingsPage> {
         "fonts" => Some(SettingsPage::Fonts),
         "accessibility" => Some(SettingsPage::Accessibility),
         "hotkeys" => Some(SettingsPage::Hotkeys),
+        "startup" => Some(SettingsPage::Startup),
         "assistant" => Some(SettingsPage::Assistant),
         "about" => Some(SettingsPage::About),
         _ => None,
@@ -373,6 +376,18 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
                 value: allowed,
             })
             .ok_or_else(|| format!("unknown keyboard layout '{layout}'"));
+    }
+    if let Some(rest) = action.strip_prefix("settings.startup.") {
+        let (verb, slot) = rest.split_once('.').ok_or_else(|| format!("unknown startup action '{action}'"))?;
+        let slot: usize = slot.parse().map_err(|_| format!("unknown startup row '{slot}'"))?;
+        if slot >= crate::startup_page::SLOTS {
+            return Err(format!("startup row {slot} is out of range"));
+        }
+        return match verb {
+            "toggle" => Ok(SettingsAction::StartupToggle(slot)),
+            "remove" => Ok(SettingsAction::StartupRemove(slot)),
+            _ => Err(format!("unknown startup action '{action}'")),
+        };
     }
     if action == "settings.default-file-manager.cycle" {
         return Ok(SettingsAction::FileManagerCycle);

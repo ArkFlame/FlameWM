@@ -13,9 +13,31 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Fonts => 9,
             SettingsPage::Accessibility => 10,
             SettingsPage::Hotkeys => 11,
-            SettingsPage::Assistant => 12,
-            SettingsPage::About => 13,
+            SettingsPage::Startup => 12,
+            SettingsPage::Assistant => 13,
+            SettingsPage::About => 14,
         }
+    }
+
+    /// Projects the Startup page rows from the live XDG autostart entries.
+    pub(crate) fn sync_startup(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let entries = crate::startup_page::rows().unwrap_or_default();
+        document.visible("startup-empty", entries.is_empty())?;
+        for slot in 0..crate::startup_page::SLOTS {
+            let entry = entries.get(slot);
+            document.visible(&format!("startup-row-{slot}"), entry.is_some())?;
+            if let Some(entry) = entry {
+                document.text(
+                    &format!("startup-name-{slot}"),
+                    crate::startup_page::display_name(entry),
+                )?;
+                document.text(
+                    &format!("startup-toggle-{slot}"),
+                    if entry.enabled { "On" } else { "Off" }.to_owned(),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn sync_display_scale(

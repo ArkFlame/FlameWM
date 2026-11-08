@@ -46,6 +46,7 @@ mod input;
 mod labels;
 mod location;
 mod nav;
+mod startup_page;
 mod nodes;
 mod pager;
 mod sliders;

@@ -29,6 +29,7 @@ pub enum SettingsPage {
     Fonts,
     Accessibility,
     Hotkeys,
+    Startup,
     Assistant,
     About,
 }
