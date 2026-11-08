@@ -357,7 +357,6 @@ mod tests {
             // (c) All four corner grips are grip x grip squares at the outer frame corners. Only
             // the right and bottom edge strips are RESIZE_EDGE_RB deep, so scrollbar clicks stay.
             let grip = corner_grip_for_titlebar(titlebar).min(w / 2).min(h / 2);
-            let rb = RESIZE_EDGE_RB.min(t);
             let expected = [
                 FrameRect::new(0, 0, grip, grip),
                 FrameRect::new(w - grip, 0, grip, grip),
