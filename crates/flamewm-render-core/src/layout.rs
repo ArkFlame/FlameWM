@@ -456,10 +456,14 @@ impl<'a> Engine<'a> {
 
         let explicit_w = style.width.resolve(avail_w);
         let explicit_h = style.height.resolve(avail_h);
-        let inner_w = explicit_w
-            .unwrap_or(avail_w)
-            .max(style.padding.horizontal())
-            - style.padding.horizontal();
+        // Children wrap inside the box as painted: its width is clamped by min/max width first.
+        let box_w = clamp_length(
+            explicit_w.unwrap_or(avail_w),
+            style.min_width,
+            style.max_width,
+            avail_w,
+        );
+        let inner_w = box_w.max(style.padding.horizontal()) - style.padding.horizontal();
         let inner_h =
             explicit_h.unwrap_or(avail_h).max(style.padding.vertical()) - style.padding.vertical();
         let children = self.children(index);
@@ -916,6 +920,70 @@ mod tests {
             active_style: None,
             focus_style: None,
         }
+    }
+
+    #[test]
+    fn max_width_box_measures_text_at_its_clamped_width() {
+        let text = "one two three four five six seven eight nine ten eleven twelve";
+        let box_style = Style {
+            max_width: Length::Px(100.0),
+            font_size: 14.0,
+            ..Style::default()
+        };
+        let node = |parent, first_child, next_sibling, kind, id: &str, style: Style, text: &str| {
+            CompiledNode {
+                kind,
+                parent,
+                first_child,
+                next_sibling,
+                id: id.to_string().into(),
+                action: std::borrow::Cow::Borrowed(""),
+                text: text.to_string().into(),
+                image: None,
+                style: style.into(),
+                hover_style: None,
+                active_style: None,
+                focus_style: None,
+            }
+        };
+        let document = CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![
+                node(None, Some(1), None, NodeKind::Element, "", Style::default(), ""),
+                node(Some(0), Some(2), None, NodeKind::Element, "box", box_style, ""),
+                node(
+                    Some(1),
+                    None,
+                    None,
+                    NodeKind::Text,
+                    "",
+                    Style {
+                        text_wrap: crate::model::TextWrap::Wrap,
+                        font_size: 14.0,
+                        ..Style::default()
+                    },
+                    text,
+                ),
+            ],
+        };
+        let doc = RuntimeDocument::new(document).unwrap();
+        let boxed = doc.node_by_id("box").expect("box node exists");
+        let size = LayoutEngine::measure_node(&doc, boxed, 800.0, 600.0, InteractionState::default())
+            .expect("box measures");
+        // Paint wraps the text at the box's 100 px width, so the measured height must match that wrap.
+        let painted = crate::text_layout::layout_text(
+            text,
+            14.0,
+            100.0,
+            crate::model::TextWrap::Wrap,
+            false,
+        );
+        assert!(size.width <= 100.0);
+        assert_eq!(size.height, painted.height);
+        assert!(painted.lines.len() > 1);
     }
 
     #[test]

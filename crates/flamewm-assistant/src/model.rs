@@ -32,10 +32,11 @@ pub fn set_window_height(height: usize) {
 fn list_budget() -> usize {
     LIST_BUDGET_PX.load(std::sync::atomic::Ordering::Relaxed)
 }
-/// Body font size and the text width inside a bubble (max-width 330 px less 13 px padding a side).
-/// Heights come from the renderer's own text layout, so the budget matches what is drawn.
+/// Body font size and the text width inside a bubble (`.bubble` max-width 340 px, border-box, less
+/// 13 px padding a side). Heights come from the renderer's own text layout, so the budget matches
+/// what is drawn.
 const BODY_PX: f32 = 14.0;
-const BUBBLE_TEXT_PX: f32 = 304.0;
+const BUBBLE_TEXT_PX: f32 = 314.0;
 /// Bubble vertical padding plus the row gap.
 const BUBBLE_PAD_PX: usize = 26;
 /// Bubble height in pixels for a message text, measured by the renderer's text layout. The whole
