@@ -1349,6 +1349,7 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
     if shutil.which("gdbus") is None or Image is None and shutil.which("identify") is None:
         details["reason"] = "authoritative D-Bus snapshot or screenshot pixel reader unavailable"
         return finish()
+    fresh_wm_for_requested_size(ctx, args)  # earlier sized SS02 launches leave a remembered 960x640 frame
     settings = ctx.spawn("settings-ss03-appearance", [args.settings_bin, "--page", "appearance"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "appearance"]))
     time.sleep(args.settle_seconds)
@@ -1489,6 +1490,7 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
                     "type='method_call',interface='com.arkflame.FlameWM1.Shortcuts',member='BeginCapture'",
                     "type='method_call',interface='com.arkflame.FlameWM1.Shortcuts',member='EndCapture'"]
     monitor = ctx.spawn("ss12-dbus-monitor", monitor_argv, ctx.app_env)
+    fresh_wm_for_requested_size(ctx, args)  # earlier sized SS02 launches leave a remembered 960x640 frame
     settings = ctx.spawn("settings-ss12-hotkeys", [args.settings_bin, "--page", "hotkeys"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "hotkeys"]))
     time.sleep(args.settle_seconds)
