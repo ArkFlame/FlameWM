@@ -2,11 +2,12 @@
 //! wall-clock budget; symlinks are never followed and hidden or dependency folders are skipped. The
 //! last walk is cached on disk so the next launch can search before the new walk finishes.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const MAX_ENTRIES: usize = 250_000;
@@ -58,23 +59,60 @@ pub struct Index {
     pub recent: Vec<usize>,
     /// True when the walk stopped at a limit instead of finishing.
     pub truncated: bool,
+    /// Recently used document paths, newest use first, as listed by the desktop's recent files.
+    pub doc_paths: Vec<String>,
+    /// Indices of `doc_paths` that are in `entries`, in the same order.
+    pub docs: Vec<usize>,
 }
 
 impl Index {
     #[must_use]
     pub fn new(entries: Vec<Entry>, truncated: bool) -> Self {
-        let mut recent: Vec<usize> = (0..entries.len()).filter(|&i| !entries[i].is_dir).collect();
-        recent.sort_unstable_by(|&a, &b| {
+        let mut index = Self {
+            entries,
+            truncated,
+            ..Self::default()
+        };
+        index.finish();
+        index
+    }
+
+    /// Replaces the recently used documents and resolves them against the entries.
+    pub fn set_docs(&mut self, paths: Vec<String>) {
+        self.doc_paths = paths;
+        self.finish();
+    }
+
+    /// Recomputes the newest-files and recent-document views after `entries` changed.
+    pub fn finish(&mut self) {
+        let entries = &self.entries;
+        let newest = |&a: &usize, &b: &usize| {
             entries[b]
                 .modified
                 .cmp(&entries[a].modified)
                 .then_with(|| entries[a].path.cmp(&entries[b].path))
-        });
-        recent.truncate(RECENT_LIMIT);
-        Self {
-            entries,
-            recent,
-            truncated,
+        };
+        let mut recent: Vec<usize> = (0..entries.len()).filter(|&i| !entries[i].is_dir).collect();
+        if recent.len() > RECENT_LIMIT {
+            recent.select_nth_unstable_by(RECENT_LIMIT - 1, newest);
+            recent.truncate(RECENT_LIMIT);
+        }
+        recent.sort_unstable_by(newest);
+        self.recent = recent;
+
+        self.docs.clear();
+        if !self.doc_paths.is_empty() {
+            let position: HashMap<&str, usize> = entries
+                .iter()
+                .enumerate()
+                .map(|(i, entry)| (entry.path.as_str(), i))
+                .collect();
+            self.docs = self
+                .doc_paths
+                .iter()
+                .filter_map(|path| position.get(path.as_str()).copied())
+                .take(RECENT_LIMIT)
+                .collect();
         }
     }
 
@@ -86,6 +124,52 @@ impl Index {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+/// True for names the index never stores: hidden entries and dependency folders.
+#[must_use]
+pub fn accept_name(name: &str) -> bool {
+    !name.starts_with('.') && !SKIPPED_DIRS.contains(&name)
+}
+
+fn entry_from(text: &str, is_dir: bool, meta: &fs::Metadata) -> Entry {
+    let size = if is_dir { 0 } else { meta.len() };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX));
+    Entry::new(text.to_owned(), is_dir, size, modified)
+}
+
+/// The entry for one path, with the same exclusions as [`walk`]. Symlinks are never indexed.
+#[must_use]
+pub fn stat(path: &Path) -> Option<Entry> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    let file_type = meta.file_type();
+    if file_type.is_symlink() || !accept_name(path.file_name()?.to_str()?) {
+        return None;
+    }
+    let text = path.to_str()?;
+    if text.contains(['\t', '\n']) {
+        return None;
+    }
+    Some(entry_from(text, file_type.is_dir(), &meta))
+}
+
+/// The index shared by the window and its watcher. The worker is the only writer; the window
+/// reads it for each paint and search, so the lock is held only for that short work.
+#[derive(Clone, Default)]
+pub struct Shared(Arc<RwLock<Index>>);
+
+impl Shared {
+    pub fn read(&self) -> RwLockReadGuard<'_, Index> {
+        self.0.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn write(&self) -> RwLockWriteGuard<'_, Index> {
+        self.0.write().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -114,7 +198,7 @@ pub fn walk(roots: &[PathBuf], max_entries: usize, max_depth: usize, budget: Dur
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if name.starts_with('.') || SKIPPED_DIRS.contains(&name) {
+            if !accept_name(name) {
                 continue;
             }
             let Ok(file_type) = item.file_type() else {
@@ -131,19 +215,11 @@ pub fn walk(roots: &[PathBuf], max_entries: usize, max_depth: usize, budget: Dur
             if text.contains(['\t', '\n']) {
                 continue;
             }
-            let (size, modified) = item.metadata().map_or((0, 0), |meta| {
-                let size = if file_type.is_dir() { 0 } else { meta.len() };
-                let modified = meta
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                    .map_or(0, |since| {
-                        i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
-                    });
-                (size, modified)
-            });
             let is_dir = file_type.is_dir();
-            entries.push(Entry::new(text.to_owned(), is_dir, size, modified));
+            entries.push(match item.metadata() {
+                Ok(meta) => entry_from(text, is_dir, &meta),
+                Err(_) => Entry::new(text.to_owned(), is_dir, 0, 0),
+            });
             if entries.len() >= max_entries {
                 truncated = true;
                 break 'walk;

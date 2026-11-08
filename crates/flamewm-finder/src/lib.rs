@@ -13,6 +13,7 @@ mod palette;
 mod quick;
 mod preview;
 mod search;
+mod watch;
 
 use std::cell::RefCell;
 use std::env;
@@ -41,7 +42,7 @@ use flamewm_ui_x11::{
     run_with_controller_events_role_with_presses_and_reactor_geometry,
 };
 
-use index::{Entry, Index};
+use index::{Entry, Index, Shared};
 use keys::{Command, Modifiers};
 use kind::{KINDS, Kind};
 use palette::{CommandSpec, Mode};
@@ -102,8 +103,12 @@ enum Item {
 /// What the background worker sends the window: the application list first, then the file index.
 enum Loaded {
     Apps(Vec<DesktopApplication>),
-    Cached(Index),
-    Files(Index),
+    /// The shared index holds the cached listing; the fresh walk still runs.
+    Cached,
+    /// The shared index holds the fresh walk.
+    Files,
+    /// The live watcher changed the shared index.
+    Changed,
 }
 
 /// Text and accent colours for the current glass tint.
@@ -157,7 +162,7 @@ fn fold_pieces(mut pieces: Vec<(String, bool)>, max: usize) -> Vec<(String, bool
 
 struct Finder {
     home: String,
-    index: Index,
+    index: Shared,
     walking: bool,
     query: String,
     parsed: Query,
@@ -221,7 +226,7 @@ fn meta_line(entry: &Entry, now: i64) -> String {
 }
 
 impl Finder {
-    fn new(home: String, index: Index, theme: SettingsSnapshot, pid_file: PathBuf) -> Self {
+    fn new(home: String, index: Shared, theme: SettingsSnapshot, pid_file: PathBuf) -> Self {
         let palette = Palette::for_theme(&theme);
         let mut app = Self {
             home,
@@ -253,12 +258,23 @@ impl Finder {
         app
     }
 
+    fn view(&self) -> std::sync::RwLockReadGuard<'_, Index> {
+        self.index.read()
+    }
+
     fn refresh(&mut self) {
+        self.rerank();
+        self.selected = 0;
+        self.first = 0;
+    }
+
+    /// Recomputes the results for the current query, keeping the selection where it is.
+    fn rerank(&mut self) {
         self.parsed = Query::parse(&self.query, &self.home);
         let now = now_secs();
         let files = palette::mode(&self.query) == Mode::Files;
         self.hits = if files {
-            search::rank(&self.index, &self.parsed, now)
+            search::rank(&self.view(), &self.parsed, now)
         } else {
             Hits::default()
         };
@@ -274,8 +290,8 @@ impl Finder {
         } else {
             Vec::new()
         };
-        self.selected = 0;
-        self.first = 0;
+        let len = self.items().len();
+        self.selected = self.selected.min(len.saturating_sub(1));
     }
 
     /// Quick rows above the file results: calculator answer, applications, then system actions.
@@ -284,8 +300,7 @@ impl Finder {
     }
 
     /// Cached files are shown but do not end the indexing state, since the fresh walk follows.
-    fn accept_cached(&mut self, index: Index) {
-        self.index = index;
+    fn accept_cached(&mut self) {
         self.refresh();
     }
 
@@ -358,9 +373,9 @@ impl Finder {
             && (self.grid || self.query.is_empty())
     }
 
-    fn selected_entry(&self) -> Option<&Entry> {
+    fn selected_entry(&self) -> Option<Entry> {
         match self.selected_item()? {
-            Item::Entry(position) => self.index.entries.get(position),
+            Item::Entry(position) => self.view().entries.get(position).cloned(),
             _ => None,
         }
     }
@@ -398,10 +413,19 @@ impl Finder {
         }
     }
 
-    fn accept_index(&mut self, index: Index) {
-        self.index = index;
+    fn accept_index(&mut self) {
         self.walking = false;
         self.refresh();
+    }
+
+    /// The live watcher changed the index: results update, the selection stays put, and an open
+    /// duplicates list is recomputed because its positions may have moved.
+    fn accept_changes(&mut self) {
+        self.rerank();
+        if self.overlay == Overlay::Duplicates {
+            let groups = index::duplicate_groups(&self.view(), DUPLICATE_SLOTS);
+            self.groups = groups;
+        }
     }
 
     fn toggle(&mut self, overlay: Overlay) {
@@ -454,7 +478,8 @@ impl Finder {
         match id {
             "help" => self.overlay = Overlay::Help,
             "duplicates" => {
-                self.groups = index::duplicate_groups(&self.index, DUPLICATE_SLOTS);
+                let groups = index::duplicate_groups(&self.view(), DUPLICATE_SLOTS);
+                self.groups = groups;
                 self.overlay = Overlay::Duplicates;
             }
             "setup" => self.overlay = Overlay::Setup,
@@ -685,7 +710,7 @@ impl Finder {
         doc.visible("list", !tiles)?;
         doc.visible("empty", items.is_empty())?;
         let empty_text = match palette::mode(&self.query) {
-            _ if self.walking && self.index.is_empty() => "Indexing files...",
+            _ if self.walking && self.view().is_empty() => "Indexing files...",
             Mode::Commands(_) => "No commands match",
             Mode::Scopes(_) => "No folders match",
             Mode::Files if self.query.is_empty() => "Nothing to show yet",
@@ -722,12 +747,12 @@ impl Finder {
         doc.background(&row, UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }))?;
         let (kind, pieces, parent, meta) = match item {
             Item::Entry(position) => {
-                let entry = &self.index.entries[*position];
+                let entry = self.view().entries[*position].clone();
                 (
-                    Kind::of(entry),
+                    Kind::of(&entry),
                     search::segments(entry.name(), &self.parsed.terms),
                     format::parent_for_display(&entry.path, &self.home),
-                    meta_line(entry, now),
+                    meta_line(&entry, now),
                 )
             }
             Item::Command(spec) => (
@@ -789,12 +814,12 @@ impl Finder {
         let Some(Item::Entry(position)) = item else {
             return doc.visible(&tile, false);
         };
-        let entry = &self.index.entries[*position];
+        let entry = self.view().entries[*position].clone();
         doc.visible(&tile, true)?;
         doc.background(&tile, UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }))?;
-        self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(entry))?;
+        self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(&entry))?;
         doc.text_ref(&format!("tile-name-{slot}"), entry.name())?;
-        doc.text(&format!("tile-meta-{slot}"), meta_line(entry, now))
+        doc.text(&format!("tile-meta-{slot}"), meta_line(&entry, now))
     }
 
     /// Shows the glyph for `kind` under `prefix` and hides the others.
@@ -838,14 +863,14 @@ impl Finder {
 
     fn paint_status(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let text = if self.walking {
-            format!("Indexing · {} files", format::count(self.index.len()))
-        } else if self.index.truncated {
+            format!("Indexing · {} files", format::count(self.view().len()))
+        } else if self.view().truncated {
             format!(
                 "{} files · index limit reached",
-                format::count(self.index.len())
+                format::count(self.view().len())
             )
         } else {
-            format!("{} files", format::count(self.index.len()))
+            format!("{} files", format::count(self.view().len()))
         };
         doc.text("status", text)
     }
@@ -870,7 +895,7 @@ impl Finder {
             return Ok(());
         };
         doc.text_ref("preview-name", entry.name())?;
-        doc.text("preview-meta", meta_line(entry, now_secs()))?;
+        doc.text("preview-meta", meta_line(&entry, now_secs()))?;
         let lines = match &self.preview {
             Some(Preview::Text(lines)) => lines.as_slice(),
             _ => &[],
@@ -896,7 +921,7 @@ impl Finder {
             if entry.is_dir {
                 "Folder".to_owned()
             } else {
-                mark_for(entry)
+                mark_for(&entry)
             },
         )?;
         doc.text(
@@ -928,7 +953,7 @@ impl Finder {
                 continue;
             };
             doc.visible(&row, true)?;
-            let first = &self.index.entries[group[0]];
+            let first = self.view().entries[group[0]].clone();
             doc.text_ref(&format!("dup-name-{slot}"), first.name())?;
             doc.text(
                 &format!("dup-meta-{slot}"),
@@ -938,7 +963,7 @@ impl Finder {
                 .iter()
                 .take(3)
                 .map(|position| {
-                    format::parent_for_display(&self.index.entries[*position].path, &self.home)
+                    format::parent_for_display(&self.view().entries[*position].path, &self.home)
                 })
                 .collect();
             doc.text(&format!("dup-path-{slot}"), places.join("  ·  "))?;
@@ -952,14 +977,14 @@ impl Finder {
             .map(|root| format::parent_for_display(&root.to_string_lossy(), &self.home))
             .collect();
         doc.text("setup-0", roots.join(", "))?;
-        let truncated = if self.index.truncated {
+        let truncated = if self.view().truncated {
             ", limit reached"
         } else {
             ""
         };
         doc.text(
             "setup-1",
-            format!("{} files{truncated}", format::count(self.index.len())),
+            format!("{} files{truncated}", format::count(self.view().len())),
         )?;
         doc.text("setup-2", format!("{} folder levels", index::MAX_DEPTH))?;
         doc.text(
@@ -1066,7 +1091,8 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let theme = initial_settings();
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
-    let mut app = Finder::new(home.to_owned(), Index::default(), theme, pid_file.to_path_buf());
+    let shared = Shared::default();
+    let mut app = Finder::new(home.to_owned(), shared.clone(), theme, pid_file.to_path_buf());
     app.paint(&mut document)?;
 
     app.frecency_file = cache_file
@@ -1082,6 +1108,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let (sender, receiver) = mpsc::sync_channel::<Loaded>(1);
     let walk_cache = cache_file.map(Path::to_path_buf);
     let roots = index::default_roots(env::var_os("HOME"));
+    let worker_index = shared;
     std::thread::spawn(move || {
         // Applications first: the desktop catalog is a few hundred small files, so it lands
         // long before the file walk finishes.
@@ -1094,7 +1121,8 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         // The cached index answers queries while the fresh walk runs; reading it here keeps the
         // window's first paint off the disk.
         if let Some(cached) = walk_cache.as_deref().and_then(index::load_cache) {
-            if sender.send(Loaded::Cached(cached)).is_ok() {
+            *worker_index.write() = cached;
+            if sender.send(Loaded::Cached).is_ok() {
                 let _ = index_writer.write(&[1]);
             }
         }
@@ -1107,8 +1135,18 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         if let Some(path) = &walk_cache {
             let _ = index::save_cache(path, &fresh);
         }
-        if sender.send(Loaded::Files(fresh)).is_ok() {
+        *worker_index.write() = fresh;
+        if sender.send(Loaded::Files).is_ok() {
             let _ = index_writer.write(&[1]);
+        }
+        // The watcher keeps the shared index current for the life of the window.
+        let result = watch::run(worker_index, roots, move || {
+            if sender.try_send(Loaded::Changed).is_ok() {
+                let _ = index_writer.write(&[1]);
+            }
+        });
+        if let Err(error) = result {
+            eprintln!("flamewm-finder: live index updates stopped: {error}");
         }
     });
 
@@ -1167,8 +1205,9 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             while let Ok(message) = wake_incoming.borrow().try_recv() {
                 match message {
                     Loaded::Apps(apps) => app.accept_apps(apps),
-                    Loaded::Cached(cached) => app.accept_cached(cached),
-                    Loaded::Files(fresh) => app.accept_index(fresh),
+                    Loaded::Cached => app.accept_cached(),
+                    Loaded::Files => app.accept_index(),
+                    Loaded::Changed => app.accept_changes(),
                 }
                 changed = true;
             }
