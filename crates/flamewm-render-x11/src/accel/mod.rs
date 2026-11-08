@@ -3,9 +3,11 @@ mod gles;
 
 pub use backend::apply_render_backend_setting;
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use crate::native::rounded::row_inset;
 use flamewm_api::render_backend::{FallbackReason, RenderBackend, RenderBackendStatus};
@@ -171,9 +173,26 @@ enum GpuSlot {
     Failed,
 }
 
+/// Bumped by every effective backend change. A thread whose slot was created under an older
+/// generation drops that slot before using it, so the GPU memory is freed after a switch.
+static GENERATION: AtomicU32 = AtomicU32::new(0);
+
+struct ThreadGpu {
+    generation: u32,
+    slot: GpuSlot,
+}
+
 thread_local! {
-    static GPU: RefCell<GpuSlot> = const { RefCell::new(GpuSlot::Untried) };
+    static GPU: RefCell<ThreadGpu> = const {
+        RefCell::new(ThreadGpu { generation: 0, slot: GpuSlot::Untried })
+    };
     static CPU: RefCell<CpuPixels> = RefCell::default();
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Counts GPU backend init attempts on this thread; the CPU-path test asserts it stays put.
+    static INIT_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Environment override for the saved setting: `FLAMEWM_GPU=0` forces the CPU path (the opt-out),
@@ -200,16 +219,44 @@ fn is_software_renderer(renderer: &str) -> bool {
         .any(|marker| lower.contains(marker))
 }
 
+/// Applies the requested acceleration. An effective change starts a new generation, which
+/// invalidates every thread's slot; the calling thread releases its slot now.
 pub fn set_render_acceleration(mode: RenderAcceleration) {
     let mode = apply_env_override(mode);
     let previous = REQUESTED.swap(mode as u8, Ordering::Relaxed);
-    if previous != mode as u8 && mode == RenderAcceleration::Gpu {
-        GPU.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if matches!(*slot, GpuSlot::Failed) {
-                *slot = GpuSlot::Untried;
-            }
-        });
+    if previous == mode as u8 {
+        return;
+    }
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    let before = if previous == RenderAcceleration::Gpu as u8 {
+        RenderAcceleration::Gpu
+    } else {
+        RenderAcceleration::Cpu
+    };
+    eprintln!(
+        "flamewm-render-x11: render acceleration: {} -> {}",
+        before.as_setting(),
+        mode.as_setting()
+    );
+    release_if_stale();
+}
+
+/// Drops this thread's GPU slot when it was created under an older generation, which frees the
+/// device. Called eagerly by [`set_render_acceleration`] and before each GPU-mode op. No idle hook
+/// calls it yet, so a paint thread that never runs a GPU op keeps its slot until it does.
+pub fn release_if_stale() {
+    let current = GENERATION.load(Ordering::Relaxed);
+    let stale = GPU.with(|cell| {
+        let mut thread = cell.borrow_mut();
+        if thread.generation == current {
+            return None;
+        }
+        thread.generation = current;
+        Some(std::mem::replace(&mut thread.slot, GpuSlot::Untried))
+    });
+    // The device is freed here, outside the thread-local borrow.
+    if let Some(GpuSlot::Ready(_)) = stale {
+        record_released();
     }
 }
 
@@ -266,6 +313,13 @@ fn record_ready(kind: RenderBackend, device: &str) {
     }
 }
 
+fn record_released() {
+    if let Ok(mut status) = STATUS.lock() {
+        status.active = RenderBackend::Cpu;
+        status.device = None;
+    }
+}
+
 fn record_fallback(reason: FallbackReason) {
     if let Ok(mut status) = STATUS.lock() {
         status.active = RenderBackend::Cpu;
@@ -281,9 +335,13 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
     if render_acceleration() != RenderAcceleration::Gpu {
         return false;
     }
-    GPU.with(|slot| {
-        let mut slot = slot.borrow_mut();
+    release_if_stale();
+    GPU.with(|cell| {
+        let mut thread = cell.borrow_mut();
+        let slot = &mut thread.slot;
         if matches!(*slot, GpuSlot::Untried) {
+            #[cfg(test)]
+            INIT_CALLS.with(|calls| calls.set(calls.get() + 1));
             *slot = match gles::GpuBlur::new() {
                 Ok(gpu) if is_software_renderer(gpu.device()) => {
                     let reason = FallbackReason::SoftwareDevice(gpu.device().to_owned());
@@ -546,6 +604,29 @@ mod tests {
         assert!(!is_software_renderer(
             "NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2"
         ));
+    }
+
+    #[test]
+    fn cpu_request_never_touches_the_gpu_slot_or_initialises_a_backend() {
+        set_render_acceleration(RenderAcceleration::Cpu);
+        let before = INIT_CALLS.with(Cell::get);
+        let mut frame = vec![9_u8; 64 * 64 * 4];
+        assert!(!try_gpu_batch(&mut frame, 64, 64, &[]));
+        assert!(!gpu_blur_rgba(&mut frame, 64, 64, 4.0));
+        assert_eq!(INIT_CALLS.with(Cell::get), before);
+        assert!(frame.iter().all(|&byte| byte == 9));
+    }
+
+    #[test]
+    fn stale_generation_releases_this_threads_slot() {
+        GPU.with(|cell| cell.borrow_mut().slot = GpuSlot::Failed);
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+        release_if_stale();
+        GPU.with(|cell| {
+            let thread = cell.borrow();
+            assert!(matches!(thread.slot, GpuSlot::Untried));
+            assert_eq!(thread.generation, GENERATION.load(Ordering::Relaxed));
+        });
     }
 
     #[test]
