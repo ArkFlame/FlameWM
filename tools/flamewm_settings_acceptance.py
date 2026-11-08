@@ -3121,11 +3121,17 @@ def ss07_taskbar_surface_changes(next_height: int, next_opacity: int, color: str
     taskbarHeight belongs to the `panel` switch group and surfaceColor/surfaceOpacity to the `surface`
     group. `effective()` shows a member's default while its switch is off, so the switches go in the
     same transaction; otherwise Apply stores the values but the snapshot reports the defaults.
+
+    Translucent shell surfaces blend over the desktop layer (flamewm-shell surface_backdrop), not the
+    root, so the bar's backdrop is the wallpaper. The expectation (fill alpha over black) holds only
+    over a black wallpaper, so the transaction sets a solid #000000 wallpaper with the taskbar values.
     """
     return {"panelCustom": "true", "surfaceCustom": "true",
             "taskbarHeight": f"uint32 {next_height}",
             "surfaceOpacity": f"uint32 {next_opacity}",
-            "surfaceColor": "'" + color + "'"}
+            "surfaceColor": "'" + color + "'",
+            "wallpaperMode": "'solid'",
+            "wallpaperColor": "'#000000'"}
 
 
 def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
