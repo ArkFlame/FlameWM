@@ -671,13 +671,23 @@ def expected_selected_row_pixel(accent: str, base: tuple[int, int, int] = (27, 3
 
 
 def wait_for_settings_window(ctx: Ctx, evidence_path: Path, timeout: float = 5.0) -> dict | None:
-    """Wait for a mapped, measurable Settings client before taking baseline screenshots."""
+    """Wait for a mapped Settings client whose position has settled.
+
+    The first mapped read can predate the WM's placement and decoration (xwininfo +0+0), and clicks
+    computed from it land on the wrong screen point. Return only after two consecutive reads agree.
+    """
     deadline = time.monotonic() + timeout
+    previous = None
     while time.monotonic() < deadline:
         geometry = window_geometry(ctx, evidence_path)
         if geometry is not None and geometry["width"] > 0 and geometry["height"] > 0:
-            return geometry
-        time.sleep(0.05)
+            key = (geometry["x"], geometry["y"], geometry["width"], geometry["height"])
+            if key == previous:
+                return geometry
+            previous = key
+        else:
+            previous = None
+        time.sleep(0.25)
     return None
 
 
