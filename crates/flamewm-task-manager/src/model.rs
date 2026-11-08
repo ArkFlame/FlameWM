@@ -57,6 +57,12 @@ pub struct Sampler {
 /// Static-per-process fields are re-read on first sight, on a rename (comm changed), and at
 /// most every `STATIC_REFRESH_TICKS` samples, which catches same-name exec and setuid.
 const STATIC_REFRESH_TICKS: u64 = 5;
+/// Discover new processes every five samples; known processes are still sampled each tick.
+const DISCOVERY_TICKS: u64 = 5;
+
+fn discovery_due(tick: u64) -> bool {
+    tick == 1 || (tick - 1) % DISCOVERY_TICKS == 0
+}
 
 #[derive(Default)]
 struct Cached {
@@ -308,24 +314,27 @@ impl Sampler {
         }
         self.tick += 1;
         let tick = self.tick;
-        if let Ok(entries) = fs::read_dir("/proc") {
-            for entry in entries.flatten() {
-                let Some(pid) = entry
-                    .file_name()
-                    .to_str()
-                    .and_then(|s| s.parse::<u32>().ok())
-                else {
-                    continue;
-                };
-                let Some(task) = self.sample_task(pid, tick, delta, cpu_count) else {
-                    continue;
-                };
-                result.threads += u64::from(task.threads);
-                if task.state == 'R' {
-                    result.running += 1;
-                }
-                result.processes.push(task);
+        let mut pids: Vec<u32> = self.tasks.keys().copied().collect();
+        if discovery_due(tick) {
+            if let Ok(entries) = fs::read_dir("/proc") {
+                pids.extend(
+                    entries
+                        .flatten()
+                        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
+                );
             }
+        }
+        pids.sort_unstable();
+        pids.dedup();
+        for pid in pids {
+            let Some(task) = self.sample_task(pid, tick, delta, cpu_count) else {
+                continue;
+            };
+            result.threads += u64::from(task.threads);
+            if task.state == 'R' {
+                result.running += 1;
+            }
+            result.processes.push(task);
         }
         self.tasks.retain(|_, cached| cached.seen == tick);
         result.tasks = result.processes.len();
@@ -537,6 +546,19 @@ mod tests {
     #[test]
     fn can_sample_procfs_without_panicking_on_exiting_tasks() {
         let _ = Sampler::default().collect();
+    }
+    #[test]
+    fn discovery_is_periodic_and_known_tasks_are_sampled_between_scans() {
+        assert_eq!(
+            (1..=11)
+                .filter(|&tick| discovery_due(tick))
+                .collect::<Vec<_>>(),
+            vec![1, 6, 11]
+        );
+        let mut sampler = Sampler::default();
+        let pid = std::process::id();
+        assert!(sampler.collect().processes.iter().any(|p| p.pid == pid));
+        assert!(sampler.collect().processes.iter().any(|p| p.pid == pid));
     }
 }
 
