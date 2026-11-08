@@ -384,7 +384,10 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let (rect, full_image) = match selection(&conn, screen, o.mode, &backend) {
         Ok(found) => found,
-        Err(e) if e == "cancelled" => return Ok(()),
+        Err(e) if e == "cancelled" => {
+            eprintln!("FlameWM: screenshot cancelled");
+            return Ok(());
+        }
         Err(e) => return Err(e),
     };
     if let Some(duration) = o.record {

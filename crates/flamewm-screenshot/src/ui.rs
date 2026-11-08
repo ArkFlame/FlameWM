@@ -370,6 +370,7 @@ pub fn select_region<C: Connection>(conn: &C, screen: usize, full: &Image) -> Re
     .map_err(err)?;
     let mut start: Option<(i32, i32)> = None;
     let mut last: Option<Rect> = None;
+    let mut ready = false;
     let result = loop {
         match conn.wait_for_event().map_err(err)? {
             Event::ButtonPress(e) if e.event == o.win && e.detail == 1 => {
@@ -406,11 +407,18 @@ pub fn select_region<C: Connection>(conn: &C, screen: usize, full: &Image) -> Re
                     conn.flush().map_err(err)?;
                 }
             }
-            Event::ButtonRelease(e) if e.event == o.win && e.detail == 1 => {
+            // A release whose press was not seen (for example a press that raced the map) is
+            // ignored, so it cannot end the selection as a silent cancel.
+            Event::ButtonRelease(e) if e.event == o.win && e.detail == 1 && start.is_some() => {
                 break finished_region(start, (i32::from(e.event_x), i32::from(e.event_y)));
             }
             Event::KeyPress(e) if sym(conn, e.detail) == 0xff1b => break None,
             Event::Expose(e) if e.window == o.win && e.count == 0 => {
+                if !ready {
+                    // Readiness signal for drivers: the overlay is mapped and can receive input.
+                    ready = true;
+                    eprintln!("FlameWM: region overlay ready");
+                }
                 o.repaint()?;
                 if let Some(r) = last {
                     conn.poly_rectangle(
