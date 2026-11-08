@@ -184,6 +184,11 @@ pub trait UiDocumentAccess {
     fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String>;
     fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String>;
     fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String>;
+    /// Layout box `(x, y, width, height)` of node `id` at CSS `viewport`, after every edit so far.
+    /// `None` when the id is absent or the backend cannot lay out.
+    fn layout_box(&self, _id: &str, _viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
     fn background(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     fn border(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     /// Corner radius in px for a surface root. Documents without shape support ignore it.
@@ -536,10 +541,27 @@ macro_rules! document_access_methods {
 
 impl UiDocumentAccess for UiDocument {
     document_access_methods!();
+
+    fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        self.layout_box_by_id(id, viewport)
+    }
 }
 
 impl UiDocumentAccess for UiDocumentView<'_> {
     document_access_methods!();
+
+    fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        let document: &RuntimeDocument = &*self.document;
+        let index = document.node_by_id(id)?;
+        let layout = flamewm_render_core::LayoutEngine::compute(
+            document,
+            viewport.0,
+            viewport.1,
+            flamewm_render_core::InteractionState::default(),
+        );
+        let rect = layout.boxes.get(index as usize)?.rect;
+        Some((rect.x, rect.y, rect.width, rect.height))
+    }
 }
 
 impl From<UiColor> for flamewm_render_core::Color {
