@@ -1160,7 +1160,7 @@ def display_output_mode_count(snapshot: str, output_id: str) -> int | None:
     for block in top_level_blocks(outputs.group(1)):
         if gvariant_field_string(block, "id") != output_id:
             continue
-        modes = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*)\]>", block, re.DOTALL)
+        modes = re.search(r"['\"]modes['\"]\s*:\s*<(?:@[^\s\[]+\s+)?\[(.*)\]>", block, re.DOTALL)
         return None if modes is None else len(top_level_blocks(modes.group(1)))
     return None
 
