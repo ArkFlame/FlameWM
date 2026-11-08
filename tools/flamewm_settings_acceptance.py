@@ -1899,7 +1899,9 @@ def run_ss19(ctx: Ctx, args: argparse.Namespace, external_update: bool | None) -
             child = ctx.spawn(name, [args.settings_bin, "--page", page], ctx.app_env)
             time.sleep(settle)
             alive = child.proc.poll() is None
-            geometry = window_geometry(ctx, ctx.run / "logs" / f"ss19-{cycle}-{page}-tree.txt")
+            # The WM maps and places the client after a variable delay; wait for it, bounded.
+            geometry = wait_for_settings_window(ctx, ctx.run / "logs" / f"ss19-{cycle}-{page}-tree.txt",
+                                                timeout=max(10.0, args.settle_seconds * 4))
             ready = bool(alive and geometry and (geometry["width"], geometry["height"]) == (820, 540))
             ctx.stop(child)
             closed = child.proc.poll() is not None
@@ -2248,6 +2250,24 @@ def run_ss14(ctx: Ctx, args: argparse.Namespace) -> dict:
                   "runner does not drive a timed revert transaction"}
     details["paths_not_exercised"].append("display timeout rollback: " + details["display_rollback"]["reason"])
     return finish()
+
+
+def settings_revision_settled(ctx: Ctx, timeout: float = 10.0, quiet: float = 1.0) -> int | None:
+    """Return the Settings revision once it has been unchanged for `quiet` seconds (bounded by `timeout`).
+
+    A client started a moment ago can still be writing its initial settings; a single read may be stale."""
+    deadline = time.monotonic() + timeout
+    last, stable_since = None, time.monotonic()
+    while time.monotonic() < deadline:
+        text, _ = dbus_settings_snapshot(ctx)
+        revision = gvariant_field_u64(text or "", "revision")
+        if revision is not None and revision == last:
+            if time.monotonic() - stable_since >= quiet:
+                return revision
+        else:
+            last, stable_since = revision, time.monotonic()
+        time.sleep(0.25)
+    return last
 
 
 def apply_and_read_settings(ctx: Ctx, revision: int, changes: dict[str, str], details: dict) -> dict | None:
@@ -3274,10 +3294,9 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     shell_ok = Image is not None and os.access(args.shell_bin, os.X_OK)
     if shell_ok:
         clients = start_session_clients(ctx, args, ("shell",), "ss07")
-        # The shell writes settings on start; a revision read before it is stale (StaleRevision).
-        fresh_before, command = dbus_settings_snapshot(ctx)
-        details["commands"].append(command)
-        settings_revision = gvariant_field_u64(fresh_before or "", "revision") or settings_revision
+        # The shell writes settings on start; a revision read before that write is stale (StaleRevision).
+        settled_revision = settings_revision_settled(ctx)
+        settings_revision = settled_revision if settled_revision is not None else settings_revision
         first = taskbar_measure(ctx, "ss07-before-a")
         second = taskbar_measure(ctx, "ss07-before-b")
         visual["before"] = first
