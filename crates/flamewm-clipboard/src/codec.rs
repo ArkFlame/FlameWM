@@ -147,6 +147,15 @@ pub fn payloads(paths: &[PathBuf], op: FileOp) -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
+pub const IMAGE_PNG: &str = "image/png";
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// `image/png` target. Returns `None` unless `png` starts with the PNG signature.
+pub fn png_payloads(png: &[u8]) -> Option<Vec<(&'static str, Vec<u8>)>> {
+    png.starts_with(PNG_SIGNATURE)
+        .then(|| vec![(IMAGE_PNG, png.to_vec())])
+}
+
 /// Text targets: `UTF8_STRING` always, STRING only for ASCII text (its Latin-1 meaning would
 /// corrupt UTF-8 bytes).
 pub fn text_payloads(text: &str) -> Vec<(&'static str, Vec<u8>)> {
@@ -298,5 +307,15 @@ mod text_tests {
         let payloads = text_payloads("é界");
         assert_eq!(payloads.len(), 1);
         assert_eq!(payloads[0], ("UTF8_STRING", "é界".as_bytes().to_vec()));
+    }
+
+    #[test]
+    fn png_payload_requires_signature_and_serves_image_png() {
+        let mut png = PNG_SIGNATURE.to_vec();
+        png.extend_from_slice(b"IHDR");
+        let payloads = png_payloads(&png).expect("png signature");
+        assert_eq!(payloads, vec![(IMAGE_PNG, png.clone())]);
+        assert!(png_payloads(b"GIF89a").is_none());
+        assert!(png_payloads(b"").is_none());
     }
 }

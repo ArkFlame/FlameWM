@@ -3,9 +3,10 @@
 
 mod capture;
 mod clipboard;
+mod notify;
 mod ui;
 
-use capture::{Image, Rect};
+use capture::{Capture as _, Image, Rect};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -21,6 +22,19 @@ enum Mode {
     Active,
     Window,
 }
+
+impl Mode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Screen => "screen",
+            Self::Region => "region",
+            Self::Active => "active",
+            Self::Window => "window",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Options {
     mode: Mode,
@@ -29,9 +43,11 @@ struct Options {
     annotate: bool,
     cursor: bool,
     output: Option<PathBuf>,
+    name_template: String,
     delay: Duration,
     record: Option<u64>,
     fps: u32,
+    audio_source: Option<String>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -42,9 +58,11 @@ impl Default for Options {
             annotate: false,
             cursor: false,
             output: None,
+            name_template: "FlameWM-{timestamp}-{nanos}".into(),
             delay: Duration::ZERO,
             record: None,
             fps: 30,
+            audio_source: None,
         }
     }
 }
@@ -61,11 +79,14 @@ Usage: flamewm-screenshot [--region|--full|--screen|--active|--window] [OPTIONS]
   --copy           Copy image/png to the X11 clipboard (survives command exit)\n\
   --no-save        Do not save to Pictures/Screenshots; combine with --copy\n\
   --output PATH    Save new PNG at PATH (never silently overwrite)\n\
+  --name-template STEM  Saved filename; supports {timestamp}, {nanos}, {mode},\n\
+                        {width}, and {height}; extension is added automatically\n\
   --delay SEC      Capture delay, 0..30 seconds\n\
   --cursor         Include mouse pointer in saved image (if XFixes available)\n\
-  --record SEC     Record X11 screen/region/window to MP4, 1..3600 seconds;\n\
-                   requires optional ffmpeg with x11grab + libx264 support\n\
+  --record SEC     Record X11 screen/region/window, 1..3600 seconds;\n\
+                   requires optional ffmpeg; output supports MP4, WebM or GIF\n\
   --fps N          Recording frame rate, 1..60 (default 30)\n\
+  --audio-source SOURCE  Optional PulseAudio monitor source (off by default)\n\
   -h, --help       Show this help\n\
 Notes: X11 only. Window capture records visible pixels, not obscured surfaces.\n";
 
@@ -83,7 +104,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--no-save" => o.save = false,
             "--annotate" => o.annotate = true,
             "--cursor" => o.cursor = true,
-            "--output" | "--delay" | "--record" | "--fps" => {
+            "--output" | "--name-template" | "--delay" | "--record" | "--fps"
+            | "--audio-source" => {
                 let kind = args[i].as_str();
                 i += 1;
                 let value = args
@@ -93,6 +115,12 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     "--output" => {
                         o.output = Some(PathBuf::from(value));
                         o.save = true;
+                    }
+                    "--name-template" => {
+                        if value.is_empty() {
+                            return Err("name template must not be empty".into());
+                        }
+                        o.name_template.clone_from(value);
                     }
                     "--delay" => {
                         let seconds = value.parse::<f64>().map_err(|_| "delay must be a number")?;
@@ -118,6 +146,12 @@ fn parse(args: &[String]) -> Result<Options, String> {
                             return Err("fps must be 1..60".into());
                         }
                     }
+                    "--audio-source" => {
+                        if value.is_empty() {
+                            return Err("audio source must not be empty".into());
+                        }
+                        o.audio_source = Some(value.clone());
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -135,12 +169,16 @@ fn parse(args: &[String]) -> Result<Options, String> {
         if o.copy || o.annotate || o.cursor {
             return Err("--record does not support --copy, --cursor or --annotate".into());
         }
-        if o.output
-            .as_ref()
-            .is_some_and(|p| p.extension().and_then(|s| s.to_str()) != Some("mp4"))
-        {
-            return Err("video output path must use .mp4".into());
+        if let Some(path) = &o.output {
+            match path.extension().and_then(|s| s.to_str()) {
+                Some("mp4" | "webm") => {}
+                Some("gif") if o.audio_source.is_none() => {}
+                Some("gif") => return Err("GIF does not support audio".into()),
+                _ => return Err("video output path must use .mp4, .webm or .gif".into()),
+            }
         }
+    } else if o.audio_source.is_some() {
+        return Err("--audio-source requires --record".into());
     }
     Ok(o)
 }
@@ -171,14 +209,47 @@ fn pictures_dir() -> PathBuf {
     }
     home.join("Pictures/Screenshots")
 }
-fn default_output(extension: &str) -> Result<PathBuf, String> {
+fn render_name(
+    template: &str,
+    mode: Mode,
+    rect: Rect,
+    extension: &str,
+    timestamp: u64,
+    nanos: u128,
+) -> Result<String, String> {
+    let name = template
+        .replace("{timestamp}", &timestamp.to_string())
+        .replace("{nanos}", &format!("{nanos:09}"))
+        .replace("{mode}", mode.as_str())
+        .replace("{width}", &rect.w.to_string())
+        .replace("{height}", &rect.h.to_string());
+    if name.is_empty()
+        || matches!(name.as_str(), "." | "..")
+        || name.contains(['/', '\\', '\0'])
+        || name.contains(['{', '}'])
+    {
+        return Err("name template must produce one plain filename with known placeholders".into());
+    }
+    Ok(format!("{name}.{extension}"))
+}
+
+fn default_output(
+    extension: &str,
+    template: &str,
+    mode: Mode,
+    rect: Rect,
+) -> Result<PathBuf, String> {
     let dir = pictures_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join(format!(
-        "FlameWM-{}-{n}.{extension}",
+    let name = render_name(
+        template,
+        mode,
+        rect,
+        extension,
         flamewm_api::clock::unix_seconds(),
-        n = flamewm_api::clock::unix_nanos() % 1_000_000_000
-    )))
+        flamewm_api::clock::unix_nanos() % 1_000_000_000,
+    )?;
+    Ok(dir.join(name))
 }
 
 fn new_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -203,6 +274,7 @@ fn selection<C: Connection>(
     conn: &C,
     screen: usize,
     mode: Mode,
+    backend: &dyn capture::Capture,
 ) -> Result<(Rect, Option<Image>), String> {
     let root = conn.setup().roots[screen].root;
     let full = capture::root_bounds(conn, screen);
@@ -221,7 +293,7 @@ fn selection<C: Connection>(
             Ok((rect, None))
         }
         Mode::Region => {
-            let full_image = capture::grab(conn, screen, full)?;
+            let full_image = backend.capture(full)?;
             let Some(rect) = ui::select_region(conn, screen, &full_image)? else {
                 return Err("cancelled".into());
             };
@@ -236,6 +308,7 @@ fn record_video(
     duration: u64,
     fps: u32,
     path: &Path,
+    audio_source: Option<&str>,
 ) -> Result<(), String> {
     if path.exists() {
         return Err(format!("output already exists: {}", path.display()));
@@ -245,7 +318,8 @@ fn record_video(
     }
     let input = format!("{display}+{},{}", rect.x, rect.y);
     // Optional on-demand encoder; no recorder daemon, Qt, or GStreamer dependency.
-    let status = std::process::Command::new("ffmpeg")
+    let mut command = std::process::Command::new("ffmpeg");
+    command
         .args([
             "-nostdin",
             "-hide_banner",
@@ -259,21 +333,40 @@ fn record_video(
         .arg("-video_size")
         .arg(format!("{}x{}", rect.w, rect.h))
         .arg("-i")
-        .arg(input)
-        .arg("-t")
-        .arg(duration.to_string())
-        .args([
-            "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "20",
-            "-pix_fmt",
-            "yuv420p",
-            "-n",
-        ])
+        .arg(input);
+    if let Some(source) = audio_source {
+        command.args(["-f", "pulse", "-i", source]);
+    } else {
+        command.arg("-an");
+    }
+    command.arg("-t").arg(duration.to_string());
+    match path.extension().and_then(|s| s.to_str()) {
+        Some("webm") => {
+            command.args([
+                "-c:v",
+                "libvpx-vp9",
+                "-deadline",
+                "realtime",
+                "-cpu-used",
+                "8",
+            ]);
+        }
+        Some("gif") => {}
+        _ => {
+            command.args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+            ]);
+        }
+    }
+    let status = command
+        .arg("-n")
         .arg(path)
         .status()
         .map_err(|e| format!("ffmpeg unavailable: {e}"))?;
@@ -297,22 +390,26 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let o = parse(args)?;
     let (conn, screen) = x11rb::connect(None).map_err(|e| format!("X11 connection failed: {e}"))?;
+    let backend = capture::X11Capture::new(&conn, screen);
     if o.delay > Duration::ZERO {
         std::thread::sleep(o.delay);
     }
-    let (rect, full_image) = match selection(&conn, screen, o.mode) {
+    let (rect, full_image) = match selection(&conn, screen, o.mode, &backend) {
         Ok(found) => found,
         Err(e) if e == "cancelled" => return Ok(()),
         Err(e) => return Err(e),
     };
     if let Some(duration) = o.record {
-        let path = o.output.map_or_else(|| default_output("mp4"), Ok)?;
+        let path = o
+            .output
+            .map_or_else(|| default_output("mp4", &o.name_template, o.mode, rect), Ok)?;
         record_video(
             rect,
             &std::env::var("DISPLAY").map_err(|_| "DISPLAY must be set")?,
             duration,
             o.fps,
             &path,
+            o.audio_source.as_deref(),
         )?;
         println!("{}", path.display());
         return Ok(());
@@ -320,7 +417,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut captured = if let Some(full) = full_image {
         full.crop(rect)?
     } else {
-        capture::grab(&conn, screen, rect)?
+        backend.capture(rect)?
     };
     if o.cursor {
         capture::blend_cursor(&conn, &mut captured, rect)?;
@@ -336,27 +433,31 @@ fn run(args: &[String]) -> Result<(), String> {
     let bytes = captured.png()?;
     let mut saved = None;
     if o.save {
-        let path = o.output.map_or_else(|| default_output("png"), Ok)?;
+        let path = o
+            .output
+            .map_or_else(|| default_output("png", &o.name_template, o.mode, rect), Ok)?;
         new_file(&path, &bytes)?;
         println!("{}", path.display());
         saved = Some(path);
     }
     if o.copy {
         let temporary = saved.is_none();
-        let path = if let Some(p) = saved {
-            p
+        let temporary_path;
+        let path = if let Some(p) = saved.as_ref() {
+            p.as_path()
         } else {
-            let p = std::env::temp_dir().join(format!(
+            temporary_path = std::env::temp_dir().join(format!(
                 "flamewm-clipboard-{}-{}.png",
                 std::process::id(),
                 flamewm_api::clock::unix_nanos()
             ));
-            new_file(&p, &bytes)?;
-            p
+            new_file(&temporary_path, &bytes)?;
+            &temporary_path
         };
-        clipboard::spawn_owner(&path, temporary)?;
+        clipboard::spawn_owner(path, temporary)?;
         eprintln!("FlameWM: image copied to clipboard");
     }
+    notify::captured(saved.as_deref(), o.copy);
     Ok(())
 }
 
@@ -389,5 +490,76 @@ mod tests {
             parse(&["--record".into(), "15".into()]).unwrap().record,
             Some(15)
         );
+    }
+
+    #[test]
+    fn recording_formats_and_audio_are_validated() {
+        for ext in ["mp4", "webm", "gif"] {
+            assert!(parse(&[
+                "--record".into(),
+                "1".into(),
+                "--output".into(),
+                format!("out.{ext}")
+            ])
+            .is_ok());
+        }
+        assert!(parse(&["--audio-source".into(), "monitor".into()]).is_err());
+        assert!(parse(&[
+            "--record".into(),
+            "1".into(),
+            "--audio-source".into(),
+            "monitor".into(),
+            "--output".into(),
+            "out.gif".into()
+        ])
+        .is_err());
+        assert!(parse(&[
+            "--record".into(),
+            "1".into(),
+            "--output".into(),
+            "out.avi".into()
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn name_template_expands_capture_metadata() {
+        let options = parse(&[
+            "--window".into(),
+            "--name-template".into(),
+            "Capture-{mode}-{width}x{height}-{timestamp}-{nanos}".into(),
+        ])
+        .unwrap();
+        let rect = Rect {
+            x: 10,
+            y: 20,
+            w: 2560,
+            h: 1440,
+        };
+        assert_eq!(
+            render_name(
+                &options.name_template,
+                options.mode,
+                rect,
+                "png",
+                1_700_000_000,
+                42,
+            )
+            .unwrap(),
+            "Capture-window-2560x1440-1700000000-000000042.png"
+        );
+    }
+
+    #[test]
+    fn name_template_rejects_paths_and_unknown_placeholders() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        for template in ["../escape", "nested/name", "{unknown}", ".."] {
+            assert!(render_name(template, Mode::Full, rect, "png", 1, 0).is_err());
+        }
     }
 }

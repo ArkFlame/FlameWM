@@ -38,6 +38,17 @@ pub(crate) fn spawn(
     ready_rx.recv().map_err(err)?
 }
 
+/// Serves `payloads` on the calling thread until another client takes `selection`.
+pub(crate) fn serve(
+    display: Option<&str>,
+    selection: &'static str,
+    payloads: Vec<(&'static str, Vec<u8>)>,
+) -> Result<(), String> {
+    // `run` reports readiness on this channel; nobody waits here, so keep the receiver alive.
+    let (ready_tx, _ready_rx) = mpsc::channel();
+    run(display, selection, payloads, &ready_tx)
+}
+
 /// Helper window for selection traffic: input-only, with `PropertyNotify` for ICCCM INCR.
 pub(crate) fn helper_window(conn: &RustConnection, screen: usize) -> Result<u32, String> {
     let root = conn.setup().roots[screen].root;

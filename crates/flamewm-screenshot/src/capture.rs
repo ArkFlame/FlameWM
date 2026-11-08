@@ -9,6 +9,29 @@ use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, ImageOr
 
 pub type Result<T> = std::result::Result<T, String>;
 
+/// Backend-neutral capture boundary. A future Wayland screencopy implementation can
+/// produce the same root-relative RGBA image without changing selection or export.
+pub trait Capture {
+    fn capture(&self, rect: Rect) -> Result<Image>;
+}
+
+pub struct X11Capture<'a, C: Connection> {
+    conn: &'a C,
+    screen: usize,
+}
+
+impl<'a, C: Connection> X11Capture<'a, C> {
+    pub fn new(conn: &'a C, screen: usize) -> Self {
+        Self { conn, screen }
+    }
+}
+
+impl<C: Connection> Capture for X11Capture<'_, C> {
+    fn capture(&self, rect: Rect) -> Result<Image> {
+        grab(self.conn, self.screen, rect)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -570,6 +593,22 @@ mod tests {
         let encoded = img.png().unwrap();
         assert!(encoded.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(encoded.len() > 32);
+        let mut reader = png::Decoder::new(Cursor::new(encoded)).read_info().unwrap();
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut decoded).unwrap();
+        assert_eq!((frame.width, frame.height), (1, 1));
+        assert_eq!(frame.color_type, png::ColorType::Rgba);
+        assert_eq!(&decoded[..frame.buffer_size()], img.rgba);
+    }
+
+    #[test]
+    fn png_encoder_rejects_short_pixel_buffer() {
+        let img = Image {
+            width: 2,
+            height: 1,
+            rgba: vec![0; 4],
+        };
+        assert!(img.png().is_err());
     }
     #[test]
     fn component_masks_scale_565() {

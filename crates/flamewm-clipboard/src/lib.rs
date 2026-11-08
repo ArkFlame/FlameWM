@@ -84,6 +84,15 @@ impl Clipboard {
         )
     }
 
+    /// Takes CLIPBOARD with `image/png` and serves it on the calling thread until another client
+    /// takes CLIPBOARD. For a short-lived helper process whose only job is holding the selection:
+    /// it blocks, so it must not run on a UI thread. Errors when `png` lacks the PNG signature.
+    pub fn serve_png_until_replaced(&self, png: &[u8]) -> Result<(), String> {
+        let payloads = codec::png_payloads(png)
+            .ok_or_else(|| "clipboard payload is not PNG".to_owned())?;
+        owner::serve(self.display.as_deref(), "CLIPBOARD", payloads)
+    }
+
     /// Takes PRIMARY (the middle-click selection) and serves `text` like `set_text`.
     pub fn set_primary_text(&self, text: &str) -> Result<(), String> {
         owner::spawn(self.display.clone(), "PRIMARY", codec::text_payloads(text))

@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""Isolated Xvfb/D-Bus acceptance and bounded performance evidence for G3."""
+
+import argparse
+import ctypes as C
+import ctypes.util
+import json
+import os
+from pathlib import Path
+import statistics
+import struct
+import subprocess
+import time
+
+
+X11 = C.CDLL(ctypes.util.find_library("X11"))
+XTST = C.CDLL(ctypes.util.find_library("Xtst"))
+Display = C.c_void_p
+Window = C.c_ulong
+Atom = C.c_ulong
+
+X11.XOpenDisplay.argtypes = [C.c_char_p]
+X11.XOpenDisplay.restype = Display
+X11.XCloseDisplay.argtypes = [Display]
+X11.XDefaultRootWindow.argtypes = [Display]
+X11.XDefaultRootWindow.restype = Window
+X11.XCreateSimpleWindow.argtypes = [
+    Display, Window, C.c_int, C.c_int, C.c_uint, C.c_uint, C.c_uint, C.c_ulong, C.c_ulong
+]
+X11.XCreateSimpleWindow.restype = Window
+X11.XMapWindow.argtypes = [Display, Window]
+X11.XDestroyWindow.argtypes = [Display, Window]
+X11.XSync.argtypes = [Display, C.c_int]
+X11.XFlush.argtypes = [Display]
+X11.XWarpPointer.argtypes = [Display, Window, Window, C.c_int, C.c_int, C.c_uint, C.c_uint, C.c_int, C.c_int]
+X11.XInternAtom.argtypes = [Display, C.c_char_p, C.c_int]
+X11.XInternAtom.restype = Atom
+X11.XConvertSelection.argtypes = [Display, Atom, Atom, Atom, Window, C.c_ulong]
+X11.XPending.argtypes = [Display]
+X11.XGetWindowProperty.argtypes = [
+    Display, Window, Atom, C.c_long, C.c_long, C.c_int, Atom,
+    C.POINTER(Atom), C.POINTER(C.c_int), C.POINTER(C.c_ulong),
+    C.POINTER(C.c_ulong), C.POINTER(C.POINTER(C.c_ubyte)),
+]
+X11.XFree.argtypes = [C.c_void_p]
+XTST.XTestFakeMotionEvent.argtypes = [Display, C.c_int, C.c_int, C.c_int, C.c_ulong]
+XTST.XTestFakeButtonEvent.argtypes = [Display, C.c_uint, C.c_int, C.c_ulong]
+
+
+class XSelectionEvent(C.Structure):
+    _fields_ = [
+        ("type", C.c_int), ("serial", C.c_ulong), ("send_event", C.c_int),
+        ("display", Display), ("requestor", Window), ("selection", Atom),
+        ("target", Atom), ("property", Atom), ("time", C.c_ulong),
+    ]
+
+
+class XEvent(C.Union):
+    _fields_ = [("type", C.c_int), ("selection", XSelectionEvent), ("pad", C.c_long * 24)]
+
+
+X11.XNextEvent.argtypes = [Display, C.POINTER(XEvent)]
+
+
+def open_display(name):
+    display = X11.XOpenDisplay(name.encode())
+    if not display:
+        raise RuntimeError(f"cannot open owned display {name}")
+    return display
+
+
+def png_size(path):
+    data = path.read_bytes()[:33]
+    if len(data) != 33 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        raise AssertionError(f"invalid PNG header: {path}")
+    return struct.unpack(">II", data[16:24])
+
+
+def clipboard_png(display_name):
+    display = open_display(display_name)
+    try:
+        root = X11.XDefaultRootWindow(display)
+        requestor = X11.XCreateSimpleWindow(display, root, 0, 0, 1, 1, 0, 0, 0)
+        clipboard = X11.XInternAtom(display, b"CLIPBOARD", 0)
+        png = X11.XInternAtom(display, b"image/png", 0)
+        prop = X11.XInternAtom(display, b"FLAMEWM_G3_ACCEPTANCE", 0)
+        X11.XConvertSelection(display, clipboard, png, prop, requestor, 0)
+        X11.XFlush(display)
+        deadline = time.monotonic() + 3
+        event = XEvent()
+        while time.monotonic() < deadline:
+            while X11.XPending(display):
+                X11.XNextEvent(display, C.byref(event))
+                if event.type == 31 and event.selection.requestor == requestor:
+                    if event.selection.property == 0:
+                        raise AssertionError("clipboard refused image/png")
+                    actual, fmt = Atom(), C.c_int()
+                    count, remaining = C.c_ulong(), C.c_ulong()
+                    value = C.POINTER(C.c_ubyte)()
+                    status = X11.XGetWindowProperty(
+                        display, requestor, prop, 0, 1 << 20, 1, 0,
+                        C.byref(actual), C.byref(fmt), C.byref(count), C.byref(remaining), C.byref(value),
+                    )
+                    if status != 0 or fmt.value != 8:
+                        raise AssertionError(f"clipboard property failed: status={status} format={fmt.value}")
+                    if actual.value != png:
+                        X11.XFree(value)
+                        raise AssertionError("clipboard requires unexpected INCR for small region")
+                    payload = C.string_at(value, count.value)
+                    X11.XFree(value)
+                    return payload
+            time.sleep(0.01)
+        raise AssertionError("timed out waiting for clipboard SelectionNotify")
+    finally:
+        X11.XCloseDisplay(display)
+
+
+def terminate(process):
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--evidence", type=Path, required=True)
+    args = parser.parse_args()
+    binary = args.binary.resolve(strict=True)
+    evidence = args.evidence.resolve()
+    evidence.mkdir(parents=True, exist_ok=False)
+    home = evidence / "home"
+    home.mkdir()
+    (evidence / "cwd").mkdir()
+    command_log = (evidence / "commands.jsonl").open("a", encoding="utf-8")
+    xvfb_log = (evidence / "xvfb.log").open("w", encoding="utf-8")
+    notification_log_path = evidence / "notifications.jsonl"
+    notification_stderr = (evidence / "notification-service.log").open("w", encoding="utf-8")
+    result = {"status": "FAIL", "width": 2560, "height": 1440, "samples": 5}
+    xvfb = dbus = service = None
+    env = os.environ.copy()
+    env.pop("DISPLAY", None)
+    env.pop("WAYLAND_DISPLAY", None)
+    env.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")})
+
+    def run(command, timeout=10):
+        start = time.monotonic()
+        completed = subprocess.run(
+            [str(part) for part in command], env=env, cwd=evidence / "cwd",
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+        )
+        row = {
+            "command": [str(part) for part in command], "exit": completed.returncode,
+            "elapsed_s": time.monotonic() - start, "stdout": completed.stdout, "stderr": completed.stderr,
+        }
+        command_log.write(json.dumps(row) + "\n")
+        command_log.flush()
+        if completed.returncode != 0:
+            raise AssertionError(f"command failed: {row}")
+        return completed
+
+    try:
+        display_name = None
+        for number in range(140, 180):
+            if Path(f"/tmp/.X11-unix/X{number}").exists() or Path(f"/tmp/.X{number}-lock").exists():
+                continue
+            candidate = f":{number}"
+            process = subprocess.Popen(
+                ["Xvfb", candidate, "-screen", "0", "2560x1440x24", "-nolisten", "tcp"],
+                env=env, stdin=subprocess.DEVNULL, stdout=xvfb_log, stderr=xvfb_log,
+            )
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and process.poll() is None:
+                try:
+                    probe = open_display(candidate)
+                except RuntimeError:
+                    time.sleep(0.02)
+                else:
+                    X11.XCloseDisplay(probe)
+                    display_name, xvfb = candidate, process
+                    break
+            if display_name:
+                break
+            terminate(process)
+        if not display_name:
+            raise RuntimeError("could not start an isolated Xvfb")
+        env["DISPLAY"] = display_name
+        result["display"] = display_name
+
+        dbus = subprocess.Popen(
+            ["dbus-daemon", "--session", "--nofork", "--print-address=1", "--print-pid=1"],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        address = dbus.stdout.readline().strip()
+        daemon_pid = int(dbus.stdout.readline().strip())
+        if not address or daemon_pid != dbus.pid:
+            raise RuntimeError("private D-Bus daemon did not report its owned identity")
+        env["DBUS_SESSION_BUS_ADDRESS"] = address
+        service = subprocess.Popen(
+            ["/usr/bin/python3", str(Path(__file__).resolve().parent / "tests/screenshot/notification-service.py"), str(notification_log_path)],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=notification_stderr, text=True,
+        )
+        if service.stdout.readline().strip() != "ready":
+            raise RuntimeError("private notification service did not start")
+
+        full = run([binary, "--full", "--name-template", "acceptance-{mode}-{width}x{height}-{timestamp}-{nanos}"])
+        full_path = Path(full.stdout.strip())
+        expected_dir = home / "Pictures" / "Screenshots"
+        if full_path.parent != expected_dir or not full_path.name.startswith("acceptance-full-2560x1440-"):
+            raise AssertionError(f"template/default directory mismatch: {full_path}")
+        if png_size(full_path) != (2560, 1440):
+            raise AssertionError("full-screen dimensions mismatch")
+        result["full"] = str(full_path)
+
+        delay_path = evidence / "delayed.png"
+        delay_start = time.monotonic()
+        run([binary, "--full", "--delay", "0.15", "--output", delay_path])
+        delay_elapsed = time.monotonic() - delay_start
+        if delay_elapsed < 0.13 or png_size(delay_path) != (2560, 1440):
+            raise AssertionError("delay timer did not elapse before capture")
+        result["delay_s"] = delay_elapsed
+
+        display = open_display(display_name)
+        root = X11.XDefaultRootWindow(display)
+        fixture = X11.XCreateSimpleWindow(display, root, 40, 60, 320, 200, 0, 0, 0x00FF0000)
+        X11.XMapWindow(display, fixture)
+        X11.XWarpPointer(display, 0, fixture, 0, 0, 0, 0, 100, 80)
+        X11.XSync(display, 0)
+        window_path = evidence / "window.png"
+        run([binary, "--window", "--output", window_path])
+        if png_size(window_path) != (320, 200):
+            raise AssertionError(f"window capture dimensions mismatch: {png_size(window_path)}")
+        X11.XDestroyWindow(display, fixture)
+        X11.XCloseDisplay(display)
+        result["window"] = str(window_path)
+
+        region_path = evidence / "region.png"
+        region = subprocess.Popen(
+            [str(binary), "--region", "--copy", "--output", str(region_path)],
+            env=env, cwd=evidence / "cwd", stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(0.5)
+        if region.poll() is not None:
+            raise AssertionError(f"region selector exited early: {region.communicate()}")
+        display = open_display(display_name)
+        # Paced steps: each request is synced so the grab sees press, motion and release in order.
+        for step in (
+            lambda: XTST.XTestFakeMotionEvent(display, -1, 100, 100, 0),
+            lambda: XTST.XTestFakeButtonEvent(display, 1, 1, 0),
+            lambda: XTST.XTestFakeMotionEvent(display, -1, 219, 179, 0),
+            lambda: XTST.XTestFakeButtonEvent(display, 1, 0, 0),
+        ):
+            step()
+            X11.XSync(display, 0)
+            time.sleep(0.1)
+        X11.XCloseDisplay(display)
+        stdout, stderr = region.communicate(timeout=5)
+        command_log.write(json.dumps({"command": ["region+drag+copy"], "exit": region.returncode, "stdout": stdout, "stderr": stderr}) + "\n")
+        if region.returncode != 0 or png_size(region_path) != (120, 80):
+            raise AssertionError(f"interactive region failed: exit={region.returncode} size={png_size(region_path)} stderr={stderr}")
+        clipboard = clipboard_png(display_name)
+        if clipboard != region_path.read_bytes():
+            raise AssertionError("clipboard PNG differs from saved region PNG")
+        result["region"] = {"path": str(region_path), "size": [120, 80], "clipboard_bytes": len(clipboard)}
+
+        performance = []
+        for index in range(5):
+            output = evidence / f"performance-{index}.png"
+            timing = evidence / f"performance-{index}.time"
+            run(["/usr/bin/time", "-f", "elapsed_s=%e\nmaxrss_kb=%M", "-o", timing,
+                 binary, "--full", "--output", output])
+            fields = dict(line.split("=", 1) for line in timing.read_text().splitlines())
+            sample = {
+                "sample": index, "size": [2560, 1440], "elapsed_s": float(fields["elapsed_s"]),
+                "maxrss_kb": int(fields["maxrss_kb"]), "png_bytes": output.stat().st_size,
+            }
+            if png_size(output) != (2560, 1440):
+                raise AssertionError("performance capture dimensions mismatch")
+            performance.append(sample)
+            (evidence / "performance.jsonl").open("a").write(json.dumps(sample) + "\n")
+        result["performance"] = performance
+        result["summary"] = {
+            "latency_min_s": min(s["elapsed_s"] for s in performance),
+            "latency_median_s": statistics.median(s["elapsed_s"] for s in performance),
+            "latency_max_s": max(s["elapsed_s"] for s in performance),
+            "peak_rss_max_kb": max(s["maxrss_kb"] for s in performance),
+            "scope": "whole process: XGetImage, RGBA conversion, PNG encode/save, notification client",
+        }
+        deadline = time.monotonic() + 3
+        notifications = []
+        while time.monotonic() < deadline:
+            if notification_log_path.exists():
+                notifications = [json.loads(line) for line in notification_log_path.read_text().splitlines()]
+            if len(notifications) >= 9:
+                break
+            time.sleep(0.02)
+        if len(notifications) != 9 or any(n["app"] != "FlameWM" or n["summary"] != "Screenshot captured" or not n["body"].startswith("Saved to ") for n in notifications):
+            raise AssertionError(f"unexpected notification deliveries: {notifications}")
+        result["notify_method_calls"] = len(notifications)
+        result["status"] = "PASS"
+    except Exception as error:
+        result["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        result["owned_process_cleanup"] = {}
+        for name, process in (("notification-service", service), ("dbus-daemon", dbus), ("Xvfb", xvfb)):
+            terminate(process)
+            result["owned_process_cleanup"][name] = None if process is None else process.returncode
+        (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+        command_log.close()
+        notification_stderr.close()
+        xvfb_log.close()
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
