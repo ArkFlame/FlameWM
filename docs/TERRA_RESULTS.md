@@ -395,3 +395,9 @@ Isolated-vs-full differences (SS06, SS07, SS10, SS15) indicate order-dependent s
 - SS07 `taskbar_visual_consumer` still unmeasured (NOT_RUN). Open.
 - SS15 `disabled_mode_ends_inert` FAIL. The earlier isolated PASS had `mode_count=0`, so the mode-paging loop never ran. The full run lists 16 modes (4 pages); `mode_next` clicks at (760,497) leave the page label unchanged (`label_changed=false` x3) while the snapshot is unchanged. Open: click point versus product; not yet separated.
 - SS14, SS16, SS19 FAIL (previously triaged as harness/pre-existing; unchanged).
+
+### Full matrix after geometry and control fixes (HEAD 3962a356, `run-full3`): VERDICT FAIL, exit 1
+- `ffd114c6`: Settings geometry waits for WM placement. The first mapped read was +0+0; clicks missed. SS06 `snap_preview_consumer` now PASS, SS15 `disabled_mode_ends_inert` now PASS in the full run.
+- `3962a356`: SS07 unrelated-change control compares the taskbar sample within the 16-level tolerance (drift 9,10,10 -> 10,10,12 failed the exact digest). SS07 PASS.
+- PASS: SS00-05, SS07, SS09-13, SS15, SS17. FAIL: SS14, SS16, SS19. NOT_RUN: SS06 (`desktop_visual_consumer`: `selection_red_before` sample is None in the full run), SS18. ENVIRONMENT_BLOCKED: SS08.
+- SS15 `mode_count` was 0 in this run, so the 16-mode paging loop was not exercised here. The earlier 16-mode failure was the wrong-point click (fixed); the 16-mode path still needs a run that lists modes.
