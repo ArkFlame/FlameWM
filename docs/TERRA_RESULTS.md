@@ -158,3 +158,12 @@
 - Gate: `cargo test -p flamewm-screenshot` exit 0, 40 passed, zero warnings; release build zero warnings; `python3 tools/architecture_guard.py` exit 0.
 - Commits: `80dad7d8` (region readiness and cancel), `c5a0112e` (MIT-SHM and decode fast path), `3c903173` (stop indicator), `2fccab72` (acceptance: Esc, stop, readiness). Trailer: Co-Authored-By Claude Sonnet 5.5.
 - Not verified: 30 fps; a real notification daemon with the stop action; Wayland; SHM behaviour on TCP or remote displays (fallback path only reasoned, not run).
+
+## G11 Task Manager idle CPU — NOT FIXED, root cause localized
+
+- Method: clean HEAD worktree (the shared tree did not compile because another worker's `flamewm-platform` display edits were mid-refactor), isolated Xvfb with no WM, 30 s warm-up, then 10 s `/proc/<pid>/task/*/stat` utime+stime deltas. Script: `/tmp/opencode/tm-idle.sh <bin> <display> <warm> <measure>`.
+- Before (release, HEAD, 976 host processes): process 5.5% of one core, main thread 3.6%, sampler thread 1.9%, RSS 27 MB. Debug build: 62–68%, so debug numbers are not comparable.
+- Timing per wake (release, instrumented copy, not committed): `on_reactor` (accept + paint) 0.6–8 ms; `redraw_if_dirty` 70–225 ms. Debug redraw ~500–900 ms.
+- Ruled out: graph image re-rendering (redraw still 110–225 ms with `paint_graphs` disabled), the window backdrop (opacity forced to 100 gave the same redraw time in debug). `perf`, `strace` and `gdb` are blocked by ptrace/perf policy.
+- Reactor: `FLAMEWM_TIMER_TRACE` shows the loop sleeps with `timeout=None` between 1 Hz samples. The per-wake cost is the full retained redraw in `crates/flamewm-render-x11/src/app/render/frame.rs` (Claude-owned). Likely cause: every wake reports damage over the whole table, so the planner repaints the whole window. Not verified.
+- No source changes committed for G11 in this pass. Next step: count `pending_damage` kind per wake and the number of nodes changed, then either skip unchanged table rows in the task manager or make the renderer repaint only the changed rect. Target <1% is not yet met.
