@@ -171,8 +171,32 @@ fn load(theme: &xcursor::CursorTheme, icon: CursorIcon, size: u32) -> Option<Nam
     let path = std::iter::once(icon.name())
         .chain(icon.alt_names().iter().copied())
         .find_map(|name| theme.load_icon(name))?;
-    let data = std::fs::read(path).ok()?;
-    let images = xcursor::parser::parse_xcursor(&data)?;
+    let frame = decode_frame(&std::fs::read(path).ok()?, size)?;
+    Some(Named {
+        buffer: MemoryRenderBuffer::from_slice(
+            &frame.pixels,
+            Fourcc::Argb8888,
+            (frame.width, frame.height),
+            1,
+            Transform::Normal,
+            None,
+        ),
+        hotspot: frame.hotspot,
+    })
+}
+
+/// One decoded xcursor frame: `pixels` are the file's little-endian ARGB words, premultiplied, in
+/// memory order B, G, R, A (`Argb8888`).
+struct Frame {
+    width: i32,
+    height: i32,
+    hotspot: Point<i32, Logical>,
+    pixels: Vec<u8>,
+}
+
+/// Frame 0 of the image nearest `size` in an xcursor file.
+fn decode_frame(data: &[u8], size: u32) -> Option<Frame> {
+    let images = xcursor::parser::parse_xcursor(data)?;
     // Frames of one size are contiguous and in playback order: the first nearest image is frame 0.
     let image = images
         .iter()
@@ -185,20 +209,14 @@ fn load(theme: &xcursor::CursorTheme, icon: CursorIcon, size: u32) -> Option<Nam
     if width == 0 || height == 0 || image.pixels_rgba.len() < bytes {
         return None;
     }
-    // xcursor pixels are little-endian ARGB words, which is DRM's Argb8888 byte order.
-    Some(Named {
-        buffer: MemoryRenderBuffer::from_slice(
-            &image.pixels_rgba,
-            Fourcc::Argb8888,
-            (width, height),
-            1,
-            Transform::Normal,
-            None,
-        ),
+    Some(Frame {
+        width,
+        height,
         hotspot: Point::from((
             i32::try_from(image.xhot).unwrap_or(0),
             i32::try_from(image.yhot).unwrap_or(0),
         )),
+        pixels: image.pixels_rgba[..bytes].to_vec(),
     })
 }
 
@@ -357,5 +375,43 @@ mod tests {
             cursors.named.contains_key(&CursorIcon::Pointer),
             "the lookup is remembered"
         );
+    }
+
+    #[test]
+    fn real_progress_cursor_keeps_alpha_and_never_turns_clear_pixels_black() {
+        // The shipped `progress` cursor: the busy pointer the user sees when a folder opens.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors/cursors/progress");
+        let data = std::fs::read(path).expect("shipped progress cursor");
+        for size in [24u32, 32, 48] {
+            let frame = decode_frame(&data, size).expect("frame decodes");
+            assert_eq!(frame.pixels.len(), (frame.width * frame.height * 4) as usize);
+            let mut clear = 0usize;
+            for pixel in frame.pixels.chunks_exact(4) {
+                // Argb8888 memory order is B, G, R, A.
+                let (b, g, r, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+                assert!(r <= a && g <= a && b <= a, "premultiplied: channel above alpha");
+                if a == 0 {
+                    clear += 1;
+                    assert_eq!(
+                        pixel,
+                        &[0, 0, 0, 0],
+                        "a clear pixel must stay fully transparent, not opaque black"
+                    );
+                }
+            }
+            assert!(clear > 0, "the busy cursor has transparent margin");
+        }
+    }
+
+    #[test]
+    fn decoded_pixels_are_the_file_words_unchanged() {
+        // Identity: xcursor file words are B,G,R,A bytes, the same order as Argb8888 in memory.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors/cursors/progress");
+        let data = std::fs::read(path).expect("shipped progress cursor");
+        let frame = decode_frame(&data, 24).expect("frame decodes");
+        let images = xcursor::parser::parse_xcursor(&data).expect("parses");
+        let image = images.iter().find(|image| image.size == 24).expect("24px frame");
+        assert_eq!(frame.pixels[..], image.pixels_rgba[..frame.pixels.len()]);
+        assert_eq!(frame.hotspot, Point::from((4, 4)));
     }
 }
