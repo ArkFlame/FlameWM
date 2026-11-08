@@ -3185,11 +3185,15 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
             and abs(visual["selection_red_before"] - visual["expected_red_before"]) <= 12)
         visual["controls_ok"] = controls
         if controls and red_apply is not None and red_high is not None and high is not None:
+            # The 20%->50% probe must be distinguishable: the expected step (accent-dependent) must be
+            # at least 12 levels and the measured step must keep 60% of it.
+            step = visual["expected_red_at_50"] - visual["expected_red_before"]
             observations["desktop_visual_consumer"] = bool(
                 visual["note_visible_after_apply"] is False
                 and abs(red_apply - visual["expected_red_after_apply"]) <= 12
                 and abs(red_high - visual["expected_red_at_50"]) <= 12
-                and red_high - visual["selection_red_before"] >= 40)
+                and step >= 12
+                and red_high - visual["selection_red_before"] >= 0.6 * step)
     if values_ok and clients and clients_alive(clients):
         ss06_snap_preview(ctx, args, details, observations)
     stop_session_clients(ctx, clients)
