@@ -406,7 +406,7 @@ for path, anchor, description in [
     ("crates/flamewm-render-x11/src/app/events.rs", "ActionPhase::Motion", "motion dispatch"),
     ("crates/flamewm-render-x11/src/app/events.rs", "hover == Some(index),", "motion dispatch"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "XSetGraphicsExposures(display, gc, 0)", "image copy"),
-    ("crates/flamewm-render-x11/src/app/render.rs", "XCopyArea(\n                    self.display,\n                    self.backbuffer,", "present copy"),
+    ("crates/flamewm-render-x11/src/app/render/present.rs", "XCopyArea(\n                    self.display,\n                    self.backbuffer,", "present copy"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "_NET_WM_WINDOW_TYPE", "EWMH role"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "attributes.override_redirect = 1;", "popup override redirect"),
     ("crates/flamewm-render-x11/src/app/images.rs", "revision: u64", "image revision cache"),
