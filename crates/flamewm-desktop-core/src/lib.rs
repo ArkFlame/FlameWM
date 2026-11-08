@@ -8,6 +8,7 @@ pub mod atomic_file;
 pub mod file_actions;
 pub mod layout;
 pub mod model;
+pub mod paste;
 pub mod persistence;
 pub mod presentation;
 pub mod selection;

@@ -7,6 +7,18 @@ pub(crate) fn handle_desktop_key(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
+    // Ctrl+V pastes files from the system clipboard into the Desktop folder.
+    if key.phase == UiKeyPhase::Press
+        && key.key.eq_ignore_ascii_case("v")
+        && key.modifiers.len() == 1
+        && key.modifiers.iter().any(|m| m.eq_ignore_ascii_case("ctrl"))
+        && state.rename.is_none()
+        && !sticky::is_editing(state)
+        && !state.widgets.is_editing()
+    {
+        paste_clipboard_files(state.directory.clone());
+        return Ok(());
+    }
     if key.phase != UiKeyPhase::Press
         || key.key != "Delete"
         || !key.modifiers.is_empty()
@@ -24,6 +36,32 @@ pub(crate) fn handle_desktop_key(
     state.menu = None;
     hide_menus(document, &mut state.menu_rects)?;
     show_confirm(document, state)
+}
+
+/// Reads files from the system clipboard on a worker thread and copies or moves them into `directory`.
+/// Cut sources are removed only after each copy succeeds; the desktop watcher shows the new entries.
+pub(crate) fn paste_clipboard_files(directory: PathBuf) {
+    let spawned = std::thread::Builder::new()
+        .name("flamewm-paste".to_owned())
+        .spawn(move || {
+            let read = flamewm_clipboard::Clipboard::connect()
+                .and_then(|clipboard| clipboard.get_files());
+            match read {
+                Ok(Some((paths, op))) => {
+                    let cut = matches!(op, flamewm_clipboard::FileOp::Cut);
+                    for outcome in flamewm_desktop_core::paste::paste_into(&directory, &paths, cut) {
+                        if let Err(error) = outcome {
+                            report_action_failure("paste file", error);
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => report_action_failure("read clipboard files", error),
+            }
+        });
+    if let Err(error) = spawned {
+        report_action_failure("start paste", error.to_string());
+    }
 }
 
 pub(crate) fn wheel_bounds(state: &DesktopState) -> Option<Rect> {
