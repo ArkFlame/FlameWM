@@ -25,7 +25,7 @@ pub fn serve(path: &Path, temporary: bool) -> Result<(), String> {
     if temporary {
         let _ = std::fs::remove_file(path);
     }
-    flamewm_clipboard::Clipboard::connect()?.serve_png_until_replaced(&bytes)
+    flamewm_clipboard::serve_png(None, &bytes)
 }
 
 /// Makes clipboard persistence optional: no resident process unless --copy is requested.

@@ -562,4 +562,48 @@ mod tests {
             assert!(render_name(template, Mode::Full, rect, "png", 1, 0).is_err());
         }
     }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-shot-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn new_file_creates_missing_directories_and_never_overwrites() {
+        let dir = scratch("create");
+        let path = dir.join("missing/nested/shot.png");
+        new_file(&path, b"one").expect("creates parents");
+        assert_eq!(fs::read(&path).unwrap(), b"one");
+        let again = new_file(&path, b"two").unwrap_err();
+        assert!(again.contains("shot.png"), "{again}");
+        assert_eq!(fs::read(&path).unwrap(), b"one", "existing capture must survive");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_file_reports_a_parent_that_is_not_a_directory() {
+        let dir = scratch("blocked");
+        let blocker = dir.join("not-a-dir");
+        fs::write(&blocker, b"file").unwrap();
+        let error = new_file(&blocker.join("shot.png"), b"x").unwrap_err();
+        assert!(error.contains("not-a-dir"), "{error}");
+        assert_eq!(fs::read(&blocker).unwrap(), b"file");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn region_outside_capture_is_an_error_not_a_blank_image() {
+        let image = Image {
+            width: 4,
+            height: 4,
+            rgba: vec![0; 4 * 4 * 4],
+        };
+        let outside = Rect { x: 10, y: 10, w: 3, h: 3 };
+        assert!(image.clone().crop(outside).is_err());
+    }
 }

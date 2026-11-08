@@ -18,6 +18,46 @@ pub fn spawn_keeper(display: Option<&str>) -> Result<(), String> {
     keeper::spawn(display.map(str::to_owned))
 }
 
+/// Takes CLIPBOARD on `display` (or `$DISPLAY`) with `image/png` and serves it on the calling
+/// thread until another client takes CLIPBOARD. For a short-lived helper process whose only job is
+/// holding the selection: it blocks, so it must not run on a UI thread. The payload is validated
+/// before any connection is made.
+pub fn serve_png(display: Option<&str>, png: &[u8]) -> Result<(), String> {
+    let payloads =
+        codec::png_payloads(png).ok_or_else(|| "clipboard payload is not PNG".to_owned())?;
+    owner::serve(display, "CLIPBOARD", payloads)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nIHDR";
+
+    #[test]
+    fn non_png_payload_is_rejected_before_connecting() {
+        // A bogus display proves no connection was attempted: the error is the payload check.
+        assert_eq!(
+            serve_png(Some(":no-such-display-999"), b"GIF89a").unwrap_err(),
+            "clipboard payload is not PNG"
+        );
+        assert_eq!(
+            serve_png(Some(":no-such-display-999"), b"").unwrap_err(),
+            "clipboard payload is not PNG"
+        );
+    }
+
+    #[test]
+    fn unreachable_display_fails_instead_of_claiming_clipboard() {
+        assert!(serve_png(Some(":no-such-display-999"), PNG).is_err());
+    }
+
+    #[test]
+    fn connect_to_missing_display_is_an_error() {
+        assert!(Clipboard::connect_display(Some(":no-such-display-999")).is_err());
+    }
+}
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -82,15 +122,6 @@ impl Clipboard {
             "CLIPBOARD",
             codec::text_payloads(text),
         )
-    }
-
-    /// Takes CLIPBOARD with `image/png` and serves it on the calling thread until another client
-    /// takes CLIPBOARD. For a short-lived helper process whose only job is holding the selection:
-    /// it blocks, so it must not run on a UI thread. Errors when `png` lacks the PNG signature.
-    pub fn serve_png_until_replaced(&self, png: &[u8]) -> Result<(), String> {
-        let payloads = codec::png_payloads(png)
-            .ok_or_else(|| "clipboard payload is not PNG".to_owned())?;
-        owner::serve(self.display.as_deref(), "CLIPBOARD", payloads)
     }
 
     /// Takes PRIMARY (the middle-click selection) and serves `text` like `set_text`.
