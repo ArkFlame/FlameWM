@@ -321,7 +321,10 @@ mod audio_template_tests {
         assert_eq!(audio_thumb_left(100.0, 100.0), 349.0);
         assert_eq!(audio_thumb_left(150.0, 150.0), 349.0);
         assert_eq!(audio_thumb_left(75.0, 150.0), 174.0);
-        assert_eq!(AUDIO_THUMB_TOP, 1.0, "knob centre sits on the 16px track centre");
+        assert_eq!(
+            AUDIO_THUMB_TOP, 1.0,
+            "knob centre sits on the 16px track centre"
+        );
     }
 
     #[test]
@@ -583,7 +586,130 @@ mod audio_list_css_tests {
         let start = css.find(".audio-list {").expect("audio-list rule");
         let body = &css[start..start + css[start..].find('}').expect("rule end")];
         assert!(!body.contains("max-height"), "{body}");
-        assert!(include_str!("../../../../ui/shell/audio.html")
-            .contains(".audio-list { position:relative; height:336px;"));
+        assert!(
+            include_str!("../../../../ui/shell/audio.html")
+                .contains(".audio-list { position:relative; height:336px;")
+        );
+    }
+}
+
+#[cfg(test)]
+mod audio_render_tests {
+    //! Headless pixels of the real audio popup. The compiled template is projected, laid out and
+    //! painted through the software chain (`PaintCommand` -> glyph masks -> `PixelOp` -> RGBA8),
+    //! so the slider is checked on painted pixels, not only on layout boxes. Set
+    //! `FLAMEWM_AUDIO_SHOT_DIR` to also dump each step as a raw RGBA8 frame.
+    use super::*;
+    use flamewm_api::system::{AudioEndpointKind, AudioEndpointSnapshot, ServiceAvailability};
+    use flamewm_shell_core::status::{AudioSettings, AudioTab};
+
+    const AUDIO_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-audio.rwr"));
+    const VIEWPORT: (f32, f32) = (459.0, 460.0);
+    /// Opaque panel-like backdrop the popup is composited over.
+    const BACKDROP: [u8; 4] = [30, 33, 35, 255];
+
+    fn output_snapshot(percent: u8) -> crate::ShellSnapshot {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        snapshot.system.audio.endpoints = vec![AudioEndpointSnapshot {
+            id: 1,
+            kind: AudioEndpointKind::Sink,
+            name: "speakers".to_owned(),
+            description: "Built-in Speakers".to_owned(),
+            volume_percent: percent,
+            muted: false,
+            is_default: true,
+        }];
+        snapshot
+    }
+
+    /// The Devices tab projected at `percent` with the 100% cap (no raise-maximum).
+    fn popup(percent: u8) -> flamewm_ui_x11::UiDocument {
+        let mut document =
+            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
+        project_audio_full(
+            &mut document,
+            &output_snapshot(percent),
+            AudioTab::Devices,
+            AudioSettings {
+                raise_maximum: false,
+            },
+            0,
+        )
+        .expect("every projected audio id must be a valid target");
+        document
+    }
+
+    fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = (y as usize * VIEWPORT.0 as usize + x as usize) * 4;
+        [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+    }
+
+    /// Bright enough to be the white fill or knob rather than the dim track.
+    fn is_fill(pixel: [u8; 4]) -> bool {
+        pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200
+    }
+
+    fn rect_of(document: &flamewm_ui_x11::UiDocument, id: &str) -> (f32, f32, f32, f32) {
+        document
+            .layout_box_by_id(id, VIEWPORT)
+            .unwrap_or_else(|| panic!("no layout box for {id}"))
+    }
+
+    #[test]
+    fn slider_paints_pill_track_fill_and_knob_at_every_step() {
+        let out_dir = std::env::var_os("FLAMEWM_AUDIO_SHOT_DIR").map(std::path::PathBuf::from);
+        for percent in [0u8, 25, 50, 75, 100] {
+            let document = popup(percent);
+            let track = rect_of(&document, "audio-slot-1-track");
+            let fill = rect_of(&document, "audio-slot-1-fill");
+            let knob = rect_of(&document, "audio-slot-1-thumb");
+            let frame =
+                flamewm_ui_x11::test_support::paint_popup_software(document, VIEWPORT, BACKDROP);
+            if let Some(dir) = &out_dir {
+                std::fs::write(dir.join(format!("audio-{percent:03}.rgba")), &frame)
+                    .expect("write shot");
+            }
+            let mid_y = (track.1 + track.3 / 2.0) as u32;
+
+            // Fill and track share a height: the fill column is white for exactly the track rows.
+            if percent > 0 {
+                let column = (fill.0 + fill.2 / 2.0) as u32;
+                let top = track.1 as u32;
+                let rows = (top..top + track.3 as u32)
+                    .filter(|&y| is_fill(pixel(&frame, column, y)))
+                    .count();
+                assert_eq!(
+                    rows, track.3 as usize,
+                    "{percent}%: fill rows must match track height"
+                );
+                assert!(
+                    !is_fill(pixel(&frame, column, top - 2)),
+                    "{percent}%: fill leaks above track"
+                );
+                assert!(
+                    !is_fill(pixel(&frame, column, top + track.3 as u32 + 1)),
+                    "{percent}%: fill leaks below track"
+                );
+            } else {
+                assert!(
+                    !is_fill(pixel(&frame, (track.0 + track.2 / 2.0) as u32, mid_y)),
+                    "0%: track must be unfilled"
+                );
+            }
+
+            // The knob is white at its centre and that centre sits on the fill end.
+            let knob_centre = (knob.0 + knob.2 / 2.0, knob.1 + knob.3 / 2.0);
+            assert!(
+                is_fill(pixel(&frame, knob_centre.0 as u32, knob_centre.1 as u32)),
+                "{percent}%: knob must paint white at its centre"
+            );
+            let expected_x = track.0 + track.2 * percent as f32 / 100.0;
+            assert!(
+                (knob_centre.0 - expected_x).abs() <= 1.0,
+                "{percent}%: knob centre {} != fill end {expected_x}",
+                knob_centre.0
+            );
+        }
     }
 }

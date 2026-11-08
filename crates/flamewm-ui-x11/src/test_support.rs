@@ -10,6 +10,11 @@ use flamewm_render_core::{CompiledNode, NodeKind, Style};
 use flamewm_ui_core::style::UiLayer;
 
 use crate::{RuntimeImage, UiColor, UiDocumentAccess};
+use crate::{UiDocument, UiTemplate};
+use flamewm_render_core::glyphs::{TextMask, text_mask};
+use flamewm_render_core::lower::{FrameSource, lower_commands};
+use flamewm_render_core::soft::SoftPixels;
+use flamewm_render_core::{InteractionState, LayoutEngine, PaintCommand};
 
 /// Fixture node with empty action/text and no style; callers override fields with `..`.
 #[cfg(test)]
@@ -134,4 +139,103 @@ impl UiDocumentAccess for RecordingUiDoc {
     fn layer(&mut self, _id: &str, _layer: UiLayer) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Lays out and paints a popup `document` over `backdrop` at `viewport` through the software chain
+/// (`PaintCommand` -> glyph masks -> `PixelOp` -> RGBA8), as a Wayland presenter does. Returns
+/// `width * height * 4` bytes; set `FLAMEWM_AUDIO_SHOT_DIR` in the caller to dump them.
+pub fn paint_popup_software(
+    document: UiDocument,
+    viewport: (f32, f32),
+    backdrop: [u8; 4],
+) -> Vec<u8> {
+    let (width, height) = (viewport.0 as u32, viewport.1 as u32);
+    let runtime = UiTemplate::new(document).into_runtime_document();
+    let layout = LayoutEngine::compute(
+        &runtime,
+        viewport.0,
+        viewport.1,
+        InteractionState::default(),
+    );
+    // Fractional fills (25% of 350px is 87.5px) snap to device pixels as the presenters do.
+    let commands = flamewm_render_core::lower::snap_commands(
+        &flamewm_render_core::paint::build_paint_commands(
+            &runtime,
+            &layout,
+            InteractionState::default(),
+        ),
+        1.0,
+    );
+    // One source per Text, TextShadow and Image command, in command order. Text without a
+    // usable font gets an empty mask, so the label is simply not drawn; slider geometry is
+    // unaffected. The popup carries no bitmap images, so Image sources are empty.
+    enum Pending {
+        Mask(TextMask, [u8; 4]),
+        Image,
+    }
+    let pending: Vec<Pending> = commands
+        .iter()
+        .filter_map(|command| match command {
+            PaintCommand::Text {
+                x,
+                y,
+                size,
+                color,
+                text,
+                ..
+            }
+            | PaintCommand::TextShadow {
+                x,
+                y,
+                size,
+                color,
+                text,
+                ..
+            } => {
+                // The command's y is already the text baseline (see the popup template).
+                let mask = text_mask(text, *size, *x, *y).unwrap_or(TextMask {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                    coverage: Vec::new(),
+                });
+                Some(Pending::Mask(mask, [color.r, color.g, color.b, color.a]))
+            }
+            PaintCommand::Image { .. } => Some(Pending::Image),
+            _ => None,
+        })
+        .collect();
+    let sources: Vec<FrameSource<'_>> = pending
+        .iter()
+        .map(|source| match source {
+            Pending::Mask(mask, color) => FrameSource::Mask {
+                x: mask.x,
+                y: mask.y,
+                width: mask.width,
+                height: mask.height,
+                alpha: &mask.coverage[..],
+                color: *color,
+            },
+            Pending::Image => FrameSource::Image {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+                rgba: &[],
+            },
+        })
+        .collect();
+    let ops = lower_commands(&commands, 1.0, &sources, (width, height), None)
+        .expect("popup commands must lower");
+    let mut frame: Vec<u8> = backdrop
+        .iter()
+        .copied()
+        .cycle()
+        .take(width as usize * height as usize * 4)
+        .collect();
+    SoftPixels::new()
+        .paint(&mut frame, width, height, &ops)
+        .expect("software paint");
+    frame
 }
