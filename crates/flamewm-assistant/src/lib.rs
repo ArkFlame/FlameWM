@@ -839,7 +839,7 @@ impl Assistant {
         doc.visible("input", !empty)?;
         doc.visible("caret-empty", empty)?;
         doc.visible("caret", !empty)?;
-        doc.text("input", model::keep_spaces(&self.input))?;
+        doc.text_ref("input-text", &self.input)?;
         doc.visible("record", self.speech_in && !self.working)?;
         doc.visible("mic", mic)?;
         doc.visible("send", !self.working && !mic)?;
@@ -851,7 +851,29 @@ impl Assistant {
             UiColor::from_rgb(KEY_TINT, 36)
         };
         doc.background("tts", tts)?;
+        self.paint_composer(doc)?;
         doc.text("notice", or_blank(self.notice.clone()))
+    }
+
+    /// Sizes the composer box to its wrapped text and places the text and caret on the last line.
+    /// Runs last so the box width reflects every button visibility change made above.
+    fn paint_composer(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let viewport = (WIDTH as f32, HEIGHT as f32);
+        let Some((_, _, box_w, _)) = doc.layout_box("input-area", viewport) else {
+            return Ok(());
+        };
+        let Some((_, _, pill_w, _)) = doc.layout_box("pill", viewport) else {
+            return Ok(());
+        };
+        let c = model::composer(&self.input, box_w);
+        doc.size("pill", pill_w, c.pill_h)?;
+        doc.size("input-area", box_w, c.box_h)?;
+        doc.size("input", c.text_w, c.text_h)?;
+        doc.size("input-text", c.text_w, c.text_h)?;
+        doc.position("input", 0.0, c.text_top)?;
+        doc.position("caret", c.caret.0, c.caret.1)?;
+        doc.size("caret", 2.0, c.caret_h)?;
+        Ok(())
     }
 }
 

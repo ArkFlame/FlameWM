@@ -57,10 +57,68 @@ pub fn wraps(text: &str) -> bool {
     bubble_px(text) > bubble_px("x")
 }
 
-/// Input text as drawn: every space is non-breaking, so the layout's whitespace collapsing cannot
-/// drop leading, trailing or repeated spaces and the caret always sits after what was typed.
-pub fn keep_spaces(text: &str) -> String {
-    text.replace(' ', "\u{a0}")
+/// Composer input font size, and the one-line input box height the pill is designed around.
+const INPUT_PX: f32 = 14.0;
+const INPUT_BOX_PX: f32 = 38.0;
+/// Composer pill height around a one-line input box.
+const PILL_PX: f32 = 50.0;
+/// Horizontal inset of the input text inside the input area.
+const INPUT_PAD_PX: f32 = 8.0;
+/// Input lines shown before the box stops growing and scrolls to the tail.
+pub const INPUT_MAX_LINES: usize = 5;
+/// Caret bar height: a glyph's em box, centred on its line box.
+const CARET_PX: f32 = 16.0;
+
+/// Composer input geometry. Offsets are relative to the input area's content box (inside its
+/// padding), which is the containing block of the absolutely positioned input box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Composer {
+    /// Input box height: one line, plus each further shown line.
+    pub box_h: f32,
+    /// Pill height that holds the box with the same margins as a one-line pill.
+    pub pill_h: f32,
+    /// Text block width (the area's content width).
+    pub text_w: f32,
+    /// Laid-out text height.
+    pub text_h: f32,
+    /// Text block top. Negative once the text overflows and the box shows its tail.
+    pub text_top: f32,
+    /// Caret top-left relative to the text block, and its height.
+    pub caret: (f32, f32),
+    pub caret_h: f32,
+}
+
+/// Composer geometry for `text` in an input area `area_w` wide, from the renderer's own text layout
+/// at the real wrap width, so the caret sits where the painted glyphs end. Painted spaces collapse,
+/// so trailing spaces are added to the caret's advance.
+#[must_use]
+pub fn composer(text: &str, area_w: f32) -> Composer {
+    let text_w = (area_w - 2.0 * INPUT_PAD_PX).max(1.0);
+    let wrap = flamewm_render_core::TextWrap::Wrap;
+    let layout = flamewm_render_core::layout_text(text, INPUT_PX, text_w, wrap, false);
+    let space_w = flamewm_render_core::layout_text("\u{a0}", INPUT_PX, text_w, wrap, false).width;
+    let line_h = layout.line_height;
+    let lines = layout.lines.len().max(1);
+    let shown = lines.min(INPUT_MAX_LINES);
+    let box_h = INPUT_BOX_PX + (shown - 1) as f32 * line_h;
+    let text_h = lines as f32 * line_h;
+    // Bottom inset of the box below the last line; a one-line box centres its line.
+    let inset = (INPUT_BOX_PX - line_h) / 2.0;
+    // Text is bottom-aligned to the box: a short one centres, a tall one shows its tail.
+    let text_top = box_h - inset - text_h;
+    let trailing = text.len() - text.trim_end_matches(' ').len();
+    let last_line = layout.lines.last().map_or(0.0, |line| line.width);
+    let caret_x = (last_line + trailing as f32 * space_w).min(text_w);
+    let caret_y = (lines - 1) as f32 * line_h + (line_h - CARET_PX) / 2.0;
+    Composer {
+        box_h,
+        pill_h: PILL_PX + (box_h - INPUT_BOX_PX),
+        text_w,
+        text_h,
+        text_top,
+        caret: (caret_x, caret_y),
+        caret_h: CARET_PX,
+    }
 }
 
 /// How many messages, taken in order, fit `slots` and the budget after `base` pixels.
@@ -692,5 +750,71 @@ mod model_filter_tests {
     #[test]
     fn no_match_is_empty() {
         assert!(filter_models(&ids(), "zzz").is_empty());
+    }
+
+    use super::{composer, INPUT_BOX_PX, INPUT_MAX_LINES, INPUT_PX};
+
+    const BOX_W: f32 = 300.0;
+
+    fn line_h() -> f32 {
+        flamewm_render_core::layout_text("x", INPUT_PX, 100.0, flamewm_render_core::TextWrap::Wrap, false)
+            .line_height
+    }
+
+    #[test]
+    fn empty_composer_is_one_centred_line() {
+        let c = composer("", BOX_W);
+        assert_eq!(c.box_h, INPUT_BOX_PX);
+        assert_eq!(c.caret.0, 0.0);
+        // The caret bar is centred on the single line box (relative to the text block).
+        let centre = line_h() / 2.0;
+        assert!((c.caret.1 + c.caret_h / 2.0 - centre).abs() < 0.01);
+    }
+
+    #[test]
+    fn caret_follows_the_last_glyph_on_its_line() {
+        let short = composer("hi", BOX_W);
+        let longer = composer("hi there", BOX_W);
+        assert!(longer.caret.0 > short.caret.0);
+        let trailing = composer("hi ", BOX_W);
+        assert!(trailing.caret.0 > short.caret.0, "a trailing space moves the caret");
+        let line = flamewm_render_core::layout_text(
+            "hi there",
+            INPUT_PX,
+            longer.text_w,
+            flamewm_render_core::TextWrap::Wrap,
+            false,
+        );
+        assert_eq!(longer.caret.0, line.lines[0].width);
+    }
+
+    #[test]
+    fn wrapped_input_grows_and_caret_moves_to_the_new_line() {
+        let one = composer("word", BOX_W);
+        let text = "word ".repeat(40);
+        let many = composer(&text, BOX_W);
+        assert!(many.box_h > one.box_h, "box grows as text wraps");
+        assert!((many.pill_h - (one.pill_h + many.box_h - one.box_h)).abs() < 0.01);
+        assert!(many.box_h <= INPUT_BOX_PX + (INPUT_MAX_LINES - 1) as f32 * line_h() + 0.01);
+        let lines = (many.text_h / line_h()).round() as usize;
+        assert!(lines > 1);
+        // The caret sits on the last wrapped line, inside the box.
+        let last_line_centre = (lines - 1) as f32 * line_h() + line_h() / 2.0;
+        assert!((many.caret.1 + many.caret_h / 2.0 - last_line_centre).abs() < 0.01);
+        let top = many.text_top + many.caret.1;
+        assert!(top >= 0.0 && top + many.caret_h <= many.box_h + 0.01);
+    }
+
+    #[test]
+    fn overflowing_input_scrolls_to_the_tail() {
+        let text = "x\n".repeat(20);
+        let c = composer(&text, BOX_W);
+        assert_eq!(c.box_h, INPUT_BOX_PX + (INPUT_MAX_LINES - 1) as f32 * line_h());
+        assert!(c.text_top < 0.0, "text is scrolled up");
+        // Caret stays on the newest (last) line, visible in the box.
+        let top = c.text_top + c.caret.1;
+        assert!(top >= 0.0 && top + c.caret_h <= c.box_h + 0.01);
+        let inset = (INPUT_BOX_PX - line_h()) / 2.0;
+        assert!((c.text_top + c.text_h + inset - c.box_h).abs() < 0.01, "tail aligns to the box bottom");
     }
 }
