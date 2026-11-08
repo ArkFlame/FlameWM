@@ -227,3 +227,16 @@
 - Not verified: minimize/unmap pause (no WM, no visibility events); populated-desktop idle.
 - Risk: target <1% not met; remaining cost is 1 Hz full-window CPU-side repaint. Non-hot pids may show RSS/CPU up to 4 s stale. Accepted by coordinator at 2.4%; dirty-region redraw is a later item.
 - Commit: bd1c8840 pushed: yes
+
+## Settings acceptance triage (SS02–SS19) — PARTIAL
+- Runs: clean worktree at HEAD, host Xvfb :103, runner display :102, cargo under flock. Results: `scratchpad/w3/result.json` (final), `w2` and `w1` for earlier runs. Final: PASS 6, FAIL 9, NOT_RUN 4, ENVIRONMENT_BLOCKED 1.
+- SS02 FIXED (cd73bae1): the WM restores the frame rect remembered for a WM_CLASS (`wm/manage.rs` recall) and this overrides the client's requested initial size. SS01 base pages left a remembered 822x572 frame (`home/.config/flamewm/window-geometry.conf`), so sized launches measured 820x540. Sized launches now restart the WM and remove the memory file. Product behaviour (size memory) is unchanged. Result: PASS.
+- SS13 PASS: About renders at all three sizes and OCR reads the version live (`version_live_ocr_matches: true`, `cargo test ... about_version_text_is_exact_flamewm_version` exit 0). This is a side effect of the SS02 fix.
+- SS09 FIXED (d36900ac): the runner pointed at `services::display::tests::…` but the tests moved to `tests_output`. Now `cargo test -p flamewm-platform` runs all three named tests `ok` (exit 0). Source-test evidence only.
+- SS03, SS05, SS06, SS07, SS10, SS11, SS12, SS14, SS15, SS17, SS19: NOT FIXED. Not triaged to root cause. Failing observations: SS03 `selected_visuals`, `reset_persisted_after_restart`; SS05 `error_preserved_and_visible`; SS06 `snap_preview_consumer`; SS07 `settings_snapshot_values`, `panel_edge_and_size_snapshot`; SS10 `scale_changed_snapshot`; SS11 family/size snapshots not set; SS14 `settings_visible_without_input`, `signal_loss_recovery`; SS15 `disabled_mode_ends_inert`, `settings_survived_keyboard_escape`; SS17 `scale_scroll_ss10`; SS19 `external_update_responsive`, `repeated_pages_opened_and_closed` (these last two suggest the settings window does not react to external Settings signals without input).
+- SS08 ENVIRONMENT_BLOCKED: no host X server here exposes two RandR outputs (Xephyr=1, Xvfb=1).
+- SS16 FAIL: static gate `verify_rwr_promotion=1` (pre-existing, not touched).
+- SS18 NOT_RUN: no installed-prefix result supplied.
+- Not verified: all live causes above.
+- Commits: cd73bae1 (SS02), d36900ac (SS09), pushed: yes.
+- Risk: runner now restarts the WM before each sized launch (adds about 4 s per launch). SS13 and SS02 PASS are live evidence; SS09 is source-test only.
