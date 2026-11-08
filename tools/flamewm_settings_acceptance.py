@@ -496,10 +496,29 @@ def window_geometry(ctx: Ctx, text_out: Path) -> dict | None:
     return parse_window_tree(result.stdout)
 
 
+GEOMETRY_MEMORY_FILES = ("home/.config/flamewm/window-geometry.conf", "xdg-config/flamewm/window-geometry.conf")
+
+
+def fresh_wm_for_requested_size(ctx: Ctx, args: argparse.Namespace) -> None:
+    """Restart the WM with its remembered frame rects erased.
+
+    A plain window restores the frame rect it last had for its WM_CLASS (wm/manage.rs recall), which
+    overrides the client's own initial size. A diagnostic --window-size launch must measure the size
+    the client asked for, so the WM is restarted and window-geometry.conf removed first. The WM is
+    stopped before the file is removed so it cannot rewrite the file on exit.
+    """
+    ctx.stop(ctx.wm)
+    for rel in GEOMETRY_MEMORY_FILES:
+        (ctx.run / rel).unlink(missing_ok=True)
+    ctx.wm = ctx.spawn("flamewm-sized", [args.wm_bin], ctx.app_env)
+    time.sleep(args.settle_seconds)
+
+
 def page_shot(ctx: Ctx, args: argparse.Namespace, page: str, label: str,
               window_size: tuple[int, int] | None = None) -> dict:
     launch = [args.settings_bin, "--page", page]
     if window_size is not None:
+        fresh_wm_for_requested_size(ctx, args)
         launch += ["--window-size", f"{window_size[0]}x{window_size[1]}"]
     settings = ctx.spawn(f"settings-{page}-{label}", launch, ctx.app_env)
     time.sleep(args.settle_seconds)
