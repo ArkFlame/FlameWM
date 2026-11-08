@@ -69,6 +69,55 @@ def open_display(name):
     return display
 
 
+def png_rgba(path):
+    """Decode an 8-bit RGBA, non-interlaced PNG into (width, height, rows of bytearray)."""
+    import zlib
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise AssertionError(f"not a PNG: {path}")
+    pos, idat, width, height = 8, b"", 0, 0
+    while pos < len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", body[:13])
+            if (depth, color, interlace) != (8, 6, 0):
+                raise AssertionError(f"unsupported PNG format depth={depth} color={color} interlace={interlace}")
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * 4
+    rows, previous = [], bytearray(stride)
+    for y in range(height):
+        kind_byte, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            left = line[i - 4] if i >= 4 else 0
+            up = previous[i]
+            upleft = previous[i - 4] if i >= 4 else 0
+            if kind_byte == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind_byte == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind_byte == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind_byte == 4:
+                p = left + up - upleft
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - upleft)
+                pred = left if pa <= pb and pa <= pc else (up if pb <= pc else upleft)
+                line[i] = (line[i] + pred) & 0xFF
+            elif kind_byte != 0:
+                raise AssertionError(f"unknown PNG filter {kind_byte}")
+        rows.append(line)
+        previous = line
+    return width, height, rows
+
+
+def rgb_at(rows, x, y):
+    row = rows[y]
+    return tuple(row[x * 4:x * 4 + 3])
+
+
 def png_size(path):
     data = path.read_bytes()[:33]
     if len(data) != 33 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
@@ -147,21 +196,29 @@ def main():
     env.pop("WAYLAND_DISPLAY", None)
     env.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")})
 
-    def run(command, timeout=10):
-        start = time.monotonic()
-        completed = subprocess.run(
-            [str(part) for part in command], env=env, cwd=evidence / "cwd",
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
-        )
-        row = {
-            "command": [str(part) for part in command], "exit": completed.returncode,
-            "elapsed_s": time.monotonic() - start, "stdout": completed.stdout, "stderr": completed.stderr,
-        }
-        command_log.write(json.dumps(row) + "\n")
-        command_log.flush()
-        if completed.returncode != 0:
-            raise AssertionError(f"command failed: {row}")
-        return completed
+    def run(command, timeout=10, attempts=3):
+        # Known intermittent: the isolated server occasionally resets a fresh client connection
+        # (os error 104) right after another client finished. Root cause unproven; each failed
+        # attempt is logged in commands.jsonl, and only that connect error is retried.
+        for attempt in range(1, attempts + 1):
+            start = time.monotonic()
+            completed = subprocess.run(
+                [str(part) for part in command], env=env, cwd=evidence / "cwd",
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+            )
+            row = {
+                "command": [str(part) for part in command], "exit": completed.returncode,
+                "attempt": attempt, "elapsed_s": time.monotonic() - start,
+                "stdout": completed.stdout, "stderr": completed.stderr,
+            }
+            command_log.write(json.dumps(row) + "\n")
+            command_log.flush()
+            if completed.returncode == 0:
+                return completed
+            if "X11 connection failed" not in completed.stderr or attempt == attempts:
+                raise AssertionError(f"command failed: {row}")
+            time.sleep(0.2)
+        raise AssertionError("unreachable")
 
     try:
         display_name = None
@@ -224,18 +281,21 @@ def main():
             raise AssertionError("delay timer did not elapse before capture")
         result["delay_s"] = delay_elapsed
 
-        display = open_display(display_name)
+        fixture_display = open_display(display_name)
+        display = fixture_display
         root = X11.XDefaultRootWindow(display)
         fixture = X11.XCreateSimpleWindow(display, root, 40, 60, 320, 200, 0, 0, 0x00FF0000)
         X11.XMapWindow(display, fixture)
+        # Left 160 px red, right 160 px blue: the region crop must reproduce this boundary exactly.
+        gc = X11.XCreateGC(display, fixture, 0, None)
+        X11.XSetForeground(display, gc, 0x000000FF)
+        X11.XFillRectangle(display, fixture, gc, 160, 0, 160, 200)
         X11.XWarpPointer(display, 0, fixture, 0, 0, 0, 0, 100, 80)
         X11.XSync(display, 0)
         window_path = evidence / "window.png"
         run([binary, "--window", "--output", window_path])
         if png_size(window_path) != (320, 200):
             raise AssertionError(f"window capture dimensions mismatch: {png_size(window_path)}")
-        X11.XDestroyWindow(display, fixture)
-        X11.XCloseDisplay(display)
         result["window"] = str(window_path)
 
         region_path = evidence / "region.png"
@@ -247,22 +307,36 @@ def main():
         time.sleep(0.5)
         if region.poll() is not None:
             raise AssertionError(f"region selector exited early: {region.communicate()}")
-        display = open_display(display_name)
+        driver = open_display(display_name)
         # Paced steps: each request is synced so the grab sees press, motion and release in order.
         for step in (
-            lambda: XTST.XTestFakeMotionEvent(display, -1, 100, 100, 0),
-            lambda: XTST.XTestFakeButtonEvent(display, 1, 1, 0),
-            lambda: XTST.XTestFakeMotionEvent(display, -1, 219, 179, 0),
-            lambda: XTST.XTestFakeButtonEvent(display, 1, 0, 0),
+            lambda: XTST.XTestFakeMotionEvent(driver, -1, 100, 100, 0),
+            lambda: XTST.XTestFakeButtonEvent(driver, 1, 1, 0),
+            lambda: XTST.XTestFakeMotionEvent(driver, -1, 219, 179, 0),
+            lambda: XTST.XTestFakeButtonEvent(driver, 1, 0, 0),
         ):
             step()
-            X11.XSync(display, 0)
+            X11.XSync(driver, 0)
             time.sleep(0.1)
-        X11.XCloseDisplay(display)
+        X11.XCloseDisplay(driver)
         stdout, stderr = region.communicate(timeout=5)
         command_log.write(json.dumps({"command": ["region+drag+copy"], "exit": region.returncode, "stdout": stdout, "stderr": stderr}) + "\n")
         if region.returncode != 0 or png_size(region_path) != (120, 80):
             raise AssertionError(f"interactive region failed: exit={region.returncode} size={png_size(region_path)} stderr={stderr}")
+        # Region is root (100,100)-(219,179); fixture is red for root x<200 and blue from x=200.
+        _, _, rows = png_rgba(region_path)
+        red, blue = (255, 0, 0), (0, 0, 255)
+        mismatches = []
+        for y in range(80):
+            for x in range(120):
+                expected = red if 100 + x < 200 else blue
+                if rgb_at(rows, x, y) != expected:
+                    mismatches.append((x, y, rgb_at(rows, x, y)))
+        if mismatches:
+            raise AssertionError(f"region pixels differ from fixture: {len(mismatches)} e.g. {mismatches[:3]}")
+        result["region_pixels"] = {"red_columns": 100, "blue_columns": 20, "checked": 120 * 80}
+        X11.XDestroyWindow(fixture_display, fixture)
+        X11.XCloseDisplay(fixture_display)
         clipboard = clipboard_png(display_name)
         if clipboard != region_path.read_bytes():
             raise AssertionError("clipboard PNG differs from saved region PNG")
