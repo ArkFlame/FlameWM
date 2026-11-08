@@ -3136,6 +3136,10 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     shell_ok = Image is not None and os.access(args.shell_bin, os.X_OK)
     if shell_ok:
         clients = start_session_clients(ctx, args, ("shell",), "ss07")
+        # The shell writes settings on start; a revision read before it is stale (StaleRevision).
+        fresh_before, command = dbus_settings_snapshot(ctx)
+        details["commands"].append(command)
+        settings_revision = gvariant_field_u64(fresh_before or "", "revision") or settings_revision
         first = taskbar_measure(ctx, "ss07-before-a")
         second = taskbar_measure(ctx, "ss07-before-b")
         visual["before"] = first
@@ -3160,6 +3164,13 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
                "surfaceOpacity": f"uint32 {next_opacity}",
                "surfaceColor": "'" + color + "'"}
     applied = apply_and_read_settings(ctx, settings_revision, changes, details)
+    time.sleep(min(max(args.settle_seconds, 0.25), 1.5))
+    settled_text, command = dbus_settings_snapshot(ctx)
+    details["commands"].append(command)
+    details["settings_settled"] = {"revision": gvariant_field_u64(settled_text or "", "revision"),
+                                   "taskbarHeight": gvariant_field_uint(settled_text or "", "taskbarHeight"),
+                                   "surfaceOpacity": gvariant_field_uint(settled_text or "", "surfaceOpacity"),
+                                   "surfaceColor": gvariant_field_string(settled_text or "", "surfaceColor")}
     text = (applied or {}).get("text") or ""
     new_settings_revision = (applied or {}).get("revision")
     settings_ok = (
