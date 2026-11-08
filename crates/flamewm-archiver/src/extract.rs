@@ -2,7 +2,7 @@
 
 use std::fs::{self, File};
 use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -13,8 +13,10 @@ use crate::visit::{Entry, Kind, list, under_any, visit};
 /// Extracts `archive` into `dest`.
 ///
 /// An empty `selection` extracts everything. A selected directory includes its contents.
-/// Every entry name is validated before the first write, so one unsafe name aborts with nothing
-/// written. Symlink, hard link and special entries are counted as skipped and never created.
+/// Every listed entry name is validated before the first write. If the archive stays unchanged,
+/// one unsafe name aborts with nothing written. Symlink, hard link and special entries are skipped.
+/// Filesystem checks are not atomic with writes; do not extract into a tree that another process
+/// can modify concurrently. Archive validation is also not atomic with a changing archive.
 pub fn extract(
     archive: &Path,
     dest: &Path,
@@ -52,6 +54,7 @@ pub fn extract(
     // cancel never deletes a directory the user already had.
     let created = !dest.exists();
     if !nothing_selected {
+        safe_path::reject_symlinks(dest, Path::new(""))?;
         fs::create_dir_all(dest)?;
     }
     let mut rep = Reporter::new(bytes_total, entries_total, cancel, sink);
@@ -122,12 +125,22 @@ fn write_file(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
+    // Do not truncate a shared inode or open a device, FIFO, or other special node.
+    // This check does not protect against concurrent replacement or hard-link creation.
+    match fs::symlink_metadata(&target) {
+        Ok(meta) if !meta.is_file() || meta.nlink() > 1 => {
+            return Err(crate::error::ArchiveError::UnsafePath(rel.to_path_buf()));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
     let mut out = File::create(&target)?;
     match copy_tracked(data, &mut out, rep) {
         Ok(n) => {
             // Permission bits only: setuid/setgid/sticky are never restored from an archive.
             if let Some(bits) = mode {
-                fs::set_permissions(&target, fs::Permissions::from_mode(bits & 0o777))?;
+                out.set_permissions(fs::Permissions::from_mode(bits & 0o777))?;
             }
             Ok(n)
         }

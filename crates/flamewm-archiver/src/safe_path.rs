@@ -24,10 +24,10 @@ pub fn sanitize(entry: &Path) -> Result<Option<PathBuf>> {
     Ok((!out.as_os_str().is_empty()).then_some(out))
 }
 
-/// Fails when any existing component of `dest/rel` is a symlink, so a write cannot leave `dest`.
+/// Rejects symlinks in existing components. This is a check, not race-safe confinement.
 pub fn reject_symlinks(dest: &Path, rel: &Path) -> Result<()> {
-    let mut current = dest.to_path_buf();
-    for component in rel.components() {
+    let mut current = PathBuf::new();
+    for component in dest.components().chain(rel.components()) {
         current.push(component);
         match fs::symlink_metadata(&current) {
             Ok(meta) if meta.file_type().is_symlink() => {

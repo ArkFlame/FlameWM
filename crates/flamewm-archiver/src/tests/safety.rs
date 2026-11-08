@@ -130,6 +130,57 @@ fn write_through_preexisting_symlink_is_rejected() {
 }
 
 #[test]
+fn symlink_destination_is_rejected() {
+    let dir = Scratch::new("symlink-destination");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let out = dir.path().join("out");
+    std::os::unix::fs::symlink(&outside, &out).unwrap();
+    let archive = dir.path().join("w.zip");
+    make_zip(&archive, &[("pwned.txt", Some(b"pwned"))]);
+    let err = extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).unwrap_err();
+    assert!(matches!(err, ArchiveError::UnsafePath(_)), "got {err}");
+    assert!(!outside.join("pwned.txt").exists());
+}
+
+#[test]
+fn symlink_destination_ancestor_is_rejected_before_creation() {
+    let dir = Scratch::new("symlink-destination-ancestor");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let archive = dir.path().join("w.zip");
+    make_zip(&archive, &[("pwned.txt", Some(b"pwned"))]);
+    let err = extract(
+        &archive,
+        &link.join("new"),
+        &[],
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(matches!(err, ArchiveError::UnsafePath(_)), "got {err}");
+    assert!(!outside.join("new").exists());
+}
+
+#[test]
+fn preexisting_hardlink_is_not_overwritten() {
+    let dir = Scratch::new("hardlink-preexisting");
+    let outside = dir.path().join("outside");
+    fs::write(&outside, b"original").unwrap();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    fs::hard_link(&outside, out.join("file.txt")).unwrap();
+    let archive = dir.path().join("w.zip");
+    make_zip(&archive, &[("file.txt", Some(b"changed"))]);
+    let err = extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).unwrap_err();
+    assert!(matches!(err, ArchiveError::UnsafePath(_)), "got {err}");
+    assert_eq!(fs::read(&outside).unwrap(), b"original");
+    assert_eq!(fs::read(out.join("file.txt")).unwrap(), b"original");
+}
+
+#[test]
 fn cancel_mid_extract_stops_and_removes_partial_file() {
     let dir = Scratch::new("cancel-extract");
     let archive = dir.path().join("big.zip");
