@@ -1,9 +1,15 @@
 //! X11 root capture and pixel-format conversion. The server supplies the visual masks;
 //! assuming BGRA would silently corrupt 16-bit and big-endian desktops.
 
+use std::cell::RefCell;
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::FileExt;
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
+use x11rb::protocol::shm::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder, Window};
 
@@ -18,17 +24,22 @@ pub trait Capture {
 pub struct X11Capture<'a, C: Connection> {
     conn: &'a C,
     screen: usize,
+    shm: RefCell<ShmState>,
 }
 
 impl<'a, C: Connection> X11Capture<'a, C> {
     pub fn new(conn: &'a C, screen: usize) -> Self {
-        Self { conn, screen }
+        Self {
+            conn,
+            screen,
+            shm: RefCell::new(ShmState::default()),
+        }
     }
 }
 
 impl<C: Connection> Capture for X11Capture<'_, C> {
     fn capture(&self, rect: Rect) -> Result<Image> {
-        grab(self.conn, self.screen, rect)
+        grab_or_shm(self.conn, self.screen, rect, &mut self.shm.borrow_mut())
     }
 }
 
@@ -227,18 +238,25 @@ pub fn decode_ximage<C: Connection>(
 /// occupies four bytes per pixel, so allocating another full RGBA frame is unnecessary.
 /// Non-32-bit or padded replies keep the general decoder below.
 fn decode_32bpp_in_place(data: &mut [u8], masks: [u32; 3], little: bool) {
+    // 8-bit channels (the common case) need only a shift and mask; the general scaling
+    // divides per pixel and dominated the capture time at 1080p.
+    let shift_of = |mask: u32| if mask == 0 { 0 } else { mask.trailing_zeros() };
+    let eight_bit = masks.map(|m| m != 0 && (m >> shift_of(m)) == 0xff);
+    let shifts = masks.map(shift_of);
     for pixel in data.chunks_exact_mut(4) {
         let native = if little {
             u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])
         } else {
             u32::from_be_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])
         };
-        pixel.copy_from_slice(&[
-            component(native, masks[0]),
-            component(native, masks[1]),
-            component(native, masks[2]),
-            255,
-        ]);
+        let channel = |i: usize| {
+            if eight_bit[i] {
+                ((native & masks[i]) >> shifts[i]) as u8
+            } else {
+                component(native, masks[i])
+            }
+        };
+        pixel.copy_from_slice(&[channel(0), channel(1), channel(2), 255]);
     }
 }
 
@@ -294,17 +312,155 @@ pub fn decode_ximage_owned<C: Connection>(
 pub struct Grabber {
     conn: x11rb::rust_connection::RustConnection,
     screen: usize,
+    shm: ShmState,
 }
 
 /// Opens a connection for capture on a worker thread.
 pub fn connect_grabber() -> Result<Grabber> {
     let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
-    Ok(Grabber { conn, screen })
+    Ok(Grabber {
+        conn,
+        screen,
+        shm: ShmState::default(),
+    })
 }
 
 impl Grabber {
-    pub fn grab(&self, requested: Rect) -> Result<Image> {
-        grab(&self.conn, self.screen, requested)
+    pub fn grab(&mut self, requested: Rect) -> Result<Image> {
+        grab_or_shm(&self.conn, self.screen, requested, &mut self.shm)
+    }
+}
+
+/// Bytes per row the server uses for a 32-bpp ZPixmap with the given scanline pad.
+pub fn image_stride(width: u32, scanline_pad: u8) -> usize {
+    let pad = usize::from(scanline_pad).max(8);
+    (width as usize * 32).div_ceil(pad) * pad / 8
+}
+
+/// MIT-SHM state for one capture owner. The segment is a file descriptor passed to the
+/// server (SHM 1.2), so no System V IPC or raw FFI is needed. A failed setup disables SHM
+/// for this owner and every capture falls back to GetImage.
+#[derive(Default)]
+pub struct ShmState {
+    segment: Option<ShmSegment>,
+    disabled: bool,
+}
+
+struct ShmSegment {
+    seg: u32,
+    /// The server writes into this file's pages; reading it back sees those pixels.
+    file: File,
+    len: usize,
+}
+
+/// Captures through MIT-SHM when available and falls back to GetImage otherwise.
+pub fn grab_or_shm<C: Connection>(
+    conn: &C,
+    screen: usize,
+    requested: Rect,
+    state: &mut ShmState,
+) -> Result<Image> {
+    // Clip first so an offscreen request is an error and never disables SHM.
+    let rect = requested
+        .intersect(root_bounds(conn, screen))
+        .ok_or("capture rectangle offscreen")?;
+    if !state.disabled {
+        match grab_shm(conn, screen, rect, state) {
+            Ok(image) => return Ok(image),
+            Err(_) => {
+                state.disabled = true;
+                state.segment = None;
+            }
+        }
+    }
+    grab(conn, screen, rect)
+}
+
+fn grab_shm<C: Connection>(conn: &C, screen: usize, rect: Rect, state: &mut ShmState) -> Result<Image> {
+    let root_info = &conn.setup().roots[screen];
+    let root = root_info.root;
+    let pad = conn
+        .setup()
+        .pixmap_formats
+        .iter()
+        .find(|p| p.depth == root_info.root_depth && p.bits_per_pixel == 32)
+        .map(|p| p.scanline_pad)
+        .ok_or("shm needs a 32-bpp root format")?;
+    let len = image_stride(rect.w, pad) * rect.h as usize;
+    let reuse = matches!(&state.segment, Some(s) if s.len >= len);
+    if !reuse {
+        if let Some(old) = state.segment.take() {
+            let _ = conn.shm_detach(old.seg);
+        }
+        state.segment = Some(create_segment(conn, len)?);
+    }
+    let segment = state.segment.as_ref().ok_or("shm segment missing")?;
+    let reply = conn
+        .shm_get_image(
+            root,
+            i16::try_from(rect.x).map_err(|_| "X11 coordinate overflow")?,
+            i16::try_from(rect.y).map_err(|_| "X11 coordinate overflow")?,
+            u16::try_from(rect.w).map_err(|_| "capture width exceeds X11 limit")?,
+            u16::try_from(rect.h).map_err(|_| "capture height exceeds X11 limit")?,
+            u32::MAX,
+            u8::from(ImageFormat::Z_PIXMAP),
+            segment.seg,
+            0,
+        )
+        .map_err(|e| e.to_string())?
+        .reply()
+        .map_err(|e| e.to_string())?;
+    // The reply arrives after the server finished writing, so the bytes are complete here.
+    let mut data = vec![0u8; len];
+    segment
+        .file
+        .read_exact_at(&mut data, 0)
+        .map_err(|e| e.to_string())?;
+    decode_ximage_owned(conn, screen, reply.depth, rect.w, rect.h, data)
+}
+
+fn create_segment<C: Connection>(conn: &C, len: usize) -> Result<ShmSegment> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = if Path::new("/dev/shm").is_dir() {
+        PathBuf::from("/dev/shm")
+    } else {
+        std::env::temp_dir()
+    };
+    let path = dir.join(format!(
+        "flamewm-capture-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    // Unlink at once: our handles and the server's descriptor keep the memory alive.
+    let _ = std::fs::remove_file(&path);
+    file.set_len(len as u64).map_err(|e| e.to_string())?;
+    let seg = conn.generate_id().map_err(|e| e.to_string())?;
+    let server_fd = file.try_clone().map_err(|e| e.to_string())?;
+    conn.shm_attach_fd(seg, server_fd, false)
+        .map_err(|e| e.to_string())?
+        .check()
+        .map_err(|e| e.to_string())?;
+    Ok(ShmSegment { seg, file, len })
+}
+
+#[cfg(test)]
+mod shm_layout_tests {
+    use super::image_stride;
+
+    #[test]
+    fn stride_matches_server_padding() {
+        // 32 bpp with 32-bit pad: one 4-byte pixel per column.
+        assert_eq!(image_stride(3, 32), 12);
+        assert_eq!(image_stride(2560, 32), 2560 * 4);
+        // 64-bit pad rounds the row up to 8 bytes.
+        assert_eq!(image_stride(3, 64), 16);
+        assert_eq!(image_stride(1, 8), 4);
     }
 }
 
@@ -628,6 +784,23 @@ mod tests {
         };
         assert!(img.png().is_err());
     }
+    #[test]
+    fn fast_8bit_path_matches_general_scaling() {
+        // Same answer whether a channel takes the shift path or the scaling path.
+        let masks = [0x00ff_0000, 0x0000_ff00, 0x0000_00ff];
+        for value in [0u32, 0x0012_3456, 0x00ff_ffff, 0x0080_8080] {
+            let mut fast = value.to_le_bytes();
+            decode_32bpp_in_place(&mut fast, masks, true);
+            let expected = [
+                component(value, masks[0]),
+                component(value, masks[1]),
+                component(value, masks[2]),
+                255,
+            ];
+            assert_eq!(fast, expected, "value {value:#x}");
+        }
+    }
+
     #[test]
     fn component_masks_scale_565() {
         assert_eq!(component(0xf800, 0xf800), 255);

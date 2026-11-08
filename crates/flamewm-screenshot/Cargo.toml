@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-clipboard = { path = "../flamewm-clipboard" }
-x11rb = { workspace = true, features = ["randr", "xfixes"] }
+x11rb = { workspace = true, features = ["randr", "xfixes", "shm"] }
 png = "=0.18.1"
 
 [lints]
