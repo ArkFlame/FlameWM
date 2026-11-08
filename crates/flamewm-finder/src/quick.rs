@@ -7,7 +7,19 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use std::thread;
+use std::time::Duration;
+
 use flamewm_api::applications::DesktopApplication;
+use flamewm_api::session::{SessionAction, SessionCapabilities};
+use flamewm_control_core::{ControlRequest, ControlResponse};
+use flamewm_control_dbus::ControlClient;
+use flamewm_dbus_reactor::BusKind;
+
+/// Longest wait for the session capabilities; a silent bus leaves logout hidden.
+const CAPABILITY_TIMEOUT: Duration = Duration::from_secs(2);
+/// Longest wait for a session action to be accepted.
+const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Applications shown above the file results.
 pub const APP_SLOTS: usize = 6;
@@ -361,38 +373,53 @@ pub fn rank_apps(
     scored.into_iter().map(|(_, index)| index).collect()
 }
 
+/// How a system action runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Run {
+    /// Program and arguments, run as the signed-in user.
+    Argv(&'static [&'static str]),
+    /// Ends the session through the control bus; shown only when the session allows it.
+    Logout,
+}
+
 /// A system action the user reaches by typing its name and pressing Enter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemAction {
     pub label: &'static str,
     /// Space-separated words that the query may start with.
     pub words: &'static str,
-    /// Program and arguments, run as the signed-in user.
-    pub argv: &'static [&'static str],
+    pub run: Run,
 }
 
-pub const ACTIONS: [SystemAction; 2] = [
+pub const ACTIONS: [SystemAction; 3] = [
     SystemAction {
         label: "Lock screen",
         words: "lock screen",
-        argv: &["loginctl", "lock-session"],
+        run: Run::Argv(&["loginctl", "lock-session"]),
     },
     SystemAction {
         label: "Suspend",
         words: "suspend sleep",
-        argv: &["systemctl", "suspend"],
+        run: Run::Argv(&["systemctl", "suspend"]),
+    },
+    SystemAction {
+        label: "Log out",
+        words: "log logout sign",
+        run: Run::Logout,
     },
 ];
 
 /// Actions whose label contains `query` or whose word starts with it; needs two characters.
+/// Log out is listed only when `logout_allowed` is set.
 #[must_use]
-pub fn actions_matching(query: &str) -> Vec<&'static SystemAction> {
+pub fn actions_matching(query: &str, logout_allowed: bool) -> Vec<&'static SystemAction> {
     let needle = query.trim().to_lowercase();
     if needle.chars().count() < 2 {
         return Vec::new();
     }
     ACTIONS
         .iter()
+        .filter(|action| logout_allowed || action.run != Run::Logout)
         .filter(|action| {
             action.label.to_lowercase().contains(&needle)
                 || action.words.split(' ').any(|word| word.starts_with(&needle))
@@ -400,16 +427,59 @@ pub fn actions_matching(query: &str) -> Vec<&'static SystemAction> {
         .collect()
 }
 
-/// Starts the action without waiting for it, as the finder does for file openers.
+/// Whether the session allows logout. A missing or silent control bus answers no (fail closed).
+#[must_use]
+pub fn logout_allowed() -> bool {
+    ControlClient::connect(BusKind::Session)
+        .ok()
+        .and_then(|client| {
+            match client
+                .call_with_timeout(&ControlRequest::GetSessionCapabilities, CAPABILITY_TIMEOUT)
+                .ok()?
+            {
+                ControlResponse::SessionCapabilities(SessionCapabilities { logout, .. }) => {
+                    Some(logout)
+                }
+                _ => None,
+            }
+        })
+        .unwrap_or(false)
+}
+
+/// Starts the action without waiting for it, as the finder does for file openers. Logout runs on
+/// its own thread, so a slow control bus never blocks the window.
 pub fn run_action(action: &SystemAction) -> io::Result<()> {
-    let (program, args) = action
-        .argv
-        .split_first()
-        .ok_or_else(|| io::Error::other("system action has no program"))?;
-    std::process::Command::new(program)
-        .args(args)
-        .spawn()
-        .map(drop)
+    match action.run {
+        Run::Argv(argv) => {
+            let (program, args) = argv
+                .split_first()
+                .ok_or_else(|| io::Error::other("system action has no program"))?;
+            std::process::Command::new(program)
+                .args(args)
+                .spawn()
+                .map(drop)
+        }
+        Run::Logout => thread::Builder::new()
+            .name("flamewm-finder-logout".to_owned())
+            .spawn(|| {
+                let client = ControlClient::connect(BusKind::Session);
+                let outcome = client.map_err(|_| "control bus unavailable".to_owned()).and_then(
+                    |client| {
+                        client
+                            .call_with_timeout(
+                                &ControlRequest::SessionAction(SessionAction::Logout),
+                                ACTION_TIMEOUT,
+                            )
+                            .map(drop)
+                            .map_err(|_| "control call failed".to_owned())
+                    },
+                );
+                if let Err(error) = outcome {
+                    eprintln!("flamewm-finder: log out failed: {error}");
+                }
+            })
+            .map(drop),
+    }
 }
 
 #[cfg(test)]
@@ -509,9 +579,26 @@ mod tests {
 
     #[test]
     fn actions_need_two_characters_and_match_words() {
-        assert!(actions_matching("s").is_empty());
-        assert_eq!(actions_matching("lo")[0].label, "Lock screen");
-        assert_eq!(actions_matching("sleep")[0].label, "Suspend");
-        assert_eq!(actions_matching("sus")[0].label, "Suspend");
+        assert!(actions_matching("s", true).is_empty());
+        assert_eq!(actions_matching("lo", false)[0].label, "Lock screen");
+        assert_eq!(actions_matching("sleep", false)[0].label, "Suspend");
+        assert_eq!(actions_matching("sus", false)[0].label, "Suspend");
+    }
+
+    #[test]
+    fn log_out_appears_only_when_the_session_allows_it() {
+        assert!(actions_matching("log", false)
+            .iter()
+            .all(|action| action.label != "Log out"));
+        assert_eq!(actions_matching("log", true)[0].label, "Log out");
+        assert_eq!(actions_matching("logout", true)[0].label, "Log out");
+        assert_eq!(actions_matching("sign", true)[0].label, "Log out");
+        assert!(actions_matching("out", false).is_empty());
+    }
+
+    #[test]
+    fn log_out_is_a_control_bus_action_not_a_program() {
+        let logout = ACTIONS.iter().find(|action| action.label == "Log out").unwrap();
+        assert_eq!(logout.run, Run::Logout);
     }
 }

@@ -104,6 +104,8 @@ enum Item {
 /// What the background worker sends the window: the application list first, then the file index.
 enum Loaded {
     Apps(Vec<DesktopApplication>),
+    /// Whether the session allows the log out action.
+    Session(bool),
     /// The shared index holds the cached listing; the fresh walk still runs.
     Cached,
     /// The shared index holds the fresh walk.
@@ -186,6 +188,8 @@ struct Finder {
     answer: Option<quick::Answer>,
     app_hits: Vec<usize>,
     actions: Vec<&'static quick::SystemAction>,
+    /// Stays false until the session says logout is allowed (fail closed).
+    logout: bool,
     frecency: quick::Frecency,
     frecency_file: Option<PathBuf>,
 }
@@ -252,6 +256,7 @@ impl Finder {
             answer: None,
             app_hits: Vec::new(),
             actions: Vec::new(),
+            logout: false,
             frecency: quick::Frecency::default(),
             frecency_file: None,
         };
@@ -287,7 +292,7 @@ impl Finder {
             Vec::new()
         };
         self.actions = if quick {
-            quick::actions_matching(&self.query)
+            quick::actions_matching(&self.query, self.logout)
         } else {
             Vec::new()
         };
@@ -298,6 +303,11 @@ impl Finder {
     /// Quick rows above the file results: calculator answer, applications, then system actions.
     fn quick_count(&self) -> usize {
         self.answer.is_some() as usize + self.app_hits.len() + self.actions.len()
+    }
+
+    fn accept_session(&mut self, logout: bool) {
+        self.logout = logout;
+        self.rerank();
     }
 
     /// Cached files are shown but do not end the indexing state, since the fresh walk follows.
@@ -1123,6 +1133,9 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         if sender.send(Loaded::Apps(apps)).is_ok() {
             let _ = index_writer.write(&[1]);
         }
+        if sender.send(Loaded::Session(quick::logout_allowed())).is_ok() {
+            let _ = index_writer.write(&[1]);
+        }
         // The cached index answers queries while the fresh walk runs; reading it here keeps the
         // window's first paint off the disk.
         if let Some(mut cached) = walk_cache.as_deref().and_then(index::load_cache) {
@@ -1212,6 +1225,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             while let Ok(message) = wake_incoming.borrow().try_recv() {
                 match message {
                     Loaded::Apps(apps) => app.accept_apps(apps),
+                    Loaded::Session(logout) => app.accept_session(logout),
                     Loaded::Cached => app.accept_cached(),
                     Loaded::Files => app.accept_index(),
                     Loaded::Changed => app.accept_changes(),
