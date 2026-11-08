@@ -2774,12 +2774,14 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                         case["commands"].append(shell(ocr_argv))
                         details["commands"].append(shell(ocr_argv))
                         case["error_text"] = ocr.stdout.strip()
-                        normalize_ocr = lambda value: re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-                        expected_tokens = normalize_ocr(expected_error)
-                        observed_tokens = normalize_ocr(ocr.stdout)
+                        # tesseract --psm 7 drops word spaces and reads "rn" as "m" ("returned" -> "retumed");
+                        # compare alphanumeric runs only, with those two confusions applied to both sides.
+                        normalize_ocr = lambda value: re.sub(r"[^a-z0-9]", "", value.lower()).replace("rn", "m")
+                        expected_key = normalize_ocr(expected_error)
+                        observed_key = normalize_ocr(ocr.stdout)
                         # tesseract confuses o/a in small text; tolerate only that one glyph.
-                        tolerant = re.escape(expected_tokens).replace("code", "c[oa]de")
-                        expected_error_seen = (ocr.returncode == 0 and re.search(tolerant, observed_tokens) is not None)
+                        tolerant = re.escape(expected_key).replace("code", "c[oa]de")
+                        expected_error_seen = (ocr.returncode == 0 and re.search(tolerant, observed_key) is not None)
                     case["error_message_crop"] = str(error_crop)
                 else:
                     case["ocr_capability"] = {"tesseract": bool(tesseract), "captured_after": captured_after}
