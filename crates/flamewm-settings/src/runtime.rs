@@ -157,6 +157,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         scope: SettingsScope,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        let panels_before = self.client().panels().cloned();
         let refreshed = match scope {
             SettingsScope::Settings => self.client_mut().refresh_settings(),
             SettingsScope::Displays => self.client_mut().refresh_displays(),
@@ -164,12 +165,44 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsScope::Panels => self.client_mut().refresh_panels(),
         };
         refreshed.map_err(crate::control_error)?;
+        if !panels_refresh_changed(scope, panels_before.as_ref(), self.client().panels()) {
+            return Ok(());
+        }
         self.settle(document)
     }
 }
 
+/// A Panels wake whose refreshed snapshot equals the one already projected needs no document
+/// settle. Window churn bumps the panels revision without changing what the Taskbar page shows,
+/// and each settle rebuilds the whole document on the reactor thread.
+fn panels_refresh_changed<T: PartialEq>(
+    scope: SettingsScope,
+    before: Option<&T>,
+    after: Option<&T>,
+) -> bool {
+    !matches!(scope, SettingsScope::Panels) || before != after
+}
+
 #[cfg(test)]
 mod tests {
+    use super::panels_refresh_changed;
+    use crate::control::SettingsScope;
+
+    #[test]
+    fn unchanged_panels_snapshot_skips_the_settle() {
+        assert!(!panels_refresh_changed(SettingsScope::Panels, Some(&1), Some(&1)));
+    }
+
+    #[test]
+    fn changed_panels_snapshot_settles() {
+        assert!(panels_refresh_changed(SettingsScope::Panels, Some(&1), Some(&2)));
+    }
+
+    #[test]
+    fn other_scopes_always_settle() {
+        assert!(panels_refresh_changed(SettingsScope::Settings, Some(&1), Some(&1)));
+    }
+
     #[test]
     fn live_updates_enter_through_the_reactor_seam_and_reproject_one_section() {
         let production = include_str!("runtime.rs")
