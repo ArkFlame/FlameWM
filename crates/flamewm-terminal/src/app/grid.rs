@@ -103,6 +103,7 @@ impl App {
                 let banner = self.banner_rows();
                 rows.extend(self.banner_lines_for(banner).into_iter().map(Row::from));
                 rows.extend(self.grid_frame(banner));
+                self.draw_find(&mut rows, banner);
                 if let Some(suffix) = self.ghost() {
                     self.draw_ghost(&mut rows, suffix);
                 }

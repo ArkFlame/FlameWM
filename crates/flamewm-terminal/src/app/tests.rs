@@ -959,3 +959,54 @@ fn pool_tier_grows_at_once_and_shrinks_only_with_a_quarter_spare() {
     // Beyond the largest tier the largest is used, merging extra runs as before.
     assert_eq!(pool_tier_for(400, 200, 0), 2);
 }
+
+/// Ctrl+Shift+F opens the find bar, typing edits the query, Enter and Shift+Enter step, and the bar
+/// paints on the tab row with the match count. Escape closes it.
+#[test]
+fn ctrl_shift_f_finds_text_in_the_focused_pane() {
+    let mut app = test_app();
+    app.open_tab(cat()).expect("tab");
+    {
+        let pane = app.focused_pane_mut().expect("pane");
+        crate::parser::Parser::new().advance(b"alpha needle\r\nbeta NEEDLE\r\n", &mut pane.session.screen);
+    }
+    let ctrl_shift_f = UiKeyEvent {
+        phase: UiKeyPhase::Press,
+        modifiers: vec!["ctrl".to_owned(), "shift".to_owned()],
+        key: "f".to_owned(),
+        text: None,
+    };
+    app.key(&ctrl_shift_f);
+    assert!(app.focused_pane().and_then(|p| p.search.as_ref()).is_some(), "bar open");
+    for ch in "needle".chars() {
+        let text = ch.to_string();
+        app.key(&UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: Vec::new(),
+            key: text.clone(),
+            text: Some(text),
+        });
+    }
+    let search = app.focused_pane().and_then(|p| p.search.clone()).expect("search");
+    assert_eq!(search.query, "needle");
+    assert_eq!(search.matches.len(), 2, "case-insensitive: both lines match");
+    assert_eq!(search.current, 0);
+
+    app.key(&key("return"));
+    assert_eq!(app.focused_pane().unwrap().search.as_ref().unwrap().current, 1);
+    let shift_enter = UiKeyEvent {
+        phase: UiKeyPhase::Press,
+        modifiers: vec!["shift".to_owned()],
+        key: "return".to_owned(),
+        text: None,
+    };
+    app.key(&shift_enter);
+    assert_eq!(app.focused_pane().unwrap().search.as_ref().unwrap().current, 0);
+
+    let rows = app.frame();
+    let bar: String = rows[0].to_vec().iter().map(|run| run.text.clone()).collect();
+    assert!(bar.contains("Find: needle") && bar.contains("1/2"), "bar: {bar}");
+
+    app.key(&key("escape"));
+    assert!(app.focused_pane().unwrap().search.is_none(), "Escape closes the bar");
+}

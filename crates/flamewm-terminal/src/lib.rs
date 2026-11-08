@@ -8,6 +8,7 @@ pub mod parser;
 pub mod pool;
 pub mod pty;
 pub mod screen;
+pub mod search;
 pub mod session;
 pub mod settings;
 pub mod settings_cache;

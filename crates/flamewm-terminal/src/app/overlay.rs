@@ -142,6 +142,69 @@ impl App {
     }
 
     /// Paints the context menu over window rows starting at `row`, column `col`.
+    /// Paints the find bar over the tab row and highlights every match on screen. The current match uses the
+    /// cursor colour; the others use the selection colour. Runs on top of the cached grid rows.
+    pub(super) fn draw_find(&self, rows: &mut [Row], banner: usize) {
+        let (Some(tab), Some(pane)) = (self.tabs.get(self.active), self.focused_pane()) else {
+            return;
+        };
+        let Some(search) = pane.search.as_ref() else {
+            return;
+        };
+        let Some((_, rect)) = tab
+            .root
+            .rects(self.grid_rect())
+            .into_iter()
+            .find(|(id, _)| *id == tab.focused)
+        else {
+            return;
+        };
+        let screen = &pane.session.screen;
+        let top = screen
+            .total_lines()
+            .saturating_sub(screen.rows() + pane.view_offset.min(screen.scrollback_len()));
+        let palette = &self.palette;
+        for (index, found) in search.matches.iter().enumerate() {
+            if found.line < top || found.line >= top + rect.rows {
+                continue;
+            }
+            let Some(row) = rows.get_mut(1 + banner + rect.y0 + (found.line - top)) else {
+                continue;
+            };
+            let Some(cells) = screen.line_abs(found.line) else {
+                continue;
+            };
+            let chars = crate::search::line_chars(&cells);
+            let Some(text) = chars.get(found.col..found.col + found.len) else {
+                continue;
+            };
+            let text: String = text.iter().collect();
+            let col = rect.x0 + found.col;
+            let (fg, bg) = if index == search.current {
+                (palette.background, palette.cursor)
+            } else {
+                (palette.foreground, palette.selection)
+            };
+            let run = text_run(col, &text, fg, Some(bg), false);
+            *row = Row::from(overlay(row.to_vec(), col, found.len, run));
+        }
+        let position = if search.matches.is_empty() {
+            String::from("0/0")
+        } else {
+            format!("{}/{}", search.current + 1, search.matches.len())
+        };
+        let label = format!(" Find: {}  {position} ", search.query);
+        if let Some(bar) = rows.first_mut() {
+            *bar = Row::from(vec![text_run(
+                0,
+                &label,
+                palette.foreground,
+                Some(palette.selection),
+                false,
+            )]);
+        }
+    }
+
     pub(super) fn draw_menu(&self, rows: &mut [Row], row: usize, col: usize) {
         let width = menu_width();
         for (index, item) in MENU.iter().enumerate() {

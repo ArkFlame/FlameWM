@@ -40,6 +40,7 @@ pub enum Shortcut {
     Settings,
     FontLarger,
     FontSmaller,
+    Find,
 }
 
 #[must_use]
@@ -53,6 +54,7 @@ pub fn shortcut(key: &str, mods: Mods) -> Option<Shortcut> {
         (true, true, "c") => Some(Shortcut::Copy),
         (true, true, "v") => Some(Shortcut::Paste),
         (true, true, "t") => Some(Shortcut::NewTab),
+        (true, true, "f") => Some(Shortcut::Find),
         (true, true, "w") => Some(Shortcut::CloseTab),
         (true, false, "tab") => Some(Shortcut::NextTab),
         (true, true, "tab" | "iso_left_tab") => Some(Shortcut::PreviousTab),
@@ -351,6 +353,7 @@ mod tests {
         };
         assert_eq!(shortcut("c", ctrl_shift), Some(Shortcut::Copy));
         assert_eq!(shortcut("v", ctrl_shift), Some(Shortcut::Paste));
+        assert_eq!(shortcut("f", ctrl_shift), Some(Shortcut::Find));
         assert_eq!(shortcut("t", ctrl_shift), Some(Shortcut::NewTab));
         assert_eq!(
             shortcut(

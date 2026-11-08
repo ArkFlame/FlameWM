@@ -47,6 +47,10 @@ impl App {
             self.shortcut(shortcut);
             return;
         }
+        if self.focused_pane().is_some_and(|pane| pane.search.is_some()) {
+            self.find_key(event);
+            return;
+        }
         if let View::Settings(settings) = &mut self.view {
             let command = settings.handle_key(event, &self.themes);
             self.settings_command(command);
@@ -161,7 +165,78 @@ impl App {
             Shortcut::Settings => self.toggle_settings(),
             Shortcut::FontLarger => self.change_font_size(1),
             Shortcut::FontSmaller => self.change_font_size(-1),
+            Shortcut::Find => self.open_find(),
         }
+    }
+
+    fn open_find(&mut self) {
+        if let Some(pane) = self.focused_pane_mut() {
+            pane.search = Some(crate::search::Search::default());
+        }
+    }
+
+    /// Find-bar keys: text edits the query, Enter steps to the next match, Shift+Enter to the previous one,
+    /// Escape closes the bar. Every other key is dropped while the bar is open.
+    fn find_key(&mut self, event: &UiKeyEvent) {
+        let shift = event.modifiers.iter().any(|m| m == "shift");
+        let text = event
+            .text
+            .as_deref()
+            .filter(|t| !t.is_empty() && !t.chars().any(char::is_control));
+        match event.key.to_ascii_lowercase().as_str() {
+            "escape" => {
+                if let Some(pane) = self.focused_pane_mut() {
+                    pane.search = None;
+                }
+            }
+            "return" | "enter" | "kp_enter" => self.find_step(!shift),
+            "backspace" => self.find_edit(|query| {
+                query.pop();
+            }),
+            _ => {
+                if let Some(text) = text {
+                    self.find_edit(|query| query.push_str(text));
+                }
+            }
+        }
+    }
+
+    /// Changes the query, recomputes the matches over the focused pane and jumps to the first one.
+    fn find_edit(&mut self, edit: impl FnOnce(&mut String)) {
+        let Some(pane) = self.focused_pane_mut() else {
+            return;
+        };
+        let Some(search) = pane.search.as_mut() else {
+            return;
+        };
+        edit(&mut search.query);
+        search.matches = crate::search::find(&pane.session.screen, &search.query);
+        search.current = 0;
+        self.find_reveal();
+    }
+
+    fn find_step(&mut self, forward: bool) {
+        let Some(pane) = self.focused_pane_mut() else {
+            return;
+        };
+        let Some(search) = pane.search.as_mut() else {
+            return;
+        };
+        if let Some(next) = crate::search::step(search.matches.len(), search.current, forward) {
+            search.current = next;
+        }
+        self.find_reveal();
+    }
+
+    /// Scrolls the focused pane so the current match is visible.
+    fn find_reveal(&mut self) {
+        let Some(pane) = self.focused_pane_mut() else {
+            return;
+        };
+        let Some(found) = pane.search.as_ref().and_then(crate::search::Search::current_match) else {
+            return;
+        };
+        pane.view_offset = crate::search::view_for_line(&pane.session.screen, found.line);
     }
 
     fn step_tab(&mut self, step: usize) {

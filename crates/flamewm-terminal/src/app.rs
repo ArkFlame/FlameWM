@@ -78,6 +78,8 @@ pub struct Pane {
     /// Lines scrolled back from the live bottom; 0 shows the live grid.
     pub view_offset: usize,
     pub selection: Option<Span>,
+    /// Open find bar, when the user has searched this pane.
+    pub search: Option<crate::search::Search>,
     drag_anchor: Option<(usize, usize)>,
     /// Last primary press in this pane: time, absolute row, column and click count (1 to 3).
     last_click: Option<(Instant, usize, usize, u8)>,
@@ -288,6 +290,7 @@ impl App {
             input_line: String::new(),
             view_offset: 0,
             selection: None,
+            search: None,
             drag_anchor: None,
             last_click: None,
             selection_text: String::new(),
