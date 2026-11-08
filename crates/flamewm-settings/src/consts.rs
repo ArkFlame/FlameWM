@@ -60,6 +60,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-enabled-on",
     "dock-enabled-on",
     "dock-running-on",
+    "dock-autohide-on",
     "assistant-enabled-on",
     "assistant-taskbar-icon-on",
     "assistant-speech-to-text-on",
@@ -249,6 +250,12 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "dock.showRunning",
         "dock-running-on",
         "dock-running-off",
+        true,
+    ),
+    (
+        "dock.autoHide",
+        "dock-autohide-on",
+        "dock-autohide-off",
         true,
     ),
     (

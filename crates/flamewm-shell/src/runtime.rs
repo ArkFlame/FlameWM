@@ -36,6 +36,8 @@ const PANEL_VERTICAL_ARTIFACT: &[u8] =
 const DOCK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-dock.rwr"));
 const DOCK_MENU_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-dock-menu.rwr"));
+const DOCK_LABEL_ARTIFACT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-dock-label.rwr"));
 const START_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-start.rwr"));
 const TASK_MENU_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-task-menu.rwr"));
@@ -654,6 +656,28 @@ fn create_panel_surface(
 }
 
 /// Native dock surface at `rect` (device px), hidden until projected. Mirrors `create_panel_surface`.
+/// Hover label for a dock slot: a passthrough popup above or below the bar, so it never
+/// needs room inside the dock window. Starts hidden; `rect` is device px.
+pub fn create_dock_label_surface(
+    runtime: &mut SurfaceRuntime,
+    rect: (i32, i32, u32, u32),
+) -> Result<SurfaceHandle, String> {
+    create_surface(
+        runtime,
+        DOCK_LABEL_ARTIFACT,
+        SurfaceConfig {
+            width: rect.2,
+            height: rect.3,
+            title: "FlameWM dock label".to_owned(),
+            role: SurfaceRole::Overlay,
+            input: SurfaceInputMode::PassThrough,
+            initially_visible: false,
+            x: rect.0,
+            y: rect.1,
+        },
+    )
+}
+
 /// Right-click menu for a dock slot. Starts hidden; `rect` is device px.
 pub fn create_dock_menu_surface(
     runtime: &mut SurfaceRuntime,

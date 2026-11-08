@@ -28,6 +28,10 @@ impl ShellLoop {
         if Some(event.surface) == self.dock_surface {
             return self.route_dock_event(runtime, &event);
         }
+        if Some(event.surface) == self.dock_stage.reveal {
+            self.route_dock_reveal(runtime, &event);
+            return Ok(());
+        }
         if Some(event.surface) == self.dock_menu {
             return self.route_dock_menu_event(runtime, &event);
         }

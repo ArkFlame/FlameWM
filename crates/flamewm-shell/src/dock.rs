@@ -18,6 +18,8 @@ pub struct DockSettings {
     pub icon_size: f32,
     pub pinned: Vec<String>,
     pub show_running: bool,
+    /// `dock.autoHide`: the dock slides away when idle and reveals at its edge.
+    pub auto_hide: bool,
 }
 
 #[must_use]
@@ -26,9 +28,10 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         return DockSettings {
             enabled: false,
             edge: Edge::Bottom,
-            icon_size: 48.0,
+            icon_size: 44.0,
             pinned: Vec::new(),
             show_running: true,
+            auto_hide: true,
         };
     };
     let text = |key: &str| match snapshot.values.get(key) {
@@ -51,8 +54,12 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     };
     let icon_size = match snapshot.values.get("dock.iconSize") {
         Some(SettingValue::Integer(px)) => (*px).clamp(24, 96) as f32,
-        _ => 48.0,
+        _ => 44.0,
     };
+    let auto_hide = !matches!(
+        snapshot.values.get("dock.autoHide"),
+        Some(SettingValue::Boolean(false))
+    );
     let mut pinned: Vec<String> = Vec::new();
     for id in text("dock.pinned").unwrap_or("").split(',').map(str::trim) {
         if !id.is_empty()
@@ -69,6 +76,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         icon_size,
         pinned,
         show_running,
+        auto_hide,
     }
 }
 
@@ -121,11 +129,17 @@ pub fn click_request(app_id: &str, windows: &[WindowSnapshot]) -> ControlRequest
 
 /// Document slots available in `dock.html`; entries beyond this are not shown.
 pub const MAX_SLOTS: usize = 24;
-const PAD: f32 = 8.0;
-const GAP: f32 = 6.0;
-/// Room beside the bar for the hover label (horizontal docks only).
-const LABEL_ROOM: f32 = 28.0;
-const LABEL_W: f32 = 160.0;
+const PAD: f32 = 6.0;
+const GAP: f32 = 3.0;
+/// Gap between the bar and the screen edge it floats above, in CSS px.
+pub const DOCK_MARGIN: f32 = 8.0;
+/// Thickness of the reveal strip left on the edge while the dock is hidden, in CSS px.
+pub const REVEAL_PX: f32 = 3.0;
+/// Hover label size and its gap above (bottom) or below (top) the bar, in CSS px. The label is
+/// its own popup surface, so the dock window is exactly the bar.
+pub const LABEL_W: f32 = 160.0;
+pub const LABEL_H: f32 = 22.0;
+const LABEL_GAP: f32 = 4.0;
 const DOT: f32 = 4.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,9 +179,6 @@ pub fn dock_frame(
     let vertical = edge.is_vertical();
     let main = count as f32 * slot + 2.0 * PAD;
     let cross = slot + 2.0 * PAD;
-    let room = if vertical { 0.0 } else { LABEL_ROOM };
-    // Bottom puts the label room above the bar; top puts it below.
-    let bar_y = if edge == Edge::Bottom { room } else { 0.0 };
     let (width, height, bar) = if vertical {
         (
             cross,
@@ -182,10 +193,10 @@ pub fn dock_frame(
     } else {
         (
             main,
-            cross + room,
+            cross,
             Rect {
                 x: 0.0,
-                y: bar_y,
+                y: 0.0,
                 w: main,
                 h: cross,
             },
@@ -248,16 +259,17 @@ pub fn dock_frame(
                 h: 0.0,
             }
         } else {
+            // Window-space rect: above the bar on bottom, below it on top (outside the window).
             let label_y = if edge == Edge::Bottom {
-                2.0
+                bar.y - LABEL_GAP - LABEL_H
             } else {
-                bar.y + cross + 2.0
+                bar.y + bar.h + LABEL_GAP
             };
             Rect {
                 x: s.x + slot / 2.0 - LABEL_W / 2.0,
                 y: label_y,
                 w: LABEL_W,
-                h: LABEL_ROOM - 4.0,
+                h: LABEL_H,
             }
         });
     }
@@ -296,7 +308,8 @@ pub fn dock_frame(
 
 /// Device-px placement of a dock surface on `output` (device px). `inset` is
 /// the reserved strip on the dock's edge (for example the taskbar height when
-/// both sit on the same edge). Centred along the edge.
+/// both sit on the same edge). Centred along the edge, floating `DOCK_MARGIN`
+/// away from the screen edge.
 #[must_use]
 pub fn place(
     frame: &DockFrame,
@@ -306,47 +319,81 @@ pub fn place(
 ) -> (i32, i32, u32, u32) {
     let w = (frame.width * scale).round() as i32;
     let h = (frame.height * scale).round() as i32;
+    let margin = device_px(DOCK_MARGIN, scale);
     let (ox, oy, ow, oh) = output;
     let (x, y) = match frame.edge {
-        Edge::Bottom => (ox + (ow - w) / 2, oy + oh - h - inset),
-        Edge::Top => (ox + (ow - w) / 2, oy + inset),
-        Edge::Left => (ox + inset, oy + (oh - h) / 2),
-        Edge::Right => (ox + ow - w - inset, oy + (oh - h) / 2),
+        Edge::Bottom => (ox + (ow - w) / 2, oy + oh - h - inset - margin),
+        Edge::Top => (ox + (ow - w) / 2, oy + inset + margin),
+        Edge::Left => (ox + inset + margin, oy + (oh - h) / 2),
+        Edge::Right => (ox + ow - w - inset - margin, oy + (oh - h) / 2),
     };
     (x, y, w.max(1) as u32, h.max(1) as u32)
 }
 
-/// Shows the hover label of slot `hovered` (0-based) and hides the rest. The
-/// renderer takes pseudo-states only on the rightmost selector, so hover is
-/// driven from the shell's hover events rather than CSS.
-pub fn project_hover(
-    document: &mut impl UiDocumentAccess,
-    hovered: Option<usize>,
-) -> Result<(), String> {
-    for i in 0..MAX_SLOTS {
-        document.visible(&format!("dock-slot-{}-label", i + 1), hovered == Some(i))?;
+fn device_px(css: f32, scale: f32) -> i32 {
+    (css * scale).round() as i32
+}
+
+/// Device-px distance from `placed` to the point where it sits wholly past its screen edge on
+/// `output`. The taskbar inset is part of the distance, so a hidden dock clears the taskbar too.
+#[must_use]
+pub fn slide_extent(placed: (i32, i32, u32, u32), edge: Edge, output: (i32, i32, i32, i32)) -> i32 {
+    let (x, y, w, h) = placed;
+    let (ox, oy, ow, oh) = output;
+    match edge {
+        Edge::Bottom => oy + oh - y,
+        Edge::Top => y + h as i32 - oy,
+        Edge::Left => x + w as i32 - ox,
+        Edge::Right => ox + ow - x,
     }
-    Ok(())
+}
+
+/// `placed` moved `offset` device px toward its screen edge. Offset 0 is shown; the full
+/// `slide_extent` is hidden.
+#[must_use]
+pub fn slide_rect(placed: (i32, i32, u32, u32), edge: Edge, offset: i32) -> (i32, i32, u32, u32) {
+    let (x, y, w, h) = placed;
+    match edge {
+        Edge::Bottom => (x, y + offset, w, h),
+        Edge::Top => (x, y - offset, w, h),
+        Edge::Left => (x - offset, y, w, h),
+        Edge::Right => (x + offset, y, w, h),
+    }
+}
+
+/// Thin strip on `edge` of `output` spanning the dock's shown extent. It is the only
+/// pointer target while the dock is unmapped.
+#[must_use]
+pub fn reveal_rect(
+    placed: (i32, i32, u32, u32),
+    output: (i32, i32, i32, i32),
+    edge: Edge,
+    scale: f32,
+) -> (i32, i32, u32, u32) {
+    let (x, y, w, h) = placed;
+    let (ox, oy, ow, oh) = output;
+    let px = device_px(REVEAL_PX, scale).max(1);
+    match edge {
+        Edge::Bottom => (x, oy + oh - px, w, px as u32),
+        Edge::Top => (x, oy, w, px as u32),
+        Edge::Left => (ox, y, px as u32, h),
+        Edge::Right => (ox + ow - px, y, px as u32, h),
+    }
 }
 
 fn rect_to_css(rect: Rect) -> (f32, f32, f32, f32) {
     (rect.x, rect.y, rect.w, rect.h)
 }
 
-/// Writes one frame into `dock.html`. `names` are app names in slot order.
-pub fn project_dock(
-    document: &mut impl UiDocumentAccess,
-    frame: &DockFrame,
-    names: &[String],
-) -> Result<(), String> {
+/// Writes one frame into `dock.html`. Hover labels are separate popups (`sync_dock_label`).
+pub fn project_dock(document: &mut impl UiDocumentAccess, frame: &DockFrame) -> Result<(), String> {
     for i in 0..MAX_SLOTS {
         let n = i + 1;
         let slot_id = format!("dock-slot-{n}");
         let icon_id = format!("dock-slot-{n}-icon");
         let dot_id = format!("dock-slot-{n}-dot");
-        let label_id = format!("dock-slot-{n}-label");
         let Some(slot) = frame.slots.get(i).copied() else {
-            for id in [&slot_id, &icon_id, &dot_id, &label_id] {
+            for id in [&slot_id, &icon_id, &dot_id] {
                 document.visible(id, false)?;
             }
             continue;
@@ -355,7 +402,7 @@ pub fn project_dock(
         document.visible(&slot_id, true)?;
         document.position(&slot_id, x, y)?;
         document.size(&slot_id, w, h)?;
-        // Icon, dot and label are children of the slot button, so their
+        // Icon and dot are children of the slot button, so their
         // positions are slot-local.
         let local = |r: Rect| (r.x - slot.x, r.y - slot.y, r.w, r.h);
         let (ix, iy, iw, ih) = local(frame.icons[i]);
@@ -371,16 +418,6 @@ pub fn project_dock(
             }
             None => document.visible(&dot_id, false)?,
         }
-        let label = frame.labels[i];
-        if label.w > 0.0 {
-            // Labels are direct children of the dock root, so surface coordinates apply.
-            let (lx, ly, lw, lh) = rect_to_css(label);
-            document.position(&label_id, lx, ly)?;
-            document.size(&label_id, lw, lh)?;
-        }
-        let name = names.get(i).map_or("", String::as_str);
-        document.text_ref(&label_id, if name.is_empty() { "\u{200b}" } else { name })?;
-        document.visible(&label_id, false)?;
     }
     let (bx, by, bw, bh) = rect_to_css(frame.bar);
     document.position("dock-bar", bx, by)?;
@@ -398,39 +435,51 @@ pub fn project_dock(
     Ok(())
 }
 
+/// Window corner radius (device px) of the stadium pill: half the bar thickness.
+#[must_use]
+pub fn pill_corner_radius(bar_css: f32, scale: f32) -> u32 {
+    (bar_css * scale / 2.0).round() as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn bottom_bar_is_centred_with_label_room_above() {
-        let frame = dock_frame(&[true, false], None, 48.0, Edge::Bottom);
-        // slot = 60, main = 2*60 + 16 = 136, cross = 76.
-        assert_eq!(frame.width, 136.0);
-        assert_eq!(frame.height, 76.0 + LABEL_ROOM);
-        assert_eq!(frame.bar.y, LABEL_ROOM);
-        assert_eq!(frame.slots[1].x, PAD + 60.0);
+    fn window_is_exactly_the_bar_and_labels_sit_outside_it() {
+        let frame = dock_frame(&[true, false], None, 44.0, Edge::Bottom);
+        // slot = 44 + 2*3 = 50, main = 2*50 + 2*6 = 112, cross = 50 + 12 = 62.
+        assert_eq!(frame.width, 112.0);
+        assert_eq!(frame.height, 62.0);
+        assert_eq!(frame.bar.y, 0.0);
+        // Bottom label sits above the bar, outside the window, and clears the bar by the gap.
+        let label = frame.labels[0];
+        assert_eq!(label.y + label.h + LABEL_GAP, frame.bar.y);
+        assert!(label.y < 0.0);
+        let top = dock_frame(&[true], None, 44.0, Edge::Top);
+        assert_eq!(top.labels[0].y, top.bar.y + top.bar.h + LABEL_GAP);
+        assert_eq!(frame.slots[1].x, PAD + 50.0);
         assert!(frame.dots[0].is_some() && frame.dots[1].is_none());
     }
 
     #[test]
     fn vertical_bar_runs_down_the_edge_without_labels() {
-        let frame = dock_frame(&[false, false, false], None, 48.0, Edge::Left);
-        assert_eq!(frame.width, 76.0);
-        assert_eq!(frame.height, 3.0 * 60.0 + 16.0);
-        assert_eq!(frame.slots[2].y, PAD + 120.0);
+        let frame = dock_frame(&[false, false, false], None, 44.0, Edge::Left);
+        assert_eq!(frame.width, 62.0);
+        assert_eq!(frame.height, 3.0 * 50.0 + 12.0);
+        assert_eq!(frame.slots[2].y, PAD + 100.0);
         assert!(frame.labels.iter().all(|l| l.w == 0.0));
     }
 
     #[test]
     fn separator_sits_on_group_boundary_only() {
-        let split = dock_frame(&[true, true, false], Some(1), 48.0, Edge::Bottom);
+        let split = dock_frame(&[true, true, false], Some(1), 44.0, Edge::Bottom);
         let sep = split.separator.expect("separator");
-        assert!((sep.x - (PAD + 2.0 * 60.0 - 0.5)).abs() < 1e-3);
-        assert!(dock_frame(&[true], None, 48.0, Edge::Bottom)
+        assert!((sep.x - (PAD + 2.0 * 50.0 - 0.5)).abs() < 1e-3);
+        assert!(dock_frame(&[true], None, 44.0, Edge::Bottom)
             .separator
             .is_none());
-        assert!(dock_frame(&[true], Some(0), 48.0, Edge::Bottom)
+        assert!(dock_frame(&[true], Some(0), 44.0, Edge::Bottom)
             .separator
             .is_none());
     }
@@ -439,21 +488,71 @@ mod tests {
     fn slot_count_is_capped() {
         let running = vec![false; MAX_SLOTS + 5];
         assert_eq!(
-            dock_frame(&running, None, 48.0, Edge::Bottom).slots.len(),
+            dock_frame(&running, None, 44.0, Edge::Bottom).slots.len(),
             MAX_SLOTS
         );
     }
 
     #[test]
-    fn placement_respects_edge_and_inset() {
-        let frame = dock_frame(&[true], None, 48.0, Edge::Bottom);
+    fn placement_floats_margin_from_its_edge() {
+        let frame = dock_frame(&[true], None, 44.0, Edge::Bottom);
         let (x, y, w, h) = place(&frame, (0, 0, 1000, 800), 1.0, 44);
-        assert_eq!((w, h), (76, 76 + LABEL_ROOM as u32));
-        assert_eq!(x, (1000 - 76) / 2);
-        assert_eq!(y, 800 - h as i32 - 44);
-        let vertical = dock_frame(&[true], None, 48.0, Edge::Right);
+        assert_eq!((w, h), (62, 62));
+        assert_eq!(x, (1000 - 62) / 2);
+        assert_eq!(y, 800 - h as i32 - 44 - DOCK_MARGIN as i32);
+        let vertical = dock_frame(&[true], None, 44.0, Edge::Right);
         let (vx, _, _, _) = place(&vertical, (0, 0, 1000, 800), 1.0, 0);
-        assert_eq!(vx, 1000 - 76);
+        assert_eq!(vx, 1000 - 62 - DOCK_MARGIN as i32);
+        let top = dock_frame(&[true], None, 44.0, Edge::Top);
+        assert_eq!(place(&top, (0, 0, 1000, 800), 1.0, 0).1, DOCK_MARGIN as i32);
+        let left = dock_frame(&[true], None, 44.0, Edge::Left);
+        assert_eq!(place(&left, (0, 0, 1000, 800), 2.0, 0).0, 16);
+    }
+
+    #[test]
+    fn slide_moves_the_dock_fully_past_its_edge() {
+        let output = (0, 0, 1000, 800);
+        let placed = (100, 700, 500, 90);
+        let extent = slide_extent(placed, Edge::Bottom, output);
+        assert_eq!(extent, 100);
+        // Fully hidden: the top edge sits exactly on the screen bottom (800).
+        assert_eq!(slide_rect(placed, Edge::Bottom, extent).1, 800);
+        assert_eq!(slide_rect(placed, Edge::Bottom, 0), placed);
+        // Above a taskbar inset the hidden point is still the screen edge, not the bar edge.
+        let inset = (100, 656, 500, 90);
+        assert_eq!(slide_extent(inset, Edge::Bottom, output), 144);
+        assert_eq!(slide_rect(inset, Edge::Bottom, 144).1, 800);
+        let right = (900, 300, 62, 200);
+        let right_extent = slide_extent(right, Edge::Right, output);
+        assert_eq!(right_extent, 100);
+        assert_eq!(slide_rect(right, Edge::Right, right_extent).0, 1000);
+        let top = (100, 8, 500, 90);
+        assert_eq!(
+            slide_rect(top, Edge::Top, slide_extent(top, Edge::Top, output)).1,
+            -90
+        );
+        assert_eq!(slide_rect(right, Edge::Left, 10).0, 890);
+    }
+
+    #[test]
+    fn reveal_strip_hugs_the_edge_across_the_shown_extent() {
+        let output = (0, 0, 1000, 800);
+        assert_eq!(
+            reveal_rect((100, 700, 500, 90), output, Edge::Bottom, 1.0),
+            (100, 797, 500, 3)
+        );
+        assert_eq!(
+            reveal_rect((0, 300, 62, 200), output, Edge::Left, 2.0),
+            (0, 300, 6, 200)
+        );
+        assert_eq!(
+            reveal_rect((938, 300, 62, 200), output, Edge::Right, 1.0),
+            (997, 300, 3, 200)
+        );
+        assert_eq!(
+            reveal_rect((100, 8, 500, 90), output, Edge::Top, 1.0),
+            (100, 0, 500, 3)
+        );
     }
 }
 
@@ -484,5 +583,12 @@ mod menu_label_tests {
             assert!(!label.is_empty());
             assert!(!labels[..i].contains(label), "duplicate label {label}");
         }
+    }
+
+    #[test]
+    fn pill_corner_radius_is_half_bar_in_device_px() {
+        assert_eq!(pill_corner_radius(62.0, 1.0), 31);
+        assert_eq!(pill_corner_radius(62.0, 2.0), 62);
+        assert_eq!(pill_corner_radius(0.0, 1.0), 0);
     }
 }

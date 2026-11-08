@@ -7,6 +7,7 @@ use flamewm_api::PanelEdge;
 use crate::notification_center::is_escape_key;
 use flamewm_shell::dock::{self, DockSettings};
 use flamewm_shell::icon_loader::IconTarget;
+use flamewm_shell_core::autohide::AutoHide;
 use flamewm_shell_core::dock::{drag_off_removes, move_pinned, slot_at, Edge};
 use flamewm_ui_document::UiDocumentAccess;
 use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
@@ -33,6 +34,33 @@ pub(crate) type DockSync = (
     Vec<flamewm_shell_core::dock::DockEntry>,
 );
 
+/// Dock surface placement state. Each field caches the last value written, so a tick only
+/// talks to the window system when something changed.
+#[derive(Default)]
+pub(crate) struct DockStage {
+    /// Reveal strip surface: mapped only while the dock is hidden.
+    pub(crate) reveal: Option<flamewm_ui_x11::SurfaceHandle>,
+    pub(crate) autohide: Option<AutoHide>,
+    placed: Option<(i32, i32, u32, u32)>,
+    reveal_placed: Option<(i32, i32, u32, u32)>,
+    /// `(dock mapped, reveal mapped)`.
+    mapped: Option<(bool, bool)>,
+    strut: Option<((i32, i32, u32, u32), bool)>,
+    /// Hover label popup, created on first hover and hidden otherwise.
+    pub(crate) label: Option<flamewm_ui_x11::SurfaceHandle>,
+}
+
+/// Inputs to one placement pass, grouped to keep the call readable.
+struct DockPlacement {
+    placed: (i32, i32, u32, u32),
+    output: (i32, i32, i32, i32),
+    scale: f32,
+    auto_hide: bool,
+    /// False when the dock has no entries; it then stays unmapped, reveal included.
+    shown: bool,
+    model: AutoHide,
+}
+
 fn strut_edge(edge: Edge) -> DockEdge {
     match edge {
         Edge::Bottom => DockEdge::Bottom,
@@ -53,6 +81,7 @@ fn dock_edge(edge: PanelEdge) -> Edge {
 
 impl ShellLoop {
     /// Creates, moves, projects, or destroys the dock surface to match the settings and windows.
+    /// Auto-hide slides the dock toward its edge; once fully hidden, only the reveal strip is mapped.
     pub(crate) fn sync_dock(&mut self, runtime: &mut SurfaceRuntime) {
         let settings: DockSettings = dock::dock_settings(self.settings_cache.as_ref());
         if !settings.enabled {
@@ -62,6 +91,10 @@ impl ShellLoop {
             if let Some(surface) = self.dock_surface.take() {
                 let _ = runtime.destroy(surface);
             }
+            if let Some(reveal) = self.dock_stage.reveal.take() {
+                let _ = runtime.destroy(reveal);
+            }
+            self.dock_stage = DockStage::default();
             return;
         }
         let snapshot = self.shell.snapshot();
@@ -114,15 +147,27 @@ impl ShellLoop {
             0
         };
         let geometry = output.geometry;
-        let rect = dock::place(
-            &frame,
-            (geometry.x, geometry.y, geometry.width, geometry.height),
-            scale,
-            inset,
+        let output_rect = (geometry.x, geometry.y, geometry.width, geometry.height);
+        let placed = dock::place(&frame, output_rect, scale, inset);
+        let now = std::time::Instant::now();
+        let mut model = self
+            .dock_stage
+            .autohide
+            .unwrap_or_else(|| AutoHide::new(settings.auto_hide, now));
+        model.set_auto_hide(settings.auto_hide, now);
+        model.set_fullscreen(snapshot.windows.iter().any(|window| {
+            window.state == flamewm_api::window::WindowState::Fullscreen
+                && window.output == panel.output
+        }));
+        model.set_pinned_open(
+            self.dock_drag.is_some() || self.dock_menu_slot.is_some(),
+            now,
         );
+        model.step(now);
+        self.dock_stage.autohide = Some(model);
         let surface = match self.dock_surface {
             Some(surface) => surface,
-            None => match flamewm_shell::runtime::create_dock_surface(runtime, rect, scale) {
+            None => match flamewm_shell::runtime::create_dock_surface(runtime, placed, scale) {
                 Ok(surface) => {
                     self.dock_surface = Some(surface);
                     surface
@@ -133,6 +178,22 @@ impl ShellLoop {
                 }
             },
         };
+        let reveal_rect = dock::reveal_rect(placed, output_rect, settings.edge, scale);
+        let reveal = match self.dock_stage.reveal {
+            Some(reveal) => reveal,
+            None => {
+                match flamewm_shell::runtime::create_dock_surface(runtime, reveal_rect, scale) {
+                    Ok(reveal) => {
+                        self.dock_stage.reveal = Some(reveal);
+                        reveal
+                    }
+                    Err(error) => {
+                        eprintln!("flamewm-shell: dock reveal create failed: {error}");
+                        return;
+                    }
+                }
+            }
+        };
         let names: Vec<String> = layout
             .entries
             .iter()
@@ -140,62 +201,209 @@ impl ShellLoop {
                 lookup(&entry.app_id).map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
             })
             .collect();
-        let state: DockSync = (frame.clone(), rect, names.clone(), layout.entries.clone());
-        if self.dock_last.as_ref() == Some(&state) {
-            return;
-        }
-        let icon_px = (settings.icon_size * scale).round() as u32;
-        let icon_names: Vec<String> = layout
-            .entries
-            .iter()
-            .map(|entry| {
-                lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
-            })
-            .collect();
-        async_projection::bump_dock_view_epoch();
-        if let Some(loader) = self.icon_loader.as_mut() {
-            for (index, name) in icon_names.iter().enumerate() {
-                let target = IconTarget::DockSlot(index as u8);
-                let generation = loader.generation();
-                loader.request(target, name, icon_px, icon_px);
-                async_projection::bind_icon_request(target, name, icon_px, icon_px, generation);
+        let state: DockSync = (frame.clone(), placed, names.clone(), layout.entries.clone());
+        if self.dock_last.as_ref() != Some(&state) {
+            let icon_px = (settings.icon_size * scale).round() as u32;
+            let icon_names: Vec<String> = layout
+                .entries
+                .iter()
+                .map(|entry| {
+                    lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
+                })
+                .collect();
+            async_projection::bump_dock_view_epoch();
+            if let Some(loader) = self.icon_loader.as_mut() {
+                for (index, name) in icon_names.iter().enumerate() {
+                    let target = IconTarget::DockSlot(index as u8);
+                    let generation = loader.generation();
+                    loader.request(target, name, icon_px, icon_px);
+                    async_projection::bind_icon_request(target, name, icon_px, icon_px, generation);
+                }
             }
+            if let Err(error) = runtime.with_document(surface, |document| {
+                dock::project_dock(document, &frame)?;
+                for index in 0..icon_names.len() {
+                    async_projection::apply_cached_binding(
+                        document,
+                        IconTarget::DockSlot(index as u8),
+                        icon_px,
+                    )?;
+                }
+                Ok::<(), String>(())
+            }) {
+                eprintln!("flamewm-shell: dock projection failed: {error:?}");
+            }
+            let _ = runtime.redraw(surface);
+            self.dock_entries.clone_from(&layout.entries);
+            self.dock_last = Some(state);
         }
-        let _ = runtime.move_resize(surface, rect.0, rect.1, rect.2, rect.3);
-        // Reserve only the bar, not the hover-label room the window also covers.
-        let bar_css = if frame.edge.is_vertical() {
-            frame.bar.w
-        } else {
-            frame.bar.h
-        };
-        let _ = runtime.set_dock_frame(
-            surface,
-            Some(strut_edge(frame.edge)),
-            0,
-            Some((bar_css * scale).round() as u32),
+        self.place_dock(
+            runtime,
+            (surface, reveal),
+            &frame,
+            DockPlacement {
+                placed,
+                output: output_rect,
+                scale,
+                auto_hide: settings.auto_hide,
+                shown: !layout.entries.is_empty(),
+                model,
+            },
         );
-        if let Err(error) = runtime.with_document(surface, |document| {
-            dock::project_dock(document, &frame, &names)?;
-            for index in 0..icon_names.len() {
-                async_projection::apply_cached_binding(
-                    document,
-                    IconTarget::DockSlot(index as u8),
-                    icon_px,
-                )?;
+        self.sync_dock_label(runtime);
+    }
+
+    /// Shows the hover label of the hovered slot as its own popup above or below the bar, or
+    /// hides it. The popup follows the dock's slide-adjusted rect and never paints inside the dock.
+    pub(crate) fn sync_dock_label(&mut self, runtime: &mut SurfaceRuntime) {
+        let dock_mapped = self.dock_stage.mapped.is_some_and(|(dock, _)| dock);
+        let hovered = self
+            .dock_hover
+            .filter(|_| dock_mapped && self.dock_menu_slot.is_none());
+        let shown = match (hovered, self.dock_stage.placed, self.dock_last.as_ref()) {
+            (Some(index), Some(placed), Some(state)) => {
+                let name = state.2.get(index).map_or("", String::as_str);
+                state
+                    .0
+                    .labels
+                    .get(index)
+                    .copied()
+                    .filter(|label| label.w > 0.0 && !name.is_empty())
+                    .map(|label| (name.to_owned(), placed, label))
             }
-            Ok::<(), String>(())
-        }) {
-            eprintln!("flamewm-shell: dock projection failed: {error:?}");
-        }
-        let shown = if layout.entries.is_empty() {
-            runtime.hide(surface)
-        } else {
-            runtime.show(surface)
+            _ => None,
         };
-        let _ = shown;
-        let _ = runtime.redraw(surface);
-        self.dock_entries = layout.entries;
-        self.dock_last = Some(state);
+        let Some((name, placed, label)) = shown else {
+            if let Some(popup) = self.dock_stage.label {
+                let _ = runtime.hide(popup);
+            }
+            return;
+        };
+        let x = placed.0 + label.x.round() as i32;
+        let y = placed.1 + label.y.round() as i32;
+        let popup = match self.dock_stage.label {
+            Some(popup) => popup,
+            None => match flamewm_shell::runtime::create_dock_label_surface(
+                runtime,
+                (x, y, dock::LABEL_W as u32, dock::LABEL_H as u32),
+            ) {
+                Ok(popup) => {
+                    self.dock_stage.label = Some(popup);
+                    popup
+                }
+                Err(error) => {
+                    eprintln!("flamewm-shell: dock label create failed: {error}");
+                    return;
+                }
+            },
+        };
+        let _ = runtime.move_resize(popup, x, y, dock::LABEL_W as u32, dock::LABEL_H as u32);
+        let _ = runtime.with_document(popup, |document| {
+            document.text("dock-tip-text", name.clone())
+        });
+        let _ = runtime.show(popup);
+        let _ = runtime.redraw(popup);
+    }
+
+    /// Moves the dock and reveal strip, keeps the work-area strut in step with auto-hide, and maps
+    /// exactly one of them: the dock while shown, the reveal strip while hidden.
+    fn place_dock(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        (surface, reveal): (flamewm_ui_x11::SurfaceHandle, flamewm_ui_x11::SurfaceHandle),
+        frame: &dock::DockFrame,
+        placement: DockPlacement,
+    ) {
+        let DockPlacement {
+            placed,
+            output,
+            scale,
+            auto_hide,
+            shown,
+            model,
+        } = placement;
+        let extent = dock::slide_extent(placed, frame.edge, output);
+        let offset = (model.offset() * extent as f32).round() as i32;
+        let moved = dock::slide_rect(placed, frame.edge, offset);
+        if self.dock_stage.placed != Some(moved) {
+            let _ = runtime.move_resize(surface, moved.0, moved.1, moved.2, moved.3);
+            self.dock_stage.placed = Some(moved);
+        }
+        let reveal_rect = dock::reveal_rect(placed, output, frame.edge, scale);
+        if self.dock_stage.reveal_placed != Some(reveal_rect) {
+            let _ = runtime.move_resize(
+                reveal,
+                reveal_rect.0,
+                reveal_rect.1,
+                reveal_rect.2,
+                reveal_rect.3,
+            );
+            self.dock_stage.reveal_placed = Some(reveal_rect);
+            // The reveal strip never gets a projection, so it needs one paint before it can hit-test.
+            let _ = runtime.redraw(reveal);
+        }
+        // An auto-hidden Dock reserves nothing; a shown one keeps its bar plus the floating margin.
+        if self.dock_stage.strut != Some((placed, auto_hide)) {
+            let bar_css = if frame.edge.is_vertical() {
+                frame.bar.w
+            } else {
+                frame.bar.h
+            };
+            let strut =
+                (!auto_hide).then(|| ((bar_css + dock::DOCK_MARGIN) * scale).round() as u32);
+            // The window is exactly the bar, so a stadium pill clips the window corners with
+            // radius = half the bar thickness; without it the unpainted corners show clear pixels.
+            let corner_radius = dock::pill_corner_radius(bar_css, scale);
+            let _ = runtime.set_dock_frame(
+                surface,
+                strut.map(|_| strut_edge(frame.edge)),
+                corner_radius,
+                strut,
+            );
+            self.dock_stage.strut = Some((placed, auto_hide));
+        }
+        let hidden = model.is_hidden();
+        // The strip stays mapped under a shown auto-hide dock: unmapping it under the pointer
+        // sends a Leave that ends the hold and hides the dock again.
+        let mapped = (shown && !hidden, shown && (hidden || auto_hide));
+        if self.dock_stage.mapped != Some(mapped) {
+            let reveal_was_mapped = self.dock_stage.mapped.is_some_and(|(_, reveal)| reveal);
+            let _ = if mapped.0 {
+                runtime.show(surface)
+            } else {
+                runtime.hide(surface)
+            };
+            let _ = if mapped.1 {
+                runtime.show(reveal)
+            } else {
+                runtime.hide(reveal)
+            };
+            // The strip is painted once at creation while unmapped; repaint on each map so it hit-tests.
+            if mapped.1 && !reveal_was_mapped {
+                let _ = runtime.redraw(reveal);
+            }
+            self.dock_stage.mapped = Some(mapped);
+        }
+    }
+
+    /// Pointer over the dock or its reveal strip; keeps the dock shown or starts its hide delay.
+    /// Applies the hold at once: the event path does not tick, so this syncs the slide and
+    /// republishes the hide deadline itself.
+    pub(crate) fn dock_pointer(&mut self, runtime: &mut SurfaceRuntime, inside: bool) {
+        let now = std::time::Instant::now();
+        if let Some(mut model) = self.dock_stage.autohide {
+            model.set_pointer(inside, now);
+            self.dock_stage.autohide = Some(model);
+        }
+        self.sync_dock(runtime);
+        self.publish_wake(now);
+    }
+
+    /// Hover on the reveal strip: the dock slides in while the pointer is over it.
+    pub(crate) fn route_dock_reveal(&mut self, runtime: &mut SurfaceRuntime, event: &SurfaceEvent) {
+        if event.action.phase == ActionPhase::Hover {
+            self.dock_pointer(runtime, event.action.inside);
+        }
     }
 
     /// Writes the pinned list to `dock.pinned` through the settings service.
@@ -270,6 +478,9 @@ impl ShellLoop {
             .strip_prefix("dock.slot.")
             .and_then(|n| n.parse::<usize>().ok());
         let (x, y) = (event.action.x, event.action.y);
+        if event.action.phase == ActionPhase::Hover {
+            self.dock_pointer(runtime, event.action.inside);
+        }
         let pinned_count = self.dock_entries.iter().take_while(|e| e.pinned).count();
         match event.action.phase {
             ActionPhase::Press => {
@@ -320,14 +531,17 @@ impl ShellLoop {
             let hovered = slot
                 .filter(|_| event.action.inside && self.dock_menu_slot.is_none())
                 .map(|n| n - 1)
-                .filter(|index| *index < self.dock_entries.len());
+                .filter(|index| *index < self.dock_entries.len())
+                // A slot with no name would paint an empty label box above the bar.
+                .filter(|index| {
+                    self.dock_last
+                        .as_ref()
+                        .and_then(|state| state.2.get(*index))
+                        .is_some_and(|name| !name.is_empty())
+                });
             if hovered != self.dock_hover {
                 self.dock_hover = hovered;
-                if let Some(surface) = self.dock_surface {
-                    let _ = runtime
-                        .with_document(surface, |document| dock::project_hover(document, hovered));
-                    let _ = runtime.redraw(surface);
-                }
+                self.sync_dock_label(runtime);
             }
             return Ok(());
         }
@@ -434,9 +648,8 @@ impl ShellLoop {
         self.dock_menu_slot = Some(index);
         if let Some(dock_surface) = self.dock_surface {
             self.dock_hover = None;
-            let _ =
-                runtime.with_document(dock_surface, |document| dock::project_hover(document, None));
             let _ = runtime.redraw(dock_surface);
+            self.sync_dock_label(runtime);
         }
         self.dock_menu_items = items;
     }

@@ -187,6 +187,9 @@ impl ShellLoop {
             self.auto_lookup.poll_deadline(now),
             self.zone_settle_at,
             self.task_progress_deadline,
+            self.dock_stage
+                .autohide
+                .and_then(|model| model.deadline(now)),
         ]));
     }
 

@@ -12,7 +12,8 @@ Keys are final and implemented in `crates/flamewm-platform/src/settings.rs` (tes
 | --- | --- | --- | --- | --- |
 | `dock.enabled` | bool | `false` | `0`/`1`, `true`/`false` | Dock surface is created only when true. |
 | `dock.position` | enum | `bottom` | `bottom`, `left`, `right`, `top` | Left and right use the vertical variant. |
-| `dock.iconSize` | integer px | `48` | `24`..`96` | Out of range: parse error (validation). |
+| `dock.iconSize` | integer px | `44` | `24`..`96` | Out of range: parse error (validation). |
+| `dock.autoHide` | bool | `true` | bool | Slides the dock out when idle; the pointer on its edge strip reveals it. Explicit `false` keeps it shown and reserves its strip. Missing key = `true`. |
 | `dock.pinned` | comma list | empty | app ids: `[A-Za-z0-9._-]`, 1..128 bytes, max 32 | Duplicates dropped on load. Invalid id: parse error. Unknown ids kept. |
 | `dock.showRunning` | bool | `true` | bool | Unpinned running apps after the separator. |
 | `taskbar.enabled` | bool | `true` | bool | False: taskbar panel not created, reserves no work area. |
@@ -35,6 +36,7 @@ Group **Dock**:
 - Segmented "Position" (Bottom / Left / Right / Top) -> `dock.position`.
 - Slider "Icon size" 24..96 step 4 -> `dock.iconSize`.
 - Toggle "Show running apps" -> `dock.showRunning`.
+- Toggle "Automatically hide and show the Dock" -> `dock.autoHide`.
 - List of pinned apps with remove -> `dock.pinned`.
 
 Group **Taskbar**:

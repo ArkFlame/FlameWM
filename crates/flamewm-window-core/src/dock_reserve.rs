@@ -17,17 +17,19 @@ pub enum ReserveEdge {
 }
 
 /// Bar padding on each side, in px. Mirrors `PAD` in `crates/flamewm-shell/src/dock.rs`.
-pub const DOCK_PADDING: i32 = 8;
+pub const DOCK_PADDING: i32 = 6;
 /// Gap around each icon, in px. Mirrors `GAP` in `crates/flamewm-shell/src/dock.rs`.
-pub const DOCK_GAP: i32 = 6;
+pub const DOCK_GAP: i32 = 3;
+/// Gap between the bar and its screen edge. Mirrors `DOCK_MARGIN` in `crates/flamewm-shell/src/dock.rs`.
+pub const DOCK_MARGIN: i32 = 8;
 /// Default `dock.iconSize` (the settings default).
-pub const DEFAULT_ICON_SIZE: i32 = 48;
+pub const DEFAULT_ICON_SIZE: i32 = 44;
 
-/// Thickness of the Dock bar on its edge: icon plus gap and padding on both sides. The hover label
-/// room is an overlay and is not reserved.
+/// Thickness the Dock reserves on its edge: icon plus gap and padding on both sides, plus the
+/// floating margin. The hover label room is an overlay and is not reserved.
 #[must_use]
 pub fn dock_extent(icon_size: i32) -> i32 {
-    icon_size + 2 * (DOCK_PADDING + DOCK_GAP)
+    icon_size + 2 * (DOCK_PADDING + DOCK_GAP) + DOCK_MARGIN
 }
 
 /// Cuts `extent` px off `work` along `edge`. Sizes never go negative.
@@ -52,7 +54,8 @@ pub fn reserve_edge(work: Rect, edge: ReserveEdge, extent: i32) -> Rect {
     }
 }
 
-/// `(edge, extent)` the Dock reserves, or `None` when `dock.enabled` is not true.
+/// `(edge, extent)` the Dock reserves, or `None` when `dock.enabled` is not true or `dock.autoHide`
+/// is on (an auto-hidden Dock leaves the work area alone and only overlaps it while revealed).
 ///
 /// Missing or ill-typed values keep the settings defaults. An unknown `dock.position` falls back to
 /// bottom, and an out-of-range `dock.iconSize` falls back to the default, so a hand-edited file
@@ -62,6 +65,12 @@ pub fn dock_reserve_from_snapshot(snapshot: &SettingsSnapshot) -> Option<(Reserv
     if !matches!(
         snapshot.values.get("dock.enabled"),
         Some(SettingValue::Boolean(true))
+    ) {
+        return None;
+    }
+    if !matches!(
+        snapshot.values.get("dock.autoHide"),
+        Some(SettingValue::Boolean(false))
     ) {
         return None;
     }
@@ -145,8 +154,8 @@ mod tests {
 
     #[test]
     fn extent_matches_the_shell_bar_thickness() {
-        assert_eq!(dock_extent(48), 76);
-        assert_eq!(dock_extent(96), 124);
+        assert_eq!(dock_extent(48), 74);
+        assert_eq!(dock_extent(96), 122);
     }
 
     #[test]
@@ -166,6 +175,7 @@ mod tests {
         assert_eq!(
             dock_reserve_from_snapshot(&snapshot(&[
                 ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.autoHide", SettingValue::Boolean(false)),
                 ("dock.position", SettingValue::Text("right".into())),
                 ("dock.iconSize", SettingValue::Integer(64)),
             ])),
@@ -178,10 +188,30 @@ mod tests {
         assert_eq!(
             dock_reserve_from_snapshot(&snapshot(&[
                 ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.autoHide", SettingValue::Boolean(false)),
                 ("dock.position", SettingValue::Text("sideways".into())),
                 ("dock.iconSize", SettingValue::Integer(500)),
             ])),
             Some((ReserveEdge::Bottom, dock_extent(DEFAULT_ICON_SIZE)))
+        );
+    }
+
+    #[test]
+    fn auto_hidden_dock_reserves_nothing() {
+        assert_eq!(
+            dock_reserve_from_snapshot(&snapshot(&[
+                ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.position", SettingValue::Text("bottom".into())),
+            ])),
+            None,
+            "a missing dock.autoHide means the default (on)"
+        );
+        assert_eq!(
+            dock_reserve_from_snapshot(&snapshot(&[
+                ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.autoHide", SettingValue::Boolean(true)),
+            ])),
+            None
         );
     }
 }

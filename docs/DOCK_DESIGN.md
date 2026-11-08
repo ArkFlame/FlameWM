@@ -48,7 +48,30 @@ settings wiring, work-area hook and visual checks are not built yet (see "Not ye
 - One surface, created only when `dock.enabled` is true.
 - `flamewm-wm-*` changes are limited to the work-area hook.
 
-## 5. Not yet done
+## 5. Compact surface and auto-hide (remake, 2026-11-08)
+
+Modelled on the macOS Dock auto-hide (slide out when idle, reveal at the edge, short hide delay)
+and on the COSMIC dock's floating pill. These are design references only; this change did not check
+them against the shipped Tahoe or COSMIC builds.
+
+- **Surface.** A floating rounded pill using the taskbar tokens `--panel` and `--rim`. Default icon
+  size 44 px, 6 px padding, 3 px gap, 8 px margin from the screen edge. Running dots, a separator
+  between pinned and running apps, and a light hover feedback. No bounce or magnification.
+- **Placement.** `dock.position` moves the pill to bottom, left, right or top. It shares the taskbar
+  output only.
+- **Auto-hide (`dock.autoHide`, default `true`).** The dock slides out over 200 ms after 400 ms of no
+  hold. A 3 px reveal strip sits on the dock's edge; pointer hover on it or on the dock holds the dock
+  shown. A menu or drag also holds it. The model is pure: `flamewm_shell_core::autohide::AutoHide`.
+- **Fullscreen.** A fullscreen window on the dock output hides the dock even with auto-hide off.
+- **Work area.** An auto-hidden dock reserves nothing. A shown dock reserves its bar plus margin.
+- **Wake.** Hover events call `sync_dock` and republish the wake deadline directly, because the
+  event path does not tick.
+
+Verified on an isolated Xvfb session (`:100`): all four edges start hidden, slide in on pointer
+hover on the strip, and hide after the pointer leaves. Known issues: an empty label area paints a
+flat dark rectangle above the pill; fullscreen hide and Alt+Super+D are not verified.
+
+## 6. Not yet done
 
 - Shell surface `ui/shell/dock.html` and vertical variant.
 - `flamewm-platform` settings keys (`dock.*`, `taskbar.enabled`, `taskbar.style`,

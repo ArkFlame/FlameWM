@@ -328,7 +328,6 @@ input { cursor:text; }
 .dock-slot:hover { background:var(--hover-fill); }
 .dock-icon { position:absolute; left:0px; top:0px; width:0px; height:0px; }
 .dock-dot { position:absolute; left:0px; top:0px; width:0px; height:0px; border-radius:2px; background:var(--accent); }
-.dock-label { position:absolute; left:0px; top:0px; width:0px; height:0px; overflow:visible; display:flex; align-items:center; justify-content:center; font-size:var(--font-sm); color:var(--text); background:var(--surface); border:1px solid var(--rim); border-radius:var(--radius-md); }
 .dock-separator { position:absolute; left:0px; top:0px; width:0px; height:0px; background:var(--rim); }
 
 .dock-menu { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; padding:4px; display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--rim); border-radius:var(--radius-md); }
