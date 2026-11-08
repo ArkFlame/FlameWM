@@ -324,3 +324,18 @@
 - Not verified live: finder watcher (create/delete reflected in the open window), Tab sheet, log out (the session would end), recent-documents rows on a real `recently-used.xbel`. All are unit-tested only.
 - Size: `crates/flamewm-finder/src/lib.rs` 1391 lines (was 1240; already over 700). New files: `watch.rs` 367, `recent_docs.rs` 156, `verbs.rs` 72.
 - Risk: Log out has no confirmation step; a typed `log out` and Enter ends the session. Live check of the session path and the finder watcher is still open.
+
+## G7 Finder universal search (run 3) — confirm step, live finder, lib split DONE
+- Commits (pushed to `origin/main`): `75de7042` confirm sheet for Suspend and Log out (Cancel is the default row; Enter on the query only opens the sheet); `04753a2d` lib split.
+- Confirm (`quick.rs`, `verbs.rs`, `lib.rs`): `SystemAction.confirm` is true for Suspend and Log out, false for Lock. Tests: `session_ending_actions_need_confirmation_and_lock_does_not`, `confirm_sheet_defaults_to_cancel_then_confirm`.
+- Split: `crates/flamewm-finder/src/lib.rs` 1423 → 548 lines. Pure moves: `state.rs` 344 (state and selection), `input.rs` 162 (keys, actions, overlays), `paint.rs` 386 (painting). Moved methods are `pub(super)`; types, consts, `show` and `pub fn run()` stay in `lib.rs`. No module over 700.
+- Checks: `cargo test -p flamewm-finder` exit 0 (74 pass, 1 ignored, 0 warnings) before and after the split; `cargo build -p flamewm-finder` exit 0; `python3 tools/architecture_guard.py` exit 0.
+- BackSpace in the G6 command field (item 2): not an app fault. The earlier "not deleting" reading was repaint lag in screenshots taken too soon. After a 2 s settle, `ab` → `a` (`scratchpad/bs-AB.png`) and `xy` → `x` (`scratchpad/bs-E-crop.png`). Key path is `keyboard_text` in `flamewm-render-x11/src/app/events.rs` (BackSpace → `\u{8}`), then `startup_command_text` and `type_command`. No code change.
+- Live finder run (own Xvfb `:115`, PID 1755029, stopped by PID; finder PID 1762079 built from `04753a2d`, stopped by PID; fixture `scratchpad/g7/home` and `scratchpad/g7/data/recently-used.xbel` under `XDG_DATA_HOME`):
+  - Empty view (`scratchpad/g7/g7-1-crop.png`): recent rows `notes-beta.md` then `report-alpha.txt` from the xbel.
+  - Tab (`scratchpad/g7/g7-2-tab-crop.png`): sheet for `notes-beta.md` lists Open, Show in folder, Preview, Details. Escape closed it.
+  - Inotify (`scratchpad/g7/g7-3-inotify-crop.png`): `gamma-new.txt` created in `~/Documents` after launch; typing `gamma` listed it with status "4 files", no restart.
+  - Confirm (`scratchpad/g7/g7-4-confirm-crop.png`): typing `suspend` and one Enter showed `Suspend?` with Cancel highlighted and Confirm below. The finder stayed up and the machine did not suspend. Confirm was not pressed; Escape closed the sheet.
+- Harness: no WM on `:115`; focus set with `XSetInputFocus` (`focus-finder.py`); screenshots taken 2 s after input.
+- Not verified live: Log out row and its sheet (no session control service on the isolated display); Lock; Confirm pressed (it would run systemctl suspend on the host); Shift+Enter Reveal; watcher delete and rename events.
+- Risk: the Suspend Confirm row was not executed, so the "Confirm runs the action" path is unit-tested only (`quick.rs` run path). Live log-out remains unverified.
