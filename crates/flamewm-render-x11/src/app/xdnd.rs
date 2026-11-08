@@ -666,6 +666,64 @@ impl X11App {
         }
     }
 
+    /// Retargets the drag at the window under root point `(x, y)`: sends Leave/Enter when the target
+    /// changes and Position when the point moved. Used for motion and for the pointer position at grab time.
+    ///
+    /// # Safety
+    ///
+    /// Must run while this app owns the display and XdndSelection.
+    unsafe fn track_pointer(
+        &self,
+        atoms: XdndAtoms,
+        (x, y): (c_int, c_int),
+        time: Time,
+        target: &mut Option<(Window, bool)>,
+        last_position: &mut Option<(c_int, c_int)>,
+    ) {
+        let (display, window) = (self.display, self.window);
+        let uri = atoms.uri_list as c_long;
+        let plain = atoms.text_plain as c_long;
+        // SAFETY: display is live.
+        let found = unsafe { self.xdnd_target_at(x, y, atoms.aware) };
+        if found.map(|f| f.0) != target.map(|t| t.0) {
+            if let Some((old, _)) = *target {
+                // SAFETY: display is live; the message carries only longs.
+                unsafe { send_client(display, old, atoms.leave, window, [0; 4]) };
+            }
+            *target = found.map(|(w, _)| (w, false));
+            if let Some((w, aware)) = found {
+                let version = protocol::source_version_for(aware);
+                // SAFETY: display is live; the message carries only longs.
+                unsafe {
+                    send_client(
+                        display,
+                        w,
+                        atoms.enter,
+                        window,
+                        [(version << 24) as c_long, uri, plain, 0],
+                    )
+                };
+            }
+            *last_position = None;
+        }
+        if let Some((w, _)) = *target
+            && *last_position != Some((x, y))
+        {
+            let packed = protocol::pack_position(x, y) as c_long;
+            // SAFETY: display is live; the message carries only longs.
+            unsafe {
+                send_client(
+                    display,
+                    w,
+                    atoms.position,
+                    window,
+                    [0, packed, time as c_long, atoms.action_copy as c_long],
+                )
+            };
+            *last_position = Some((x, y));
+        }
+    }
+
     /// # Safety
     ///
     /// Must run while this app owns the display and XdndSelection.
@@ -681,8 +739,17 @@ impl X11App {
         let mut last_position: Option<(c_int, c_int)> = None;
         let mut time: Time;
         let mut dropped: Option<(Window, Instant)> = None;
-        let uri = atoms.uri_list as c_long;
-        let plain = atoms.text_plain as c_long;
+        // The grab generates no motion for the pointer's current position: target it now, or a release
+        // without further motion would drop on nothing.
+        // SAFETY: display is live; out-pointers reference locals.
+        unsafe {
+            let root = XRootWindow(display, self.screen);
+            let (mut r, mut c, mut rx, mut ry, mut wx, mut wy, mut mask) =
+                (0 as Window, 0 as Window, 0, 0, 0, 0, 0 as c_uint);
+            if crate::xinput::XQueryPointer(display, root, &mut r, &mut c, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask) != 0 {
+                self.track_pointer(atoms, (rx, ry), CURRENT_TIME, &mut target, &mut last_position);
+            }
+        }
         loop {
             if let Some((_, deadline)) = dropped
                 && Instant::now() >= deadline
@@ -703,50 +770,20 @@ impl X11App {
             // SAFETY: type_ is the discriminator common to every XEvent arm.
             match unsafe { event.type_ } {
                 MOTION_NOTIFY => {
-                    // SAFETY: the discriminator selects XMotionEvent.
-                    let motion = unsafe { event.xmotion };
-                    time = motion.time;
                     if dropped.is_some() {
                         continue;
                     }
-                    // SAFETY: display is live.
-                    let found =
-                        unsafe { self.xdnd_target_at(motion.x_root, motion.y_root, atoms.aware) };
-                    if found.map(|f| f.0) != target.map(|t| t.0) {
-                        if let Some((old, _)) = target {
-                            unsafe { send_client(display, old, atoms.leave, window, [0; 4]) };
-                        }
-                        target = found.map(|(w, _)| (w, false));
-                        if let Some((w, aware)) = found {
-                            let version = protocol::source_version_for(aware);
-                            unsafe {
-                                send_client(
-                                    display,
-                                    w,
-                                    atoms.enter,
-                                    window,
-                                    [(version << 24) as c_long, uri, plain, 0],
-                                )
-                            };
-                        }
-                        last_position = None;
-                    }
-                    if let Some((w, _)) = target
-                        && last_position != Some((motion.x_root, motion.y_root))
-                    {
-                        let packed =
-                            protocol::pack_position(motion.x_root, motion.y_root) as c_long;
-                        unsafe {
-                            send_client(
-                                display,
-                                w,
-                                atoms.position,
-                                window,
-                                [0, packed, time as c_long, atoms.action_copy as c_long],
-                            )
-                        };
-                        last_position = Some((motion.x_root, motion.y_root));
-                    }
+                    // SAFETY: the discriminator selects XMotionEvent.
+                    let motion = unsafe { event.xmotion };
+                    unsafe {
+                        self.track_pointer(
+                            atoms,
+                            (motion.x_root, motion.y_root),
+                            motion.time,
+                            &mut target,
+                            &mut last_position,
+                        )
+                    };
                 }
                 BUTTON_RELEASE => {
                     // SAFETY: the discriminator selects XButtonEvent.
