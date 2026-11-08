@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
-use flamewm_api::display::{DisplaySnapshot, OutputSnapshot};
+use flamewm_api::display::{DisplaySnapshot, OutputSnapshot, TopologyChange};
 use flamewm_api::input::PointerPosition;
 use flamewm_api::ports::*;
 use flamewm_api::session::{SessionAction, SessionCapabilities};
@@ -40,6 +40,7 @@ pub use session::*;
 mod lock;
 pub use lock::*;
 mod ports;
+mod topology;
 
 pub mod shared;
 pub mod shortcuts;
@@ -51,6 +52,7 @@ pub struct X11Desktop {
     atoms: BTreeMap<String, Atom>,
     next_transaction: u64,
     pending_mode: Option<PendingMode>,
+    pending_topology: Option<topology::PendingTopology>,
     catalog: ApplicationCatalogCache,
 }
 
@@ -123,6 +125,7 @@ impl X11Desktop {
             atoms,
             next_transaction: 0,
             pending_mode: None,
+            pending_topology: None,
             catalog: ApplicationCatalogCache::default(),
         })
     }

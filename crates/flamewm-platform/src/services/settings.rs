@@ -206,14 +206,11 @@ impl SettingsService {
     }
 
     /// Persists one per-output shell scale through the same candidate, persist, and commit steps as
-    /// `persist_hotkey`. An unchanged scale writes nothing.
-    pub fn persist_scale(&mut self, output: &str, scale: u16) -> FlameResult<()> {
+    /// `persist_hotkey`. `None` removes the output's key. An unchanged scale writes nothing.
+    pub fn persist_scale(&mut self, output: &str, scale: Option<u16>) -> FlameResult<()> {
         let mut candidate = self.store.current().clone();
-        apply_change(
-            &mut candidate,
-            &format!("scale.{output}"),
-            Some(&SettingValue::Integer(i64::from(scale))),
-        )?;
+        let value = scale.map(|scale| SettingValue::Integer(i64::from(scale)));
+        apply_change(&mut candidate, &format!("scale.{output}"), value.as_ref())?;
         if candidate.per_output_scale == self.store.current().per_output_scale {
             return Ok(());
         }

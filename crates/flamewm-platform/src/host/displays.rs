@@ -151,25 +151,24 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 }
 
-/// Writes `percent` under every key in order. A failed write restores the keys already written
-/// to their `prior` values and returns the error, so a partial persist never survives.
+/// Writes `percent` under every key in order. A failed write restores the keys already written:
+/// to their prior value, or deleted when they had none. The error is returned, so a partial
+/// persist never survives.
 fn persist_scale_keys(
     keys: &[String],
     percent: u16,
     prior: impl Fn(&str) -> Option<u16>,
-    mut write: impl FnMut(&str, u16) -> FlameResult<()>,
+    mut write: impl FnMut(&str, Option<u16>) -> FlameResult<()>,
 ) -> FlameResult<()> {
     let mut written: Vec<(&String, Option<u16>)> = Vec::with_capacity(keys.len());
     for key in keys {
-        if let Err(error) = write(key, percent) {
+        if let Err(error) = write(key, Some(percent)) {
             for (done, previous) in written.iter().rev() {
-                if let Some(previous) = previous {
-                    if let Err(restore) = write(done, *previous) {
-                        eprintln!(
-                            "flamewm: scale rollback for {done} failed: {}",
-                            restore.message
-                        );
-                    }
+                if let Err(restore) = write(done, *previous) {
+                    eprintln!(
+                        "flamewm: scale rollback for {done} failed: {}",
+                        restore.message
+                    );
                 }
             }
             return Err(error);
@@ -209,13 +208,36 @@ mod tests {
             150,
             |_| None,
             |key, value| {
-                store.insert(key.to_owned(), value);
+                store.insert(key.to_owned(), value.expect("set"));
                 Ok(())
             },
         )
         .expect("persist");
         assert_eq!(store.get("wayland-2"), Some(&150));
         assert_eq!(store.get("wayland-0"), Some(&150));
+    }
+
+    #[test]
+    fn failed_second_key_deletes_a_key_that_had_no_prior_value() {
+        let mut store: BTreeMap<String, u16> = BTreeMap::new();
+        let result = persist_scale_keys(
+            &keys(2),
+            150,
+            |_| None,
+            |key, value| {
+                if key == "wayland-0" {
+                    return Err(FlameError::new(ErrorCode::Unavailable, "disk full"));
+                }
+                match value {
+                    Some(value) => store.insert(key.to_owned(), value),
+                    None => store.remove(key),
+                };
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::Unavailable);
+        assert!(!store.contains_key("wayland-2"), "new key deleted on rollback");
+        assert!(store.is_empty());
     }
 
     #[test]
@@ -232,7 +254,10 @@ mod tests {
                 if key == "wayland-0" {
                     return Err(FlameError::new(ErrorCode::Unavailable, "disk full"));
                 }
-                store.insert(key.to_owned(), value);
+                match value {
+                    Some(value) => store.insert(key.to_owned(), value),
+                    None => store.remove(key),
+                };
                 Ok(())
             },
         );

@@ -384,6 +384,12 @@ impl DisplayPort for X11Desktop {
         })
     }
     fn apply_mode(&mut self, output_name: &OutputId, mode: ModeId) -> FlameResult<TransactionId> {
+        if self.pending_topology.is_some() {
+            return Err(FlameError::new(
+                ErrorCode::Busy,
+                "RandR topology transaction already pending",
+            ));
+        }
         shared::apply_mode(
             &self.conn,
             self.root,
@@ -393,7 +399,26 @@ impl DisplayPort for X11Desktop {
             mode,
         )
     }
+    fn apply_topology(&mut self, change: &TopologyChange) -> FlameResult<TransactionId> {
+        if self.pending_mode.is_some() || self.pending_topology.is_some() {
+            return Err(FlameError::new(
+                ErrorCode::Busy,
+                "RandR display transaction already pending",
+            ));
+        }
+        let baseline = topology::apply(&self.conn, self.root, change)?;
+        self.next_transaction = self.next_transaction.saturating_add(1).max(1);
+        let transaction = TransactionId(self.next_transaction);
+        self.pending_topology = Some(topology::PendingTopology {
+            transaction,
+            baseline,
+        });
+        Ok(transaction)
+    }
     fn keep_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
+        if self.pending_topology.take_if(|p| p.transaction == transaction).is_some() {
+            return Ok(());
+        }
         if self.pending_mode.map(|p| p.transaction) != Some(transaction) {
             return Err(FlameError::not_found("RandR mode transaction not found"));
         }
@@ -401,6 +426,9 @@ impl DisplayPort for X11Desktop {
         Ok(())
     }
     fn revert_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
+        if let Some(pending) = self.pending_topology.take_if(|p| p.transaction == transaction) {
+            return topology::restore(&self.conn, self.root, &pending.baseline);
+        }
         let pending = self
             .pending_mode
             .ok_or_else(|| FlameError::not_found("RandR mode transaction not found"))?;

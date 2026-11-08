@@ -172,6 +172,10 @@ impl DisplayPort for WaylandDesktop {
             "nested compositor output mode is fixed by the host window",
         ))
     }
+
+    fn scale_keys(&self, _output: &OutputId, index: usize) -> Vec<String> {
+        flamewm_api::ports::wayland_scale_keys(index)
+    }
 }
 
 impl ShortcutPort for WaylandDesktop {
