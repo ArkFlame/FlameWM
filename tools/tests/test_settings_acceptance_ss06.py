@@ -18,6 +18,10 @@ class Ss06SnapRect(unittest.TestCase):
     def test_window_sized_outline_is_not_a_snap_preview(self):
         self.assertFalse(harness.ss06_is_snap_rect({"x": 640, "y": 400, "width": 820, "height": 540}, WINDOW))
 
+    def test_framed_outline_measured_in_ss06_is_not_a_snap_preview(self):
+        # Measured control rect: 822x572 for a 820x540 client.
+        self.assertFalse(harness.ss06_is_snap_rect({"x": 229, "y": 385, "width": 822, "height": 572}, WINDOW))
+
     def test_half_screen_zone_is_a_snap_preview(self):
         self.assertTrue(harness.ss06_is_snap_rect({"x": 2, "y": 2, "width": 637, "height": 752}, WINDOW))
 

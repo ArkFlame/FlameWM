@@ -2903,6 +2903,10 @@ def ss06_snap_preview_observed(preview_before: bool | None, preview_during: bool
                 and committed_narrower and not preview_after)
 
 
+SS06_OUTLINE_FRAME_X = 8
+SS06_OUTLINE_FRAME_Y = 48
+
+
 def ss06_is_snap_rect(rect: dict | None, window: dict | None) -> bool:
     """A snap-preview rect is a zone (half/corner), not the moved window. In outline move mode the same
     window shows its own outline at the window size, so a mapped preview of that size is not a snap."""
@@ -2910,7 +2914,10 @@ def ss06_is_snap_rect(rect: dict | None, window: dict | None) -> bool:
         return False
     if window is None:
         return True
-    return (rect["width"], rect["height"]) != (window["width"], window["height"])
+    # The outline carries the client frame: measured 822x572 for a 820x540 client (SS06 control).
+    outline = (window["width"] <= rect["width"] <= window["width"] + SS06_OUTLINE_FRAME_X
+               and window["height"] <= rect["height"] <= window["height"] + SS06_OUTLINE_FRAME_Y)
+    return not outline
 
 
 def ss06_preview_rect(ctx: Ctx) -> dict | None:
