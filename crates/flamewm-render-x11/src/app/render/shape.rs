@@ -134,6 +134,9 @@ impl X11App {
             self.static_shape_applied.set(None);
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         } else {
+            // The frame was copied to the window before this shape ran, and nothing else flushes
+            // the request. Unflushed, the new bounding region waits for the next pointer event.
+            unsafe { XFlush(self.display) };
             self.static_shape_applied.set(static_key);
         }
     }
