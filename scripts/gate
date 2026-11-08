@@ -27,8 +27,10 @@ exec flock "$LOCK" bash -c '
   all=0
   python3 -I tools/architecture_guard.py; g=$?; echo "EXIT_GUARD=$g"
   cargo fmt --all -- --check; f=$?; echo "EXIT_FMT=$f"
-  CARGO_TARGET_DIR="$T" cargo test "$@" --all-targets; t=$?; echo "EXIT_TEST=$t"
+  # Fail fast: clippy first (compile errors + lints on the cheap check build); tests only if it passes.
   CARGO_TARGET_DIR="$C" cargo clippy "$@" --all-targets -- -D warnings; c=$?; echo "EXIT_CLIPPY=$c"
+  if [ $((g+f+c)) -eq 0 ]; then CARGO_TARGET_DIR="$T" cargo test "$@" --all-targets; t=$?; else t=skipped; echo "EXIT_TEST=skipped (earlier step failed)"; fi
+  [ "$t" = skipped ] && t=1; [ "$t" = 1 ] || echo "EXIT_TEST=$t"
   [ $((g+f+t+c)) -eq 0 ] || all=1
   echo "GATE_DONE all=$all"
 ' _ "${PKGS[@]}"
