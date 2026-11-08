@@ -13,5 +13,6 @@ Ground rules for every entry:
 | --- | --- | --- | --- | --- |
 | Vela (`vela-desktop/vela`, local copy `.vendor/vela-main`) | Wayland (own compositor, Vulkan, Qt Quick shell) | GPL-3.0-or-later | 2026-11-08 | [FEATURES](vela/FEATURES.md), [DESIGN_COMPARISON](vela/DESIGN_COMPARISON.md) |
 | Xfce xfwm4 + xfdesktop, MATE libmate-desktop (`.vendor/xfwm4-master`, `xfdesktop-master`, `mate-desktop-master`) | X11 window manager, desktop, shared helper library | GPL-2.0-or-later (xfwm4, xfdesktop); GPL-2.0/LGPL (MATE) | 2026-11-08 | [xfce LEARNINGS](xfce/LEARNINGS.md), [mate LEARNINGS](mate/LEARNINGS.md) |
+| KDE Plasma (`invent.kde.org/plasma/{kwin,plasma-desktop,plasma-workspace}`, scratch clones, not in `.vendor`) | Wayland and X11 desktop (KWin compositor, Plasma shell) | GPL-2.0-or-later, LGPL (per repo `LICENSES/`) | 2026-11-08 | [FEATURES](kde-plasma/FEATURES.md), [LEARNINGS](kde-plasma/LEARNINGS.md), [WINNERS](kde-plasma/WINNERS.md), [SOURCE_MAP](kde-plasma/SOURCE_MAP.md), [DESIGN_COMPARISON](kde-plasma/DESIGN_COMPARISON.md) |
 
 Add a new competitor by creating `docs/competitors/<name>/` with the same two files and one row in the table above.
