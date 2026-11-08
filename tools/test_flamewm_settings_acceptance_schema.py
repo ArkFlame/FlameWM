@@ -1225,7 +1225,7 @@ class Ss09SourceAndNativeTests(unittest.TestCase):
         self.assertTrue(all(value is True for value in observed.values()))
 
     def test_missing_failed_or_nonzero_is_false_and_not_run_is_none(self) -> None:
-        keep = "services::display::tests::keep_clears_pending_and_never_auto_reverts"
+        keep = "services::display::tests_output::keep_clears_pending_and_never_auto_reverts"
         without = {name: word for name, word in self.OK.items() if name != keep}
         self.assertFalse(acc.ss09_source_observations(0, without)["source_keep_prevents_revert"])
         failed = dict(self.OK, **{keep: "FAILED"})

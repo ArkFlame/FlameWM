@@ -3797,12 +3797,12 @@ def run_ss06(ctx: Ctx, args: argparse.Namespace) -> dict:
 # ---- SS09: 15s display-mode rollback -------------------------------------------------------------
 SS09_SOURCE_TESTS: dict[str, tuple[str, ...]] = {
     "source_no_revert_at_14999ms": (
-        "services::display::tests::fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_snapshot",
+        "services::display::tests_output::fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_snapshot",
         "host::tests::unconfirmed_display_mode_reverts_only_after_deadline_tick"),
     "source_single_revert_at_15000ms": (
-        "services::display::tests::fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_snapshot",
+        "services::display::tests_output::fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_snapshot",
         "host::tests::unconfirmed_display_mode_reverts_only_after_deadline_tick"),
-    "source_keep_prevents_revert": ("services::display::tests::keep_clears_pending_and_never_auto_reverts",),
+    "source_keep_prevents_revert": ("services::display::tests_output::keep_clears_pending_and_never_auto_reverts",),
 }
 SS09_REVERT_WINDOW = (14.5, 17.5)
 
