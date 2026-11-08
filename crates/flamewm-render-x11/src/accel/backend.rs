@@ -4,7 +4,7 @@
 use flamewm_api::render_backend::{RenderBackend, choose_from_snapshot};
 use flamewm_api::settings::SettingsSnapshot;
 
-use super::{RenderAcceleration, set_render_acceleration};
+use super::{RenderAcceleration, release_if_stale, set_render_acceleration};
 
 #[must_use]
 const fn acceleration_for_backend(backend: RenderBackend) -> RenderAcceleration {
@@ -22,6 +22,9 @@ pub fn apply_render_backend_setting(snapshot: &SettingsSnapshot) {
         eprintln!("flamewm-render-x11: render backend: {reason}");
     }
     set_render_acceleration(acceleration_for_backend(choice.backend));
+    // Frees this thread's GPU slot now when the switch made it stale (the calling thread is the
+    // settings-change thread, so this is the release point that runs on every change).
+    release_if_stale();
 }
 
 #[cfg(test)]

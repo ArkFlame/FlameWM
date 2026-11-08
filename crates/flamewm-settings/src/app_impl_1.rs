@@ -525,6 +525,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.startup_command = None;
         }
         match action {
+            SettingsAction::RenderBackendUnavailable => {
+                return Err("Vulkan is not built into this version".to_owned());
+            }
             SettingsAction::FileManagerCycle => {
                 self.file_manager_label = file_manager::toggle()?;
             }

@@ -236,10 +236,10 @@ fn appearance_actions_parse_to_their_exact_typed_targets() {
         })
     );
     assert_action!(
-        "settings.render-acceleration.gpu",
+        "settings.render-backend.opengl",
         Ok(SettingsAction::TextSelect {
-            key: "renderAcceleration",
-            value: "gpu"
+            key: "renderBackend",
+            value: "opengl"
         })
     );
     assert_action!(

@@ -1381,3 +1381,13 @@ fn non_default_backend_round_trips() {
         assert_eq!(load(&text).expect("reload"), settings);
     }
 }
+
+/// The default backend is `cpu` and is never serialized, so a stock settings file keeps no key.
+#[test]
+fn default_render_backend_is_cpu_and_not_serialized() {
+    let defaults = ProductSettings::default();
+    assert_eq!(defaults.render_backend, "cpu");
+    let text = ConfigStore::serialize(&defaults);
+    assert!(!text.contains("renderBackend"), "{text}");
+    assert!(!text.contains("renderAcceleration"), "{text}");
+}

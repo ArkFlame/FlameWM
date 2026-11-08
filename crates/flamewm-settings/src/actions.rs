@@ -44,6 +44,8 @@ impl AppearanceTab {
 /// Every control action the Settings markup may emit. Parsing is pure, so the
 /// markup coverage test can check each `data-action` without side effects.
 pub(crate) enum SettingsAction {
+    /// The disabled Vulkan segment: names why nothing changes, never stores a value.
+    RenderBackendUnavailable,
     FileManagerCycle,
     StartupToggle(usize),
     StartupRemove(usize),
@@ -795,13 +797,15 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
             key: "taskbarMaterialMode",
             value: "custom-tint",
         }),
-        "settings.render-acceleration.cpu" => Ok(SettingsAction::TextSelect {
-            key: "renderAcceleration",
+        "settings.render-backend.cpu" => Ok(SettingsAction::TextSelect {
+            key: "renderBackend",
             value: "cpu",
         }),
-        "settings.render-acceleration.gpu" => Ok(SettingsAction::TextSelect {
-            key: "renderAcceleration",
-            value: "gpu",
+        // Disabled in the markup until Vulkan is built (phase 4).
+        "settings.render-backend.vulkan" => Ok(SettingsAction::RenderBackendUnavailable),
+        "settings.render-backend.opengl" => Ok(SettingsAction::TextSelect {
+            key: "renderBackend",
+            value: "opengl",
         }),
         "settings.start-icon.choose" => Ok(SettingsAction::StartIconChoose),
         "settings.start-icon.clear" => Ok(SettingsAction::StartIconClear),

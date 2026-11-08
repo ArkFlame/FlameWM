@@ -940,14 +940,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 ("squared", "decoration-squared"),
             ],
         )?;
-        self.sync_option_setting(
-            document,
-            "renderAcceleration",
-            &[
-                ("cpu", "render-acceleration-cpu"),
-                ("gpu", "render-acceleration-gpu"),
-            ],
-        )?;
+        self.sync_render_backend(document)?;
         self.sync_option_setting(
             document,
             "titlebarButtonStyle",

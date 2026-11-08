@@ -630,6 +630,21 @@ mod tests {
     }
 
     #[test]
+    fn generation_bump_makes_a_cpu_thread_release_its_slot_on_the_next_release() {
+        GPU.with(|cell| cell.borrow_mut().slot = GpuSlot::Failed);
+        let before = GENERATION.load(Ordering::Relaxed);
+        // Bumps directly: a real set would flip the process-wide request under parallel tests.
+        GENERATION.fetch_add(2, Ordering::Relaxed);
+        assert!(GENERATION.load(Ordering::Relaxed) >= before + 2);
+        release_if_stale();
+        GPU.with(|cell| {
+            let thread = cell.borrow();
+            assert!(matches!(thread.slot, GpuSlot::Untried));
+            assert_eq!(thread.generation, GENERATION.load(Ordering::Relaxed));
+        });
+    }
+
+    #[test]
     fn accel_status_shim_reports_the_recorded_fallback_text() {
         record_fallback(FallbackReason::SoftwareDevice("llvmpipe".to_owned()));
         let shim = render_acceleration_status();

@@ -49,6 +49,7 @@ mod location;
 mod nav;
 mod nodes;
 mod pager;
+mod render_backend_row;
 mod sliders;
 mod startup_extras;
 mod startup_page;
