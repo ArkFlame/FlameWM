@@ -273,10 +273,10 @@ fn prefetch_loop(shared: &SharedState, decode: Decode) {
 /// Worker loop. Returns when the UI side drops its sender.
 pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream) {
     let mut worker = Worker::new(decode_file);
-    let mut loads: VecDeque<Job> = VecDeque::new();
+    let mut load: Option<Job> = None;
     let mut view: Option<Job> = None;
     loop {
-        let nothing_queued = loads.is_empty() && view.is_none();
+        let nothing_queued = load.is_none() && view.is_none();
         let mut next = if nothing_queued {
             match jobs.recv() {
                 Ok(job) => Some(job),
@@ -301,13 +301,15 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                 Job::Load { .. } => {
                     // A new active image makes any queued viewport request for the old one stale.
                     view = None;
-                    loads.push_back(job);
+                    // Only the newest selection can be displayed. Avoid decoding every image
+                    // passed while the user rapidly browses a folder.
+                    load = Some(job);
                 }
                 Job::View { .. } => view = Some(job),
                 Job::Prefetch { path } => worker.prefetch(path),
             }
         }
-        if let Some(Job::Load { generation, path }) = loads.pop_front() {
+        if let Some(Job::Load { generation, path }) = load.take() {
             let reply = match worker.image(&path) {
                 Ok(image) => Reply::Loaded {
                     generation,
@@ -363,6 +365,28 @@ mod tests {
     fn decodes_a_jpeg_fixture_by_magic() {
         let image = decode_file(&fixture("baseline-16x16.jpg")).expect("jpeg decodes");
         assert_eq!((image.width, image.height), (16, 16));
+    }
+
+    #[test]
+    fn queued_loads_decode_only_the_latest_selection() {
+        let (jobs, receiver) = mpsc::channel();
+        let (replies, received) = mpsc::channel();
+        let (_reader, mut writer) = UnixStream::pair().unwrap();
+        for generation in 1..=3 {
+            jobs.send(Job::Load {
+                generation,
+                path: fixture("baseline-16x16.jpg"),
+            })
+            .unwrap();
+        }
+        let thread = std::thread::spawn(move || run(&receiver, &replies, &mut writer));
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(10)),
+            Ok(Reply::Loaded { generation: 3, .. })
+        ));
+        drop(jobs);
+        thread.join().unwrap();
+        assert!(received.try_recv().is_err());
     }
 
     #[test]
