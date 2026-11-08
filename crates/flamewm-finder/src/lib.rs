@@ -14,6 +14,7 @@ mod quick;
 mod preview;
 mod recent_docs;
 mod search;
+mod verbs;
 mod watch;
 
 use std::cell::RefCell;
@@ -86,6 +87,8 @@ enum Overlay {
     Help,
     Duplicates,
     Setup,
+    /// Tab sheet of actions for the selected file or app.
+    Verbs,
 }
 
 /// One row or tile of the current view.
@@ -190,6 +193,10 @@ struct Finder {
     actions: Vec<&'static quick::SystemAction>,
     /// Stays false until the session says logout is allowed (fail closed).
     logout: bool,
+    /// Actions for the selected result while the Tab sheet is open.
+    verbs: &'static [verbs::Verb],
+    /// Highlighted row of the Tab sheet.
+    verb: usize,
     frecency: quick::Frecency,
     frecency_file: Option<PathBuf>,
 }
@@ -257,6 +264,8 @@ impl Finder {
             app_hits: Vec::new(),
             actions: Vec::new(),
             logout: false,
+            verbs: &[],
+            verb: 0,
             frecency: quick::Frecency::default(),
             frecency_file: None,
         };
@@ -439,6 +448,41 @@ impl Finder {
         }
     }
 
+    /// Tab opens the actions for the selected file or app; Tab again closes the sheet.
+    fn toggle_verbs(&mut self) {
+        if self.overlay == Overlay::Verbs {
+            self.overlay = Overlay::None;
+            return;
+        }
+        let subject = match self.selected_item() {
+            Some(Item::Entry(_)) => verbs::Subject::File,
+            Some(Item::App(_)) => verbs::Subject::App,
+            _ => return,
+        };
+        self.verbs = verbs::for_subject(subject);
+        self.verb = 0;
+        self.overlay = Overlay::Verbs;
+    }
+
+    fn move_verb(&mut self, delta: isize) {
+        let last = self.verbs.len().saturating_sub(1);
+        self.verb = self.verb.saturating_add_signed(delta).min(last);
+    }
+
+    /// Closes the sheet and runs the action in `slot`.
+    fn run_verb(&mut self, slot: usize) {
+        let Some(verb) = self.verbs.get(slot).copied() else {
+            return;
+        };
+        self.overlay = Overlay::None;
+        match verb {
+            verbs::Verb::Open | verbs::Verb::Launch => self.activate_selected(),
+            verbs::Verb::Reveal => self.open_selected(true),
+            verbs::Verb::Preview => self.toggle(Overlay::Preview),
+            verbs::Verb::Details => self.toggle(Overlay::Details),
+        }
+    }
+
     fn toggle(&mut self, overlay: Overlay) {
         if self.overlay == overlay {
             self.overlay = Overlay::None;
@@ -537,6 +581,10 @@ impl Finder {
                     | Command::Details
                     | Command::Help
             ),
+            Overlay::Verbs => matches!(
+                command,
+                Command::Escape | Command::Actions | Command::Up | Command::Down | Command::Open
+            ),
             Overlay::Help | Overlay::Duplicates | Overlay::Setup => {
                 matches!(command, Command::Escape | Command::Help)
             }
@@ -550,14 +598,14 @@ impl Finder {
                 _ => self.overlay = Overlay::None,
             },
             Command::Help => self.toggle(Overlay::Help),
+            Command::Open if self.overlay == Overlay::Verbs => self.run_verb(self.verb),
             Command::Open => self.activate_selected(),
             Command::Reveal => self.open_selected(true),
             Command::Preview => self.toggle(Overlay::Preview),
             Command::Details => self.toggle(Overlay::Details),
-            Command::Next => {
-                self.navigating = true;
-                self.step(1);
-            }
+            Command::Actions => self.toggle_verbs(),
+            Command::Up if self.overlay == Overlay::Verbs => self.move_verb(-1),
+            Command::Down if self.overlay == Overlay::Verbs => self.move_verb(1),
             Command::Previous => {
                 self.navigating = true;
                 self.step(-1);
@@ -629,6 +677,14 @@ impl Finder {
                 self.set_query(String::new());
             }
             "finder.close-overlay" => self.overlay = Overlay::None,
+            action if action.starts_with("finder.verb.") => {
+                if let Some(slot) = action
+                    .strip_prefix("finder.verb.")
+                    .and_then(|slot| slot.parse().ok())
+                {
+                    self.run_verb(slot);
+                }
+            }
             action => {
                 let slot = action
                     .strip_prefix("finder.row.")
@@ -892,8 +948,10 @@ impl Finder {
         doc.visible("help", self.overlay == Overlay::Help)?;
         doc.visible("duplicates", self.overlay == Overlay::Duplicates)?;
         doc.visible("setup", self.overlay == Overlay::Setup)?;
+        doc.visible("verbs", self.overlay == Overlay::Verbs)?;
         match self.overlay {
             Overlay::None | Overlay::Help => Ok(()),
+            Overlay::Verbs => self.paint_verbs(doc),
             Overlay::Preview => self.paint_preview(doc),
             Overlay::Details => self.paint_details(doc),
             Overlay::Duplicates => self.paint_duplicates(doc),
@@ -947,6 +1005,25 @@ impl Finder {
             "details-modified",
             format::relative_time(entry.modified, now_secs()),
         )
+    }
+
+    fn paint_verbs(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let title = self
+            .selected_entry()
+            .map_or_else(|| "Actions".to_owned(), |entry| entry.name().to_owned());
+        doc.text_ref("verbs-title", &title)?;
+        for slot in 0..verbs::SLOTS {
+            let verb = self.verbs.get(slot);
+            let row = format!("verb-{slot}");
+            doc.visible(&row, verb.is_some())?;
+            doc.text_ref(
+                &format!("verb-name-{slot}"),
+                verb.map_or("", |verb| verbs::label(*verb)),
+            )?;
+            let alpha = if slot == self.verb { 36 } else { 0 };
+            doc.background(&row, UiColor::from_rgb(0x00ff_ffff, alpha))?;
+        }
+        Ok(())
     }
 
     fn paint_duplicates(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {

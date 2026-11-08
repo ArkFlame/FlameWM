@@ -20,8 +20,8 @@ pub enum Command {
     Preview,
     /// Toggle the details panel of the selected file.
     Details,
-    /// Move to the next result (Tab), or the next tile in grid view.
-    Next,
+    /// Tab: open the actions for the selected result.
+    Actions,
     /// Move to the previous result (Shift+Tab), or the previous tile in grid view.
     Previous,
     /// Arrow keys: one row up or down in the list, a row of tiles in grid view.
@@ -70,7 +70,7 @@ pub fn command(
             return Some(if mods.shift {
                 Command::Previous
             } else {
-                Command::Next
+                Command::Actions
             });
         }
         "page_up" | "prior" => return Some(Command::PageUp),
@@ -119,7 +119,7 @@ mod tests {
         assert_eq!(command("up", None, NONE, false), Some(Command::Up));
         assert_eq!(command("left", None, NONE, false), Some(Command::Left));
         assert_eq!(command("right", None, NONE, false), Some(Command::Right));
-        assert_eq!(command("tab", None, NONE, false), Some(Command::Next));
+        assert_eq!(command("tab", None, NONE, false), Some(Command::Actions));
         let shift = Modifiers {
             shift: true,
             ..NONE

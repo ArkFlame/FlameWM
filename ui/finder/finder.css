@@ -56,5 +56,7 @@ button { background:transparent; color:var(--text); cursor:default; border-width
 .dup-row { width:100%; display:flex; flex-direction:column; gap:1px; padding:4px 0; }
 .dup-name { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dup-meta { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.dup-path { font-size:11px; color:var(--subtle); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.verb-row { width:100%; padding:6px 8px; border-radius:8px; cursor:pointer; }
+.verb-name { font-size:13px; font-weight:500; }
+.dup-path {font-size:11px; color:var(--subtle); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
