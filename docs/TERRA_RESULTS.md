@@ -339,3 +339,13 @@
 - Harness: no WM on `:115`; focus set with `XSetInputFocus` (`focus-finder.py`); screenshots taken 2 s after input.
 - Not verified live: Log out row and its sheet (no session control service on the isolated display); Lock; Confirm pressed (it would run systemctl suspend on the host); Shift+Enter Reveal; watcher delete and rename events.
 - Risk: the Suspend Confirm row was not executed, so the "Confirm runs the action" path is unit-tested only (`quick.rs` run path). Live log-out remains unverified.
+
+## Settings acceptance triage (SS07 / SS17 / SS03 / SS05 / SS06 / SS11 / SS12 / SS15)
+
+### SS07 taskbar colour: KNOWN_OPEN
+- Symptom: measured bar pixel (40,69,101) vs harness expectation (27,53,80) (`#284F77` alpha 171 over black). `settings_persistence_after_restart` also false. Run: `--only SS07 --display :98` with host `DISPLAY=:97`, exit 1.
+- Evidence: the bar pixel is identical at `surfaceOpacity` 0 and 100 (both (39,69,99), 5 s settle, probe on a throwaway worktree). It changes when `surfaceColor` changes. It is not proportional to `#284F77` at any single alpha over black. Rows above the bar are pure black.
+- Paint path: shell `settings_projection/project.rs:49` projects `dock_fill` (`flamewm-ui-core/src/surface.rs`). Inherit mode delegates to `surface_fill`, whose alpha comes from the glass material. `glass.rs:5` says `glassOpacityPercent` mirrors `surfaceOpacity`.
+- Unresolved: why the runtime pixel ignores the alpha, and whether the harness model or the product is wrong. `wallpaperMeanRgb` is not the explanation (desktop not running in SS07; wallpaperColor `#232629`).
+- Unit test `d8011c04` pins the ui-core function only, not the runtime pixel.
+- Next: trace the glass blur/tint compositing in the shell renderer for the taskbar `background` node.
