@@ -1597,6 +1597,8 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     details["commands"].append(shell([args.settings_bin, "--page", "hotkeys"]))
     time.sleep(settle)
     clear_click, clear_command = send_input(ctx, capture_click, None)
+    # The click arms the capture asynchronously; Escape sent before it is armed is not a clear.
+    time.sleep(settle)
     clear_escape, escape_command = send_input(ctx, None, "Escape")
     details["commands"].extend([clear_command, escape_command])
     time.sleep(settle)
