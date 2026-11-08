@@ -4333,8 +4333,10 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
     base_label = f"base-{args.geometry}"
 
     # SS01: all seven pages at the base screen size.
-    base_shots = [page_shot(ctx, args, page, base_label) for page in PAGES] if wm_alive else []
-    if not wm_alive:
+    base_shots = [page_shot(ctx, args, page, base_label) for page in PAGES] if wm_alive and wanted("SS01") else []
+    if not wanted("SS01"):
+        pass
+    elif not wm_alive:
         results["SS01"] = result_entry("SS01", STATUS_FAIL, "flamewm WM exited before the first settings page")
     else:
         ok = all(s["alive"] and s["captured"] and s["nonblank"] for s in base_shots)
@@ -4346,7 +4348,9 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
         )
 
     # SS02: launch the actual Settings client at each requested size and measure it.
-    if not wm_alive:
+    if not wanted("SS02"):
+        pass
+    elif not wm_alive:
         results["SS02"] = result_entry("SS02", STATUS_FAIL, "flamewm WM exited; no matrix captures")
     else:
         matrix = {}
@@ -4399,8 +4403,10 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
                                                         [displays_base["shot"]], commands)
 
     # NATIVE_HOTKEY_INPUT (legacy, was labelled SS06): PASS only on a measured effect (see run_ss06).
-    results["NATIVE_HOTKEY_INPUT"] = run_ss06(ctx, args)
-    results["SS04"] = run_ss04(ctx, args)
+    if wanted("NATIVE_HOTKEY_INPUT"):
+        results["NATIVE_HOTKEY_INPUT"] = run_ss06(ctx, args)
+    if wanted("SS04"):
+        results["SS04"] = run_ss04(ctx, args)
     if wanted("SS05"):
         results["SS05"] = run_ss05(ctx, args)
     if wanted("SS06"):
@@ -4416,7 +4422,8 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
     # Escape clear / Reset persistence.
     if wanted("SS12"):
         results["SS12"] = run_ss12(ctx, args)
-    results["SS13"] = run_ss13(ctx, args)
+    if wanted("SS13"):
+        results["SS13"] = run_ss13(ctx, args)
     if wanted("SS15"):
         results["SS15"] = run_ss15(ctx, args)
     # SS14 currently exercises only Settings.accent: full status remains NOT_RUN until
