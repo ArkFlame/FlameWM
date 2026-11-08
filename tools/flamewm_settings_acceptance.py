@@ -2274,6 +2274,14 @@ def apply_and_read_settings(ctx: Ctx, revision: int, changes: dict[str, str], de
     reply, command, exit_code = dbus_apply_settings(ctx, revision, changes)
     details["commands"].append(command)
     details.setdefault("apply_replies", []).append({"exit": exit_code, "reply": reply})
+    if exit_code != 0 and "StaleRevision" in (reply or "") and not details.get("_stale_retry"):
+        # A client that loses the revision race re-reads the settled revision and applies once more.
+        details["_stale_retry"] = True
+        fresh = settings_revision_settled(ctx)
+        try:
+            return apply_and_read_settings(ctx, fresh, changes, details) if fresh is not None else None
+        finally:
+            details.pop("_stale_retry", None)
     if exit_code != 0:
         return None
     text, command = dbus_settings_snapshot(ctx)
