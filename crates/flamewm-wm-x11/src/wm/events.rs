@@ -427,6 +427,14 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     pub(super) fn handle_unmap(&mut self, window: Window) -> Result<(), ReplyError> {
+        // A Dock strut reserves space only while its window is mapped (EWMH). `map_dock` re-reads
+        // it when the window maps again.
+        if self.dock_struts.remove(&window).is_some() {
+            self.changes.panels = true;
+            self.mark_work_area();
+            self.reconcile_work_area()?;
+            self.publish_workspace_metadata()?;
+        }
         let Some(client_id) = self.client_for(window) else {
             return Ok(());
         };

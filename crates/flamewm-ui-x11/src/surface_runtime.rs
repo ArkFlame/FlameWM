@@ -151,16 +151,18 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
-    /// Declare the root edge a dock surface reserves (strut) and its window corner radius.
-    /// `None` restores classic inference and a rectangular window.
+    /// Declare the root edge a dock surface reserves (strut), the bar thickness on that edge in
+    /// window px (`None` reserves the whole window), and its window corner radius.
+    /// `None` edge restores classic inference and a rectangular window.
     pub fn set_dock_frame(
         &mut self,
         surface: SurfaceHandle,
         edge: Option<flamewm_render_x11::DockEdge>,
         corner_radius: u32,
+        bar: Option<u32>,
     ) -> Result<(), UiBackendError> {
         self.controller
-            .set_dock_frame(surface.0, edge, corner_radius)
+            .set_dock_frame(surface.0, edge, corner_radius, bar)
             .map_err(UiBackendError::Renderer)
     }
 

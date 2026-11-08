@@ -282,6 +282,7 @@ impl SurfaceController {
             overlay: None,
             grab_pending: false,
             dock_edge: None,
+            dock_bar: None,
             dock_radius: 0,
             popup_backdrop: None,
         };
@@ -1382,6 +1383,7 @@ fn sync_dock_geometry(
         root_w,
         root_h,
         instance.dock_edge,
+        instance.dock_bar,
         x,
         y,
         w,

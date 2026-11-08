@@ -13,6 +13,24 @@ pub(super) fn with_dock_reserve(work_area: Rect, dock: Option<(ReserveEdge, i32)
     }
 }
 
+/// The part of the Dock reserve that a strut-derived work area does not already cover. A Dock
+/// window touching its root edge publishes that edge as `_NET_WM_STRUT`, and `strut` (left, top,
+/// right, top, bottom: EWMH order, as `work_area` reads it) already holds it, so reserving it again
+/// would count the Dock twice.
+pub(super) fn dock_reserve_uncovered_by_struts(
+    strut: [u32; 4],
+    dock: Option<(ReserveEdge, i32)>,
+) -> Option<(ReserveEdge, i32)> {
+    let (edge, extent) = dock?;
+    let index = match edge {
+        ReserveEdge::Left => 0,
+        ReserveEdge::Right => 1,
+        ReserveEdge::Top => 2,
+        ReserveEdge::Bottom => 3,
+    };
+    (i64::from(strut[index]) < i64::from(extent)).then_some((edge, extent))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OutputWorkArea {
     pub(super) output: flamewm_api::OutputId,
@@ -87,6 +105,46 @@ mod dock_work_area_tests {
     fn hidden_dock_leaves_the_taskbar_area_untouched() {
         let after_taskbar = Rect::new(0, 0, 1280, 756);
         assert_eq!(with_dock_reserve(after_taskbar, None), after_taskbar);
+    }
+
+    #[test]
+    fn dock_strut_on_its_edge_is_not_reserved_twice() {
+        // Left Dock at 72 px: its own strut already holds 72 px on the left.
+        let strut = [72, 0, 0, 44];
+        let dock = Some((ReserveEdge::Left, 72));
+        assert_eq!(dock_reserve_uncovered_by_struts(strut, dock), None);
+        assert_eq!(
+            with_dock_reserve(output(), dock_reserve_uncovered_by_struts(strut, dock)),
+            output()
+        );
+    }
+
+    #[test]
+    fn dock_strut_uses_ewmh_slots_for_top_and_right() {
+        // `work_area` reads the strut as [left, right, top, bottom].
+        let right = [0, 76, 0, 0];
+        assert_eq!(
+            dock_reserve_uncovered_by_struts(right, Some((ReserveEdge::Right, 76))),
+            None
+        );
+        let top = [0, 0, 104, 0];
+        assert_eq!(
+            dock_reserve_uncovered_by_struts(top, Some((ReserveEdge::Top, 76))),
+            None
+        );
+        assert_eq!(
+            dock_reserve_uncovered_by_struts([0, 0, 0, 44], Some((ReserveEdge::Top, 76))),
+            Some((ReserveEdge::Top, 76))
+        );
+    }
+
+    #[test]
+    fn dock_without_strut_on_its_edge_keeps_the_reserve() {
+        // Bottom Dock above a bottom taskbar: the Dock does not touch the root edge.
+        let strut = [0, 0, 0, 44];
+        let dock = Some((ReserveEdge::Bottom, 72));
+        assert_eq!(dock_reserve_uncovered_by_struts(strut, dock), dock);
+        assert_eq!(dock_reserve_uncovered_by_struts(strut, None), None);
     }
 }
 
@@ -163,7 +221,7 @@ impl<C: Connection> Wm<'_, C> {
                 self.screen_rect.width.saturating_sub(left + right).max(1),
                 self.screen_rect.height.saturating_sub(top + bottom).max(1),
             ),
-            crate::live_settings::dock_reserve(),
+            dock_reserve_uncovered_by_struts(strut, crate::live_settings::dock_reserve()),
         )
     }
 

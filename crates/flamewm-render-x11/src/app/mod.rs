@@ -461,7 +461,7 @@ impl X11App {
         set_window_role(display, window, config.role);
         if config.role == X11WindowRole::Dock {
             let (root_w, root_h) = display_extent(display, screen);
-            apply_dock_strut(display, window, root_w, root_h, None, x, y, width, height);
+            apply_dock_strut(display, window, root_w, root_h, None, None, x, y, width, height);
         }
         let gc = unsafe { XCreateGC(display, window, 0, ptr::null_mut()) };
         if gc.is_null() {
@@ -948,6 +948,7 @@ pub(crate) fn apply_dock_strut(
     root_w: u32,
     root_h: u32,
     edge: Option<crate::config::DockEdge>,
+    bar: Option<u32>,
     x: i32,
     y: i32,
     w: u32,
@@ -958,9 +959,17 @@ pub(crate) fn apply_dock_strut(
     if partial == 0 || strut == 0 {
         return;
     }
-    let reserved = match edge {
-        Some(edge) => crate::config::DockStrut::from_edge_rect(root_w, root_h, edge, x, y, w, h),
-        None => crate::config::DockStrut::from_root_and_rect(root_w, root_h, x, y, w, h),
+    // A dock window reserves its bar only: the label room above or below the bar is not space
+    // the bar takes from the work area.
+    let reserved = match (edge, bar) {
+        (Some(edge), Some(thickness)) => {
+            let (bx, by, bw, bh) = edge.bar_rect(x, y, w, h, thickness);
+            crate::config::DockStrut::from_edge_rect(root_w, root_h, edge, bx, by, bw, bh)
+        }
+        (Some(edge), None) => {
+            crate::config::DockStrut::from_edge_rect(root_w, root_h, edge, x, y, w, h)
+        }
+        (None, _) => crate::config::DockStrut::from_root_and_rect(root_w, root_h, x, y, w, h),
     };
     match reserved {
         Some(reserved) => unsafe {

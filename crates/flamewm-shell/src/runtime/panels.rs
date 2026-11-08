@@ -96,7 +96,7 @@ impl ShellSurfaces {
                 })
                 .map_err(|error| format!("panel corner paint: {error:?}"))?;
             runtime
-                .set_dock_frame(record.panel, edge, radius)
+                .set_dock_frame(record.panel, edge, radius, None)
                 .map_err(|error| format!("panel dock frame: {error:?}"))?;
         }
         Ok(())

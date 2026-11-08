@@ -4,7 +4,7 @@
 use super::*;
 use flamewm_api::PanelEdge;
 
-use flamewm_ui_x11::{ActionPhase, SurfaceEvent};
+use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
 use flamewm_shell::dock::{self, DockSettings};
 use flamewm_shell::icon_loader::IconTarget;
 use flamewm_shell_core::dock::{drag_off_removes, move_pinned, slot_at, Edge};
@@ -27,6 +27,15 @@ pub(crate) struct DockDrag {
 
 /// Last projected dock state; an identical state skips the document write.
 pub(crate) type DockSync = (dock::DockFrame, (i32, i32, u32, u32), Vec<String>, Vec<flamewm_shell_core::dock::DockEntry>);
+
+fn strut_edge(edge: Edge) -> DockEdge {
+    match edge {
+        Edge::Bottom => DockEdge::Bottom,
+        Edge::Top => DockEdge::Top,
+        Edge::Left => DockEdge::Left,
+        Edge::Right => DockEdge::Right,
+    }
+}
 
 fn dock_edge(edge: PanelEdge) -> Edge {
     match edge {
@@ -78,8 +87,9 @@ impl ShellLoop {
         let running: Vec<bool> = layout.entries.iter().map(|entry| entry.running).collect();
         let frame = dock::dock_frame(&running, layout.separator_after, settings.icon_size, settings.edge);
         let scale = flamewm_shell::runtime::panel_ui_scale(output.shell_scale_percent);
-        // The taskbar keeps its strip when the dock shares its edge.
-        let inset = if dock_edge(panel.edge) == settings.edge {
+        // The taskbar keeps its strip when the dock shares its edge, unless `taskbar.enabled` is off.
+        let taskbar_shown = self.settings_cache.as_ref().is_none_or(taskbar_enabled);
+        let inset = if taskbar_shown && dock_edge(panel.edge) == settings.edge {
             if settings.edge.is_vertical() {
                 panel.geometry.width
             } else {
@@ -139,6 +149,14 @@ impl ShellLoop {
             }
         }
         let _ = runtime.move_resize(surface, rect.0, rect.1, rect.2, rect.3);
+        // Reserve only the bar, not the hover-label room the window also covers.
+        let bar_css = if frame.edge.is_vertical() { frame.bar.w } else { frame.bar.h };
+        let _ = runtime.set_dock_frame(
+            surface,
+            Some(strut_edge(frame.edge)),
+            0,
+            Some((bar_css * scale).round() as u32),
+        );
         if let Err(error) = runtime.with_document(surface, |document| {
             dock::project_dock(document, &frame, &names)?;
             for index in 0..icon_names.len() {

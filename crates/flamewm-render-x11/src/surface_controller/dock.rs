@@ -22,6 +22,8 @@ pub(super) struct SurfaceInstance {
     pub(super) grab_pending: bool,
     /// Root edge this dock reserves (floating docks touch no edge). `None` infers from the rect.
     pub(super) dock_edge: Option<DockEdge>,
+    /// Bar thickness (window px) on `dock_edge`; `None` reserves the whole window rect.
+    pub(super) dock_bar: Option<u32>,
     /// Corner radius (window px) last published by `set_dock_frame`; zero means rectangular.
     pub(super) dock_radius: u32,
     /// `(opacity, blur)` percents for the desktop-layer backdrop installed before each first map.
@@ -77,13 +79,15 @@ pub(super) fn apply_dock_mask(instance: &SurfaceInstance, w: u32, h: u32, mask: 
 
 impl SurfaceController {
     /// Publishes the dock frame: `Some(edge)` reserves that root edge and clips the window to
-    /// `corner_radius` (window px). `None` is classic: legacy strut inference and a full
+    /// `corner_radius` (window px). `bar` is the bar thickness on that edge (window px); `None`
+    /// reserves the whole window rect. `None` edge is classic: legacy strut inference and a full
     /// rectangle mask, restored only if this surface was previously floating.
     pub fn set_dock_frame(
         &mut self,
         id: SurfaceId,
         edge: Option<DockEdge>,
         corner_radius: u32,
+        bar: Option<u32>,
     ) -> Result<(), String> {
         let display = self.display;
         let (root_w, root_h) = self.root_geometry();
@@ -91,11 +95,12 @@ impl SurfaceController {
         if instance.role != SurfaceRole::Dock {
             return Err("set_dock_frame requires a dock surface".to_string());
         }
-        if instance.dock_edge == edge && instance.dock_radius == corner_radius {
+        if instance.dock_edge == edge && instance.dock_radius == corner_radius && instance.dock_bar == bar {
             return Ok(());
         }
         let mask = dock_mask_plan(instance.dock_radius, corner_radius);
         instance.dock_edge = edge;
+        instance.dock_bar = bar;
         instance.dock_radius = corner_radius;
         instance.app.dock_corner_radius = corner_radius;
         let (x, y) = instance.origin;
@@ -106,6 +111,7 @@ impl SurfaceController {
             root_w,
             root_h,
             edge,
+            bar,
             x,
             y,
             w,
