@@ -562,12 +562,12 @@ mod tests {
         let mut registry = ThemeRegistry {
             icon: vec![ThemeItem {
                 previews: vec![image.clone()],
-                ..item("MacTahoe", "MacTahoe")
+                ..item("breeze", "breeze")
             }],
             cursor: vec![],
         };
         let preview = registry
-            .selected_preview(PickerKind::Icon, "MacTahoe")
+            .selected_preview(PickerKind::Icon, "breeze")
             .expect("cached");
         assert!(std::ptr::eq(
             preview,
@@ -585,7 +585,7 @@ mod tests {
         registry = ThemeRegistry::default(); // a rescan invalidates the old cache
         assert!(
             registry
-                .selected_preview(PickerKind::Icon, "MacTahoe")
+                .selected_preview(PickerKind::Icon, "breeze")
                 .is_none()
         );
     }
