@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::native::rounded::row_inset;
+use flamewm_api::render_backend::{FallbackReason, RenderBackend, RenderBackendStatus};
 
 pub use flamewm_render_core::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect};
 
@@ -143,6 +144,12 @@ impl PixelBackend for gles::GpuBlur {
     }
 }
 
+/// A GPU pixel backend. `PixelBackend` stays the op contract: on error the frame is untouched.
+pub(super) trait GpuPixels: PixelBackend {
+    fn kind(&self) -> RenderBackend;
+    fn device(&self) -> &str;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AccelerationStatus {
     pub requested: RenderAcceleration,
@@ -151,11 +158,16 @@ pub struct AccelerationStatus {
 }
 
 static REQUESTED: AtomicU8 = AtomicU8::new(0);
-static STATUS: Mutex<(Option<String>, Option<String>)> = Mutex::new((None, None));
+static STATUS: Mutex<RenderBackendStatus> = Mutex::new(RenderBackendStatus {
+    requested: RenderBackend::Cpu,
+    active: RenderBackend::Cpu,
+    device: None,
+    fallback: None,
+});
 
 enum GpuSlot {
     Untried,
-    Ready(Box<gles::GpuBlur>),
+    Ready(Box<dyn GpuPixels>),
     Failed,
 }
 
@@ -210,16 +222,28 @@ pub fn render_acceleration() -> RenderAcceleration {
     }
 }
 
+/// What the process runs now. `requested` is the acceleration setting mapped to a backend.
 #[must_use]
-pub fn render_acceleration_status() -> AccelerationStatus {
-    let (gpu_renderer, gpu_error) = STATUS
+pub fn render_backend_status() -> RenderBackendStatus {
+    let mut status = STATUS
         .lock()
         .map(|status| status.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+    status.requested = match render_acceleration() {
+        RenderAcceleration::Gpu => RenderBackend::OpenGl,
+        RenderAcceleration::Cpu => RenderBackend::Cpu,
+    };
+    status
+}
+
+/// Kept for `flamewm-ui-x11` and the WM until no caller is left; use [`render_backend_status`].
+#[must_use]
+pub fn render_acceleration_status() -> AccelerationStatus {
+    let status = render_backend_status();
     AccelerationStatus {
         requested: render_acceleration(),
-        gpu_renderer,
-        gpu_error,
+        gpu_renderer: status.device,
+        gpu_error: status.fallback.map(|reason| reason.to_string()),
     }
 }
 
@@ -230,13 +254,23 @@ pub fn probe_gpu_renderer() -> Result<String, String> {
         .lock()
         .map_err(|_| "GPU probe state is poisoned".to_owned())?;
     cached
-        .get_or_insert_with(|| gles::GpuBlur::new().map(|gpu| gpu.renderer().to_owned()))
+        .get_or_insert_with(|| gles::GpuBlur::new().map(|gpu| gpu.device().to_owned()))
         .clone()
 }
 
-fn record(renderer: Option<String>, error: Option<String>) {
+fn record_ready(kind: RenderBackend, device: &str) {
     if let Ok(mut status) = STATUS.lock() {
-        *status = (renderer, error);
+        status.active = kind;
+        status.device = Some(device.to_owned());
+        status.fallback = None;
+    }
+}
+
+fn record_fallback(reason: FallbackReason) {
+    if let Ok(mut status) = STATUS.lock() {
+        status.active = RenderBackend::Cpu;
+        status.device = None;
+        status.fallback = Some(reason);
     }
 }
 
@@ -251,24 +285,24 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
         let mut slot = slot.borrow_mut();
         if matches!(*slot, GpuSlot::Untried) {
             *slot = match gles::GpuBlur::new() {
-                Ok(gpu) if is_software_renderer(gpu.renderer()) => {
-                    let error = format!("software GL renderer {}", gpu.renderer());
+                Ok(gpu) if is_software_renderer(gpu.device()) => {
+                    let reason = FallbackReason::SoftwareDevice(gpu.device().to_owned());
                     eprintln!(
-                        "flamewm-render-x11: GPU acceleration unavailable, using CPU: {error}"
+                        "flamewm-render-x11: GPU acceleration unavailable, using CPU: {reason}"
                     );
-                    record(None, Some(error));
+                    record_fallback(reason);
                     GpuSlot::Failed
                 }
                 Ok(gpu) => {
-                    eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.renderer());
-                    record(Some(gpu.renderer().to_owned()), None);
+                    eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.device());
+                    record_ready(gpu.kind(), gpu.device());
                     GpuSlot::Ready(Box::new(gpu))
                 }
                 Err(error) => {
                     eprintln!(
                         "flamewm-render-x11: GPU acceleration unavailable, using CPU: {error}"
                     );
-                    record(None, Some(error));
+                    record_fallback(FallbackReason::InitFailed(error));
                     GpuSlot::Failed
                 }
             };
@@ -281,7 +315,7 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
             Ok(()) => true,
             Err(error) => {
                 eprintln!("flamewm-render-x11: GPU pixel op failed, using CPU: {error}");
-                record(None, Some(error));
+                record_fallback(FallbackReason::DeviceLost(error));
                 *slot = GpuSlot::Failed;
                 false
             }
@@ -512,6 +546,29 @@ mod tests {
         assert!(!is_software_renderer(
             "NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2"
         ));
+    }
+
+    #[test]
+    fn accel_status_shim_reports_the_recorded_fallback_text() {
+        record_fallback(FallbackReason::SoftwareDevice("llvmpipe".to_owned()));
+        let shim = render_acceleration_status();
+        assert_eq!(
+            shim.gpu_error.as_deref(),
+            Some("software GL renderer llvmpipe")
+        );
+        assert_eq!(render_backend_status().active, RenderBackend::Cpu);
+        assert_eq!(
+            render_backend_status().fallback,
+            Some(FallbackReason::SoftwareDevice("llvmpipe".to_owned()))
+        );
+        record_ready(RenderBackend::OpenGl, "test renderer");
+        assert_eq!(render_backend_status().active, RenderBackend::OpenGl);
+        assert_eq!(
+            render_acceleration_status().gpu_renderer.as_deref(),
+            Some("test renderer")
+        );
+        assert!(render_acceleration_status().gpu_error.is_none());
+        record_fallback(FallbackReason::NotBuilt);
     }
 
     #[test]
@@ -1041,7 +1098,7 @@ mod tests {
             );
             eprintln!(
                 "GPU {} radius {radius}: mean difference {mean:.2}",
-                context.renderer()
+                context.device()
             );
         }
     }

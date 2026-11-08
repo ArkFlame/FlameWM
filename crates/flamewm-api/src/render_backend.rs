@@ -54,6 +54,45 @@ pub struct RenderBackendChoice {
     pub reason: Option<String>,
 }
 
+/// What the running process actually uses, published for the status line and the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderBackendStatus {
+    pub requested: RenderBackend,
+    /// `Cpu`, `OpenGl` or `Vulkan`. Never `Auto`.
+    pub active: RenderBackend,
+    /// `GL_RENDERER` or the Vulkan device name, when a GPU backend is active.
+    pub device: Option<String>,
+    pub fallback: Option<FallbackReason>,
+}
+
+/// Why a requested GPU backend is not the active one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FallbackReason {
+    /// Vulkan requested, binary has no Vulkan feature.
+    NotBuilt,
+    /// libEGL / libGLESv2 / libvulkan not found.
+    LibraryMissing(String),
+    /// llvmpipe, softpipe, swrast, or a Vulkan CPU device.
+    SoftwareDevice(String),
+    InitFailed(String),
+    /// Device or op failure after init.
+    DeviceLost(String),
+    ForcedByEnv,
+}
+
+impl std::fmt::Display for FallbackReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotBuilt => f.write_str("not built into this binary"),
+            Self::LibraryMissing(text) | Self::InitFailed(text) | Self::DeviceLost(text) => {
+                f.write_str(text)
+            }
+            Self::SoftwareDevice(renderer) => write!(f, "software GL renderer {renderer}"),
+            Self::ForcedByEnv => f.write_str("forced by FLAMEWM_GPU"),
+        }
+    }
+}
+
 /// Resolves stored settings to the backend this build runs.
 #[must_use]
 pub fn choose(
@@ -131,6 +170,22 @@ mod tests {
         ] {
             assert_eq!(RenderBackend::parse(backend.as_setting()), Some(backend));
         }
+    }
+
+    #[test]
+    fn fallback_reasons_render_the_text_the_log_already_uses() {
+        assert_eq!(
+            FallbackReason::SoftwareDevice("llvmpipe".to_owned()).to_string(),
+            "software GL renderer llvmpipe"
+        );
+        assert_eq!(
+            FallbackReason::InitFailed("no EGL display".to_owned()).to_string(),
+            "no EGL display"
+        );
+        assert_eq!(
+            FallbackReason::NotBuilt.to_string(),
+            "not built into this binary"
+        );
     }
 
     #[test]

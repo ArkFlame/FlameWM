@@ -237,10 +237,6 @@ impl GpuBlur {
         }
     }
 
-    pub(crate) fn renderer(&self) -> &str {
-        &self.renderer
-    }
-
     unsafe fn shader(&self, kind: GlEnum, source: &str) -> Result<GlUint, String> {
         let source = CString::new(source).expect("shader source is static and NUL-free");
         // SAFETY: a context is current; the source pointer stays alive for the call.
@@ -514,6 +510,16 @@ impl Program {
             node: -1,
             corner: -1,
         }
+    }
+}
+
+impl super::GpuPixels for GpuBlur {
+    fn kind(&self) -> flamewm_api::render_backend::RenderBackend {
+        flamewm_api::render_backend::RenderBackend::OpenGl
+    }
+
+    fn device(&self) -> &str {
+        &self.renderer
     }
 }
 
