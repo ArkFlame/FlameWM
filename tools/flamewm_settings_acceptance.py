@@ -3097,6 +3097,12 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     base_path: Path | None = None
     details["visual"] = visual
     settle = min(args.settle_seconds, 1.5)
+    # Selection pixels are measured as changes from black. A default wallpaper paints after the base
+    # capture and would be counted as selection, so set a solid #000000 wallpaper first (as SS07 does).
+    black = apply_and_read_settings(ctx, revision, {"wallpaperMode": "'solid'", "wallpaperColor": "'#000000'"}, details)
+    visual["wallpaper_black_applied"] = black is not None
+    if black is not None and isinstance(black.get("revision"), int):
+        revision = black["revision"]
     if Image is not None and os.access(args.desktop_bin, os.X_OK) and sticky:
         ss06_seed_fixtures(ctx)
         clients = start_session_clients(ctx, args, ("desktop",), "ss06")
@@ -3159,7 +3165,8 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
             {"DesktopSelectionFillOpacity": f"uint32 {next_selection}"}, details)
         visual["selection_restored"] = restored is not None
         controls = (
-            visual.get("alive") is True and clients_alive(clients)
+            visual.get("wallpaper_black_applied") is True
+            and visual.get("alive") is True and clients_alive(clients)
             and visual.get("note_visible_base") is True
             and visual.get("selection_red_unchanged_capture") == visual["selection_red_before"]
             and visual.get("note_visible_after_unrelated") is True
