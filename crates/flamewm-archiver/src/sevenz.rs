@@ -368,7 +368,9 @@ fn create_with(
             .filter(|dir| !dir.as_os_str().is_empty())
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     };
-    let parent = inputs.first().map_or_else(|| PathBuf::from("."), |i| folder_of(i));
+    let parent = inputs
+        .first()
+        .map_or_else(|| PathBuf::from("."), |i| folder_of(i));
     if inputs.iter().any(|input| folder_of(input) != parent) {
         return Err(ArchiveError::Unsupported(
             "7z create needs all inputs in one folder".to_owned(),

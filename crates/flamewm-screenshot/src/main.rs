@@ -313,7 +313,9 @@ fn record_video(
     audio_source: Option<&str>,
 ) -> Result<record::Stats, String> {
     if !record::ffmpeg_available() {
-        return Err("screen recording needs ffmpeg on PATH (not found); screenshots work without it".into());
+        return Err(
+            "screen recording needs ffmpeg on PATH (not found); screenshots work without it".into(),
+        );
     }
     if path.exists() {
         return Err(format!("output already exists: {}", path.display()));
@@ -355,7 +357,10 @@ fn record_video(
     let status = child.wait().map_err(|e| e.to_string())?;
     let outcome = match recorded {
         Ok(stats) if status.success() => Ok(stats),
-        Ok(_) => Err(format!("recording failed: ffmpeg exited {status}: {}", diagnostics.trim())),
+        Ok(_) => Err(format!(
+            "recording failed: ffmpeg exited {status}: {}",
+            diagnostics.trim()
+        )),
         Err(error) => Err(error),
     };
     if outcome.is_err() {
@@ -483,31 +488,37 @@ mod tests {
     #[test]
     fn recording_formats_and_audio_are_validated() {
         for ext in ["mp4", "webm", "gif"] {
-            assert!(parse(&[
+            assert!(
+                parse(&[
+                    "--record".into(),
+                    "1".into(),
+                    "--output".into(),
+                    format!("out.{ext}")
+                ])
+                .is_ok()
+            );
+        }
+        assert!(parse(&["--audio-source".into(), "monitor".into()]).is_err());
+        assert!(
+            parse(&[
+                "--record".into(),
+                "1".into(),
+                "--audio-source".into(),
+                "monitor".into(),
+                "--output".into(),
+                "out.gif".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
                 "--record".into(),
                 "1".into(),
                 "--output".into(),
-                format!("out.{ext}")
+                "out.avi".into()
             ])
-            .is_ok());
-        }
-        assert!(parse(&["--audio-source".into(), "monitor".into()]).is_err());
-        assert!(parse(&[
-            "--record".into(),
-            "1".into(),
-            "--audio-source".into(),
-            "monitor".into(),
-            "--output".into(),
-            "out.gif".into()
-        ])
-        .is_err());
-        assert!(parse(&[
-            "--record".into(),
-            "1".into(),
-            "--output".into(),
-            "out.avi".into()
-        ])
-        .is_err());
+            .is_err()
+        );
     }
 
     #[test]
@@ -552,10 +563,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "flamewm-shot-{name}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("flamewm-shot-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -569,7 +577,11 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"one");
         let again = new_file(&path, b"two").unwrap_err();
         assert!(again.contains("shot.png"), "{again}");
-        assert_eq!(fs::read(&path).unwrap(), b"one", "existing capture must survive");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"one",
+            "existing capture must survive"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -591,7 +603,12 @@ mod tests {
             height: 4,
             rgba: vec![0; 4 * 4 * 4],
         };
-        let outside = Rect { x: 10, y: 10, w: 3, h: 3 };
+        let outside = Rect {
+            x: 10,
+            y: 10,
+            w: 3,
+            h: 3,
+        };
         assert!(image.clone().crop(outside).is_err());
     }
 }

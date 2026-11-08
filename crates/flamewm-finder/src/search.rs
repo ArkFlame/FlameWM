@@ -358,9 +358,17 @@ mod tests {
             entry("/h/b", false, 9),
             entry("/h/doc.odt", false, 1),
         ]);
-        idx.set_docs(vec!["/h/doc.odt".to_owned(), "/h/missing.txt".to_owned(), "/h/a".to_owned()]);
+        idx.set_docs(vec![
+            "/h/doc.odt".to_owned(),
+            "/h/missing.txt".to_owned(),
+            "/h/a".to_owned(),
+        ]);
         let hits = rank(&idx, &Query::default(), NOW);
-        let names: Vec<&str> = hits.indices.iter().map(|&i| idx.entries[i].name()).collect();
+        let names: Vec<&str> = hits
+            .indices
+            .iter()
+            .map(|&i| idx.entries[i].name())
+            .collect();
         assert_eq!(names, ["doc.odt", "a", "b"]);
         assert_eq!(hits.total, 3);
     }

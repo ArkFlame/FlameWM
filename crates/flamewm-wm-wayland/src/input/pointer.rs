@@ -132,14 +132,15 @@ impl State {
                     let titlebars = self.model.titlebars();
                     let target = snap_target_at(self, location, activated);
                     // `snapPreviewEnabled` off hides the zone ring only; release still snaps.
-                    let zone = (self.snap_preview_enabled && target != SnapTarget::None).then(|| {
-                        self.model
-                            .snap_client_geometry(id, target, self.work_area())
-                            .map_or_else(
-                                || frame_for_client(floating, titlebars),
-                                |client| frame_for_client(client, titlebars),
-                            )
-                    });
+                    let zone =
+                        (self.snap_preview_enabled && target != SnapTarget::None).then(|| {
+                            self.model
+                                .snap_client_geometry(id, target, self.work_area())
+                                .map_or_else(
+                                    || frame_for_client(floating, titlebars),
+                                    |client| frame_for_client(client, titlebars),
+                                )
+                        });
                     let feedback = move_feedback(
                         self.show_content_while_dragging,
                         zone,
@@ -239,7 +240,11 @@ impl State {
     /// keeps moving, so only then is the raw device position the base; otherwise the cursor is.
     #[cfg_attr(not(feature = "drm"), allow(dead_code))]
     pub(crate) fn relative_base(&self) -> Point<f64, Logical> {
-        pick_relative_base(self.locked_focus().is_some(), self.pointer, self.raw_pointer)
+        pick_relative_base(
+            self.locked_focus().is_some(),
+            self.pointer,
+            self.raw_pointer,
+        )
     }
 
     fn locked_focus(&self) -> Option<WlSurface> {
@@ -519,7 +524,10 @@ mod pointer_constraint_tests {
         assert_eq!(pick_relative_base(false, pointer, raw), pointer);
         assert_eq!(pick_relative_base(true, pointer, raw), raw);
         // Without any constraint the raw position equals the cursor, so both bases agree.
-        assert_eq!(pick_relative_base(false, pointer, pointer), pick_relative_base(true, pointer, pointer));
+        assert_eq!(
+            pick_relative_base(false, pointer, pointer),
+            pick_relative_base(true, pointer, pointer)
+        );
     }
 
     #[test]

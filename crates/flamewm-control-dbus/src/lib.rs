@@ -644,7 +644,11 @@ mod tests {
         use flamewm_api::shell_bootstrap::ShellBootstrapSnapshot;
         use flamewm_api::system::SystemSnapshot;
         use flamewm_api::workspace::WorkspaceSnapshot;
-        let call = WireCall::new(flamewm_control_core::IFACE_ROOT, "GetShellBootstrap", Vec::new());
+        let call = WireCall::new(
+            flamewm_control_core::IFACE_ROOT,
+            "GetShellBootstrap",
+            Vec::new(),
+        );
         let source = ShellBootstrapSnapshot {
             windows_revision: 1,
             windows: Vec::new(),
@@ -679,12 +683,12 @@ mod tests {
         };
         let reply = encode_reply(&call, &ControlResponse::ShellBootstrap(source.clone()))
             .expect("encode reply");
-        let mut message = Message::new_signal(OBJECT_PATH, "org.flamewm.Test", "Bootstrap")
-            .expect("signal");
+        let mut message =
+            Message::new_signal(OBJECT_PATH, "org.flamewm.Test", "Bootstrap").expect("signal");
         append_wire_values(&mut message, &reply.values).expect("append");
         let values = wire_args(message.get_items()).expect("decode items");
-        let decoded = flamewm_control_wire::decode_reply(&call, &WireReply { values })
-            .expect("decode reply");
+        let decoded =
+            flamewm_control_wire::decode_reply(&call, &WireReply { values }).expect("decode reply");
         assert_eq!(decoded, ControlResponse::ShellBootstrap(source));
     }
 

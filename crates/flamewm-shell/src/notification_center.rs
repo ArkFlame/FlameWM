@@ -52,8 +52,15 @@ pub enum Command {
     Clear,
     ToggleDnd,
     ToggleGroupMute(usize),
-    DismissItem { group: usize, item: usize },
-    InvokeItemAction { group: usize, item: usize, action: usize },
+    DismissItem {
+        group: usize,
+        item: usize,
+    },
+    InvokeItemAction {
+        group: usize,
+        item: usize,
+        action: usize,
+    },
 }
 
 impl Command {
@@ -163,7 +170,11 @@ pub fn view(history: &NotificationHistory) -> CenterView {
 /// Drops action buttons of items whose notification is no longer active, since the client can
 /// no longer be answered for them.
 pub fn hide_inactive_actions(view: &mut CenterView, is_active: impl Fn(u32) -> bool) {
-    for item in view.groups.iter_mut().flat_map(|group| group.items.iter_mut()) {
+    for item in view
+        .groups
+        .iter_mut()
+        .flat_map(|group| group.items.iter_mut())
+    {
         if !is_active(item.notification_id) {
             item.actions.clear();
         }
@@ -307,7 +318,10 @@ mod tests {
                 action: 1
             })
         );
-        assert_eq!(Command::parse("notification.center.item.2.3.action.3"), None);
+        assert_eq!(
+            Command::parse("notification.center.item.2.3.action.3"),
+            None
+        );
         assert_eq!(Command::parse("notification.center.group.6.mute"), None);
         assert_eq!(Command::parse("notification.center.item.1.4.dismiss"), None);
         assert_eq!(Command::parse("notification.center.group.0.mute"), None);
@@ -327,7 +341,10 @@ mod tests {
     fn close_latch_consumes_one_opener_release_inside_the_window() {
         let now = Instant::now();
         let mut latch = Some(now);
-        assert!(latch_consumes_open(&mut latch, now + Duration::from_millis(40)));
+        assert!(latch_consumes_open(
+            &mut latch,
+            now + Duration::from_millis(40)
+        ));
         assert_eq!(latch, None, "the latch is single-use");
         assert!(!latch_consumes_open(&mut latch, now));
 
@@ -422,7 +439,10 @@ mod tests {
         );
         let mut center = view(&history);
         assert_eq!(center.groups[0].items[0].notification_id, 7);
-        assert_eq!(center.groups[0].items[0].actions.len(), MAX_ITEM_ACTION_SLOTS);
+        assert_eq!(
+            center.groups[0].items[0].actions.len(),
+            MAX_ITEM_ACTION_SLOTS
+        );
         let projected = nodes(&center);
         assert!(projected.contains(&text("nc-item-1-1-action-1", "Reply")));
         assert!(projected.contains(&text("nc-item-1-1-action-2", "Later")));
@@ -500,9 +520,14 @@ mod tests {
             for item in 1..=MAX_ITEM_SLOTS {
                 for action in 1..=MAX_ITEM_ACTION_SLOTS {
                     let open = format!("<button id=\"nc-item-{row}-{item}-action-{action}\"");
-                    let start = TEMPLATE.find(&open).unwrap_or_else(|| panic!("missing {open}"));
+                    let start = TEMPLATE
+                        .find(&open)
+                        .unwrap_or_else(|| panic!("missing {open}"));
                     let end = start + TEMPLATE[start..].find("</button>").expect("button end");
-                    assert!(TEMPLATE[start..end].ends_with("&#8203;"), "{open} has no text child");
+                    assert!(
+                        TEMPLATE[start..end].ends_with("&#8203;"),
+                        "{open} has no text child"
+                    );
                 }
             }
         }

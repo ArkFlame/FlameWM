@@ -260,7 +260,9 @@ impl MainLoopPort for X11Desktop {
     }
     fn remove_timer(&mut self, _handle: TimerHandle) {}
     fn defer(&mut self, _callback: TimerCallback) -> FlameResult<TimerHandle> {
-        Err(FlameError::unsupported("desktop host owns deferred callbacks"))
+        Err(FlameError::unsupported(
+            "desktop host owns deferred callbacks",
+        ))
     }
 }
 impl BackgroundPort for X11Desktop {
@@ -416,7 +418,11 @@ impl DisplayPort for X11Desktop {
         Ok(transaction)
     }
     fn keep_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
-        if self.pending_topology.take_if(|p| p.transaction == transaction).is_some() {
+        if self
+            .pending_topology
+            .take_if(|p| p.transaction == transaction)
+            .is_some()
+        {
             return Ok(());
         }
         if self.pending_mode.map(|p| p.transaction) != Some(transaction) {
@@ -426,7 +432,10 @@ impl DisplayPort for X11Desktop {
         Ok(())
     }
     fn revert_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
-        if let Some(pending) = self.pending_topology.take_if(|p| p.transaction == transaction) {
+        if let Some(pending) = self
+            .pending_topology
+            .take_if(|p| p.transaction == transaction)
+        {
             return topology::restore(&self.conn, self.root, &pending.baseline);
         }
         let pending = self

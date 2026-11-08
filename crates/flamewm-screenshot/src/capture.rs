@@ -3,8 +3,8 @@
 
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::FileExt;
 use std::io::Cursor;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use x11rb::connection::Connection;
@@ -376,7 +376,12 @@ pub fn grab_or_shm<C: Connection>(
     grab(conn, screen, rect)
 }
 
-fn grab_shm<C: Connection>(conn: &C, screen: usize, rect: Rect, state: &mut ShmState) -> Result<Image> {
+fn grab_shm<C: Connection>(
+    conn: &C,
+    screen: usize,
+    rect: Rect,
+    state: &mut ShmState,
+) -> Result<Image> {
     let root_info = &conn.setup().roots[screen];
     let root = root_info.root;
     let pad = conn

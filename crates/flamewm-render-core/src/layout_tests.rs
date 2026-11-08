@@ -556,14 +556,7 @@ fn childless_patch_matches_full_compute(pill: Style, expect_patch: bool) {
             "root",
             Style::default(),
         ),
-        geometry_node(
-            NodeKind::Element,
-            Some(0),
-            Some(2),
-            None,
-            "pill",
-            pill,
-        ),
+        geometry_node(NodeKind::Element, Some(0), Some(2), None, "pill", pill),
         geometry_node(
             NodeKind::Element,
             Some(1),

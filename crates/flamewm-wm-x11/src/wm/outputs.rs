@@ -6,9 +6,7 @@ use flamewm_window_core::dock_reserve::{ReserveEdge, reserve_edge};
 /// the same edge stacks beyond it.
 pub(super) fn with_dock_reserve(work_area: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
     match dock {
-        Some((edge, extent)) => {
-            from_core_rect(reserve_edge(to_core_rect(work_area), edge, extent))
-        }
+        Some((edge, extent)) => from_core_rect(reserve_edge(to_core_rect(work_area), edge, extent)),
         None => work_area,
     }
 }

@@ -96,10 +96,16 @@ fn night_light_schedule_selects_canonical_mode_and_hides_manual_times_for_sunset
         let (requests, mut transport) = recording_transport();
         let snapshot = |revision, mode: &str| {
             let mut snapshot = accessibility_snapshot(
-                revision, "nightShiftMode", SettingValue::Text(mode.to_owned()),
+                revision,
+                "nightShiftMode",
+                SettingValue::Text(mode.to_owned()),
             );
-            snapshot.values.insert("nightShift".into(), SettingValue::Boolean(true));
-            snapshot.values.insert("nightShiftSchedule".into(), SettingValue::Boolean(true));
+            snapshot
+                .values
+                .insert("nightShift".into(), SettingValue::Boolean(true));
+            snapshot
+                .values
+                .insert("nightShiftSchedule".into(), SettingValue::Boolean(true));
             snapshot
         };
         transport.responses.extend([
@@ -108,12 +114,22 @@ fn night_light_schedule_selects_canonical_mode_and_hides_manual_times_for_sunset
         ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
-        application.handle_action(&release(&format!("settings.night-shift.mode.{target}")), &mut document)
+        application
+            .handle_action(
+                &release(&format!("settings.night-shift.mode.{target}")),
+                &mut document,
+            )
             .expect("select schedule");
         application.sync(&mut document).expect("sync schedule");
-        assert_eq!(written_values(&requests, "nightShiftMode"), vec![SettingValue::Text(target.to_owned())]);
+        assert_eq!(
+            written_values(&requests, "nightShiftMode"),
+            vec![SettingValue::Text(target.to_owned())]
+        );
         assert!(document.visible["night-shift-mode-row"]);
-        assert_eq!(document.visible["night-shift-start-row"], target == "manual");
+        assert_eq!(
+            document.visible["night-shift-start-row"],
+            target == "manual"
+        );
         assert_eq!(document.visible["night-shift-end-row"], target == "manual");
         assert!(document.highlighted[&format!("night-shift-mode-{target}")]);
     }

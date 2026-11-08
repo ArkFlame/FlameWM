@@ -28,7 +28,10 @@ pub const GROUPS: [Group; 7] = [
     },
     Group {
         label: "Terminal",
-        mimes: &["x-scheme-handler/terminal", "application/x-terminal-emulator"],
+        mimes: &[
+            "x-scheme-handler/terminal",
+            "application/x-terminal-emulator",
+        ],
     },
     Group {
         label: "Image viewer",
@@ -165,7 +168,10 @@ mod tests {
             "hidden.desktop",
             "[Desktop Entry]\nType=Application\nName=Hidden\nMimeType=image/png;\nNoDisplay=true\n",
         );
-        let image_slot = GROUPS.iter().position(|g| g.label == "Image viewer").unwrap();
+        let image_slot = GROUPS
+            .iter()
+            .position(|g| g.label == "Image viewer")
+            .unwrap();
 
         // No current default: the first handler is chosen; hidden entries never appear.
         assert_eq!(cycle_with(&settings, image_slot).unwrap(), "Viewer A");

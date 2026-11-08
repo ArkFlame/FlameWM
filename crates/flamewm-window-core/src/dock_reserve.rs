@@ -119,7 +119,10 @@ mod tests {
     fn dock_above_taskbar_on_the_same_edge_stacks() {
         let after_taskbar = reserve_edge(OUTPUT, ReserveEdge::Bottom, 44);
         let after_dock = reserve_edge(after_taskbar, ReserveEdge::Bottom, dock_extent(48));
-        assert_eq!(after_dock, Rect::new(0, 0, 1280, 800 - 44 - dock_extent(48)));
+        assert_eq!(
+            after_dock,
+            Rect::new(0, 0, 1280, 800 - 44 - dock_extent(48))
+        );
     }
 
     #[test]

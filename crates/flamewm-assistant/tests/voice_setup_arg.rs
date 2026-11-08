@@ -19,8 +19,12 @@ fn voice_setup_flag_runs_background_setup_and_records_status() {
         .output()
         .expect("run flamewm-assistant");
 
-    let status = fs::read_to_string(base.join("flamewm/assistant/voice/status")).unwrap_or_default();
-    assert!(!output.status.success(), "a refused setup must exit non-zero");
+    let status =
+        fs::read_to_string(base.join("flamewm/assistant/voice/status")).unwrap_or_default();
+    assert!(
+        !output.status.success(),
+        "a refused setup must exit non-zero"
+    );
     assert!(
         status.starts_with("failed (attempt 1 of 3): configuration error:")
             && status.contains("must not contain spaces"),

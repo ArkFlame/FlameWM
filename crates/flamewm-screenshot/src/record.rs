@@ -115,7 +115,10 @@ impl FrameSource for X11Frames {
 /// Opens the worker's own X connection when the worker starts.
 pub fn x11_frames(rect: Rect) -> impl FnOnce() -> Result<X11Frames, String> + Send {
     move || {
-        Ok(X11Frames { grabber: capture::connect_grabber()?, rect })
+        Ok(X11Frames {
+            grabber: capture::connect_grabber()?,
+            rect,
+        })
     }
 }
 
@@ -137,7 +140,14 @@ pub fn encoder_args(
     audio: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = [
-        "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
     ]
     .map(str::to_owned)
     .to_vec();
@@ -156,12 +166,27 @@ pub fn encoder_args(
     match ext {
         "mp4" => args.extend(
             [
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
             ]
             .map(str::to_owned),
         ),
         "webm" => args.extend(
-            ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8"].map(str::to_owned),
+            [
+                "-c:v",
+                "libvpx-vp9",
+                "-deadline",
+                "realtime",
+                "-cpu-used",
+                "8",
+            ]
+            .map(str::to_owned),
         ),
         "gif" => args.extend(
             [
@@ -227,43 +252,94 @@ mod tests {
 
     #[test]
     fn fast_writer_receives_every_frame_in_capture_order() {
-        let mut sink = Recorder { seen: Vec::new(), pause: Duration::ZERO };
+        let mut sink = Recorder {
+            seen: Vec::new(),
+            pause: Duration::ZERO,
+        };
         let stop = AtomicBool::new(false);
-        let stats = run(counter(Duration::from_millis(5)), &mut sink, 100, Duration::from_millis(150), &stop)
-            .expect("recording");
+        let stats = run(
+            counter(Duration::from_millis(5)),
+            &mut sink,
+            100,
+            Duration::from_millis(150),
+            &stop,
+        )
+        .expect("recording");
         assert!(stats.written >= 5, "{stats:?}");
         assert_eq!(stats.written as usize, sink.seen.len());
-        assert!(sink.seen.windows(2).all(|w| w[1] == w[0].wrapping_add(1)), "out of order: {:?}", sink.seen);
+        assert!(
+            sink.seen.windows(2).all(|w| w[1] == w[0].wrapping_add(1)),
+            "out of order: {:?}",
+            sink.seen
+        );
     }
 
     #[test]
     fn slow_writer_drops_frames_instead_of_queueing() {
-        let mut sink = Recorder { seen: Vec::new(), pause: Duration::from_millis(40) };
+        let mut sink = Recorder {
+            seen: Vec::new(),
+            pause: Duration::from_millis(40),
+        };
         let stop = AtomicBool::new(false);
-        let stats = run(counter(Duration::ZERO), &mut sink, 200, Duration::from_millis(400), &stop)
-            .expect("recording");
+        let stats = run(
+            counter(Duration::ZERO),
+            &mut sink,
+            200,
+            Duration::from_millis(400),
+            &stop,
+        )
+        .expect("recording");
         assert!(stats.dropped > 0, "{stats:?}");
         assert!(stats.written < stats.captured, "{stats:?}");
         // One slot plus one in the writer: the writer can never be more than two frames behind.
-        let gaps = sink.seen.windows(2).map(|w| w[1].wrapping_sub(w[0])).max().unwrap_or(1);
-        assert!(gaps >= 2, "frames must be skipped, not delivered back to back: {:?}", sink.seen);
+        let gaps = sink
+            .seen
+            .windows(2)
+            .map(|w| w[1].wrapping_sub(w[0]))
+            .max()
+            .unwrap_or(1);
+        assert!(
+            gaps >= 2,
+            "frames must be skipped, not delivered back to back: {:?}",
+            sink.seen
+        );
     }
 
     #[test]
     fn stop_flag_ends_recording_before_the_first_frame() {
-        let mut sink = Recorder { seen: Vec::new(), pause: Duration::ZERO };
+        let mut sink = Recorder {
+            seen: Vec::new(),
+            pause: Duration::ZERO,
+        };
         let stop = AtomicBool::new(true);
-        let stats = run(counter(Duration::ZERO), &mut sink, 30, Duration::from_secs(10), &stop).expect("stop");
+        let stats = run(
+            counter(Duration::ZERO),
+            &mut sink,
+            30,
+            Duration::from_secs(10),
+            &stop,
+        )
+        .expect("stop");
         assert_eq!(stats, Stats::default());
         assert!(sink.seen.is_empty());
     }
 
     #[test]
     fn duration_bounds_the_recording() {
-        let mut sink = Recorder { seen: Vec::new(), pause: Duration::ZERO };
+        let mut sink = Recorder {
+            seen: Vec::new(),
+            pause: Duration::ZERO,
+        };
         let stop = AtomicBool::new(false);
         let started = Instant::now();
-        run(counter(Duration::ZERO), &mut sink, 60, Duration::from_millis(100), &stop).expect("recording");
+        run(
+            counter(Duration::ZERO),
+            &mut sink,
+            60,
+            Duration::from_millis(100),
+            &stop,
+        )
+        .expect("recording");
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
@@ -275,7 +351,10 @@ mod tests {
                 Err("capture rectangle offscreen".into())
             }
         }
-        let mut sink = Recorder { seen: Vec::new(), pause: Duration::ZERO };
+        let mut sink = Recorder {
+            seen: Vec::new(),
+            pause: Duration::ZERO,
+        };
         let stop = AtomicBool::new(false);
         let error = run(|| Ok(Broken), &mut sink, 30, Duration::from_secs(5), &stop).unwrap_err();
         assert_eq!(error, "capture rectangle offscreen");
@@ -283,7 +362,10 @@ mod tests {
 
     #[test]
     fn factory_failure_is_reported() {
-        let mut sink = Recorder { seen: Vec::new(), pause: Duration::ZERO };
+        let mut sink = Recorder {
+            seen: Vec::new(),
+            pause: Duration::ZERO,
+        };
         let stop = AtomicBool::new(false);
         let error = run(
             || Err::<Counter, _>("no X connection".to_owned()),
@@ -309,18 +391,35 @@ mod tests {
         }
         let stop = AtomicBool::new(false);
         let started = Instant::now();
-        let error = run(counter(Duration::from_millis(2)), &mut Full, 100, Duration::from_secs(30), &stop)
-            .unwrap_err();
+        let error = run(
+            counter(Duration::from_millis(2)),
+            &mut Full,
+            100,
+            Duration::from_secs(30),
+            &stop,
+        )
+        .unwrap_err();
         assert!(error.contains("pipe closed"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
     fn mp4_webm_and_gif_use_their_codecs() {
-        let mp4 = encoder_args("mp4", 30, (1920, 1080), None).unwrap().join(" ");
-        assert!(mp4.contains("-video_size 1920x1080") && mp4.contains("libx264") && mp4.contains("yuv420p"));
-        assert!(mp4.ends_with("-an -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p"), "{mp4}");
-        let webm = encoder_args("webm", 30, (640, 480), None).unwrap().join(" ");
+        let mp4 = encoder_args("mp4", 30, (1920, 1080), None)
+            .unwrap()
+            .join(" ");
+        assert!(
+            mp4.contains("-video_size 1920x1080")
+                && mp4.contains("libx264")
+                && mp4.contains("yuv420p")
+        );
+        assert!(
+            mp4.ends_with("-an -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p"),
+            "{mp4}"
+        );
+        let webm = encoder_args("webm", 30, (640, 480), None)
+            .unwrap()
+            .join(" ");
         assert!(webm.contains("libvpx-vp9") && webm.contains("realtime"));
         let gif = encoder_args("gif", 15, (640, 480), None).unwrap().join(" ");
         assert!(gif.contains("palettegen") && gif.contains("-framerate 15"));

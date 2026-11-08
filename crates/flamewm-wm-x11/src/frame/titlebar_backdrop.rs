@@ -503,10 +503,7 @@ mod tests {
         );
         let px = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80, 0);
         assert_eq!(px, flat_pixels(3, 2, (0, 0, 0), 127));
-        assert!(
-            state.canvas.is_none(),
-            "no inline build on the event loop"
-        );
+        assert!(state.canvas.is_none(), "no inline build on the event loop");
         assert!(state.pending.is_some(), "one worker build is in flight");
         let again = titlebar_in(&mut state, (0, 0), (16, 8), (3, 2), (0, 0, 0), 127, 80, 0);
         assert_eq!(again, px);

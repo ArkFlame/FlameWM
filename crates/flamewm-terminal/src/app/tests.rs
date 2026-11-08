@@ -968,7 +968,8 @@ fn ctrl_shift_f_finds_text_in_the_focused_pane() {
     app.open_tab(cat()).expect("tab");
     {
         let pane = app.focused_pane_mut().expect("pane");
-        crate::parser::Parser::new().advance(b"alpha needle\r\nbeta NEEDLE\r\n", &mut pane.session.screen);
+        crate::parser::Parser::new()
+            .advance(b"alpha needle\r\nbeta NEEDLE\r\n", &mut pane.session.screen);
     }
     let ctrl_shift_f = UiKeyEvent {
         phase: UiKeyPhase::Press,
@@ -977,7 +978,10 @@ fn ctrl_shift_f_finds_text_in_the_focused_pane() {
         text: None,
     };
     app.key(&ctrl_shift_f);
-    assert!(app.focused_pane().and_then(|p| p.search.as_ref()).is_some(), "bar open");
+    assert!(
+        app.focused_pane().and_then(|p| p.search.as_ref()).is_some(),
+        "bar open"
+    );
     for ch in "needle".chars() {
         let text = ch.to_string();
         app.key(&UiKeyEvent {
@@ -987,13 +991,23 @@ fn ctrl_shift_f_finds_text_in_the_focused_pane() {
             text: Some(text),
         });
     }
-    let search = app.focused_pane().and_then(|p| p.search.clone()).expect("search");
+    let search = app
+        .focused_pane()
+        .and_then(|p| p.search.clone())
+        .expect("search");
     assert_eq!(search.query, "needle");
-    assert_eq!(search.matches.len(), 2, "case-insensitive: both lines match");
+    assert_eq!(
+        search.matches.len(),
+        2,
+        "case-insensitive: both lines match"
+    );
     assert_eq!(search.current, 0);
 
     app.key(&key("return"));
-    assert_eq!(app.focused_pane().unwrap().search.as_ref().unwrap().current, 1);
+    assert_eq!(
+        app.focused_pane().unwrap().search.as_ref().unwrap().current,
+        1
+    );
     let shift_enter = UiKeyEvent {
         phase: UiKeyPhase::Press,
         modifiers: vec!["shift".to_owned()],
@@ -1001,14 +1015,27 @@ fn ctrl_shift_f_finds_text_in_the_focused_pane() {
         text: None,
     };
     app.key(&shift_enter);
-    assert_eq!(app.focused_pane().unwrap().search.as_ref().unwrap().current, 0);
+    assert_eq!(
+        app.focused_pane().unwrap().search.as_ref().unwrap().current,
+        0
+    );
 
     let rows = app.frame();
-    let bar: String = rows[0].to_vec().iter().map(|run| run.text.clone()).collect();
-    assert!(bar.contains("Find: needle") && bar.contains("1/2"), "bar: {bar}");
+    let bar: String = rows[0]
+        .to_vec()
+        .iter()
+        .map(|run| run.text.clone())
+        .collect();
+    assert!(
+        bar.contains("Find: needle") && bar.contains("1/2"),
+        "bar: {bar}"
+    );
 
     app.key(&key("escape"));
-    assert!(app.focused_pane().unwrap().search.is_none(), "Escape closes the bar");
+    assert!(
+        app.focused_pane().unwrap().search.is_none(),
+        "Escape closes the bar"
+    );
 }
 
 /// Ctrl+click resolves the link under the pointer from the pane's visible line. The click itself is
@@ -1019,7 +1046,8 @@ fn link_under_the_pointer_resolves_from_the_visible_line() {
     app.open_tab(cat()).expect("tab");
     let id = {
         let pane = app.focused_pane_mut().expect("pane");
-        crate::parser::Parser::new().advance(b"go https://a.b/c. now\r\n", &mut pane.session.screen);
+        crate::parser::Parser::new()
+            .advance(b"go https://a.b/c. now\r\n", &mut pane.session.screen);
         pane.session.id
     };
     assert_eq!(app.link_at(id, 0, 5).as_deref(), Some("https://a.b/c"));
@@ -1037,9 +1065,20 @@ fn paste_strips_escape_introducers_and_brackets_only_when_enabled() {
     let bracketed = paste_bytes(hostile, true);
     assert!(bracketed.starts_with(b"\x1b[200~"));
     assert!(bracketed.ends_with(b"\x1b[201~"));
-    assert_eq!(bracketed.windows(6).filter(|w| *w == b"\x1b[201~").count(), 1, "one end marker only");
-    assert_eq!(bracketed.iter().filter(|&&b| b == 0x1b).count(), 2, "only our own two ESC bytes");
+    assert_eq!(
+        bracketed.windows(6).filter(|w| *w == b"\x1b[201~").count(),
+        1,
+        "one end marker only"
+    );
+    assert_eq!(
+        bracketed.iter().filter(|&&b| b == 0x1b).count(),
+        2,
+        "only our own two ESC bytes"
+    );
     let plain = paste_bytes(hostile, false);
-    assert!(!plain.contains(&0x1b), "no ESC reaches a shell that did not ask for bracketed paste");
+    assert!(
+        !plain.contains(&0x1b),
+        "no ESC reaches a shell that did not ask for bracketed paste"
+    );
     assert_eq!(plain, b"ls[201~; rm -rf ~\r]0;x\x0731m".to_vec());
 }

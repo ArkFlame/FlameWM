@@ -47,7 +47,10 @@ enum Step {
 }
 
 fn step(owner: Window, subtype: SelectionEvent) -> Step {
-    match (owner == NONE, u8::from(subtype) == u8::from(SelectionEvent::SET_SELECTION_OWNER)) {
+    match (
+        owner == NONE,
+        u8::from(subtype) == u8::from(SelectionEvent::SET_SELECTION_OWNER),
+    ) {
         (false, _) => Step::Fetch,
         (true, true) => Step::Forget,
         (true, false) => Step::Reserve,
@@ -68,8 +71,15 @@ fn keepable(targets: Option<&[Atom]>, hint: Atom) -> bool {
 /// Reads the atoms the CLIPBOARD owner advertises in TARGETS; `None` when it does not answer.
 fn advertised(clipboard: &Clipboard, targets: Atom) -> Option<Vec<Atom>> {
     let requester = clipboard.requester.lock().ok()?;
-    let bytes = requester.read(targets, Instant::now() + GET_TIMEOUT).ok()??;
-    Some(bytes.chunks_exact(4).map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect())
+    let bytes = requester
+        .read(targets, Instant::now() + GET_TIMEOUT)
+        .ok()??;
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+    )
 }
 
 fn run(display: Option<&str>) -> Result<(), String> {
@@ -127,15 +137,24 @@ mod tests {
 
     #[test]
     fn owner_window_or_client_close_reserves_and_explicit_clear_forgets() {
-        assert_eq!(step(0, SelectionEvent::SELECTION_WINDOW_DESTROY), Step::Reserve);
-        assert_eq!(step(0, SelectionEvent::SELECTION_CLIENT_CLOSE), Step::Reserve);
+        assert_eq!(
+            step(0, SelectionEvent::SELECTION_WINDOW_DESTROY),
+            Step::Reserve
+        );
+        assert_eq!(
+            step(0, SelectionEvent::SELECTION_CLIENT_CLOSE),
+            Step::Reserve
+        );
         assert_eq!(step(0, SelectionEvent::SET_SELECTION_OWNER), Step::Forget);
     }
 
     #[test]
     fn foreign_owner_is_always_fetched() {
         assert_eq!(step(42, SelectionEvent::SET_SELECTION_OWNER), Step::Fetch);
-        assert_eq!(step(42, SelectionEvent::SELECTION_WINDOW_DESTROY), Step::Fetch);
+        assert_eq!(
+            step(42, SelectionEvent::SELECTION_WINDOW_DESTROY),
+            Step::Fetch
+        );
     }
 
     #[test]

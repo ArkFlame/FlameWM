@@ -324,7 +324,9 @@ fn map_window(
         .create_new(true)
         .open(&path)?;
     std::fs::remove_file(&path)?;
-    let pixels = 0xFF2E_86C1_u32.to_le_bytes().repeat((width * height) as usize);
+    let pixels = 0xFF2E_86C1_u32
+        .to_le_bytes()
+        .repeat((width * height) as usize);
     file.write_all(&pixels)?;
     let shm = app.shm.clone().ok_or("no wl_shm")?;
     let pool = shm.create_pool(file.as_fd(), len as i32, &qh, ());
@@ -385,7 +387,10 @@ fn read_offer(
         (r, w.into())
     };
     if primary {
-        let offer = app.primary_offer.clone().ok_or("primary selection vanished")?;
+        let offer = app
+            .primary_offer
+            .clone()
+            .ok_or("primary selection vanished")?;
         offer.receive(MIME.into(), wr.as_fd());
     } else {
         let offer = app.selection.clone().ok_or("selection vanished")?;

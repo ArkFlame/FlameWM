@@ -109,7 +109,12 @@ impl Watcher {
 
     /// Indexes a folder created while watching, and watches the folders under it.
     fn scan(&mut self, fd: &OwnedFd, dir: &Path, batch: &mut Batch, budget: usize) {
-        let found = index::walk(&[dir.to_path_buf()], budget, index::MAX_DEPTH, index::WALK_BUDGET);
+        let found = index::walk(
+            &[dir.to_path_buf()],
+            budget,
+            index::MAX_DEPTH,
+            index::WALK_BUDGET,
+        );
         batch.truncated |= found.truncated;
         for entry in found.entries {
             if entry.is_dir {
@@ -131,7 +136,10 @@ impl Watcher {
         let Some(dir) = self.dirs.get(&event.wd).cloned() else {
             return;
         };
-        if event.flags.intersects(ReadFlags::DELETE_SELF | ReadFlags::MOVE_SELF) {
+        if event
+            .flags
+            .intersects(ReadFlags::DELETE_SELF | ReadFlags::MOVE_SELF)
+        {
             if let Some(text) = dir.to_str() {
                 batch.remove_tree(text.to_owned());
             }
@@ -147,7 +155,10 @@ impl Watcher {
         let Some(text) = path.to_str().map(str::to_owned) else {
             return;
         };
-        if event.flags.intersects(ReadFlags::DELETE | ReadFlags::MOVED_FROM) {
+        if event
+            .flags
+            .intersects(ReadFlags::DELETE | ReadFlags::MOVED_FROM)
+        {
             batch.remove_tree(text.clone());
         }
         if event
@@ -186,7 +197,12 @@ impl Watcher {
         if batch.overflow {
             // The kernel dropped events, so the index is rebuilt from a fresh walk.
             let docs = shared.read().doc_paths.clone();
-            let mut fresh = index::walk(roots, index::MAX_ENTRIES, index::MAX_DEPTH, index::WALK_BUDGET);
+            let mut fresh = index::walk(
+                roots,
+                index::MAX_ENTRIES,
+                index::MAX_DEPTH,
+                index::WALK_BUDGET,
+            );
             fresh.set_docs(docs);
             self.watch_all(fd, roots, &fresh.entries);
             *shared.write() = fresh;
@@ -230,7 +246,9 @@ fn commit(shared: &Shared, batch: Batch) -> bool {
     if !touched.is_empty() || !trees.is_empty() {
         index.entries.retain(|entry| {
             !touched.contains(&entry.path)
-                && !trees.iter().any(|root| is_under(Path::new(&entry.path), root))
+                && !trees
+                    .iter()
+                    .any(|root| is_under(Path::new(&entry.path), root))
         });
     }
     let room = index::MAX_ENTRIES.saturating_sub(index.len());
@@ -277,7 +295,12 @@ mod tests {
     fn setup(root: &Path) -> (OwnedFd, Watcher, Shared, Vec<PathBuf>) {
         let roots = vec![root.to_path_buf()];
         let shared = Shared::default();
-        *shared.write() = index::walk(&roots, index::MAX_ENTRIES, index::MAX_DEPTH, index::WALK_BUDGET);
+        *shared.write() = index::walk(
+            &roots,
+            index::MAX_ENTRIES,
+            index::MAX_DEPTH,
+            index::WALK_BUDGET,
+        );
         let fd = inotify::init(CreateFlags::CLOEXEC).unwrap();
         let mut watcher = Watcher::default();
         let entries = shared.read().entries.clone();
@@ -286,7 +309,12 @@ mod tests {
     }
 
     fn paths(shared: &Shared) -> Vec<String> {
-        let mut paths: Vec<String> = shared.read().entries.iter().map(|e| e.path.clone()).collect();
+        let mut paths: Vec<String> = shared
+            .read()
+            .entries
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
         paths.sort();
         paths
     }
@@ -359,9 +387,14 @@ mod tests {
         let fd = inotify::init(CreateFlags::CLOEXEC).unwrap();
         let mut watcher = Watcher::default();
         for i in 0..MAX_WATCHES {
-            watcher.dirs.insert(i as i32 + 1_000_000, PathBuf::from(i.to_string()));
+            watcher
+                .dirs
+                .insert(i as i32 + 1_000_000, PathBuf::from(i.to_string()));
         }
-        assert!(!watcher.watch(&fd, &root.join("docs")), "a full budget refuses new watches");
+        assert!(
+            !watcher.watch(&fd, &root.join("docs")),
+            "a full budget refuses new watches"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

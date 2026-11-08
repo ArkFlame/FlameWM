@@ -142,7 +142,8 @@ impl ChromeBuffer {
             };
             slot.x0 = x0;
             slot.x1 = x1;
-            let rect = Rectangle::<i32, Buffer>::new((x0, 0).into(), ((x1 - x0), TITLEBAR_HEIGHT).into());
+            let rect =
+                Rectangle::<i32, Buffer>::new((x0, 0).into(), ((x1 - x0), TITLEBAR_HEIGHT).into());
             let _ = ctx.draw(|mem| {
                 repaint_slot(mem, w, h, rounded, backdrop.as_deref(), &slot, feedback);
                 Ok::<_, std::convert::Infallible>(vec![rect])

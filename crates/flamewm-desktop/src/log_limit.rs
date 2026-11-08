@@ -24,7 +24,13 @@ fn admit(key: &'static str, now: Instant) -> Option<u64> {
     let map = guard.get_or_insert_with(HashMap::new);
     match map.get_mut(key) {
         None => {
-            map.insert(key, Slot { last: now, suppressed: 0 });
+            map.insert(
+                key,
+                Slot {
+                    last: now,
+                    suppressed: 0,
+                },
+            );
             Some(0)
         }
         Some(slot) if now.saturating_duration_since(slot.last) >= WINDOW => {

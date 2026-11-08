@@ -455,7 +455,10 @@ impl X11Desktop {
             .map_err(FlameError::io)?;
         let parent = tree_cookie.reply().map_err(FlameError::io)?.parent;
         let geometry_window = if parent == self.root { window } else { parent };
-        let geometry_cookie = self.conn.get_geometry(geometry_window).map_err(FlameError::io)?;
+        let geometry_cookie = self
+            .conn
+            .get_geometry(geometry_window)
+            .map_err(FlameError::io)?;
         let states: Vec<u32> = states_cookie
             .reply()
             .map_err(FlameError::io)?
@@ -490,9 +493,13 @@ impl X11Desktop {
             .unwrap_or_else(|| OutputId::new("default"));
         let has = |name: &str| states.contains(&self.atom(name));
         // Utility, dock and splash windows are never tasks, whatever their state says.
-        let untasked_type = ["_NET_WM_WINDOW_TYPE_DOCK", "_NET_WM_WINDOW_TYPE_UTILITY", "_NET_WM_WINDOW_TYPE_SPLASH"]
-            .iter()
-            .any(|name| types.contains(&self.atom(name)));
+        let untasked_type = [
+            "_NET_WM_WINDOW_TYPE_DOCK",
+            "_NET_WM_WINDOW_TYPE_UTILITY",
+            "_NET_WM_WINDOW_TYPE_SPLASH",
+        ]
+        .iter()
+        .any(|name| types.contains(&self.atom(name)));
         let state = if has("_NET_WM_STATE_FULLSCREEN") {
             flamewm_api::window::WindowState::Fullscreen
         } else if has("_NET_WM_STATE_HIDDEN") {

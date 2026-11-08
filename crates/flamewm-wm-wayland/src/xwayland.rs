@@ -23,11 +23,11 @@ use smithay::reexports::x11rb::protocol::xproto::{
 use smithay::reexports::x11rb::rust_connection::RustConnection;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::selection::SelectionTarget;
-use smithay::wayland::selection::primary_selection::{
-    clear_primary_selection, request_primary_client_selection, set_primary_selection,
-};
 use smithay::wayland::selection::data_device::{
     clear_data_device_selection, request_data_device_client_selection, set_data_device_selection,
+};
+use smithay::wayland::selection::primary_selection::{
+    clear_primary_selection, request_primary_client_selection, set_primary_selection,
 };
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, XwmId};
@@ -318,8 +318,13 @@ impl State {
     }
 
     /// Whether `surface` belongs to a managed or unmanaged X11 window.
-    pub fn is_x11_surface(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> bool {
-        self.x11.iter().any(|(_, window)| window.wl_surface().as_ref() == Some(surface))
+    pub fn is_x11_surface(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> bool {
+        self.x11
+            .iter()
+            .any(|(_, window)| window.wl_surface().as_ref() == Some(surface))
             || self
                 .unmanaged
                 .iter()
@@ -795,11 +800,11 @@ impl XwmHandler for State {
     ) {
         let result = match selection {
             SelectionTarget::Clipboard => {
-                request_data_device_client_selection(&self.seat, mime_type, fd).map_err(|e| e.to_string())
+                request_data_device_client_selection(&self.seat, mime_type, fd)
+                    .map_err(|e| e.to_string())
             }
-            SelectionTarget::Primary => {
-                request_primary_client_selection(&self.seat, mime_type, fd).map_err(|e| e.to_string())
-            }
+            SelectionTarget::Primary => request_primary_client_selection(&self.seat, mime_type, fd)
+                .map_err(|e| e.to_string()),
         };
         if let Err(error) = result {
             eprintln!("flamewm-wayland: {selection:?} request from X11 failed: {error}");
@@ -807,7 +812,10 @@ impl XwmHandler for State {
     }
 
     fn allow_selection_access(&mut self, _xwm: XwmId, selection: SelectionTarget) -> bool {
-        let focused = self.seat.get_keyboard().and_then(|keyboard| keyboard.current_focus());
+        let focused = self
+            .seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus());
         let focused_x11 = focused.is_some_and(|surface| self.is_x11_surface(&surface));
         x11_may_read_selection(selection, focused_x11)
     }
@@ -817,7 +825,9 @@ impl XwmHandler for State {
             SelectionTarget::Clipboard => {
                 set_data_device_selection(&self.display, &self.seat, mime_types, ());
             }
-            SelectionTarget::Primary => set_primary_selection(&self.display, &self.seat, mime_types, ()),
+            SelectionTarget::Primary => {
+                set_primary_selection(&self.display, &self.seat, mime_types, ())
+            }
         }
     }
 
@@ -842,7 +852,10 @@ impl XwmHandler for State {
 /// focus. Reads are allowed only while an X11 surface holds keyboard focus. Selections owned by an X
 /// client never reach this callback: X server routes those reads directly between X clients.
 const fn x11_may_read_selection(selection: SelectionTarget, focused_x11: bool) -> bool {
-    matches!(selection, SelectionTarget::Clipboard | SelectionTarget::Primary) && focused_x11
+    matches!(
+        selection,
+        SelectionTarget::Clipboard | SelectionTarget::Primary
+    ) && focused_x11
 }
 
 /// Edge flags for an XWM `_NET_WM_MOVERESIZE` resize request.
@@ -873,8 +886,14 @@ mod selection_tests {
     #[test]
     fn x11_reads_need_an_x11_focused_surface_for_clipboard_and_primary() {
         for selection in [SelectionTarget::Clipboard, SelectionTarget::Primary] {
-            assert!(x11_may_read_selection(selection, true), "{selection:?} focused X11 read");
-            assert!(!x11_may_read_selection(selection, false), "{selection:?} unfocused read");
+            assert!(
+                x11_may_read_selection(selection, true),
+                "{selection:?} focused X11 read"
+            );
+            assert!(
+                !x11_may_read_selection(selection, false),
+                "{selection:?} unfocused read"
+            );
         }
     }
 }

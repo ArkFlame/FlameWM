@@ -746,8 +746,17 @@ impl X11App {
             let root = XRootWindow(display, self.screen);
             let (mut r, mut c, mut rx, mut ry, mut wx, mut wy, mut mask) =
                 (0 as Window, 0 as Window, 0, 0, 0, 0, 0 as c_uint);
-            if crate::xinput::XQueryPointer(display, root, &mut r, &mut c, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask) != 0 {
-                self.track_pointer(atoms, (rx, ry), CURRENT_TIME, &mut target, &mut last_position);
+            if crate::xinput::XQueryPointer(
+                display, root, &mut r, &mut c, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask,
+            ) != 0
+            {
+                self.track_pointer(
+                    atoms,
+                    (rx, ry),
+                    CURRENT_TIME,
+                    &mut target,
+                    &mut last_position,
+                );
             }
         }
         loop {

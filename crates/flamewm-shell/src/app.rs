@@ -62,8 +62,7 @@ use helpers::{
     interaction_target_is_current, media_popup_must_close, media_system_request,
     pager_cell_window_rect, panel_projection_needed, resolve_control_output,
     start_icon_refresh_due, take_context_menu_for_popup, taskbar_enabled, taskbar_frame,
-    RuntimeIconGeometrySink,
-    ZONE_SETTLE,
+    RuntimeIconGeometrySink, ZONE_SETTLE,
 };
 use quick_popups::{
     apply_quick_open_result, is_quick_popup_kind, quick_popup_kind, QuickOpenResolution,

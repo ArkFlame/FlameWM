@@ -9,7 +9,7 @@ use flamewm_dbus_reactor::{
     MessageType, Signature,
 };
 
-use crate::item::{IconPixmap, ITEM_INTERFACE, ItemKey, ItemProps, PropValue, parse_registration};
+use crate::item::{ITEM_INTERFACE, IconPixmap, ItemKey, ItemProps, PropValue, parse_registration};
 use crate::menu::{MenuNode, MenuValue};
 use crate::registry::{Registration, Registry};
 
@@ -141,7 +141,9 @@ impl TrayWatcher {
             .append3(0i32, -1i32, Vec::<String>::new());
         let serial = self.pump.send(call)?;
         self.state.layouts.remove(key);
-        self.state.pending.insert(serial, Pending::Layout(key.clone()));
+        self.state
+            .pending
+            .insert(serial, Pending::Layout(key.clone()));
         Ok(())
     }
 
@@ -168,21 +170,13 @@ impl TrayWatcher {
 
     /// Fire-and-forget method call on an item at the given screen position. The reply, if any,
     /// is ignored; no thread or timer is involved.
-    pub fn invoke(
-        &self,
-        key: &ItemKey,
-        action: ItemAction,
-        x: i32,
-        y: i32,
-    ) -> FlameResult<()> {
-        let call = Message::new_method_call(
-            key.service(),
-            key.path(),
-            ITEM_INTERFACE,
-            action.member(),
-        )
-        .map_err(|error| flamewm_api::FlameError::new(flamewm_api::ErrorCode::InvalidArgument, error))?
-        .append2(x, y);
+    pub fn invoke(&self, key: &ItemKey, action: ItemAction, x: i32, y: i32) -> FlameResult<()> {
+        let call =
+            Message::new_method_call(key.service(), key.path(), ITEM_INTERFACE, action.member())
+                .map_err(|error| {
+                    flamewm_api::FlameError::new(flamewm_api::ErrorCode::InvalidArgument, error)
+                })?
+                .append2(x, y);
         self.pump.send(call).map(|_| ())
     }
 }
@@ -507,8 +501,11 @@ fn pixmaps(entries: Vec<MessageItem>) -> Vec<IconPixmap> {
             let MessageItem::Struct(fields) = entry else {
                 return None;
             };
-            let [MessageItem::Int32(width), MessageItem::Int32(height), MessageItem::Array(bytes)] =
-                fields.as_slice()
+            let [
+                MessageItem::Int32(width),
+                MessageItem::Int32(height),
+                MessageItem::Array(bytes),
+            ] = fields.as_slice()
             else {
                 return None;
             };
@@ -522,7 +519,9 @@ fn pixmaps(entries: Vec<MessageItem>) -> Vec<IconPixmap> {
                     _ => None,
                 })
                 .collect::<Option<_>>()?;
-            let expected = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+            let expected = (width as usize)
+                .checked_mul(height as usize)?
+                .checked_mul(4)?;
             (width > 0 && height > 0 && expected == argb.len() && argb.len() <= MAX_PIXMAP_BYTES)
                 .then_some(IconPixmap {
                     width,

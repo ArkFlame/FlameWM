@@ -38,7 +38,11 @@ fn created_tree(dir: &Scratch, archive: &Path) {
 
 #[test]
 fn system_tar_reads_our_xz_and_bz2_archives() {
-    for (name, flag) in [("sys.tar.xz", "-J"), ("sys.tar.bz2", "-j"), ("sys.tar.zst", "--zstd")] {
+    for (name, flag) in [
+        ("sys.tar.xz", "-J"),
+        ("sys.tar.bz2", "-j"),
+        ("sys.tar.zst", "--zstd"),
+    ] {
         let dir = Scratch::new(&format!("interop-{name}"));
         let archive = dir.path().join(name);
         created_tree(&dir, &archive);

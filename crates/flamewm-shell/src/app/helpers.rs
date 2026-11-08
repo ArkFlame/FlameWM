@@ -46,7 +46,10 @@ pub(super) fn interaction_target_is_current(
 /// `ProductSettings::default()`).
 /// `taskbar.enabled`; a missing key keeps the spec default (enabled).
 pub(super) fn taskbar_enabled(settings: &SettingsSnapshot) -> bool {
-    !matches!(settings.values.get("taskbar.enabled"), Some(SettingValue::Boolean(false)))
+    !matches!(
+        settings.values.get("taskbar.enabled"),
+        Some(SettingValue::Boolean(false))
+    )
 }
 
 pub(super) fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {

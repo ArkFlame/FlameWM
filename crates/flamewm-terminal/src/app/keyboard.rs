@@ -47,7 +47,10 @@ impl App {
             self.shortcut(shortcut);
             return;
         }
-        if self.focused_pane().is_some_and(|pane| pane.search.is_some()) {
+        if self
+            .focused_pane()
+            .is_some_and(|pane| pane.search.is_some())
+        {
             self.find_key(event);
             return;
         }
@@ -233,7 +236,11 @@ impl App {
         let Some(pane) = self.focused_pane_mut() else {
             return;
         };
-        let Some(found) = pane.search.as_ref().and_then(crate::search::Search::current_match) else {
+        let Some(found) = pane
+            .search
+            .as_ref()
+            .and_then(crate::search::Search::current_match)
+        else {
             return;
         };
         pane.view_offset = crate::search::view_for_line(&pane.session.screen, found.line);

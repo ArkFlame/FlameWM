@@ -3,7 +3,12 @@
 use super::*;
 
 impl Finder {
-    pub(super) fn new(home: String, index: Shared, theme: SettingsSnapshot, pid_file: PathBuf) -> Self {
+    pub(super) fn new(
+        home: String,
+        index: Shared,
+        theme: SettingsSnapshot,
+        pid_file: PathBuf,
+    ) -> Self {
         let palette = Palette::for_theme(&theme);
         let mut app = Self {
             home,

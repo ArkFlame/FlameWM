@@ -27,9 +27,13 @@ fn client_configure_applies_hints_and_gravity() {
 fn client_configure_explicit_origin_wins_over_gravity_on_resize() {
     let r = client_configure(free());
     let gravity_only = plan_client_configure(&r, RootPoint::new(300, 300), Some((500, 400)));
-    let explicit = plan_client_configure_explicit(&r, RootPoint::new(300, 300), Some((500, 400)), true);
+    let explicit =
+        plan_client_configure_explicit(&r, RootPoint::new(300, 300), Some((500, 400)), true);
     assert_eq!(explicit.client_size, (500, 400));
-    assert_eq!(explicit.frame, client_rect_to_frame(RootPoint::new(300, 300), (500, 400), EXT));
+    assert_eq!(
+        explicit.frame,
+        client_rect_to_frame(RootPoint::new(300, 300), (500, 400), EXT)
+    );
     assert_ne!(gravity_only.frame, explicit.frame);
 }
 

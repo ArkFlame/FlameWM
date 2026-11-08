@@ -562,4 +562,3 @@ fn header_label_for(connected: Option<&AccessPoint>, active_path_set: bool) -> S
         |ap| ap.ssid.clone(),
     )
 }
-

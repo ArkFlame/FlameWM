@@ -79,7 +79,9 @@ static TITLEBAR_SQUARE_BUTTONS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Records the button style. Returns whether it changed, so the caller drops cached bars.
-pub(crate) fn set_titlebar_button_shape(shape: flamewm_skin::recipes::decoration::ButtonShape) -> bool {
+pub(crate) fn set_titlebar_button_shape(
+    shape: flamewm_skin::recipes::decoration::ButtonShape,
+) -> bool {
     let square = shape == flamewm_skin::recipes::decoration::ButtonShape::Square;
     TITLEBAR_SQUARE_BUTTONS.swap(square, std::sync::atomic::Ordering::Relaxed) != square
 }
@@ -217,14 +219,17 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                             geometry.size.w,
                             geometry.size.h,
                         );
-                        if let Some(backdrop) = decorations.surface_backdrop(renderer, rect, scale) {
+                        if let Some(backdrop) = decorations.surface_backdrop(renderer, rect, scale)
+                        {
                             out.push(backdrop);
                         }
                     }
                 }
             }
             SceneItem::Popup { surface, origin } => {
-                out.extend(surface_elements(renderer, &surface, origin.x, origin.y, scale));
+                out.extend(surface_elements(
+                    renderer, &surface, origin.x, origin.y, scale,
+                ));
             }
             SceneItem::Managed(id) => {
                 let Some(managed) = state.model.get(id).cloned() else {
@@ -362,7 +367,13 @@ fn render_into(
     // A locker that crashed mid-lock must not keep the screen covered forever.
     crate::session_lock::prune_dead_locks(state);
     let elements = if let Some(surface) = state.lock_surface() {
-        surface_elements(backend.renderer(), surface.wl_surface(), 0, 0, state.output_scale())
+        surface_elements(
+            backend.renderer(),
+            surface.wl_surface(),
+            0,
+            0,
+            state.output_scale(),
+        )
     } else {
         // The host window draws a named pointer itself (see `State::sync_host_cursor`).
         let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {
@@ -1115,10 +1126,12 @@ pub fn is_software_renderer(name: &str) -> bool {
 }
 
 /// Set once a driver refuses `EGL_BUFFER_AGE_EXT`: every later frame repaints in full.
-static BUFFER_AGE_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static BUFFER_AGE_REFUSED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Set after the first successful submit, when the window surface is bound and presented.
-static FIRST_FRAME_SUBMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static FIRST_FRAME_SUBMITTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the buffer-age query may run: only once a frame was submitted and no driver refused it.
 pub(crate) const fn buffer_age_probe_allowed(first_frame_submitted: bool, refused: bool) -> bool {
@@ -1180,20 +1193,35 @@ mod renderer_class_tests {
     fn software_renderer_skips_buffer_age_probe() {
         // The nested llvmpipe surface answers EGL_BAD_SURFACE to BUFFER_AGE (one ERROR per start).
         assert!(buffer_age_unsupported("llvmpipe (LLVM 21.1.8, 256 bits)"));
-        assert!(!buffer_age_unsupported("Mesa Intel(R) UHD Graphics (TGL GT1)"));
+        assert!(!buffer_age_unsupported(
+            "Mesa Intel(R) UHD Graphics (TGL GT1)"
+        ));
     }
 
     #[test]
     fn nested_winit_skips_buffer_age_probe_on_hardware_too() {
         // Real Intel GL on the nested winit surface: EGL_BAD_SURFACE on every age query.
-        assert!(super::buffer_age_unsupported_on("winit", "Mesa Intel(R) UHD Graphics (TGL GT1)"));
-        assert!(!super::buffer_age_unsupported_on("drm", "Mesa Intel(R) UHD Graphics (TGL GT1)"));
-        assert!(super::buffer_age_unsupported_on("drm", "llvmpipe (LLVM 21.1.8, 256 bits)"));
+        assert!(super::buffer_age_unsupported_on(
+            "winit",
+            "Mesa Intel(R) UHD Graphics (TGL GT1)"
+        ));
+        assert!(!super::buffer_age_unsupported_on(
+            "drm",
+            "Mesa Intel(R) UHD Graphics (TGL GT1)"
+        ));
+        assert!(super::buffer_age_unsupported_on(
+            "drm",
+            "llvmpipe (LLVM 21.1.8, 256 bits)"
+        ));
     }
 }
 
 pub(crate) fn packaged_root() -> std::path::PathBuf {
-    flamewm_api::paths::packaged_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").as_path())
+    flamewm_api::paths::packaged_root(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .as_path(),
+    )
 }
 
 #[cfg(test)]
@@ -1237,7 +1265,9 @@ mod surface_backdrop_tests {
         let corner = decorations.crop((0, 0), 1, 1, 1.0).expect("desktop set");
         assert_eq!(corner[0], 1);
         // Past the bottom-right edge every sample clamps to the bottom-right stored pixel.
-        let clamped = decorations.crop((100, 100), 2, 2, 1.0).expect("desktop set");
+        let clamped = decorations
+            .crop((100, 100), 2, 2, 1.0)
+            .expect("desktop set");
         let reds: Vec<u8> = clamped.chunks_exact(4).map(|px| px[0]).collect();
         assert_eq!(reds, vec![31, 31, 31, 31]);
     }

@@ -29,9 +29,9 @@ use flamewm_api::{
     WindowRef,
 };
 use flamewm_control_core::{
-    ControlError, ControlRequest, ControlResponse, Version, IFACE_APPLICATIONS, IFACE_DISPLAYS,
+    ControlError, ControlRequest, ControlResponse, IFACE_APPLICATIONS, IFACE_DISPLAYS,
     IFACE_PANELS, IFACE_ROOT, IFACE_SESSION, IFACE_SETTINGS, IFACE_SHORTCUTS, IFACE_SYSTEM,
-    IFACE_WEATHER, IFACE_WINDOWS, IFACE_WORKSPACES,
+    IFACE_WEATHER, IFACE_WINDOWS, IFACE_WORKSPACES, Version,
 };
 
 mod wire;

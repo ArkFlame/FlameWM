@@ -701,6 +701,8 @@ fn integer_stepper_writes_percent_keys_back_as_percent() {
 #[test]
 fn dock_and_taskbar_toggles_parse() {
     for key in ["taskbar.enabled", "dock.enabled", "dock.showRunning"] {
-        assert!(matches!(crate::parse_action(&format!("settings.toggle.{key}")), Ok(crate::SettingsAction::Toggle(actual)) if actual == key));
+        assert!(
+            matches!(crate::parse_action(&format!("settings.toggle.{key}")), Ok(crate::SettingsAction::Toggle(actual)) if actual == key)
+        );
     }
 }

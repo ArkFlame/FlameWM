@@ -1234,5 +1234,8 @@ fn right_and_bottom_handles_leave_the_scrollbar_clickable() {
     );
     assert_eq!(model.hit(right - 1.0, bottom - 1.0), Some(Hit::Resize(1)));
     // Left and top keep their 12 px client band.
-    assert_eq!(model.hit(f64::from(rect.x) + 5.0, mid_y), Some(Hit::Resize(1)));
+    assert_eq!(
+        model.hit(f64::from(rect.x) + 5.0, mid_y),
+        Some(Hit::Resize(1))
+    );
 }

@@ -105,7 +105,10 @@ impl Finder {
             return doc.visible(&row, false);
         };
         doc.visible(&row, true)?;
-        doc.background(&row, UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }))?;
+        doc.background(
+            &row,
+            UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }),
+        )?;
         let (kind, pieces, parent, meta) = match item {
             Item::Entry(position) => {
                 let entry = self.view().entries[*position].clone();
@@ -177,7 +180,10 @@ impl Finder {
         };
         let entry = self.view().entries[*position].clone();
         doc.visible(&tile, true)?;
-        doc.background(&tile, UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }))?;
+        doc.background(
+            &tile,
+            UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }),
+        )?;
         self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(&entry))?;
         doc.text_ref(&format!("tile-name-{slot}"), entry.name())?;
         doc.text(&format!("tile-meta-{slot}"), meta_line(&entry, now))

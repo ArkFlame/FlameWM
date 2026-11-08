@@ -130,11 +130,17 @@ fn symlink_produced_by_the_tool_is_removed_not_moved() {
     )
     .expect("extract");
     assert!(out.join("ok/a.txt").is_file());
-    assert!(fs::symlink_metadata(out.join("link")).is_err(), "symlink created");
+    assert!(
+        fs::symlink_metadata(out.join("link")).is_err(),
+        "symlink created"
+    );
     assert!(summary.skipped >= 1);
-    let leftover = fs::read_dir(&out)
-        .expect("out")
-        .any(|e| e.expect("entry").file_name().to_string_lossy().starts_with(".flamewm-7z-stage"));
+    let leftover = fs::read_dir(&out).expect("out").any(|e| {
+        e.expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".flamewm-7z-stage")
+    });
     assert!(!leftover, "staging directory left behind");
 }
 
@@ -216,23 +222,37 @@ fn cancel_kills_a_running_tool_promptly() {
     .unwrap_err();
     timer.join().expect("timer");
     assert!(matches!(err, ArchiveError::Cancelled), "got {err}");
-    assert!(started.elapsed() < Duration::from_secs(10), "cancel too slow");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "cancel too slow"
+    );
     assert!(!out.exists(), "cancelled run left a destination");
 }
 
 #[test]
 fn real_7z_round_trip_when_installed() {
-    if Command::new("7z").arg("-h").output().is_err() && Command::new("7zz").arg("-h").output().is_err() {
+    if Command::new("7z").arg("-h").output().is_err()
+        && Command::new("7zz").arg("-h").output().is_err()
+    {
         eprintln!("SKIP: no 7z or 7zz on PATH");
         return;
     }
     let dir = Scratch::new("7z-real");
     make_tree(dir.path());
     let archive = dir.path().join("real.7z");
-    create(&archive, &[dir.path().join("tree")], &CancelToken::new(), &mut |_| {})
-        .expect("create");
+    create(
+        &archive,
+        &[dir.path().join("tree")],
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .expect("create");
     let entries = list(&archive).expect("list");
-    assert!(entries.iter().any(|e| e.path == Path::new("tree/sub/b.txt")));
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.path == Path::new("tree/sub/b.txt"))
+    );
     let out = dir.path().join("out");
     extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).expect("extract");
     assert_eq!(fs::read(out.join("tree/a.txt")).unwrap(), b"alpha");

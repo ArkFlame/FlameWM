@@ -41,7 +41,8 @@ pub(crate) fn capture_drawable_rect(
     // XGetImage answers NULL with a BadMatch for any rect that leaves the drawable; reject that
     // here so the caller falls back quietly instead of raising an X error.
     let (mut root, mut gx, mut gy) = (0 as c_ulong, 0 as c_int, 0 as c_int);
-    let (mut dw, mut dh, mut border, mut depth) = (0 as c_uint, 0 as c_uint, 0 as c_uint, 0 as c_uint);
+    let (mut dw, mut dh, mut border, mut depth) =
+        (0 as c_uint, 0 as c_uint, 0 as c_uint, 0 as c_uint);
     let known = unsafe {
         crate::xlib_ext::XGetGeometry(
             display,

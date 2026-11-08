@@ -380,16 +380,25 @@ mod tests {
     #[test]
     fn real_progress_cursor_keeps_alpha_and_never_turns_clear_pixels_black() {
         // The shipped `progress` cursor: the busy pointer the user sees when a folder opens.
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors/cursors/progress");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/cursors/cursors/progress"
+        );
         let data = std::fs::read(path).expect("shipped progress cursor");
         for size in [24u32, 32, 48] {
             let frame = decode_frame(&data, size).expect("frame decodes");
-            assert_eq!(frame.pixels.len(), (frame.width * frame.height * 4) as usize);
+            assert_eq!(
+                frame.pixels.len(),
+                (frame.width * frame.height * 4) as usize
+            );
             let mut clear = 0usize;
             for pixel in frame.pixels.chunks_exact(4) {
                 // Argb8888 memory order is B, G, R, A.
                 let (b, g, r, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
-                assert!(r <= a && g <= a && b <= a, "premultiplied: channel above alpha");
+                assert!(
+                    r <= a && g <= a && b <= a,
+                    "premultiplied: channel above alpha"
+                );
                 if a == 0 {
                     clear += 1;
                     assert_eq!(
@@ -406,11 +415,17 @@ mod tests {
     #[test]
     fn decoded_pixels_are_the_file_words_unchanged() {
         // Identity: xcursor file words are B,G,R,A bytes, the same order as Argb8888 in memory.
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors/cursors/progress");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/cursors/cursors/progress"
+        );
         let data = std::fs::read(path).expect("shipped progress cursor");
         let frame = decode_frame(&data, 24).expect("frame decodes");
         let images = xcursor::parser::parse_xcursor(&data).expect("parses");
-        let image = images.iter().find(|image| image.size == 24).expect("24px frame");
+        let image = images
+            .iter()
+            .find(|image| image.size == 24)
+            .expect("24px frame");
         assert_eq!(frame.pixels[..], image.pixels_rgba[..frame.pixels.len()]);
         assert_eq!(frame.hotspot, Point::from((4, 4)));
     }

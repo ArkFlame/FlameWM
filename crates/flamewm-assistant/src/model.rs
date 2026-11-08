@@ -752,13 +752,19 @@ mod model_filter_tests {
         assert!(filter_models(&ids(), "zzz").is_empty());
     }
 
-    use super::{composer, INPUT_BOX_PX, INPUT_MAX_LINES, INPUT_PX};
+    use super::{INPUT_BOX_PX, INPUT_MAX_LINES, INPUT_PX, composer};
 
     const BOX_W: f32 = 300.0;
 
     fn line_h() -> f32 {
-        flamewm_render_core::layout_text("x", INPUT_PX, 100.0, flamewm_render_core::TextWrap::Wrap, false)
-            .line_height
+        flamewm_render_core::layout_text(
+            "x",
+            INPUT_PX,
+            100.0,
+            flamewm_render_core::TextWrap::Wrap,
+            false,
+        )
+        .line_height
     }
 
     #[test]
@@ -777,7 +783,10 @@ mod model_filter_tests {
         let longer = composer("hi there", BOX_W);
         assert!(longer.caret.0 > short.caret.0);
         let trailing = composer("hi ", BOX_W);
-        assert!(trailing.caret.0 > short.caret.0, "a trailing space moves the caret");
+        assert!(
+            trailing.caret.0 > short.caret.0,
+            "a trailing space moves the caret"
+        );
         let line = flamewm_render_core::layout_text(
             "hi there",
             INPUT_PX,
@@ -809,12 +818,18 @@ mod model_filter_tests {
     fn overflowing_input_scrolls_to_the_tail() {
         let text = "x\n".repeat(20);
         let c = composer(&text, BOX_W);
-        assert_eq!(c.box_h, INPUT_BOX_PX + (INPUT_MAX_LINES - 1) as f32 * line_h());
+        assert_eq!(
+            c.box_h,
+            INPUT_BOX_PX + (INPUT_MAX_LINES - 1) as f32 * line_h()
+        );
         assert!(c.text_top < 0.0, "text is scrolled up");
         // Caret stays on the newest (last) line, visible in the box.
         let top = c.text_top + c.caret.1;
         assert!(top >= 0.0 && top + c.caret_h <= c.box_h + 0.01);
         let inset = (INPUT_BOX_PX - line_h()) / 2.0;
-        assert!((c.text_top + c.text_h + inset - c.box_h).abs() < 0.01, "tail aligns to the box bottom");
+        assert!(
+            (c.text_top + c.text_h + inset - c.box_h).abs() < 0.01,
+            "tail aligns to the box bottom"
+        );
     }
 }

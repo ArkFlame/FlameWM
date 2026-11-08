@@ -110,7 +110,10 @@ fn zip_slip_inside_an_encrypted_archive_is_rejected_before_any_write() {
     )
     .unwrap_err();
     assert!(matches!(err, ArchiveError::UnsafePath(_)), "got {err}");
-    assert!(!dir.path().join("escape.txt").exists(), "escaped destination");
+    assert!(
+        !dir.path().join("escape.txt").exists(),
+        "escaped destination"
+    );
     assert!(!out.join("ok.txt").exists(), "wrote before rejecting");
 }
 

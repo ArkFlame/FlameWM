@@ -541,7 +541,11 @@ mod tests {
             .expect("badge frame lowers");
         let mut scene = vec![0_u8; 12];
         crate::accel::paint_batch(&mut scene, 3, 1, &ops).expect("badge composites");
-        assert_eq!(&scene[0..4], &[30, 60, 90, 255], "alpha 0 keeps the backdrop");
+        assert_eq!(
+            &scene[0..4],
+            &[30, 60, 90, 255],
+            "alpha 0 keeps the backdrop"
+        );
         assert_eq!(scene[7], 255, "the edge stays opaque over the backdrop");
         for (got, want) in scene[4..7].iter().zip([115_u8, 55, 70]) {
             assert!(got.abs_diff(want) <= 2, "edge {got} != blend {want}");

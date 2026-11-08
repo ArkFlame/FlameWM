@@ -746,9 +746,10 @@ fn push_decoded(out: &mut String, text: &str) {
             _ => name
                 .strip_prefix('#')
                 .and_then(|number| {
-                    number
-                        .strip_prefix(['x', 'X'])
-                        .map_or_else(|| number.parse().ok(), |hex| u32::from_str_radix(hex, 16).ok())
+                    number.strip_prefix(['x', 'X']).map_or_else(
+                        || number.parse().ok(),
+                        |hex| u32::from_str_radix(hex, 16).ok(),
+                    )
                 })
                 .and_then(char::from_u32)
                 .filter(|c| !c.is_control() || *c == '\n' || *c == '\t'),
@@ -793,9 +794,7 @@ pub fn image_data_within_caps(
         return false;
     };
     let min_stride = width * usize::try_from(channels).unwrap_or(4);
-    stride >= min_stride
-        && byte_len <= MAX_IMAGE_BYTES
-        && byte_len == stride.saturating_mul(height)
+    stride >= min_stride && byte_len <= MAX_IMAGE_BYTES && byte_len == stride.saturating_mul(height)
 }
 
 fn unwrap_variant(value: MessageItem) -> MessageItem {
@@ -849,8 +848,15 @@ fn image_data_hint(value: &MessageItem) -> Option<NotificationImage> {
     let MessageItem::Struct(fields) = value else {
         return None;
     };
-    let [MessageItem::Int32(width), MessageItem::Int32(height), MessageItem::Int32(rowstride), MessageItem::Bool(_), MessageItem::Int32(bits), MessageItem::Int32(channels), MessageItem::Array(data)] =
-        fields.as_slice()
+    let [
+        MessageItem::Int32(width),
+        MessageItem::Int32(height),
+        MessageItem::Int32(rowstride),
+        MessageItem::Bool(_),
+        MessageItem::Int32(bits),
+        MessageItem::Int32(channels),
+        MessageItem::Array(data),
+    ] = fields.as_slice()
     else {
         return None;
     };
@@ -1035,10 +1041,19 @@ mod tests {
         );
         let out_of_range = hints(vec![("value".to_owned(), MessageItem::Int32(101))]);
         assert_eq!(parse_hints(&out_of_range).progress, None);
-        assert_eq!(expiration(i32::MAX, NotificationUrgency::Normal), Some(MAX_TIMEOUT));
+        assert_eq!(
+            expiration(i32::MAX, NotificationUrgency::Normal),
+            Some(MAX_TIMEOUT)
+        );
         assert_eq!(expiration(0, NotificationUrgency::Normal), None);
-        assert_eq!(expiration(-1, NotificationUrgency::Normal), Some(DEFAULT_TIMEOUT));
-        assert_eq!(expiration(500, NotificationUrgency::Normal), Some(Duration::from_millis(500)));
+        assert_eq!(
+            expiration(-1, NotificationUrgency::Normal),
+            Some(DEFAULT_TIMEOUT)
+        );
+        assert_eq!(
+            expiration(500, NotificationUrgency::Normal),
+            Some(Duration::from_millis(500))
+        );
     }
 
     #[test]
@@ -1071,14 +1086,15 @@ mod tests {
                 MessageItem::Bool(true),
                 MessageItem::Int32(8),
                 MessageItem::Int32(4),
-                MessageItem::new_array(
-                    (0..bytes).map(|_| MessageItem::Byte(0)).collect(),
-                )
-                .expect("bytes"),
+                MessageItem::new_array((0..bytes).map(|_| MessageItem::Byte(0)).collect())
+                    .expect("bytes"),
             ])
         };
         let accepted = image_data_hint(&image(2, 2, 8, 16)).expect("2x2 RGBA");
-        assert_eq!((accepted.width, accepted.height, accepted.rgba.len()), (2, 2, 16));
+        assert_eq!(
+            (accepted.width, accepted.height, accepted.rgba.len()),
+            (2, 2, 16)
+        );
         assert!(image_data_hint(&image(513, 1, 2052, 2052)).is_none());
         assert!(image_data_hint(&image(2, 2, 8, 15)).is_none());
         assert!(image_data_hint(&MessageItem::Str("x".to_owned())).is_none());
@@ -1100,7 +1116,10 @@ mod tests {
             image_path: Some("camera-photo".to_owned()),
             ..base.clone()
         };
-        assert_eq!(icon_name_for(&with_path, "mail").as_deref(), Some("camera-photo"));
+        assert_eq!(
+            icon_name_for(&with_path, "mail").as_deref(),
+            Some("camera-photo")
+        );
         assert_eq!(icon_name_for(&base, "").as_deref(), Some("org.example.App"));
         let absolute = Hints {
             image_path: Some("/tmp/x.png".to_owned()),
@@ -1133,10 +1152,7 @@ mod tests {
             raw.push(0);
             raw.extend(std::iter::repeat_n(0x80u8, width as usize * 4));
         }
-        let mut encoder = flate2::write::ZlibEncoder::new(
-            Vec::new(),
-            flate2::Compression::none(),
-        );
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
         std::io::Write::write_all(&mut encoder, &raw).unwrap();
         let idat = encoder.finish().unwrap();
         let mut ihdr = Vec::new();
@@ -1157,12 +1173,22 @@ mod tests {
         let wide = dir.join("wide.png");
         std::fs::write(&wide, png_fixture(96, 2)).unwrap();
         let image = image_path_hint(wide.to_str().unwrap()).expect("96x2 png decodes");
-        assert_eq!((image.width, image.height), (48, 1), "one step of 2 per axis");
+        assert_eq!(
+            (image.width, image.height),
+            (48, 1),
+            "one step of 2 per axis"
+        );
         assert_eq!(image.rgba.len(), 48 * 4);
         assert!(image_path_hint(&format!("file://{}", wide.display())).is_some());
-        assert!(image_path_hint("camera-photo").is_none(), "names use the icon theme");
+        assert!(
+            image_path_hint("camera-photo").is_none(),
+            "names use the icon theme"
+        );
         assert!(image_path_hint("relative/x.png").is_none());
-        assert!(image_path_hint("/dev/null").is_none(), "only regular files are read");
+        assert!(
+            image_path_hint("/dev/null").is_none(),
+            "only regular files are read"
+        );
         assert!(image_path_hint(dir.join("missing.png").to_str().unwrap()).is_none());
         let text = dir.join("text.png");
         std::fs::write(&text, b"plain text that is not a png file at all").unwrap();
@@ -1175,7 +1201,10 @@ mod tests {
 
     #[test]
     fn percent_decode_handles_file_uri_escapes() {
-        assert_eq!(percent_decode("/a%20b/c.png").as_deref(), Some("/a b/c.png"));
+        assert_eq!(
+            percent_decode("/a%20b/c.png").as_deref(),
+            Some("/a b/c.png")
+        );
         assert_eq!(percent_decode("/a%2"), None);
         assert_eq!(percent_decode("/a%zz"), None);
     }
@@ -1186,8 +1215,14 @@ mod tests {
         assert_eq!(expiration(-1, NotificationUrgency::Critical), None);
         assert_eq!(expiration(4000, NotificationUrgency::Critical), None);
         // Low urgency defaults shorter than normal; an explicit timeout is honored.
-        assert_eq!(expiration(-1, NotificationUrgency::Low), Some(LOW_URGENCY_TIMEOUT));
-        assert_eq!(expiration(9000, NotificationUrgency::Low), Some(Duration::from_secs(9)));
+        assert_eq!(
+            expiration(-1, NotificationUrgency::Low),
+            Some(LOW_URGENCY_TIMEOUT)
+        );
+        assert_eq!(
+            expiration(9000, NotificationUrgency::Low),
+            Some(Duration::from_secs(9))
+        );
     }
 
     #[test]
@@ -1233,19 +1268,28 @@ mod tests {
         };
         assert!(action_advertised(&view, "default"));
         assert!(action_advertised(&view, "b"));
-        assert!(!action_advertised(&view, "c"), "hidden fourth action is not invokable");
+        assert!(
+            !action_advertised(&view, "c"),
+            "hidden fourth action is not invokable"
+        );
         assert!(!action_advertised(&view, "missing"));
     }
 
     #[test]
     fn markup_is_reduced_to_safe_plain_text() {
-        assert_eq!(sanitize_markup("<b>bold</b> <i>it</i> <u>u</u>"), "bold it u");
+        assert_eq!(
+            sanitize_markup("<b>bold</b> <i>it</i> <u>u</u>"),
+            "bold it u"
+        );
         assert_eq!(
             sanitize_markup(r#"<a href="javascript:alert(1)">link</a>"#),
             "link"
         );
         assert_eq!(sanitize_markup("<img src=x onerror=y>x"), "x");
-        assert_eq!(sanitize_markup("a &amp; b &lt;c&gt; &quot;q&quot; &#65;&#x42;"), "a & b <c> \"q\" AB");
+        assert_eq!(
+            sanitize_markup("a &amp; b &lt;c&gt; &quot;q&quot; &#65;&#x42;"),
+            "a & b <c> \"q\" AB"
+        );
         // Entities decode to text only; decoded markup is never re-parsed.
         assert_eq!(sanitize_markup("&lt;script&gt;"), "<script>");
         assert_eq!(sanitize_markup("1 < 2 and 3 > 2"), "1 < 2 and 3 > 2");
@@ -1260,11 +1304,30 @@ mod tests {
         // 2x2 RGBA with a matching rowstride and byte count is accepted.
         assert!(image_data_within_caps(2, 2, 8, 8, 4, 16));
         assert!(!image_data_within_caps(513, 1, 2052, 8, 4, 2052));
-        assert!(!image_data_within_caps(2, 2, 8, 16, 4, 16), "only 8-bit samples");
-        assert!(!image_data_within_caps(2, 2, 8, 8, 2, 16), "only RGB or RGBA");
-        assert!(!image_data_within_caps(2, 2, 8, 8, 4, 15), "byte count mismatch");
-        assert!(!image_data_within_caps(2, 2, 7, 8, 4, 14), "rowstride too small");
-        assert!(!image_data_within_caps(512, 512, 2048, 8, 4, 512 * 2048 + 1));
+        assert!(
+            !image_data_within_caps(2, 2, 8, 16, 4, 16),
+            "only 8-bit samples"
+        );
+        assert!(
+            !image_data_within_caps(2, 2, 8, 8, 2, 16),
+            "only RGB or RGBA"
+        );
+        assert!(
+            !image_data_within_caps(2, 2, 8, 8, 4, 15),
+            "byte count mismatch"
+        );
+        assert!(
+            !image_data_within_caps(2, 2, 7, 8, 4, 14),
+            "rowstride too small"
+        );
+        assert!(!image_data_within_caps(
+            512,
+            512,
+            2048,
+            8,
+            4,
+            512 * 2048 + 1
+        ));
         assert!(image_data_within_caps(512, 512, 2048, 8, 4, 512 * 2048));
         assert!(!image_data_within_caps(0, 2, 8, 8, 4, 0));
     }
@@ -1479,8 +1542,11 @@ mod tests {
             MessageItem::Str(String::new()),
             MessageItem::Str("<b>hi</b>".to_owned()),
             MessageItem::Str(String::new()),
-            MessageItem::new_array(vec![MessageItem::Str("default".to_owned()), MessageItem::Str("Open".to_owned())])
-                .expect("actions"),
+            MessageItem::new_array(vec![
+                MessageItem::Str("default".to_owned()),
+                MessageItem::Str("Open".to_owned()),
+            ])
+            .expect("actions"),
             transient,
             MessageItem::Int32(-1),
         ]);

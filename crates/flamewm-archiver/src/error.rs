@@ -30,7 +30,9 @@ impl fmt::Display for ArchiveError {
             Self::UnsafePath(path) => write!(f, "unsafe archive path rejected: {}", path.display()),
             Self::Unsupported(what) => write!(f, "unsupported archive or name: {what}"),
             Self::Cancelled => f.write_str("operation cancelled"),
-            Self::PasswordRequired => f.write_str("archive entry is encrypted; a password is required"),
+            Self::PasswordRequired => {
+                f.write_str("archive entry is encrypted; a password is required")
+            }
             Self::WrongPassword => f.write_str("wrong password for encrypted archive entry"),
         }
     }

@@ -436,7 +436,8 @@ impl<R: IconResolve> IconService<R> {
         let submitted = self
             .shared
             .queue
-            .lock().unwrap_or_else(PoisonError::into_inner)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .submit(job);
         match &submitted {
             Ok(IconSubmit::Enqueued) => {
@@ -492,7 +493,8 @@ impl<R: IconResolve> IconService<R> {
     fn finish(&self, result: &IconResult) {
         self.shared
             .queue
-            .lock().unwrap_or_else(PoisonError::into_inner)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .pending
             .remove(&result.key);
         if let Ok(mut cache) = self.result_cache.lock() {
@@ -718,7 +720,8 @@ impl<R> Drop for IconService<R> {
     fn drop(&mut self) {
         self.shared
             .queue
-            .lock().unwrap_or_else(PoisonError::into_inner)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .stopped = true;
         self.shared.ready.notify_all();
         // Wake blocked result sends before waiting for worker termination.
@@ -749,7 +752,10 @@ fn worker_loop<R: IconResolve>(
         let next: Option<Next> = {
             let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
             while !queue.stopped && queue.high.is_empty() && queue.low.is_empty() {
-                queue = shared.ready.wait(queue).unwrap_or_else(PoisonError::into_inner);
+                queue = shared
+                    .ready
+                    .wait(queue)
+                    .unwrap_or_else(PoisonError::into_inner);
             }
             if queue.stopped {
                 return;

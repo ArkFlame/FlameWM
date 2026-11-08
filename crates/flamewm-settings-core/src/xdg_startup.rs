@@ -5,9 +5,7 @@
 use std::fs;
 use std::io;
 
-use crate::xdg_applications::{
-    ApplicationSettings, atomic_write, invalid, set_value, value,
-};
+use crate::xdg_applications::{ApplicationSettings, atomic_write, invalid, set_value, value};
 
 /// Start delay in seconds, as GNOME-style autostart launchers read it.
 pub const DELAY_KEY: &str = "X-GNOME-Autostart-Delay";
@@ -114,8 +112,13 @@ impl ApplicationSettings {
             .into_iter()
             .find(|entry| entry.id == id)
             .ok_or_else(|| not_found("autostart entry not found"))?;
-        let text = set_value(&entry.text, "Desktop Entry", DELAY_KEY, &seconds.to_string())
-            .map_err(invalid)?;
+        let text = set_value(
+            &entry.text,
+            "Desktop Entry",
+            DELAY_KEY,
+            &seconds.to_string(),
+        )
+        .map_err(invalid)?;
         atomic_write(&self.config_home()?.join("autostart").join(id), &text)
     }
 }
@@ -160,13 +163,19 @@ mod tests {
     #[test]
     fn delay_is_read_from_gnome_key_then_flamewm_fallback() {
         assert_eq!(startup_delay("[Desktop Entry]\nExec=a\n"), 0);
-        assert_eq!(startup_delay("[Desktop Entry]\nX-GNOME-Autostart-Delay=15\n"), 15);
+        assert_eq!(
+            startup_delay("[Desktop Entry]\nX-GNOME-Autostart-Delay=15\n"),
+            15
+        );
         assert_eq!(startup_delay("[Desktop Entry]\nX-FlameWM-Delay=30\n"), 30);
         assert_eq!(
             startup_delay("[Desktop Entry]\nX-GNOME-Autostart-Delay=5\nX-FlameWM-Delay=30\n"),
             5
         );
-        assert_eq!(startup_delay("[Desktop Entry]\nX-GNOME-Autostart-Delay=soon\n"), 0);
+        assert_eq!(
+            startup_delay("[Desktop Entry]\nX-GNOME-Autostart-Delay=soon\n"),
+            0
+        );
     }
 
     #[test]
@@ -177,14 +186,16 @@ mod tests {
         fs::write(&system, original).unwrap();
 
         settings.set_startup_delay("alpha.desktop", 15).unwrap();
-        let user = fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop")).unwrap();
+        let user =
+            fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop")).unwrap();
         assert!(user.contains("X-GNOME-Autostart-Delay=15"), "{user}");
         assert!(user.contains("Exec=alpha"));
         assert_eq!(fs::read_to_string(&system).unwrap(), original);
         assert_eq!(startup_delay(&user), 15);
 
         settings.set_startup_delay("alpha.desktop", 0).unwrap();
-        let reset = fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop")).unwrap();
+        let reset =
+            fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop")).unwrap();
         assert_eq!(startup_delay(&reset), 0);
         assert!(settings.set_startup_delay("missing.desktop", 5).is_err());
         fs::remove_dir_all(root).unwrap();
@@ -193,10 +204,26 @@ mod tests {
     #[test]
     fn candidates_skip_hidden_no_display_and_already_autostarted_apps() {
         let (root, settings) = roots("candidates");
-        install(&settings, "firefox.desktop", "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox\n");
-        install(&settings, "terminal.desktop", "[Desktop Entry]\nType=Application\nName=Terminal\nExec=term\n");
-        install(&settings, "hidden.desktop", "[Desktop Entry]\nType=Application\nName=Hidden\nHidden=true\nExec=h\n");
-        install(&settings, "viewer.desktop", "[Desktop Entry]\nType=Application\nName=Viewer\nNoDisplay=true\nExec=v\n");
+        install(
+            &settings,
+            "firefox.desktop",
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox\n",
+        );
+        install(
+            &settings,
+            "terminal.desktop",
+            "[Desktop Entry]\nType=Application\nName=Terminal\nExec=term\n",
+        );
+        install(
+            &settings,
+            "hidden.desktop",
+            "[Desktop Entry]\nType=Application\nName=Hidden\nHidden=true\nExec=h\n",
+        );
+        install(
+            &settings,
+            "viewer.desktop",
+            "[Desktop Entry]\nType=Application\nName=Viewer\nNoDisplay=true\nExec=v\n",
+        );
         fs::write(
             settings.config_dirs[0].join("autostart/terminal.desktop"),
             "[Desktop Entry]\nType=Application\nName=Terminal\nExec=term\n",
@@ -217,18 +244,33 @@ mod tests {
     #[test]
     fn adding_an_installed_app_copies_its_entry_once() {
         let (root, settings) = roots("add-installed");
-        install(&settings, "firefox.desktop", "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox\n");
-        install(&settings, "hidden.desktop", "[Desktop Entry]\nType=Application\nName=Hidden\nHidden=true\nExec=h\n");
+        install(
+            &settings,
+            "firefox.desktop",
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox\n",
+        );
+        install(
+            &settings,
+            "hidden.desktop",
+            "[Desktop Entry]\nType=Application\nName=Hidden\nHidden=true\nExec=h\n",
+        );
 
         settings.add_installed_startup("firefox.desktop").unwrap();
-        let copied = fs::read_to_string(settings.config_dirs[0].join("autostart/firefox.desktop")).unwrap();
+        let copied =
+            fs::read_to_string(settings.config_dirs[0].join("autostart/firefox.desktop")).unwrap();
         assert!(copied.contains("Exec=firefox"));
         assert_eq!(
-            settings.add_installed_startup("firefox.desktop").unwrap_err().kind(),
+            settings
+                .add_installed_startup("firefox.desktop")
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::AlreadyExists
         );
         assert_eq!(
-            settings.add_installed_startup("hidden.desktop").unwrap_err().kind(),
+            settings
+                .add_installed_startup("hidden.desktop")
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::NotFound,
             "hidden entries are not installable"
         );
@@ -238,18 +280,32 @@ mod tests {
     #[test]
     fn custom_command_becomes_a_named_entry_and_rejects_bad_input() {
         let (root, settings) = roots("command");
-        let id = settings.add_command_startup("  /usr/bin/Notify-Daemon --quiet ").unwrap();
+        let id = settings
+            .add_command_startup("  /usr/bin/Notify-Daemon --quiet ")
+            .unwrap();
         assert_eq!(id, "notify-daemon.desktop");
         let text = fs::read_to_string(settings.config_dirs[0].join("autostart").join(&id)).unwrap();
         assert!(text.contains("Name=Notify-Daemon"));
         assert!(text.contains("Exec=/usr/bin/Notify-Daemon --quiet"));
         assert_eq!(startup_delay(&text), 0);
 
-        assert!(settings.add_command_startup("   ").is_err(), "empty command");
-        assert!(settings.add_command_startup("true\nrm -rf /").is_err(), "one line only");
-        assert!(settings.add_command_startup("!!!").is_err(), "no usable program name");
+        assert!(
+            settings.add_command_startup("   ").is_err(),
+            "empty command"
+        );
+        assert!(
+            settings.add_command_startup("true\nrm -rf /").is_err(),
+            "one line only"
+        );
+        assert!(
+            settings.add_command_startup("!!!").is_err(),
+            "no usable program name"
+        );
         assert_eq!(
-            settings.add_command_startup("notify-daemon").unwrap_err().kind(),
+            settings
+                .add_command_startup("notify-daemon")
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::AlreadyExists
         );
         fs::remove_dir_all(root).unwrap();

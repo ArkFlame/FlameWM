@@ -190,17 +190,29 @@ mod tests {
 
     #[test]
     fn unchanged_panels_snapshot_skips_the_settle() {
-        assert!(!panels_refresh_changed(SettingsScope::Panels, Some(&1), Some(&1)));
+        assert!(!panels_refresh_changed(
+            SettingsScope::Panels,
+            Some(&1),
+            Some(&1)
+        ));
     }
 
     #[test]
     fn changed_panels_snapshot_settles() {
-        assert!(panels_refresh_changed(SettingsScope::Panels, Some(&1), Some(&2)));
+        assert!(panels_refresh_changed(
+            SettingsScope::Panels,
+            Some(&1),
+            Some(&2)
+        ));
     }
 
     #[test]
     fn other_scopes_always_settle() {
-        assert!(panels_refresh_changed(SettingsScope::Settings, Some(&1), Some(&1)));
+        assert!(panels_refresh_changed(
+            SettingsScope::Settings,
+            Some(&1),
+            Some(&1)
+        ));
     }
 
     #[test]

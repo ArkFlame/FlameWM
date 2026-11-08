@@ -712,7 +712,11 @@ fn sidebar_nav_rows_have_distinct_existing_icons() {
         .collect();
     assert!(icons.len() >= 4, "sidebar rows: {icons:?}");
     let unique: BTreeSet<&str> = icons.iter().copied().collect();
-    assert_eq!(unique.len(), icons.len(), "duplicate sidebar icons: {icons:?}");
+    assert_eq!(
+        unique.len(),
+        icons.len(),
+        "duplicate sidebar icons: {icons:?}"
+    );
     let breeze = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/breeze");
     for icon in icons {
         let name = icon

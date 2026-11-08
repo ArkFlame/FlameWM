@@ -127,9 +127,8 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT, ACTION_WINDOW_FULLSCREEN,
     ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE, ACTION_WINDOW_RESIZE_GROW,
     ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH, ACTION_WINDOW_SWITCH_PREV,
-    ACTION_WORKSPACE_DOWN,
-    ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP, move_direction,
-    workspace_activate_index, workspace_move_index,
+    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+    move_direction, workspace_activate_index, workspace_move_index,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
@@ -521,6 +520,7 @@ mod drag_edge;
 mod effects;
 mod event_loop;
 mod events;
+mod focus_guard;
 mod hot_corner;
 mod icons;
 mod keyboard_tile;
@@ -528,7 +528,6 @@ mod manage;
 mod outputs;
 mod overlay;
 mod paint;
-mod focus_guard;
 mod ping;
 mod pointer;
 mod probes;
@@ -540,10 +539,10 @@ mod show_desktop;
 mod stack_layer;
 mod super_tap;
 mod switcher;
-mod trace;
-mod transition;
 mod take_focus;
+mod trace;
 mod transient_placement;
+mod transition;
 mod window_ops;
 mod window_state;
 mod workspace;
@@ -555,10 +554,10 @@ use controllers::*;
 use counters::{bump, emit_resize_summary, move_counters, read, resize_counters};
 use drag_edge::*;
 pub(crate) use event_loop::{next_wait_timeout, run_with_hook};
-pub(crate) use ping::UnresponsiveClients;
 #[cfg(test)]
 use icons::{icon_completion_matches, retain_deferred_icon_job};
 use outputs::*;
+pub(crate) use ping::UnresponsiveClients;
 use rects::*;
 use release::*;
 use super_tap::*;

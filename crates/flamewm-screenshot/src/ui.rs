@@ -789,6 +789,9 @@ mod region_rule_tests {
     fn reverse_drag_normalises_to_the_smallest_valid_region() {
         let r = finished_region(Some((30, 40)), (10, 20)).expect("valid");
         assert_eq!((r.x, r.y, r.w, r.h), (10, 20, 21, 21));
-        assert_eq!(finished_region(Some((0, 0)), (2, 2)).map(|r| (r.w, r.h)), Some((3, 3)));
+        assert_eq!(
+            finished_region(Some((0, 0)), (2, 2)).map(|r| (r.w, r.h)),
+            Some((3, 3))
+        );
     }
 }

@@ -108,8 +108,7 @@ fn pointer_placement_keeps_size_hints_and_adoption_unchanged() {
         reason: GeometryReason::InitialMap,
         ..req(ResizeEdges::none(), (0, 0), hints)
     };
-    let plan =
-        plan_initial_map_near_pointer(&request, RootPoint::new(100, 100), WA, (900, 600));
+    let plan = plan_initial_map_near_pointer(&request, RootPoint::new(100, 100), WA, (900, 600));
     assert_eq!(plan.client_size, (600, 400));
     assert_eq!(plan.frame, RootRect::new(124, 124, 600, 431));
     assert_eq!(

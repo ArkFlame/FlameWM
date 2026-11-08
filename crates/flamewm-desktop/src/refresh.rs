@@ -97,7 +97,10 @@ pub(crate) fn monitor_rects(geometries: &[(OutputId, Rect)]) -> Vec<Rect> {
 /// Logs a best-effort subscription or registration that failed; the desktop keeps running without it.
 pub(crate) fn warn_degraded<T, E: std::fmt::Display>(subscription: &str, result: Result<T, E>) {
     if let Err(error) = result {
-        super::log_limit::emit("degraded subscription", format_args!("desktop: degraded {subscription} subscription: {error}"));
+        super::log_limit::emit(
+            "degraded subscription",
+            format_args!("desktop: degraded {subscription} subscription: {error}"),
+        );
     }
 }
 
@@ -255,7 +258,10 @@ pub(crate) fn refresh_settings_projection(
     projection::project_background(document, &state.wallpaper_loader.state().presentation)?;
     if let Err(error) = project_accent_tokens(document, &state.settings) {
         // Optional visual tokens must never terminate the desktop at startup.
-        super::log_limit::emit("accent tokens not projected", format_args!("desktop: accent tokens not projected: {error}"));
+        super::log_limit::emit(
+            "accent tokens not projected",
+            format_args!("desktop: accent tokens not projected: {error}"),
+        );
     }
     sync_selection_visuals(document, state)?;
     sticky::sync_sticky(document, state)?;
@@ -387,7 +393,10 @@ mod cursor_retry_tests {
             cursor_retry_delay(Some(&f), "other", now),
             Some(CURSOR_RETRY_INITIAL)
         );
-        assert_eq!(cursor_retry_delay(None, "broken", now), Some(CURSOR_RETRY_INITIAL));
+        assert_eq!(
+            cursor_retry_delay(None, "broken", now),
+            Some(CURSOR_RETRY_INITIAL)
+        );
     }
 
     #[test]
@@ -405,10 +414,22 @@ mod cursor_retry_tests {
     fn same_failure_logs_once_and_new_failure_logs_again() {
         let now = std::time::Instant::now();
         let f = failure("broken", "reload broken failed", now);
-        assert!(!cursor_failure_is_new(Some(&f), "broken", "reload broken failed"));
+        assert!(!cursor_failure_is_new(
+            Some(&f),
+            "broken",
+            "reload broken failed"
+        ));
         assert!(cursor_failure_is_new(Some(&f), "broken", "other error"));
-        assert!(cursor_failure_is_new(Some(&f), "other", "reload broken failed"));
-        assert!(cursor_failure_is_new(None, "broken", "reload broken failed"));
+        assert!(cursor_failure_is_new(
+            Some(&f),
+            "other",
+            "reload broken failed"
+        ));
+        assert!(cursor_failure_is_new(
+            None,
+            "broken",
+            "reload broken failed"
+        ));
     }
 }
 

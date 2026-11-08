@@ -461,7 +461,9 @@ impl X11App {
         set_window_role(display, window, config.role);
         if config.role == X11WindowRole::Dock {
             let (root_w, root_h) = display_extent(display, screen);
-            apply_dock_strut(display, window, root_w, root_h, None, None, x, y, width, height);
+            apply_dock_strut(
+                display, window, root_w, root_h, None, None, x, y, width, height,
+            );
         }
         let gc = unsafe { XCreateGC(display, window, 0, ptr::null_mut()) };
         if gc.is_null() {

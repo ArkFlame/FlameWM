@@ -11,7 +11,10 @@ pub mod osd;
 pub mod osd_host;
 mod popover;
 pub mod voice_background;
+mod voice_setup;
 mod voice_setup_ui;
+
+use voice_setup::{apply_defaults, default_voice_dir, ready_model};
 
 use osd::{Osd, OsdEvent, OsdInput, OsdState};
 use osd_host::OsdProcess;
@@ -32,9 +35,9 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
     AssistantError, CancelToken, ChatStore, CommandSpeech, CommandTranscriber, FALLBACK_MODELS,
     HISTORY_TURNS, Message, MsgState, OpenAiClient, Provider, Recording, Role, Selection,
-    SessionState, Speech, SpeechConfig, Stopper, SystemRunner, Transcriber, Turn, apply_defaults,
-    default_config_path, default_voice_dir, endpoint, expand, human_error, key_or_default, now_ms,
-    proxy_models, ready_model, resolve, start_recording,
+    SessionState, Speech, SpeechConfig, Stopper, SystemRunner, Transcriber, Turn,
+    default_config_path, endpoint, expand, human_error, key_or_default, now_ms, proxy_models,
+    resolve, start_recording,
 };
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;

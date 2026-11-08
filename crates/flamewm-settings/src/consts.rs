@@ -238,9 +238,19 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "taskbar-separate-off",
         false,
     ),
-    ("taskbar.enabled", "taskbar-enabled-on", "taskbar-enabled-off", true),
+    (
+        "taskbar.enabled",
+        "taskbar-enabled-on",
+        "taskbar-enabled-off",
+        true,
+    ),
     ("dock.enabled", "dock-enabled-on", "dock-enabled-off", false),
-    ("dock.showRunning", "dock-running-on", "dock-running-off", true),
+    (
+        "dock.showRunning",
+        "dock-running-on",
+        "dock-running-off",
+        true,
+    ),
     (
         "assistant.enabled",
         "assistant-enabled-on",

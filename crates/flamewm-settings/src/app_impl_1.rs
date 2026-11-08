@@ -658,9 +658,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     })
                     .ok_or_else(|| format!("toggle '{key}' has no authoritative boolean value"))?;
                 if !enabled && (key == "taskbar.enabled" || key == "dock.enabled") {
-                    let other = if key == "taskbar.enabled" { "dock.enabled" } else { "taskbar.enabled" };
+                    let other = if key == "taskbar.enabled" {
+                        "dock.enabled"
+                    } else {
+                        "taskbar.enabled"
+                    };
                     if !matches!(self.setting_value(other), Some(SettingValue::Boolean(true))) {
-                        return Err("At least one of the taskbar or dock must remain enabled".to_owned());
+                        return Err(
+                            "At least one of the taskbar or dock must remain enabled".to_owned()
+                        );
                     }
                 }
                 self.client

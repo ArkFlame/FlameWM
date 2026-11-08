@@ -52,7 +52,10 @@ pub(super) fn scale_map(snapshot: &DisplaySnapshot) -> BTreeMap<OutputId, u16> {
         .collect()
 }
 
-pub(super) fn restore_shell_scales(snapshot: &mut DisplaySnapshot, scales: &BTreeMap<OutputId, u16>) {
+pub(super) fn restore_shell_scales(
+    snapshot: &mut DisplaySnapshot,
+    scales: &BTreeMap<OutputId, u16>,
+) {
     for output in &mut snapshot.outputs {
         if let Some(scale) = scales.get(&output.id) {
             output.shell_scale_percent = *scale;

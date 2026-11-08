@@ -679,7 +679,12 @@ fn workspace_snapshot_fills_occupancy_from_cached_windows() {
     let path = fixture_path("workspace-occupancy");
     let mut host = host_at(&path, 100);
     host.engine_mut().workspace_count = Some(3);
-    host.engine_mut().windows = vec![window_on(0, 1), window_on(2, 2), window_on(2, 3), window_on(-1, 4)];
+    host.engine_mut().windows = vec![
+        window_on(0, 1),
+        window_on(2, 2),
+        window_on(2, 3),
+        window_on(-1, 4),
+    ];
     assert!(host.refresh_windows().expect("refresh"));
     let snapshot = host.workspace_snapshot().expect("snapshot");
     assert_eq!(snapshot.occupancy, vec![1, 0, 2]);

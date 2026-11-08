@@ -144,12 +144,10 @@ fn monitor_scoped_start_transfer_and_unknown_surface_are_not_fail_open() {
 
     let mut missing_contracts = Vec::new();
     if !controls.contains("open_start_surface(runtime, &target_output, started)") {
-        missing_contracts
-            .push("an already-open Start must transfer to the newly requested output");
+        missing_contracts.push("an already-open Start must transfer to the newly requested output");
     }
     if route.contains("select_input_output(event.surface)") {
-        missing_contracts
-            .push("an unknown/stale surface must be rejected before routing actions");
+        missing_contracts.push("an unknown/stale surface must be rejected before routing actions");
     }
     if !route.contains("interaction_origin_is_connected")
         || !router.contains("source_surface: event.surface")
@@ -309,7 +307,11 @@ fn latch_expires_so_a_later_genuine_click_reopens() {
 /// Replays one click as the shell sees it: the outside release closes `group`
 /// (recording the latch when enabled), then the same click's opener release arrives.
 /// Returns whether the popup is open afterwards.
-pub(super) fn replay_dismiss_then_opener(latch_enabled: bool, group: &'static str, opener: &str) -> bool {
+pub(super) fn replay_dismiss_then_opener(
+    latch_enabled: bool,
+    group: &'static str,
+    opener: &str,
+) -> bool {
     let at = Instant::now();
     let mut latch = latch_enabled.then_some(DismissLatch { group, at });
     let mut open = false;

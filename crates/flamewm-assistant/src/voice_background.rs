@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use flamewm_assistant_core::{
-    AssistantError, SETUP_BUSY, STATUS_FILE, default_voice_dir, ready_model, setup_default,
-};
+use flamewm_assistant_core::AssistantError;
+
+use crate::voice_setup::{SETUP_BUSY, STATUS_FILE, default_voice_dir, ready_model, setup_default};
 
 /// Command-line flag that starts the background setup. Settings passes the same literal.
 pub const ARG: &str = "--voice-setup";
@@ -19,7 +19,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(60);
 /// Starts `flamewm-assistant --voice-setup` from this binary and does not wait for it. The child
 /// exits when the setup ends, so no thread stays behind.
 pub fn spawn_detached() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|error| format!("cannot find flamewm-assistant: {error}"))?;
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("cannot find flamewm-assistant: {error}"))?;
     let mut child = std::process::Command::new(exe)
         .arg(ARG)
         .spawn()
@@ -231,10 +232,19 @@ mod tests {
     #[test]
     fn startup_needs_a_background_setup_only_when_speech_is_on_and_voice_is_not_ready() {
         let dir = scratch("startup");
-        assert!(!startup_setup_needed(false, &dir), "speech off never starts setup");
-        assert!(startup_setup_needed(true, &dir), "speech on and not ready starts setup");
+        assert!(
+            !startup_setup_needed(false, &dir),
+            "speech off never starts setup"
+        );
+        assert!(
+            startup_setup_needed(true, &dir),
+            "speech on and not ready starts setup"
+        );
         write_ready(&dir);
-        assert!(!startup_setup_needed(true, &dir), "a ready voice is not set up again");
+        assert!(
+            !startup_setup_needed(true, &dir),
+            "a ready voice is not set up again"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -259,7 +269,11 @@ mod tests {
             &mut |_| {
                 ticks += 1;
                 if ticks == 1 {
-                    fs::write(dir.join(STATUS_FILE), "40% Installing the speech runtimes\n").unwrap();
+                    fs::write(
+                        dir.join(STATUS_FILE),
+                        "40% Installing the speech runtimes\n",
+                    )
+                    .unwrap();
                 } else {
                     write_ready(&dir);
                 }
@@ -276,7 +290,11 @@ mod tests {
     fn await_ready_keeps_waiting_through_a_retry_and_fails_on_the_final_attempt() {
         let dir = scratch("await-fail");
         fs::create_dir_all(&dir).expect("dir");
-        fs::write(dir.join(STATUS_FILE), "failed (attempt 1 of 3): offline, retrying in 60s\n").unwrap();
+        fs::write(
+            dir.join(STATUS_FILE),
+            "failed (attempt 1 of 3): offline, retrying in 60s\n",
+        )
+        .unwrap();
         let mut ticks = 0;
         let result = await_ready(
             &dir,
@@ -285,7 +303,11 @@ mod tests {
             &mut |_| {
                 ticks += 1;
                 if ticks == 2 {
-                    fs::write(dir.join(STATUS_FILE), "failed (attempt 3 of 3): unreachable: pypi.org\n").unwrap();
+                    fs::write(
+                        dir.join(STATUS_FILE),
+                        "failed (attempt 3 of 3): unreachable: pypi.org\n",
+                    )
+                    .unwrap();
                 }
             },
             &mut |_, _| {},

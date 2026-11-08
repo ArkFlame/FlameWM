@@ -223,10 +223,7 @@ pub(super) fn build_output(
             Some((0, 0).into()),
         );
         state.output.set_preferred(mode);
-        let (w, h) = presentation_scale::logical_output_size(
-            (mode.size.w, mode.size.h),
-            percent,
-        );
+        let (w, h) = presentation_scale::logical_output_size((mode.size.w, mode.size.h), percent);
         state.output_size = Size::from((w, h));
         (state.output.clone(), None)
     };

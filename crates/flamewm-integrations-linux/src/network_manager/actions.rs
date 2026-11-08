@@ -81,7 +81,9 @@ impl NetworkManagerProvider {
             SystemAction::Disconnect => {
                 let _ = self.controller.request_disconnect(snapshot.generation)?;
                 if snapshot.active_path.is_empty() {
-                    return Err(FlameError::unsupported("no active NetworkManager connection"));
+                    return Err(FlameError::unsupported(
+                        "no active NetworkManager connection",
+                    ));
                 }
                 let message = root_call(DEACTIVATE_CONNECTION)?.append1(
                     dbus::Path::new(snapshot.active_path.clone())
@@ -123,7 +125,9 @@ impl NetworkManagerProvider {
             {
                 NetworkIntent::ConnectKnown { .. } => self.connect_saved(access_point_path),
                 NetworkIntent::RequestSecret { .. } => self.prompt_new_network(access_point_path),
-                _ => Err(FlameError::unsupported("unexpected NetworkManager Wi-Fi intent")),
+                _ => Err(FlameError::unsupported(
+                    "unexpected NetworkManager Wi-Fi intent",
+                )),
             },
             SystemAction::SubmitNetworkSecret {
                 request_id,
@@ -151,7 +155,9 @@ impl NetworkManagerProvider {
                 let devices = self.wifi_devices.keys().cloned().collect::<Vec<_>>();
                 if devices.is_empty() {
                     let _ = self.controller.complete_scan(self.controller.generation());
-                    return Err(FlameError::unsupported("NetworkManager has no wireless device"));
+                    return Err(FlameError::unsupported(
+                        "NetworkManager has no wireless device",
+                    ));
                 }
                 let controller = &mut self.controller;
                 let pump = &mut self.pump;
@@ -170,7 +176,9 @@ impl NetworkManagerProvider {
                     Ok(())
                 })
             }
-            _ => Err(FlameError::unsupported("system action is not a NetworkManager action")),
+            _ => Err(FlameError::unsupported(
+                "system action is not a NetworkManager action",
+            )),
         }
     }
 }
@@ -505,7 +513,9 @@ impl NetworkManagerProvider {
                 .controller
                 .request_submit_secret(request_id, generation, secret)?
             else {
-                return Err(FlameError::unsupported("unexpected NetworkManager secret intent"));
+                return Err(FlameError::unsupported(
+                    "unexpected NetworkManager secret intent",
+                ));
             };
             self.secret_prompt = None;
             let Some(context) = self.secret_context.take() else {
@@ -555,7 +565,9 @@ impl NetworkManagerProvider {
             .controller
             .request_submit_secret(request_id, generation, secret)?
         else {
-            return Err(FlameError::unsupported("unexpected NetworkManager secret intent"));
+            return Err(FlameError::unsupported(
+                "unexpected NetworkManager secret intent",
+            ));
         };
         self.secret_prompt = None;
         self.queue_attempt(
@@ -582,7 +594,9 @@ impl NetworkManagerProvider {
             .controller
             .request_submit_secret(request_id, generation, secret)?
         else {
-            return Err(FlameError::unsupported("unexpected NetworkManager secret intent"));
+            return Err(FlameError::unsupported(
+                "unexpected NetworkManager secret intent",
+            ));
         };
         self.secret_prompt = None;
         self.queue_attempt(

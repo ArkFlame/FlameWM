@@ -109,15 +109,7 @@ impl SnapPreview {
         if self.key == Some(key) {
             return;
         }
-        self.strips = ring_strips(
-            Rect {
-                x: 0,
-                y: 0,
-                w,
-                h,
-            },
-            self.accent,
-        );
+        self.strips = ring_strips(Rect { x: 0, y: 0, w, h }, self.accent);
         self.key = Some(key);
         #[cfg(test)]
         {
@@ -198,8 +190,14 @@ mod tests {
         let mut preview = SnapPreview::default();
         assert!(preview.show(FRAME));
         assert!(!preview.show(FRAME), "same frame is a cache hit");
-        assert!(preview.show(Rect { x: 11, ..FRAME }), "a move is a visible change");
-        assert_eq!(preview.rasters, 1, "a move with the same size re-rasterises nothing");
+        assert!(
+            preview.show(Rect { x: 11, ..FRAME }),
+            "a move is a visible change"
+        );
+        assert_eq!(
+            preview.rasters, 1,
+            "a move with the same size re-rasterises nothing"
+        );
         assert!(!preview.strips.is_empty());
         assert!(preview.show(Rect { w: 301, ..FRAME }));
         assert_eq!(preview.rasters, 2, "a resize re-rasterises once");
@@ -218,7 +216,10 @@ mod tests {
             };
             assert!(preview.show(moved), "step {step} moves the visible ring");
         }
-        assert_eq!(preview.rasters, 1, "100 translations: one raster, zero buffer rebuilds");
+        assert_eq!(
+            preview.rasters, 1,
+            "100 translations: one raster, zero buffer rebuilds"
+        );
         assert_eq!(preview.strips.len(), strips_before);
         assert_eq!(preview.shown.map(|s| s.frame.x), Some(FRAME.x + 100));
     }

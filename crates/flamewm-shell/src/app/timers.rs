@@ -103,7 +103,10 @@ impl ShellLoop {
                     }
                 }
             }
-            Err(error) => crate::log_limit::emit("quick-control result poll failed", format_args!("flamewm-shell: quick-control result poll failed: {error}")),
+            Err(error) => crate::log_limit::emit(
+                "quick-control result poll failed",
+                format_args!("flamewm-shell: quick-control result poll failed: {error}"),
+            ),
         }
         self.tick_auto_location();
         let settled = self

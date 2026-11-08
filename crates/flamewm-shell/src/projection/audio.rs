@@ -610,10 +610,8 @@ mod audio_list_css_tests {
         let start = css.find(".audio-list {").expect("audio-list rule");
         let body = &css[start..start + css[start..].find('}').expect("rule end")];
         assert!(!body.contains("max-height"), "{body}");
-        assert!(
-            include_str!("../../../../ui/shell/audio.html")
-                .contains(".audio-list { position:relative; height:336px;")
-        );
+        assert!(include_str!("../../../../ui/shell/audio.html")
+            .contains(".audio-list { position:relative; height:336px;"));
     }
 }
 

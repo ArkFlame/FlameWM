@@ -33,7 +33,11 @@ pub struct PendingTopology {
 
 /// Applies `change` and returns the baseline needed to revert it. A failed apply restores the
 /// baseline before returning its error.
-pub fn apply(conn: &RustConnection, root: Window, change: &TopologyChange) -> FlameResult<Baseline> {
+pub fn apply(
+    conn: &RustConnection,
+    root: Window,
+    change: &TopologyChange,
+) -> FlameResult<Baseline> {
     let baseline = capture(conn, root)?;
     if let Err(error) = apply_change(conn, root, change) {
         // Best effort: the original error is the one the caller needs.
@@ -106,9 +110,7 @@ fn apply_change(conn: &RustConnection, root: Window, change: &TopologyChange) ->
             };
             set_crtc(conn, crtc, &resources, &state)
         }
-        TopologyChange::SetArrangement(placements) => {
-            arrange(conn, root, &resources, placements)
-        }
+        TopologyChange::SetArrangement(placements) => arrange(conn, root, &resources, placements),
     }
 }
 
@@ -141,8 +143,10 @@ fn arrange(
                 "arrangement exceeds the X screen; screen resize is not implemented",
             ));
         }
-        let x = i16::try_from(placement.x).map_err(|_| FlameError::invalid("placement x is out of range"))?;
-        let y = i16::try_from(placement.y).map_err(|_| FlameError::invalid("placement y is out of range"))?;
+        let x = i16::try_from(placement.x)
+            .map_err(|_| FlameError::invalid("placement x is out of range"))?;
+        let y = i16::try_from(placement.y)
+            .map_err(|_| FlameError::invalid("placement y is out of range"))?;
         plan.push(CrtcState {
             crtc,
             x,

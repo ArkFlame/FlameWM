@@ -15,9 +15,9 @@ use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
 use flamewm_integrations_linux::notifications;
-use flamewm_shell::icon_loader::{IconLoader, IconTarget};
 use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
+use flamewm_shell::icon_loader::{IconLoader, IconTarget};
 use flamewm_shell::notification_center;
 use flamewm_shell::projection;
 use flamewm_shell::start;
@@ -228,7 +228,10 @@ impl NotificationHost {
                 },
             };
             if let Err(error) = outcome {
-                eprintln!("flamewm-shell: notification action failed: {}", error.message);
+                eprintln!(
+                    "flamewm-shell: notification action failed: {}",
+                    error.message
+                );
             }
         } else if event.action.action != "notification.dismiss" {
             return false;
@@ -325,7 +328,10 @@ impl NotificationHost {
                             eprintln!("flamewm-shell: notification {id} is no longer active");
                         }
                         Err(error) => {
-                            eprintln!("flamewm-shell: notification action failed: {}", error.message);
+                            eprintln!(
+                                "flamewm-shell: notification action failed: {}",
+                                error.message
+                            );
                         }
                     }
                 }
@@ -343,7 +349,12 @@ impl NotificationHost {
             return Ok(());
         }
         let revision = self.provider.history().revision();
-        let active: Vec<u32> = self.provider.active().iter().map(|active| active.id).collect();
+        let active: Vec<u32> = self
+            .provider
+            .active()
+            .iter()
+            .map(|active| active.id)
+            .collect();
         if self.center_revision == Some(revision) && self.center_active == active {
             return Ok(());
         }
@@ -418,7 +429,10 @@ impl NotificationHost {
         if !self.icon_wait {
             return Ok(());
         }
-        let wanted = self.visible.as_ref().and_then(|notification| notification.icon_name.clone());
+        let wanted = self
+            .visible
+            .as_ref()
+            .and_then(|notification| notification.icon_name.clone());
         let Some(loader) = self.icons.as_mut() else {
             self.icon_wait = false;
             return Ok(());
@@ -557,7 +571,9 @@ pub fn main() {
     // audio/network/calendar surfaces); otherwise the normal shell role
     // (profiler `flamewm-shell`, owns panel/start/task menu/media).
     if std::env::args().any(|arg| arg == "--quick-control-host") {
-        if let Err(error) = flamewm_shell::quick_controls::run_quick_control_host(flamewm_api::paths::workspace_packaged_root()) {
+        if let Err(error) = flamewm_shell::quick_controls::run_quick_control_host(
+            flamewm_api::paths::workspace_packaged_root(),
+        ) {
             eprintln!("flamewm-quick-control: {error}");
             std::process::exit(1);
         }
@@ -657,14 +673,15 @@ fn execute() -> Result<(), String> {
             None
         }
     };
-    let notifications = match NotificationHost::connect(&mut runtime, &snapshot, loader_root.clone()) {
-        Ok(Some(host)) => Some(Rc::new(RefCell::new(host))),
-        Ok(None) => None,
-        Err(error) => {
-            eprintln!("flamewm-shell: native notifications disabled: {error}");
-            None
-        }
-    };
+    let notifications =
+        match NotificationHost::connect(&mut runtime, &snapshot, loader_root.clone()) {
+            Ok(Some(host)) => Some(Rc::new(RefCell::new(host))),
+            Ok(None) => None,
+            Err(error) => {
+                eprintln!("flamewm-shell: native notifications disabled: {error}");
+                None
+            }
+        };
 
     let profile_interval = profile_interval_secs();
     let profile_due = Arc::new(AtomicBool::new(false));
@@ -703,8 +720,8 @@ fn execute() -> Result<(), String> {
         current_exe_program(),
     )));
     // StatusNotifier host: shares this reactor's bus source, no thread or timer.
-    let tray_host = flamewm_shell::tray_host::TrayHost::connect()
-        .map(|host| Rc::new(RefCell::new(host)));
+    let tray_host =
+        flamewm_shell::tray_host::TrayHost::connect().map(|host| Rc::new(RefCell::new(host)));
     state.borrow_mut().tray = tray_host.clone();
     if let Some(snapshot) = startup_settings {
         // Same entry point as the live SettingsSnapshotChanged path.

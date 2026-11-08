@@ -91,7 +91,9 @@ struct Locked;
 
 impl Read for Locked {
     fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::other("archive entry is encrypted; a password is required"))
+        Err(std::io::Error::other(
+            "archive entry is encrypted; a password is required",
+        ))
     }
 }
 
@@ -112,12 +114,12 @@ where
         }
         match password {
             Some(password) => {
-                let mut file = zip.by_index_decrypt(index, password.as_bytes()).map_err(|err| {
-                    match err {
+                let mut file = zip
+                    .by_index_decrypt(index, password.as_bytes())
+                    .map_err(|err| match err {
                         zip::result::ZipError::InvalidPassword => ArchiveError::WrongPassword,
                         other => other.into(),
-                    }
-                })?;
+                    })?;
                 f(entry, &mut file)?;
             }
             None => {

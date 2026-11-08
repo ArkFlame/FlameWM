@@ -1210,7 +1210,10 @@ mod surface_opacity_mapping_tests {
             ("surfaceOpacity", SettingValue::Percent(67)),
             ("glassOpacityPercent", SettingValue::Percent(75)),
         ]);
-        assert_eq!(appearance_from_settings(&snapshot).glass_opacity_percent, 67);
+        assert_eq!(
+            appearance_from_settings(&snapshot).glass_opacity_percent,
+            67
+        );
         assert_eq!(surface_fill(&snapshot).alpha, 171);
     }
 
@@ -1221,6 +1224,9 @@ mod surface_opacity_mapping_tests {
             ("surfaceOpacity", SettingValue::Percent(67)),
             ("glassOpacityPercent", SettingValue::Percent(75)),
         ]);
-        assert_eq!(appearance_from_settings(&snapshot).glass_opacity_percent, 75);
+        assert_eq!(
+            appearance_from_settings(&snapshot).glass_opacity_percent,
+            75
+        );
     }
 }

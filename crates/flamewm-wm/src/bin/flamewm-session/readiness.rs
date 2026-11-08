@@ -52,7 +52,10 @@ pub(super) fn check_stop(stop_requested: &AtomicBool) -> Result<(), String> {
     }
 }
 
-pub(super) fn check_parent(parent: rustix::process::Pid, stop_requested: &AtomicBool) -> Result<(), String> {
+pub(super) fn check_parent(
+    parent: rustix::process::Pid,
+    stop_requested: &AtomicBool,
+) -> Result<(), String> {
     check_stop(stop_requested)?;
     if getppid() == Some(parent) {
         Ok(())
@@ -196,6 +199,9 @@ pub(super) fn ewmh_ready() -> Result<bool, String> {
     ))
 }
 
-pub(super) fn supporting_wm_check_is_valid(root_support: Option<u32>, self_support: Option<u32>) -> bool {
+pub(super) fn supporting_wm_check_is_valid(
+    root_support: Option<u32>,
+    self_support: Option<u32>,
+) -> bool {
     matches!(root_support, Some(support) if support != 0 && self_support == Some(support))
 }

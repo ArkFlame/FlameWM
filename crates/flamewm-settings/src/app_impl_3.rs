@@ -349,7 +349,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         highlight_options(
             document,
             night_mode.as_deref(),
-            &[("manual", "night-shift-mode-manual"), ("sunset", "night-shift-mode-sunset")],
+            &[
+                ("manual", "night-shift-mode-manual"),
+                ("sunset", "night-shift-mode-sunset"),
+            ],
             accent,
         )?;
         let style = self.text_setting("taskbarStyle").ok();
@@ -369,10 +372,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
         highlight_options(
             document,
             fill.as_deref(),
-            &[("solid", "taskbar-fill-solid"), ("gradient", "taskbar-fill-gradient")],
+            &[
+                ("solid", "taskbar-fill-solid"),
+                ("gradient", "taskbar-fill-gradient"),
+            ],
             accent,
         )?;
-        document.visible("taskbar-gradient-edge-row", fill.as_deref() == Some("gradient"))?;
+        document.visible(
+            "taskbar-gradient-edge-row",
+            fill.as_deref() == Some("gradient"),
+        )?;
         let edge = self.text_setting("taskbar.gradientEdge").ok();
         highlight_options(
             document,

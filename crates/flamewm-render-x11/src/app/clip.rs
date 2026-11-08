@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 use flamewm_render_core::Rect;
-pub(crate) use flamewm_render_core::lower::{intersect, stack_bounds, visible_under, Visible};
+pub(crate) use flamewm_render_core::lower::{Visible, intersect, stack_bounds, visible_under};
 
 /// The four edge bands of a `width`-thick border inside `rect`: top, bottom, left, right.
 /// Bands overlap at the corners only when `width` exceeds half the smaller side.

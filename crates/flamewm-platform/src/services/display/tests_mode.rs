@@ -82,7 +82,10 @@ impl DisplayPort for TwoModePort {
     }
 }
 
-pub(super) fn begin(port: &mut TwoModePort, service: &mut DisplayService) -> FlameResult<TransactionId> {
+pub(super) fn begin(
+    port: &mut TwoModePort,
+    service: &mut DisplayService,
+) -> FlameResult<TransactionId> {
     let generation = service.refresh(port)?.generation;
     service.begin_mode(port, &OutputId::new("fake"), ModeId(2), generation, 100)
 }
@@ -154,15 +157,17 @@ fn fake_apply_failure_leaves_no_transaction_or_expired_deadline() {
         .refresh(&mut port)
         .expect("initial snapshot")
         .generation;
-    assert!(service
-        .begin_mode(
-            &mut port,
-            &OutputId::new("fake"),
-            ModeId(2),
-            generation,
-            100
-        )
-        .is_err());
+    assert!(
+        service
+            .begin_mode(
+                &mut port,
+                &OutputId::new("fake"),
+                ModeId(2),
+                generation,
+                100
+            )
+            .is_err()
+    );
     assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
 }
 

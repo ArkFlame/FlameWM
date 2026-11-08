@@ -74,7 +74,10 @@ impl App {
     /// The link under a pane-local grid cell, from the pane's visible line.
     pub(super) fn link_at(&self, id: u64, pane_row: usize, pane_col: usize) -> Option<String> {
         let pane = self.pane(id)?;
-        let line = pane.session.screen.line_abs(absolute_row(pane, pane_row)?)?;
+        let line = pane
+            .session
+            .screen
+            .line_abs(absolute_row(pane, pane_row)?)?;
         let chars = crate::search::line_chars(&line);
         crate::links::link_at(&chars, pane_col)
     }

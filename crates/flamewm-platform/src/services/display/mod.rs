@@ -19,22 +19,21 @@ pub struct DisplayService {
     scale_memory: BTreeMap<OutputId, u16>,
 }
 
-
 use refresh::require_generation;
 use scale::{restore_shell_scales, scale_map};
 use transaction::to_api_pending;
 
-mod refresh;
 mod mode;
+mod refresh;
+mod scale;
 mod topology;
 mod transaction;
-mod scale;
 
+#[cfg(test)]
+mod tests_five;
 #[cfg(test)]
 mod tests_mode;
 #[cfg(test)]
 mod tests_output;
-#[cfg(test)]
-mod tests_five;
 #[cfg(test)]
 mod tests_topology;

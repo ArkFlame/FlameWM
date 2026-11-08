@@ -65,12 +65,23 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     /// Projects the picker's current candidate and the command field.
-    pub(crate) fn sync_startup_extras(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(crate) fn sync_startup_extras(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         let candidates = startup_page::candidates();
         let (name, can_add) = if candidates.is_empty() {
-            ("Every installed application already starts at sign-in".to_owned(), false)
+            (
+                "Every installed application already starts at sign-in".to_owned(),
+                false,
+            )
         } else {
-            (candidates[self.startup_pick % candidates.len()].name.clone(), true)
+            (
+                candidates[self.startup_pick % candidates.len()]
+                    .name
+                    .clone(),
+                true,
+            )
         };
         document.text("startup-pick-name", name)?;
         document.visible("startup-add", can_add)?;
@@ -78,7 +89,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let (text, error) = self
             .startup_command
             .as_ref()
-            .map_or((String::new(), None), |draft| (draft.buffer.clone(), draft.error.clone()));
+            .map_or((String::new(), None), |draft| {
+                (draft.buffer.clone(), draft.error.clone())
+            });
         let shown = if text.is_empty() {
             "Add a custom command".to_owned()
         } else {

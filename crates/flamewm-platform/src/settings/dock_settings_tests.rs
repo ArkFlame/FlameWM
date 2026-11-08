@@ -21,7 +21,12 @@ fn dock_and_taskbar_defaults() {
 #[test]
 fn default_dock_and_taskbar_keys_are_not_written() {
     let text = ConfigStore::serialize(&ProductSettings::default());
-    for key in ["dock.", "taskbar.enabled", "taskbar.fill", "taskbar.gradientEdge"] {
+    for key in [
+        "dock.",
+        "taskbar.enabled",
+        "taskbar.fill",
+        "taskbar.gradientEdge",
+    ] {
         assert!(!text.contains(key), "default wrote {key}");
     }
 }
@@ -35,7 +40,10 @@ fn dock_keys_parse_and_round_trip() {
     assert!(parsed.dock_enabled);
     assert_eq!(parsed.dock_position, DockPosition::Left);
     assert_eq!(parsed.dock_icon_size, 64);
-    assert_eq!(parsed.dock_pinned, vec!["org.x.Term".to_owned(), "firefox".to_owned()]);
+    assert_eq!(
+        parsed.dock_pinned,
+        vec!["org.x.Term".to_owned(), "firefox".to_owned()]
+    );
     assert!(!parsed.dock_show_running);
     assert!(!parsed.taskbar_enabled);
     assert_eq!(parsed.taskbar_fill, TaskbarFill::Gradient);

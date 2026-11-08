@@ -115,7 +115,10 @@ mod stack_layer_tests {
     #[test]
     fn above_below_a_normal_frame_is_misplaced_and_below_above_normal_is_not() {
         assert!(layers_misplaced(&[(1, None), (2, Some(StackLayer::Below))]));
-        assert!(!layers_misplaced(&[(1, Some(StackLayer::Below)), (2, None)]));
+        assert!(!layers_misplaced(&[
+            (1, Some(StackLayer::Below)),
+            (2, None)
+        ]));
     }
 
     #[test]

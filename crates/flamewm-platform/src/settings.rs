@@ -937,7 +937,9 @@ impl Slot for Vec<String> {
 pub fn is_valid_dock_app_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
 impl Slot for AppearanceMode {
@@ -1242,9 +1244,9 @@ mod accent_custom_tests;
 #[cfg(test)]
 mod accessibility_night_tests;
 #[cfg(test)]
-mod edge_hot_corner_tests;
-#[cfg(test)]
 mod dock_settings_tests;
+#[cfg(test)]
+mod edge_hot_corner_tests;
 #[cfg(test)]
 mod switch_contract_tests;
 #[cfg(test)]

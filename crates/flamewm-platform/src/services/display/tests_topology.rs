@@ -269,8 +269,7 @@ fn arrangement_rejects_bad_layouts_without_applying() {
 fn valid_arrangement_moves_outputs_and_reverts_on_rollback() {
     let mut port = TopologyPort::new();
     let mut service = DisplayService::default();
-    let change =
-        TopologyChange::SetArrangement(vec![place("DP-A", 0, 0), place("DP-B", 0, 1080)]);
+    let change = TopologyChange::SetArrangement(vec![place("DP-A", 0, 0), place("DP-B", 0, 1080)]);
     let transaction = begin(&mut port, &mut service, &change).expect("arrangement");
     assert_eq!(port.outputs[1].geometry.y, 1080);
     service.revert(&mut port, transaction).expect("revert");

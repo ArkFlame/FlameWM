@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use flamewm_assistant_core::{AssistantError, SETUP_BUSY, default_voice_dir, setup_default};
+use flamewm_assistant_core::AssistantError;
 
 use crate::voice_background::await_ready;
+use crate::voice_setup::{SETUP_BUSY, default_voice_dir, setup_default};
 
 /// How often a busy window re-reads the background status, and how long it waits in total.
 const POLL: Duration = Duration::from_secs(2);
@@ -22,16 +23,20 @@ pub fn spawn(
     thread::spawn(move || {
         let mut progress = |percent: u8, label: &str| on_progress(percent, label.to_owned());
         let result = match setup_default(&mut progress) {
-            Err(AssistantError::Io(message)) if message == SETUP_BUSY => match default_voice_dir() {
-                Some(dir) => await_ready(
-                    &dir,
-                    POLL,
-                    WAIT,
-                    &mut |delay| thread::sleep(delay),
-                    &mut progress,
-                ),
-                None => Err(AssistantError::Config("no data directory is available".into())),
-            },
+            Err(AssistantError::Io(message)) if message == SETUP_BUSY => {
+                match default_voice_dir() {
+                    Some(dir) => await_ready(
+                        &dir,
+                        POLL,
+                        WAIT,
+                        &mut |delay| thread::sleep(delay),
+                        &mut progress,
+                    ),
+                    None => Err(AssistantError::Config(
+                        "no data directory is available".into(),
+                    )),
+                }
+            }
             other => other,
         };
         on_done(result);

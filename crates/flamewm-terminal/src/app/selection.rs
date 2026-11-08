@@ -197,7 +197,9 @@ impl App {
 /// are dropped; a pasted `ESC[201~` therefore cannot end a bracketed paste early.
 #[must_use]
 pub fn sanitize_paste(text: &str) -> String {
-    text.chars().filter(|&c| c != '\x1b' && c != '\u{9b}').collect()
+    text.chars()
+        .filter(|&c| c != '\x1b' && c != '\u{9b}')
+        .collect()
 }
 
 /// Bytes sent to the child for a paste. Sanitized text, LF as CR, wrapped in 200/201 markers when bracketed.

@@ -957,8 +957,24 @@ mod tests {
             variables: Vec::new(),
             assets: Vec::new(),
             nodes: vec![
-                node(None, Some(1), None, NodeKind::Element, "", Style::default(), ""),
-                node(Some(0), Some(2), None, NodeKind::Element, "box", box_style, ""),
+                node(
+                    None,
+                    Some(1),
+                    None,
+                    NodeKind::Element,
+                    "",
+                    Style::default(),
+                    "",
+                ),
+                node(
+                    Some(0),
+                    Some(2),
+                    None,
+                    NodeKind::Element,
+                    "box",
+                    box_style,
+                    "",
+                ),
                 node(
                     Some(1),
                     None,
@@ -976,16 +992,12 @@ mod tests {
         };
         let doc = RuntimeDocument::new(document).unwrap();
         let boxed = doc.node_by_id("box").expect("box node exists");
-        let size = LayoutEngine::measure_node(&doc, boxed, 800.0, 600.0, InteractionState::default())
-            .expect("box measures");
+        let size =
+            LayoutEngine::measure_node(&doc, boxed, 800.0, 600.0, InteractionState::default())
+                .expect("box measures");
         // Paint wraps the text at the box's 100 px width, so the measured height must match that wrap.
-        let painted = crate::text_layout::layout_text(
-            text,
-            14.0,
-            100.0,
-            crate::model::TextWrap::Wrap,
-            false,
-        );
+        let painted =
+            crate::text_layout::layout_text(text, 14.0, 100.0, crate::model::TextWrap::Wrap, false);
         assert!(size.width <= 100.0);
         assert_eq!(size.height, painted.height);
         assert!(painted.lines.len() > 1);

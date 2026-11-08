@@ -1,6 +1,6 @@
-use super::*;
 use super::tests_mode::pending_of;
-use super::tests_output::{begin_on, FakeOutput, TwoOutputPort};
+use super::tests_output::{FakeOutput, TwoOutputPort, begin_on};
+use super::*;
 
 /// Five outputs O0..O4; each has 12 modes (index k on output i is ModeId(i*100 + 1 + k)).
 fn five_output_port() -> TwoOutputPort {
@@ -69,9 +69,11 @@ fn five_output_stale_generation_is_rejected_before_any_native_apply() {
         .expect("fresh snapshot")
         .generation;
     assert_ne!(fresh, stale);
-    assert!(service
-        .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), stale, 0)
-        .is_err());
+    assert!(
+        service
+            .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), stale, 0)
+            .is_err()
+    );
     assert!(port.applied.is_empty());
     service
         .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), fresh, 0)
@@ -217,9 +219,11 @@ fn supersede_sets_fresh_15000ms_deadline() {
     begin_on(&mut port, &mut service, "DP-B", 103, 10_000).expect("B to C");
     let pending = pending_of(&service);
     assert_eq!(pending.deadline_ms, 25_000);
-    assert!(!service
-        .tick(&mut port, 24_999)
-        .expect("before fresh deadline"));
+    assert!(
+        !service
+            .tick(&mut port, 24_999)
+            .expect("before fresh deadline")
+    );
     assert!(service.tick(&mut port, 25_000).expect("fresh deadline"));
     assert_eq!(port.output("DP-B").current, ModeId(101));
 }

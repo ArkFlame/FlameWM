@@ -44,7 +44,12 @@ fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
 
 fn entry_for(path: &Path) -> Option<PathBuf> {
     let meta = fs::metadata(path).ok()?;
-    let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
     let path_bytes = path.to_string_lossy();
     let path_hash = fnv1a(0xcbf2_9ce4_8422_2325, path_bytes.as_bytes());
     let key = fnv1a(
@@ -112,10 +117,15 @@ fn write_entry(entry: &Path, image: &RgbaImage) {
 /// least recently used files until the directory holds at most `max_bytes`. `keep` is never
 /// removed. Best effort: unreadable entries are skipped.
 fn prune(dir: &Path, keep: &Path, max_bytes: u64) {
-    let Some(keep_name) = keep.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+    let Some(keep_name) = keep
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
         return;
     };
-    let owner = keep_name.split_once('-').map(|(owner, _)| format!("{owner}-"));
+    let owner = keep_name
+        .split_once('-')
+        .map(|(owner, _)| format!("{owner}-"));
     let Ok(read) = fs::read_dir(dir) else { return };
     let mut files: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
     for item in read.flatten() {
@@ -127,7 +137,9 @@ fn prune(dir: &Path, keep: &Path, max_bytes: u64) {
         let name = item.file_name().to_string_lossy().into_owned();
         let stale = name != keep_name
             && name.ends_with(".rgba")
-            && owner.as_deref().is_some_and(|owner| name.starts_with(owner));
+            && owner
+                .as_deref()
+                .is_some_and(|owner| name.starts_with(owner));
         if stale {
             let _ = fs::remove_file(&path);
             continue;
@@ -144,7 +156,10 @@ fn prune(dir: &Path, keep: &Path, max_bytes: u64) {
         if total <= max_bytes {
             break;
         }
-        if path.file_name().is_some_and(|name| name == keep_name.as_str()) {
+        if path
+            .file_name()
+            .is_some_and(|name| name == keep_name.as_str())
+        {
             continue;
         }
         if fs::remove_file(&path).is_ok() {
@@ -158,7 +173,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fw-decode-cache-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fw-decode-cache-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

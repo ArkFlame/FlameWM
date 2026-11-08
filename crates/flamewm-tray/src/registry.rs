@@ -174,7 +174,11 @@ mod tests {
         let after_props = registry.revision();
         assert!(after_props > added);
         registry.set_props(&key(":1.7"), props);
-        assert_eq!(registry.revision(), after_props, "identical props change nothing");
+        assert_eq!(
+            registry.revision(),
+            after_props,
+            "identical props change nothing"
+        );
         registry.remove_for_name(":1.7");
         assert!(registry.revision() > after_props);
     }

@@ -48,7 +48,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
             match interface.as_str() {
                 "wl_compositor" => {
                     state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
@@ -97,10 +102,18 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { surface_x, surface_y, .. } => {
+            wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            } => {
                 println!("enter {surface_x:.2} {surface_y:.2}");
             }
-            wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
                 println!("motion {surface_x:.2} {surface_y:.2}");
             }
             wl_pointer::Event::Leave { .. } => println!("leave"),
@@ -118,8 +131,13 @@ impl Dispatch<zwp_relative_pointer_v1::ZwpRelativePointerV1, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let zwp_relative_pointer_v1::Event::RelativeMotion { dx, dy, dx_unaccel, dy_unaccel, .. } =
-            event
+        if let zwp_relative_pointer_v1::Event::RelativeMotion {
+            dx,
+            dy,
+            dx_unaccel,
+            dy_unaccel,
+            ..
+        } = event
         {
             println!("rel {dx:.2} {dy:.2} unaccel {dx_unaccel:.2} {dy_unaccel:.2}");
         }
@@ -211,7 +229,10 @@ ignore_events!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let constraint = std::env::var("FLAMEWM_PROBE_CONSTRAINT").unwrap_or_else(|_| "none".into());
     let hold = Duration::from_millis(
-        std::env::var("FLAMEWM_PROBE_HOLD_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(15000),
+        std::env::var("FLAMEWM_PROBE_HOLD_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15000),
     );
 
     let conn = Connection::connect_to_env()?;
@@ -244,7 +265,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let len = (stride * HEIGHT) as usize;
     let path = PathBuf::from(std::env::var("XDG_RUNTIME_DIR")?)
         .join(format!("flame-probe-{}", std::process::id()));
-    let mut file = OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
     std::fs::remove_file(&path)?;
     file.write_all(&vec![0x80u8; len])?;
     let pool = shm.create_pool(file.as_fd(), len as i32, &qh, ());
@@ -265,11 +290,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let _locked_or_confined = match (constraint.as_str(), app.constraints.clone()) {
         ("lock", Some(c)) => {
-            let _ = c.lock_pointer(&surface, &pointer, None, zwp_pointer_constraints_v1::Lifetime::Persistent, &qh, ());
+            let _ = c.lock_pointer(
+                &surface,
+                &pointer,
+                None,
+                zwp_pointer_constraints_v1::Lifetime::Persistent,
+                &qh,
+                (),
+            );
             println!("requested lock");
         }
         ("confine", Some(c)) => {
-            let _ = c.confine_pointer(&surface, &pointer, None, zwp_pointer_constraints_v1::Lifetime::Persistent, &qh, ());
+            let _ = c.confine_pointer(
+                &surface,
+                &pointer,
+                None,
+                zwp_pointer_constraints_v1::Lifetime::Persistent,
+                &qh,
+                (),
+            );
             println!("requested confine");
         }
         _ => {}

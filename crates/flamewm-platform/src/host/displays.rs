@@ -236,7 +236,10 @@ mod tests {
             },
         );
         assert_eq!(result.unwrap_err().code, ErrorCode::Unavailable);
-        assert!(!store.contains_key("wayland-2"), "new key deleted on rollback");
+        assert!(
+            !store.contains_key("wayland-2"),
+            "new key deleted on rollback"
+        );
         assert!(store.is_empty());
     }
 

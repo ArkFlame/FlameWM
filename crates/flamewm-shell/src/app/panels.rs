@@ -204,7 +204,10 @@ impl ShellLoop {
                 })
             });
         if let Err(error) = &projected {
-            crate::log_limit::emit("panel projection failed", format_args!("flamewm-shell: panel projection failed (stage={stage}): {error:?}"));
+            crate::log_limit::emit(
+                "panel projection failed",
+                format_args!("flamewm-shell: panel projection failed (stage={stage}): {error:?}"),
+            );
         }
         if projected.is_ok() {
             flamewm_shell::runtime::projection_counter(
@@ -283,7 +286,10 @@ impl ShellLoop {
                 return false;
             }
             Err(error) => {
-                crate::log_limit::emit("panel surface sync failed", format_args!("flamewm-shell: panel surface sync failed: {error}"));
+                crate::log_limit::emit(
+                    "panel surface sync failed",
+                    format_args!("flamewm-shell: panel surface sync failed: {error}"),
+                );
                 return false;
             }
         }
@@ -297,10 +303,16 @@ impl ShellLoop {
             }
         }
         if let Err(error) = self.surfaces.sync_panel_ui_scale(runtime) {
-            crate::log_limit::emit("panel ui scale resync failed", format_args!("flamewm-shell: panel ui scale resync failed (nonfatal): {error}"));
+            crate::log_limit::emit(
+                "panel ui scale resync failed",
+                format_args!("flamewm-shell: panel ui scale resync failed (nonfatal): {error}"),
+            );
         }
         if let Err(error) = self.surfaces.move_panel_to_synced(runtime) {
-            crate::log_limit::emit("panel move_resize failed", format_args!("flamewm-shell: panel move_resize failed (nonfatal): {error}"));
+            crate::log_limit::emit(
+                "panel move_resize failed",
+                format_args!("flamewm-shell: panel move_resize failed (nonfatal): {error}"),
+            );
         }
         // The XShape mask must use the resized native panel's new dimensions.
         self.apply_taskbar_frame(runtime);
@@ -346,7 +358,10 @@ impl ShellLoop {
             self.surfaces
                 .apply_panel_backdrop(runtime, Some(&source), opacity, blur, separate)
         {
-            crate::log_limit::emit("taskbar backdrop failed", format_args!("flamewm-shell: taskbar backdrop failed (nonfatal): {error}"));
+            crate::log_limit::emit(
+                "taskbar backdrop failed",
+                format_args!("flamewm-shell: taskbar backdrop failed (nonfatal): {error}"),
+            );
         }
     }
 
@@ -357,9 +372,15 @@ impl ShellLoop {
         };
         let frame = taskbar_frame(settings);
         if let Err(error) = self.surfaces.apply_dock_frame(runtime, frame) {
-            crate::log_limit::emit("panel error passthrough", format_args!("flamewm-shell: {error}"));
+            crate::log_limit::emit(
+                "panel error passthrough",
+                format_args!("flamewm-shell: {error}"),
+            );
         }
-        if let Err(error) = self.surfaces.apply_taskbar_enabled(runtime, taskbar_enabled(settings)) {
+        if let Err(error) = self
+            .surfaces
+            .apply_taskbar_enabled(runtime, taskbar_enabled(settings))
+        {
             crate::log_limit::emit("taskbar visibility", format_args!("flamewm-shell: {error}"));
         }
         if let Err(error) = self.surfaces.apply_taskbar_gradient(runtime, settings) {

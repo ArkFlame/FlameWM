@@ -46,15 +46,19 @@ pub fn paste_destination(directory: &Path, name: &OsStr) -> PathBuf {
 
 /// Copies `source` (file, symlink or directory tree) to `destination`, which must not exist.
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
-    let meta = fs::symlink_metadata(source).map_err(|error| format!("{}: {error}", source.display()))?;
+    let meta =
+        fs::symlink_metadata(source).map_err(|error| format!("{}: {error}", source.display()))?;
     if meta.file_type().is_symlink() {
-        let target = fs::read_link(source).map_err(|error| format!("{}: {error}", source.display()))?;
+        let target =
+            fs::read_link(source).map_err(|error| format!("{}: {error}", source.display()))?;
         return std::os::unix::fs::symlink(target, destination)
             .map_err(|error| format!("{}: {error}", destination.display()));
     }
     if meta.is_dir() {
-        fs::create_dir(destination).map_err(|error| format!("{}: {error}", destination.display()))?;
-        let entries = fs::read_dir(source).map_err(|error| format!("{}: {error}", source.display()))?;
+        fs::create_dir(destination)
+            .map_err(|error| format!("{}: {error}", destination.display()))?;
+        let entries =
+            fs::read_dir(source).map_err(|error| format!("{}: {error}", source.display()))?;
         for entry in entries {
             let entry = entry.map_err(|error| format!("{}: {error}", source.display()))?;
             copy_tree(&entry.path(), &destination.join(entry.file_name()))?;
@@ -68,7 +72,8 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
 
 /// Removes a source after a successful cross-device move fallback.
 fn remove_tree(source: &Path) -> Result<(), String> {
-    let meta = fs::symlink_metadata(source).map_err(|error| format!("{}: {error}", source.display()))?;
+    let meta =
+        fs::symlink_metadata(source).map_err(|error| format!("{}: {error}", source.display()))?;
     let result = if meta.is_dir() {
         fs::remove_dir_all(source)
     } else {
@@ -80,7 +85,11 @@ fn remove_tree(source: &Path) -> Result<(), String> {
 /// Pastes each source into `directory`. A move renames when possible and falls back to copy then
 /// remove across devices. Copying a folder into itself is refused. Returns one outcome per source,
 /// holding the new path or the reason it failed.
-pub fn paste_into(directory: &Path, sources: &[PathBuf], move_it: bool) -> Vec<Result<PathBuf, String>> {
+pub fn paste_into(
+    directory: &Path,
+    sources: &[PathBuf],
+    move_it: bool,
+) -> Vec<Result<PathBuf, String>> {
     sources
         .iter()
         .map(|source| paste_one(directory, source, move_it))
@@ -92,7 +101,10 @@ fn paste_one(directory: &Path, source: &Path, move_it: bool) -> Result<PathBuf, 
         .file_name()
         .ok_or_else(|| format!("{}: no file name", source.display()))?;
     if source.is_dir() && directory.starts_with(source) {
-        return Err(format!("{}: cannot paste a folder into itself", source.display()));
+        return Err(format!(
+            "{}: cannot paste a folder into itself",
+            source.display()
+        ));
     }
     let destination = paste_destination(directory, name);
     if move_it {
@@ -123,11 +135,20 @@ mod tests {
     #[test]
     fn free_name_is_kept_and_collisions_get_copy_suffix() {
         let dir = temp_dir("names");
-        assert_eq!(paste_destination(&dir, OsStr::new("a.png")), dir.join("a.png"));
+        assert_eq!(
+            paste_destination(&dir, OsStr::new("a.png")),
+            dir.join("a.png")
+        );
         fs::write(dir.join("a.png"), b"x").unwrap();
-        assert_eq!(paste_destination(&dir, OsStr::new("a.png")), dir.join("a (copy).png"));
+        assert_eq!(
+            paste_destination(&dir, OsStr::new("a.png")),
+            dir.join("a (copy).png")
+        );
         fs::write(dir.join("a (copy).png"), b"x").unwrap();
-        assert_eq!(paste_destination(&dir, OsStr::new("a.png")), dir.join("a (copy 2).png"));
+        assert_eq!(
+            paste_destination(&dir, OsStr::new("a.png")),
+            dir.join("a (copy 2).png")
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -136,8 +157,14 @@ mod tests {
         let dir = temp_dir("shape");
         fs::write(dir.join("Notes"), b"x").unwrap();
         fs::write(dir.join(".env"), b"x").unwrap();
-        assert_eq!(paste_destination(&dir, OsStr::new("Notes")), dir.join("Notes (copy)"));
-        assert_eq!(paste_destination(&dir, OsStr::new(".env")), dir.join(".env (copy)"));
+        assert_eq!(
+            paste_destination(&dir, OsStr::new("Notes")),
+            dir.join("Notes (copy)")
+        );
+        assert_eq!(
+            paste_destination(&dir, OsStr::new(".env")),
+            dir.join(".env (copy)")
+        );
         assert_eq!(split_name("archive.tar.gz"), ("archive.tar", ".gz"));
         fs::remove_dir_all(&dir).unwrap();
     }

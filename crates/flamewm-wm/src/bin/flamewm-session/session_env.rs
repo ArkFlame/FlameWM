@@ -86,7 +86,9 @@ pub(super) const ALLOCATOR_TUNING: [(&str, &str); 3] = [
 ];
 
 /// Allocator-tuning pairs whose key is not already set; a user-provided value always wins.
-pub(super) fn allocator_tuning_defaults(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
+pub(super) fn allocator_tuning_defaults(
+    is_set: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, &'static str)> {
     ALLOCATOR_TUNING
         .into_iter()
         .filter(|(key, _)| !is_set(key))
@@ -142,7 +144,10 @@ pub(super) fn clear_kde_session_identity(environment: &mut BTreeMap<String, Stri
     }
 }
 
-pub(super) fn apply_session_environment(command: &mut Command, environment: &BTreeMap<String, String>) {
+pub(super) fn apply_session_environment(
+    command: &mut Command,
+    environment: &BTreeMap<String, String>,
+) {
     command.envs(environment);
     for key in KDE_SESSION_IDENTITY {
         command.env_remove(key);
@@ -266,7 +271,10 @@ impl ActivationEnvironmentSnapshot {
     }
 }
 
-pub(super) fn run_bounded_activation_command(program: &str, arguments: &[String]) -> Result<(), String> {
+pub(super) fn run_bounded_activation_command(
+    program: &str,
+    arguments: &[String],
+) -> Result<(), String> {
     let mut child = Command::new(program)
         .args(arguments)
         .stdout(Stdio::null())

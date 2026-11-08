@@ -12,7 +12,8 @@ impl ShellLoop {
         };
         let opened = tray.borrow_mut().take_menu_ready();
         if let Some(menu) = opened {
-            self.shell.open_tray_menu(menu.key, menu.menu_path, menu.rows, menu.pointer);
+            self.shell
+                .open_tray_menu(menu.key, menu.menu_path, menu.rows, menu.pointer);
             if let Err(error) = self.apply_controls(runtime) {
                 eprintln!("flamewm-shell: tray menu open failed: {error:?}");
             }
@@ -34,9 +35,8 @@ impl ShellLoop {
         let host = tray.borrow();
         let loader = &mut self.icon_loader;
         for panel in self.surfaces.panel_handles() {
-            let projected = runtime.with_document(panel, |document| {
-                host.project(document, loader.as_mut())
-            });
+            let projected =
+                runtime.with_document(panel, |document| host.project(document, loader.as_mut()));
             let redrawn = projected.is_ok() && runtime.redraw(panel).is_ok();
             if let Err(error) = &projected {
                 eprintln!("flamewm-shell: tray projection failed: {error:?}");

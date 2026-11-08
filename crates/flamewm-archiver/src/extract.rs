@@ -41,7 +41,9 @@ pub fn extract_with_password(
 ) -> Result<Summary> {
     if Format::detect(archive)? == Format::SevenZ {
         if password.is_some() {
-            return Err(ArchiveError::Unsupported("passwords apply to zip only".to_owned()));
+            return Err(ArchiveError::Unsupported(
+                "passwords apply to zip only".to_owned(),
+            ));
         }
         return crate::sevenz::extract(archive, dest, selection, cancel, sink);
     }

@@ -341,8 +341,15 @@ mod moveresize_tests {
             moveresize_value_mask(0x0F00),
             ConfigWindow::X | ConfigWindow::Y | ConfigWindow::WIDTH | ConfigWindow::HEIGHT
         );
-        assert_eq!(moveresize_value_mask(0x0300), ConfigWindow::X | ConfigWindow::Y);
+        assert_eq!(
+            moveresize_value_mask(0x0300),
+            ConfigWindow::X | ConfigWindow::Y
+        );
         assert_eq!(moveresize_value_mask(0x0000), ConfigWindow::default());
-        assert_eq!(moveresize_value_mask(0x0007), ConfigWindow::default(), "gravity bits are not axes");
+        assert_eq!(
+            moveresize_value_mask(0x0007),
+            ConfigWindow::default(),
+            "gravity bits are not axes"
+        );
     }
 }

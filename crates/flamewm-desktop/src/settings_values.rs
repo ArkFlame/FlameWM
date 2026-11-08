@@ -1,7 +1,7 @@
 //! Typed readers over the settings snapshot and the accent-token projection for the desktop.
 
-pub(crate) use flamewm_api::settings::{setting_bool, setting_integer, setting_percent};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+pub(crate) use flamewm_api::settings::{setting_bool, setting_integer, setting_percent};
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 pub(crate) fn setting_text(snapshot: &SettingsSnapshot, key: &str) -> String {

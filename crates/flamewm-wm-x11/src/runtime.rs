@@ -292,9 +292,10 @@ fn run_session(
     backdrop_reader.set_nonblocking(true)?;
     backdrop_writer.set_nonblocking(true)?;
     crate::frame::titlebar_backdrop::set_canvas_wake(backdrop_writer);
-    let _backdrop_wake_registration = reactor
-        .borrow_mut()
-        .register_fd_with_source_action(backdrop_reader, Interest::READ, move |_, source, _| {
+    let _backdrop_wake_registration = reactor.borrow_mut().register_fd_with_source_action(
+        backdrop_reader,
+        Interest::READ,
+        move |_, source, _| {
             let mut wake_buffer = [0_u8; 64];
             loop {
                 match source.read(&mut wake_buffer) {
@@ -305,7 +306,8 @@ fn run_session(
                 }
             }
             FdAction::Continue
-        })?;
+        },
+    )?;
     let _heap_trim_registration = reactor
         .borrow_mut()
         .register_timer(
@@ -545,7 +547,10 @@ fn run_session(
                     if let Err(error) = host.resync_panels_for_displays(&snapshot) {
                         eprintln!("flamewm: panel resync after mode transaction failed: {error}");
                     }
-                    emit_control(&control_for_hook, &ControlSignal::DisplaysSnapshotChanged { snapshot });
+                    emit_control(
+                        &control_for_hook,
+                        &ControlSignal::DisplaysSnapshotChanged { snapshot },
+                    );
                 }
             }
             // The panel service is changed by resync_panels_for_displays(), not
@@ -564,12 +569,7 @@ fn run_session(
             if let Some(signal) = wm.take_switcher_signal() {
                 emit_control(&control_for_hook, &signal);
             }
-            flush_wm_changes(
-                host,
-                &control_for_hook,
-                &integrations_for_hook,
-                changes,
-            )?;
+            flush_wm_changes(host, &control_for_hook, &integrations_for_hook, changes)?;
             let areas = host.output_work_areas();
             let mut wait =
                 crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
@@ -582,10 +582,7 @@ fn run_session(
                 wait = Some(wait.map_or(delay, |current| current.min(delay)));
             }
             // An offline MPRIS bus is retried on backoff; wake at that deadline with no polling.
-            if let Some(delay) = integrations_for_hook
-                .borrow()
-                .next_retry_in(Instant::now())
-            {
+            if let Some(delay) = integrations_for_hook.borrow().next_retry_in(Instant::now()) {
                 wait = Some(wait.map_or(delay, |current| current.min(delay)));
             }
             // Armed only by a close request: the one ping deadline, never a periodic timer.

@@ -139,7 +139,9 @@ fn entry_from(text: &str, is_dir: bool, meta: &fs::Metadata) -> Entry {
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX));
+        .map_or(0, |since| {
+            i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+        });
     Entry::new(text.to_owned(), is_dir, size, modified)
 }
 

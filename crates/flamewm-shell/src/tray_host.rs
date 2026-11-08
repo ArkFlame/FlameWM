@@ -12,8 +12,8 @@ use std::hash::{Hash, Hasher};
 use flamewm_api::Point;
 use flamewm_dbus_reactor::BusWatch;
 use flamewm_tray::{
-    IconPixmap, ItemAction, ItemKey, ItemProps, LayoutReply, TrayMenuRow, TrayWatcher,
-    parse_layout, plan_overflow, top_level_rows,
+    parse_layout, plan_overflow, top_level_rows, IconPixmap, ItemAction, ItemKey, ItemProps,
+    LayoutReply, TrayMenuRow, TrayWatcher,
 };
 use flamewm_ui_x11::{
     ActionPhase, PointerButton, RuntimeImage, SurfaceEvent, SurfaceRuntime, UiDocumentAccess,
@@ -190,7 +190,10 @@ impl TrayHost {
                 menu_request: None,
             }),
             Err(error) => {
-                eprintln!("flamewm-shell: StatusNotifier tray disabled: {}", error.message);
+                eprintln!(
+                    "flamewm-shell: StatusNotifier tray disabled: {}",
+                    error.message
+                );
                 None
             }
         }
@@ -265,7 +268,10 @@ impl TrayHost {
     /// Sends the dbusmenu `clicked` event for an open popup row, nonfatal on bus failure.
     pub fn send_menu_event(&self, key: &ItemKey, menu_path: &str, id: i32) {
         if let Err(error) = self.watcher.send_menu_event(key, menu_path, id) {
-            crate::log_limit::emit("tray menu event failed", format_args!("flamewm-shell: tray menu event failed: {}", error.message));
+            crate::log_limit::emit(
+                "tray menu event failed",
+                format_args!("flamewm-shell: tray menu event failed: {}", error.message),
+            );
         }
     }
 
@@ -274,7 +280,10 @@ impl TrayHost {
             .watcher
             .invoke(key, ItemAction::ContextMenu, pointer.x, pointer.y)
         {
-            crate::log_limit::emit("tray item call failed", format_args!("flamewm-shell: tray item call failed: {}", error.message));
+            crate::log_limit::emit(
+                "tray item call failed",
+                format_args!("flamewm-shell: tray item call failed: {}", error.message),
+            );
         }
     }
 
@@ -329,12 +338,21 @@ impl TrayHost {
                     return true;
                 }
                 Err(error) => {
-                    crate::log_limit::emit("tray layout request failed", format_args!("flamewm-shell: tray layout request failed: {}", error.message));
+                    crate::log_limit::emit(
+                        "tray layout request failed",
+                        format_args!(
+                            "flamewm-shell: tray layout request failed: {}",
+                            error.message
+                        ),
+                    );
                 }
             }
         }
         if let Err(error) = self.watcher.invoke(&key, method, x, y) {
-            crate::log_limit::emit("tray item call failed", format_args!("flamewm-shell: tray item call failed: {}", error.message));
+            crate::log_limit::emit(
+                "tray item call failed",
+                format_args!("flamewm-shell: tray item call failed: {}", error.message),
+            );
         }
         true
     }
@@ -347,7 +365,10 @@ impl TrayHost {
     ) -> Result<(), String> {
         let mut loader = loader;
         let edge = icon_device_px();
-        SNI_SHOWN.store(self.window().shown > 0, std::sync::atomic::Ordering::Relaxed);
+        SNI_SHOWN.store(
+            self.window().shown > 0,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         for slot in 0..SLOT_COUNT {
             let slot_id = format!("tray-sni-{}", slot + 1);
             let icon_id = format!("{slot_id}-icon");
@@ -420,7 +441,9 @@ mod tests {
         assert_eq!(pages[1].first, 5);
         assert_eq!(pages[2].first, 10);
         assert_eq!(pages[2].shown, 3);
-        assert!(pages.iter().all(|window| window.chevron && window.pages == 3));
+        assert!(pages
+            .iter()
+            .all(|window| window.chevron && window.pages == 3));
         assert_eq!(pages[3].first, 0, "page wraps to the first page");
     }
 

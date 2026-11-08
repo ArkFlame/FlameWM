@@ -83,7 +83,10 @@ pub(super) fn drag_feedback_from(text: &str) -> (bool, bool) {
             |_| default_drag_feedback(),
             |settings| {
                 let settings = settings.effective();
-                (settings.show_content_while_dragging, settings.snap_preview_enabled)
+                (
+                    settings.show_content_while_dragging,
+                    settings.snap_preview_enabled,
+                )
             },
         )
 }
@@ -92,7 +95,10 @@ fn default_drag_feedback() -> (bool, bool) {
     use flamewm_platform::settings::ProductSettings;
 
     let defaults = ProductSettings::default();
-    (defaults.show_content_while_dragging, defaults.snap_preview_enabled)
+    (
+        defaults.show_content_while_dragging,
+        defaults.snap_preview_enabled,
+    )
 }
 
 #[cfg(test)]
@@ -102,7 +108,10 @@ mod drag_feedback_tests {
     #[test]
     fn saved_content_drag_applies_at_startup_without_a_bus_turn() {
         // The switch is migrated on when a member is off default, so a bare saved value counts.
-        assert_eq!(drag_feedback_from("showContentWhileDragging=true\n"), (true, true));
+        assert_eq!(
+            drag_feedback_from("showContentWhileDragging=true\n"),
+            (true, true)
+        );
     }
 
     #[test]
@@ -115,7 +124,10 @@ mod drag_feedback_tests {
 
     #[test]
     fn snap_preview_off_is_read_and_defaults_stay_outline_and_preview() {
-        assert_eq!(drag_feedback_from("windowsCustom=true\nsnapPreviewEnabled=false\n"), (false, false));
+        assert_eq!(
+            drag_feedback_from("windowsCustom=true\nsnapPreviewEnabled=false\n"),
+            (false, false)
+        );
         assert_eq!(drag_feedback_from(""), (false, true));
     }
 }

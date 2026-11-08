@@ -1,5 +1,5 @@
-use super::*;
 use super::tests_mode::{mode, pending_of, unavailable};
+use super::*;
 
 #[derive(Clone)]
 pub(super) struct FakeOutput {
@@ -285,9 +285,11 @@ fn late_keep_without_intervening_tick_reverts_and_rejects_confirmation() {
             .and_then(|snapshot| snapshot.pending.as_ref()),
         None
     );
-    assert!(!service
-        .tick(&mut port, 15_002)
-        .expect("no retry after late Keep"));
+    assert!(
+        !service
+            .tick(&mut port, 15_002)
+            .expect("no retry after late Keep")
+    );
     assert_eq!(port.reverted.len(), 1, "rollback is attempted exactly once");
 }
 
@@ -331,9 +333,11 @@ fn snapshot_read_failure_at_deadline_retires_transaction_and_attempts_one_rollba
     );
 
     port.fail_snapshot = false;
-    assert!(!service
-        .tick(&mut port, 15_001)
-        .expect("no retry after retirement"));
+    assert!(
+        !service
+            .tick(&mut port, 15_001)
+            .expect("no retry after retirement")
+    );
     assert_eq!(port.reverted.len(), 1, "no busy retry");
 }
 
@@ -397,9 +401,11 @@ fn output_disconnect_at_deadline_surfaces_error_without_native_revert() {
         "no revert against the missing output"
     );
     assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-    assert!(!service
-        .tick(&mut port, 15_001)
-        .expect("transaction already cleared"));
+    assert!(
+        !service
+            .tick(&mut port, 15_001)
+            .expect("transaction already cleared")
+    );
 }
 
 #[test]

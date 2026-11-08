@@ -69,10 +69,10 @@ macro_rules! point_fn {
 mod convert_wheel;
 use convert_wheel::{WheelAction, WheelMode};
 mod downloads;
-mod log_limit;
 mod drag;
 mod icon_names;
 mod icon_raster;
+mod log_limit;
 mod output_layout;
 mod projection;
 mod rubber;
@@ -134,9 +134,8 @@ pub fn main() -> Result<(), String> {
     let user_dirs = home.join(".config/user-dirs.dirs");
     let user_dirs = fs::read_to_string(user_dirs).ok();
     let directory = DesktopDirResolver::resolve(&home, user_dirs.as_deref());
-    fs::create_dir_all(&directory).map_err(|error| {
-        format!("create desktop directory {}: {error}", directory.display())
-    })?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("create desktop directory {}: {error}", directory.display()))?;
 
     let (root_width, root_height) = root_geometry()?;
     let surface = desktop_surface_rect(root_width, root_height);
@@ -216,7 +215,9 @@ pub fn main() -> Result<(), String> {
             entry_scale_percent,
             output_geometries,
             default_output,
-            icons: projection::ParallelIconService::spawn(flamewm_api::paths::workspace_packaged_root()),
+            icons: projection::ParallelIconService::spawn(
+                flamewm_api::paths::workspace_packaged_root(),
+            ),
             icon_slots: vec![None; SLOT_COUNT],
             slot_inputs: vec![None; SLOT_COUNT],
             projected_cache: None,

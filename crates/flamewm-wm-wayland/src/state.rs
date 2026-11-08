@@ -702,9 +702,10 @@ impl State {
 
     /// Physical pixels of the scanned-out mode, the size desktop captures and offscreen targets use.
     pub fn physical_output_size(&self) -> Size<i32, Physical> {
-        self.output
-            .current_mode()
-            .map_or_else(|| (self.output_size.w, self.output_size.h).into(), |mode| mode.size)
+        self.output.current_mode().map_or_else(
+            || (self.output_size.w, self.output_size.h).into(),
+            |mode| mode.size,
+        )
     }
 
     /// Usable area: the output minus layer-shell exclusive zones (panels).
@@ -1161,14 +1162,21 @@ mod dock_work_area_tests {
     #[test]
     fn dock_stacks_above_a_bottom_taskbar() {
         let taskbar = [[0, 0, 0, 44]];
-        let work = work_area(OUTPUT, &taskbar, Some((ReserveEdge::Bottom, dock_extent(48))));
+        let work = work_area(
+            OUTPUT,
+            &taskbar,
+            Some((ReserveEdge::Bottom, dock_extent(48))),
+        );
         assert_eq!(work, Rect::new(0, 0, 1280, 800 - 44 - dock_extent(48)));
     }
 
     #[test]
     fn dock_alone_cuts_only_its_edge() {
         let work = work_area(OUTPUT, &[], Some((ReserveEdge::Left, dock_extent(48))));
-        assert_eq!(work, Rect::new(dock_extent(48), 0, 1280 - dock_extent(48), 800));
+        assert_eq!(
+            work,
+            Rect::new(dock_extent(48), 0, 1280 - dock_extent(48), 800)
+        );
     }
 
     #[test]

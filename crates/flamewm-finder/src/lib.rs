@@ -6,15 +6,15 @@
 
 mod format;
 mod index;
+mod input;
 mod instance;
 mod keys;
 mod kind;
-mod palette;
-mod quick;
-mod preview;
-mod recent_docs;
-mod input;
 mod paint;
+mod palette;
+mod preview;
+mod quick;
+mod recent_docs;
 mod search;
 mod state;
 mod verbs;
@@ -32,8 +32,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use calloop::Interest;
-use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_applications::ApplicationCatalog;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
@@ -244,7 +244,6 @@ fn meta_line(entry: &Entry, now: i64) -> String {
     }
 }
 
-
 /// Initial settings snapshot for glass and theme; defaults apply when the control service is down.
 fn initial_settings() -> SettingsSnapshot {
     ControlClient::connect(BusKind::Session)
@@ -337,7 +336,12 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
     let shared = Shared::default();
-    let mut app = Finder::new(home.to_owned(), shared.clone(), theme, pid_file.to_path_buf());
+    let mut app = Finder::new(
+        home.to_owned(),
+        shared.clone(),
+        theme,
+        pid_file.to_path_buf(),
+    );
     app.paint(&mut document)?;
 
     app.frecency_file = cache_file
@@ -367,7 +371,10 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         if sender.send(Loaded::Apps(apps)).is_ok() {
             let _ = index_writer.write(&[1]);
         }
-        if sender.send(Loaded::Session(quick::logout_allowed())).is_ok() {
+        if sender
+            .send(Loaded::Session(quick::logout_allowed()))
+            .is_ok()
+        {
             let _ = index_writer.write(&[1]);
         }
         // The cached index answers queries while the fresh walk runs; reading it here keeps the

@@ -818,7 +818,10 @@ fn occupied_pager_cells_are_tinted_and_active_cell_keeps_accent() {
     // Cells: index 0 -> cell 1, index 1 -> cell 3 (empty), index 2 -> cell 2 (active).
     assert_eq!(doc.backgrounds["workspace-1"].a, 40, "occupied idle cell");
     assert_eq!(doc.backgrounds["workspace-3"].a, 128, "empty idle cell");
-    assert_ne!(doc.backgrounds["workspace-2"], doc.backgrounds["workspace-1"]);
+    assert_ne!(
+        doc.backgrounds["workspace-2"],
+        doc.backgrounds["workspace-1"]
+    );
 }
 
 #[test]

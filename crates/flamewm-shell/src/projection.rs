@@ -54,7 +54,6 @@ pub(crate) use panel::taskbar_surface;
 pub use panel::{
     for_each_panel_record, project, project_battery_menu, project_battery_tray, project_panel,
     reapply_element_backgrounds, set_task_accent, set_taskbar_surface, task_icon_device_px,
-
     task_icon_px, taskbar_css_height, taskbar_css_width, PanelView, TaskbarItems,
     BATTERY_PROGRESS_HEIGHT,
 };

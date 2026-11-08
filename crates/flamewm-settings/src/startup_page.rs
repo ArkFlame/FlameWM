@@ -159,7 +159,8 @@ mod tests {
         .unwrap();
 
         cycle_delay_with(&settings, 0).unwrap();
-        let user = std::fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop")).unwrap();
+        let user = std::fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop"))
+            .unwrap();
         assert_eq!(startup_delay(&user), 5);
         cycle_delay_with(&settings, 0).unwrap();
         let again = settings.startup_entries().unwrap();
@@ -179,8 +180,15 @@ mod tests {
         .unwrap();
 
         add_candidate_with(&settings, 7).unwrap();
-        assert!(settings.config_dirs[0].join("autostart/firefox.desktop").exists());
-        assert!(add_candidate_with(&settings, 0).is_err(), "nothing left to add");
+        assert!(
+            settings.config_dirs[0]
+                .join("autostart/firefox.desktop")
+                .exists()
+        );
+        assert!(
+            add_candidate_with(&settings, 0).is_err(),
+            "nothing left to add"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -247,7 +255,11 @@ mod tests {
         remove_with(&settings, 0).unwrap();
         assert!(!settings.startup_entries().unwrap()[0].enabled);
         remove_with(&settings, 1).unwrap();
-        assert!(!settings.config_dirs[0].join("autostart/beta.desktop").exists());
+        assert!(
+            !settings.config_dirs[0]
+                .join("autostart/beta.desktop")
+                .exists()
+        );
 
         assert!(toggle_with(&settings, 9).is_err());
         std::fs::remove_dir_all(root).unwrap();

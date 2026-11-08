@@ -32,11 +32,13 @@ fn settings_apply_decodes_typed_variants_without_stringly_typed_core() {
     };
     assert_eq!(transaction.expected_revision, 7);
     assert_eq!(transaction.changes.len(), 3);
-    assert!(transaction
-        .changes
-        .iter()
-        .any(|change| change.key == "surfaceOpacity"
-            && change.value == Some(SettingValue::Percent(83))));
+    assert!(
+        transaction
+            .changes
+            .iter()
+            .any(|change| change.key == "surfaceOpacity"
+                && change.value == Some(SettingValue::Percent(83)))
+    );
 }
 
 #[test]

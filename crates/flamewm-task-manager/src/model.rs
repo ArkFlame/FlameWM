@@ -731,7 +731,10 @@ mod sampling_schedule_tests {
     fn every_pid_gets_a_rotating_read_within_slow_ticks() {
         for pid in [1_u32, 2, 3, 4, 5, 1_234, 99_999] {
             let due = (1..=SLOW_TICKS).filter(|tick| slow_due(pid, *tick)).count();
-            assert_eq!(due, 1, "pid {pid} must be due exactly once per {SLOW_TICKS} ticks");
+            assert_eq!(
+                due, 1,
+                "pid {pid} must be due exactly once per {SLOW_TICKS} ticks"
+            );
         }
     }
 
@@ -741,7 +744,11 @@ mod sampling_schedule_tests {
         assert!((cpu_percent(50, 100, 4.0) - 200.0).abs() < 1e-9);
         // Same process read after two intervals: the span doubles, so the percentage halves.
         assert!((cpu_percent(50, 200, 4.0) - 100.0).abs() < 1e-9);
-        assert_eq!(cpu_percent(10, 0, 4.0), 0.0, "zero span reports 0, never NaN");
+        assert_eq!(
+            cpu_percent(10, 0, 4.0),
+            0.0,
+            "zero span reports 0, never NaN"
+        );
     }
 
     #[test]

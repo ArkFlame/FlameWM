@@ -45,8 +45,8 @@ pub(crate) fn paste_clipboard_files(directory: PathBuf) {
     let spawned = std::thread::Builder::new()
         .name("flamewm-paste".to_owned())
         .spawn(move || {
-            let read = flamewm_clipboard::Clipboard::connect()
-                .and_then(|clipboard| clipboard.get_files());
+            let read =
+                flamewm_clipboard::Clipboard::connect().and_then(|clipboard| clipboard.get_files());
             match read {
                 Ok(Some((paths, op))) => {
                     let cut = matches!(op, flamewm_clipboard::FileOp::Cut);

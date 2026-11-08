@@ -407,16 +407,31 @@ mod dock_strut_tests {
         // 48 px icon: bar 76 px; window 104 px = 28 px label room + bar.
         let bottom = DockEdge::Bottom.bar_rect(672, 976, 576, 104, 76);
         assert_eq!(bottom, (672, 1004, 576, 76));
-        let s = DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, bottom.0, bottom.1, bottom.2, bottom.3)
-            .unwrap();
+        let s = DockStrut::from_edge_rect(
+            1920,
+            1080,
+            DockEdge::Bottom,
+            bottom.0,
+            bottom.1,
+            bottom.2,
+            bottom.3,
+        )
+        .unwrap();
         assert_eq!(s.strut4(), [0, 0, 0, 76]);
         let top = DockEdge::Top.bar_rect(672, 0, 576, 104, 76);
         assert_eq!(top, (672, 0, 576, 76));
-        let s = DockStrut::from_edge_rect(1920, 1080, DockEdge::Top, top.0, top.1, top.2, top.3).unwrap();
+        let s = DockStrut::from_edge_rect(1920, 1080, DockEdge::Top, top.0, top.1, top.2, top.3)
+            .unwrap();
         assert_eq!(s.strut4(), [0, 0, 76, 0]);
         // Vertical docks have no label room: the bar is the whole window.
-        assert_eq!(DockEdge::Left.bar_rect(0, 500, 76, 600, 76), (0, 500, 76, 600));
-        assert_eq!(DockEdge::Right.bar_rect(1844, 500, 76, 600, 76), (1844, 500, 76, 600));
+        assert_eq!(
+            DockEdge::Left.bar_rect(0, 500, 76, 600, 76),
+            (0, 500, 76, 600)
+        );
+        assert_eq!(
+            DockEdge::Right.bar_rect(1844, 500, 76, 600, 76),
+            (1844, 500, 76, 600)
+        );
     }
 
     #[test]

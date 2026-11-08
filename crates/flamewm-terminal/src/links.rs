@@ -32,7 +32,8 @@ fn trim_end(chars: &[char], start: usize, mut end: usize) -> usize {
                     _ => ('{', '}'),
                 };
                 let body = &chars[start..end];
-                body.iter().filter(|&&c| c == close).count() > body.iter().filter(|&&c| c == open).count()
+                body.iter().filter(|&&c| c == close).count()
+                    > body.iter().filter(|&&c| c == open).count()
             }
             '.' | ',' | ';' | ':' | '!' | '?' | '\'' => true,
             _ => false,
@@ -98,7 +99,9 @@ pub fn link_at(row: &[char], col: usize) -> Option<String> {
 #[must_use]
 pub fn is_openable(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    SCHEMES.iter().any(|s| lower.starts_with(s) && lower.len() > s.len())
+    SCHEMES
+        .iter()
+        .any(|s| lower.starts_with(s) && lower.len() > s.len())
         && !url.chars().any(char::is_whitespace)
 }
 
@@ -106,7 +109,10 @@ pub fn is_openable(url: &str) -> bool {
 /// child is reaped on a helper thread.
 pub fn open(url: &str) -> io::Result<()> {
     if !is_openable(url) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not an openable link"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not an openable link",
+        ));
     }
     let mut child = Command::new("xdg-open")
         .arg(url)
@@ -138,7 +144,10 @@ mod tests {
 
     #[test]
     fn detects_http_https_and_file_links() {
-        assert_eq!(found("see https://example.com/a?b=1 now"), vec!["https://example.com/a?b=1"]);
+        assert_eq!(
+            found("see https://example.com/a?b=1 now"),
+            vec!["https://example.com/a?b=1"]
+        );
         assert_eq!(found("http://x.org"), vec!["http://x.org"]);
         assert_eq!(found("open file:///tmp/a.txt"), vec!["file:///tmp/a.txt"]);
     }
@@ -163,7 +172,10 @@ mod tests {
     fn schemes_inside_words_and_bare_schemes_are_not_links() {
         assert!(found("xhttps://a.b").is_empty(), "letter before the scheme");
         assert!(found("https://").is_empty(), "scheme with no host");
-        assert!(found("ftp://a.b mailto:x@y").is_empty(), "other schemes are not detected");
+        assert!(
+            found("ftp://a.b mailto:x@y").is_empty(),
+            "other schemes are not detected"
+        );
     }
 
     #[test]
@@ -181,7 +193,11 @@ mod tests {
         assert_eq!(link_at(&chars, 10), Some("https://a.b".to_owned()));
         assert_eq!(link_at(&chars, 0), None, "outside the link");
         assert_eq!(link_at(&chars, 14), None, "the space after the link");
-        assert_eq!(link_at(&chars, 13), Some("https://a.b".to_owned()), "last link column");
+        assert_eq!(
+            link_at(&chars, 13),
+            Some("https://a.b".to_owned()),
+            "last link column"
+        );
     }
 
     #[test]
@@ -193,6 +209,9 @@ mod tests {
         assert!(!is_openable("--help"));
         assert!(!is_openable("https://"));
         assert!(!is_openable("https://a b"));
-        assert!(open("--option").is_err(), "rejected before any process starts");
+        assert!(
+            open("--option").is_err(),
+            "rejected before any process starts"
+        );
     }
 }

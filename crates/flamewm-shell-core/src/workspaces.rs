@@ -129,7 +129,10 @@ pub fn project(snapshot: Option<&WorkspaceSnapshot>) -> Vec<WorkspaceView> {
                 label,
                 name,
                 active: index == snapshot.active_index,
-                occupied: snapshot.occupancy.get(index).is_some_and(|count| *count > 0),
+                occupied: snapshot
+                    .occupancy
+                    .get(index)
+                    .is_some_and(|count| *count > 0),
                 row: position.row,
                 column: position.column,
             }
@@ -221,7 +224,10 @@ mod tests {
     fn occupied_flag_follows_window_counts() {
         let mut counted = snapshot(3, 0);
         counted.occupancy = vec![2, 0, 1];
-        let flags: Vec<bool> = project(Some(&counted)).iter().map(|view| view.occupied).collect();
+        let flags: Vec<bool> = project(Some(&counted))
+            .iter()
+            .map(|view| view.occupied)
+            .collect();
         assert_eq!(flags, vec![true, false, true]);
         let uncounted: Vec<bool> = project(Some(&snapshot(3, 0)))
             .iter()

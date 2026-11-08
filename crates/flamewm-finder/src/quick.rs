@@ -144,7 +144,11 @@ impl Parser {
         if start == self.pos {
             return None;
         }
-        self.chars[start..self.pos].iter().collect::<String>().parse().ok()
+        self.chars[start..self.pos]
+            .iter()
+            .collect::<String>()
+            .parse()
+            .ok()
     }
 }
 
@@ -182,37 +186,192 @@ struct Unit {
 }
 
 const UNITS: &[Unit] = &[
-    Unit { label: "mm", aliases: &["millimeter", "millimeters", "millimetre", "millimetres"], kind: Kind::Length, scale: 0.001 },
-    Unit { label: "cm", aliases: &["centimeter", "centimeters", "centimetre", "centimetres"], kind: Kind::Length, scale: 0.01 },
-    Unit { label: "m", aliases: &["meter", "meters", "metre", "metres"], kind: Kind::Length, scale: 1.0 },
-    Unit { label: "km", aliases: &["kilometer", "kilometers", "kilometre", "kilometres"], kind: Kind::Length, scale: 1000.0 },
-    Unit { label: "in", aliases: &["inch", "inches"], kind: Kind::Length, scale: 0.0254 },
-    Unit { label: "ft", aliases: &["foot", "feet"], kind: Kind::Length, scale: 0.3048 },
-    Unit { label: "yd", aliases: &["yard", "yards"], kind: Kind::Length, scale: 0.9144 },
-    Unit { label: "mi", aliases: &["mile", "miles"], kind: Kind::Length, scale: 1609.344 },
-    Unit { label: "mg", aliases: &["milligram", "milligrams"], kind: Kind::Mass, scale: 0.001 },
-    Unit { label: "g", aliases: &["gram", "grams"], kind: Kind::Mass, scale: 1.0 },
-    Unit { label: "kg", aliases: &["kilogram", "kilograms"], kind: Kind::Mass, scale: 1000.0 },
-    Unit { label: "oz", aliases: &["ounce", "ounces"], kind: Kind::Mass, scale: 28.349_523_125 },
-    Unit { label: "lb", aliases: &["lbs", "pound", "pounds"], kind: Kind::Mass, scale: 453.592_37 },
-    Unit { label: "ml", aliases: &["milliliter", "milliliters", "millilitre"], kind: Kind::Volume, scale: 1.0 },
-    Unit { label: "l", aliases: &["liter", "liters", "litre", "litres"], kind: Kind::Volume, scale: 1000.0 },
-    Unit { label: "gal", aliases: &["gallon", "gallons"], kind: Kind::Volume, scale: 3785.411_784 },
-    Unit { label: "s", aliases: &["sec", "secs", "second", "seconds"], kind: Kind::Time, scale: 1.0 },
-    Unit { label: "min", aliases: &["minute", "minutes"], kind: Kind::Time, scale: 60.0 },
-    Unit { label: "h", aliases: &["hr", "hrs", "hour", "hours"], kind: Kind::Time, scale: 3600.0 },
-    Unit { label: "d", aliases: &["day", "days"], kind: Kind::Time, scale: 86_400.0 },
-    Unit { label: "b", aliases: &["byte", "bytes"], kind: Kind::Data, scale: 1.0 },
-    Unit { label: "kb", aliases: &[], kind: Kind::Data, scale: 1e3 },
-    Unit { label: "mb", aliases: &[], kind: Kind::Data, scale: 1e6 },
-    Unit { label: "gb", aliases: &[], kind: Kind::Data, scale: 1e9 },
-    Unit { label: "tb", aliases: &[], kind: Kind::Data, scale: 1e12 },
-    Unit { label: "kib", aliases: &[], kind: Kind::Data, scale: 1024.0 },
-    Unit { label: "mib", aliases: &[], kind: Kind::Data, scale: 1_048_576.0 },
-    Unit { label: "gib", aliases: &[], kind: Kind::Data, scale: 1_073_741_824.0 },
-    Unit { label: "c", aliases: &["celsius"], kind: Kind::Temperature, scale: 0.0 },
-    Unit { label: "f", aliases: &["fahrenheit"], kind: Kind::Temperature, scale: 0.0 },
-    Unit { label: "k", aliases: &["kelvin"], kind: Kind::Temperature, scale: 0.0 },
+    Unit {
+        label: "mm",
+        aliases: &["millimeter", "millimeters", "millimetre", "millimetres"],
+        kind: Kind::Length,
+        scale: 0.001,
+    },
+    Unit {
+        label: "cm",
+        aliases: &["centimeter", "centimeters", "centimetre", "centimetres"],
+        kind: Kind::Length,
+        scale: 0.01,
+    },
+    Unit {
+        label: "m",
+        aliases: &["meter", "meters", "metre", "metres"],
+        kind: Kind::Length,
+        scale: 1.0,
+    },
+    Unit {
+        label: "km",
+        aliases: &["kilometer", "kilometers", "kilometre", "kilometres"],
+        kind: Kind::Length,
+        scale: 1000.0,
+    },
+    Unit {
+        label: "in",
+        aliases: &["inch", "inches"],
+        kind: Kind::Length,
+        scale: 0.0254,
+    },
+    Unit {
+        label: "ft",
+        aliases: &["foot", "feet"],
+        kind: Kind::Length,
+        scale: 0.3048,
+    },
+    Unit {
+        label: "yd",
+        aliases: &["yard", "yards"],
+        kind: Kind::Length,
+        scale: 0.9144,
+    },
+    Unit {
+        label: "mi",
+        aliases: &["mile", "miles"],
+        kind: Kind::Length,
+        scale: 1609.344,
+    },
+    Unit {
+        label: "mg",
+        aliases: &["milligram", "milligrams"],
+        kind: Kind::Mass,
+        scale: 0.001,
+    },
+    Unit {
+        label: "g",
+        aliases: &["gram", "grams"],
+        kind: Kind::Mass,
+        scale: 1.0,
+    },
+    Unit {
+        label: "kg",
+        aliases: &["kilogram", "kilograms"],
+        kind: Kind::Mass,
+        scale: 1000.0,
+    },
+    Unit {
+        label: "oz",
+        aliases: &["ounce", "ounces"],
+        kind: Kind::Mass,
+        scale: 28.349_523_125,
+    },
+    Unit {
+        label: "lb",
+        aliases: &["lbs", "pound", "pounds"],
+        kind: Kind::Mass,
+        scale: 453.592_37,
+    },
+    Unit {
+        label: "ml",
+        aliases: &["milliliter", "milliliters", "millilitre"],
+        kind: Kind::Volume,
+        scale: 1.0,
+    },
+    Unit {
+        label: "l",
+        aliases: &["liter", "liters", "litre", "litres"],
+        kind: Kind::Volume,
+        scale: 1000.0,
+    },
+    Unit {
+        label: "gal",
+        aliases: &["gallon", "gallons"],
+        kind: Kind::Volume,
+        scale: 3785.411_784,
+    },
+    Unit {
+        label: "s",
+        aliases: &["sec", "secs", "second", "seconds"],
+        kind: Kind::Time,
+        scale: 1.0,
+    },
+    Unit {
+        label: "min",
+        aliases: &["minute", "minutes"],
+        kind: Kind::Time,
+        scale: 60.0,
+    },
+    Unit {
+        label: "h",
+        aliases: &["hr", "hrs", "hour", "hours"],
+        kind: Kind::Time,
+        scale: 3600.0,
+    },
+    Unit {
+        label: "d",
+        aliases: &["day", "days"],
+        kind: Kind::Time,
+        scale: 86_400.0,
+    },
+    Unit {
+        label: "b",
+        aliases: &["byte", "bytes"],
+        kind: Kind::Data,
+        scale: 1.0,
+    },
+    Unit {
+        label: "kb",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1e3,
+    },
+    Unit {
+        label: "mb",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1e6,
+    },
+    Unit {
+        label: "gb",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1e9,
+    },
+    Unit {
+        label: "tb",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1e12,
+    },
+    Unit {
+        label: "kib",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1024.0,
+    },
+    Unit {
+        label: "mib",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1_048_576.0,
+    },
+    Unit {
+        label: "gib",
+        aliases: &[],
+        kind: Kind::Data,
+        scale: 1_073_741_824.0,
+    },
+    Unit {
+        label: "c",
+        aliases: &["celsius"],
+        kind: Kind::Temperature,
+        scale: 0.0,
+    },
+    Unit {
+        label: "f",
+        aliases: &["fahrenheit"],
+        kind: Kind::Temperature,
+        scale: 0.0,
+    },
+    Unit {
+        label: "k",
+        aliases: &["kelvin"],
+        kind: Kind::Temperature,
+        scale: 0.0,
+    },
 ];
 
 fn unit(word: &str) -> Option<&'static Unit> {
@@ -428,7 +587,10 @@ pub fn actions_matching(query: &str, logout_allowed: bool) -> Vec<&'static Syste
         .filter(|action| logout_allowed || action.run != Run::Logout)
         .filter(|action| {
             action.label.to_lowercase().contains(&needle)
-                || action.words.split(' ').any(|word| word.starts_with(&needle))
+                || action
+                    .words
+                    .split(' ')
+                    .any(|word| word.starts_with(&needle))
         })
         .collect()
 }
@@ -469,8 +631,9 @@ pub fn run_action(action: &SystemAction) -> io::Result<()> {
             .name("flamewm-finder-logout".to_owned())
             .spawn(|| {
                 let client = ControlClient::connect(BusKind::Session);
-                let outcome = client.map_err(|_| "control bus unavailable".to_owned()).and_then(
-                    |client| {
+                let outcome = client
+                    .map_err(|_| "control bus unavailable".to_owned())
+                    .and_then(|client| {
                         client
                             .call_with_timeout(
                                 &ControlRequest::SessionAction(SessionAction::Logout),
@@ -478,8 +641,7 @@ pub fn run_action(action: &SystemAction) -> io::Result<()> {
                             )
                             .map(drop)
                             .map_err(|_| "control call failed".to_owned())
-                    },
-                );
+                    });
                 if let Err(error) = outcome {
                     eprintln!("flamewm-finder: log out failed: {error}");
                 }
@@ -550,21 +712,30 @@ mod tests {
     #[test]
     fn fuzzy_prefers_prefix_then_substring_then_subsequence() {
         assert!(fuzzy("Firefox", "fire").unwrap() > fuzzy("Mozilla Firefox", "fire").unwrap());
-        assert!(fuzzy("Mozilla Firefox", "fire").unwrap() > fuzzy("Fine Reader Xtra", "fire").unwrap());
+        assert!(
+            fuzzy("Mozilla Firefox", "fire").unwrap() > fuzzy("Fine Reader Xtra", "fire").unwrap()
+        );
         assert!(fuzzy("Firefox", "frfx").is_some());
         assert_eq!(fuzzy("Firefox", "xyz"), None);
     }
 
     #[test]
     fn ranking_uses_frecency_only_to_break_fuzzy_ties() {
-        let apps = vec![app("alpha.desktop", "Text Editor"), app("beta.desktop", "Terminal"), app("gamma.desktop", "Tertiary")];
+        let apps = vec![
+            app("alpha.desktop", "Text Editor"),
+            app("beta.desktop", "Terminal"),
+            app("gamma.desktop", "Tertiary"),
+        ];
         let mut frecency = Frecency::default();
         // Two prefix matches tie on score and break by list order; the subsequence match ranks last.
         assert_eq!(rank_apps(&apps, "ter", &frecency, 0), vec![1, 2, 0]);
         frecency.record("gamma.desktop", 1_000);
         frecency.record("gamma.desktop", 1_001);
         let ranked = rank_apps(&apps, "ter", &frecency, 1_002);
-        assert_eq!(ranked[0], 2, "recently used app moves up among equal matches");
+        assert_eq!(
+            ranked[0], 2,
+            "recently used app moves up among equal matches"
+        );
         assert!(rank_apps(&apps, "", &frecency, 0).is_empty());
     }
 
@@ -593,9 +764,11 @@ mod tests {
 
     #[test]
     fn log_out_appears_only_when_the_session_allows_it() {
-        assert!(actions_matching("log", false)
-            .iter()
-            .all(|action| action.label != "Log out"));
+        assert!(
+            actions_matching("log", false)
+                .iter()
+                .all(|action| action.label != "Log out")
+        );
         assert_eq!(actions_matching("log", true)[0].label, "Log out");
         assert_eq!(actions_matching("logout", true)[0].label, "Log out");
         assert_eq!(actions_matching("sign", true)[0].label, "Log out");
@@ -612,7 +785,10 @@ mod tests {
 
     #[test]
     fn log_out_is_a_control_bus_action_not_a_program() {
-        let logout = ACTIONS.iter().find(|action| action.label == "Log out").unwrap();
+        let logout = ACTIONS
+            .iter()
+            .find(|action| action.label == "Log out")
+            .unwrap();
         assert_eq!(logout.run, Run::Logout);
     }
 }

@@ -61,7 +61,10 @@ impl DisplayService {
 /// Checks a topology change against the live snapshot. Arrangement must place every connected
 /// output exactly once, with non-negative origins anchored at 0,0, no overlap, and edge contact
 /// between every pair that is part of the chain.
-pub(super) fn validate_topology(snapshot: &DisplaySnapshot, change: &TopologyChange) -> FlameResult<()> {
+pub(super) fn validate_topology(
+    snapshot: &DisplaySnapshot,
+    change: &TopologyChange,
+) -> FlameResult<()> {
     let connected = |id: &OutputId| {
         snapshot
             .outputs

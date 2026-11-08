@@ -3,7 +3,11 @@
 use super::*;
 
 impl Finder {
-    pub(super) fn key(&mut self, key: &UiKeyEvent, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    pub(super) fn key(
+        &mut self,
+        key: &UiKeyEvent,
+        doc: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         if key.phase != UiKeyPhase::Press {
             return Ok(());
         }

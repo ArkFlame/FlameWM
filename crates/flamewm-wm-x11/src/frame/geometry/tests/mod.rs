@@ -16,11 +16,7 @@ const START: RootRect = RootRect::new(100, 100, 400, 300);
 
 const OUTS: &[RootRect] = &[WA];
 
-fn req(
-    edges: ResizeEdges,
-    delta: (i32, i32),
-    hints: ClientSizeHints,
-) -> GeometryRequest<'static> {
+fn req(edges: ResizeEdges, delta: (i32, i32), hints: ClientSizeHints) -> GeometryRequest<'static> {
     GeometryRequest {
         reason: GeometryReason::InteractiveResize,
         start: PlacementSnapshot {

@@ -76,12 +76,18 @@ impl PanelService {
             }
         }
         for output in &connected {
-            let (edge, logical_size, frame, taskbar_enabled) = self
-                .manager
-                .panel(&output.id)
-                .map_or((PanelEdge::Bottom, 44, TaskbarFrame::default(), true), |panel| {
-                    (panel.edge, panel.logical_size, panel.frame, panel.taskbar_enabled)
-                });
+            let (edge, logical_size, frame, taskbar_enabled) =
+                self.manager.panel(&output.id).map_or(
+                    (PanelEdge::Bottom, 44, TaskbarFrame::default(), true),
+                    |panel| {
+                        (
+                            panel.edge,
+                            panel.logical_size,
+                            panel.frame,
+                            panel.taskbar_enabled,
+                        )
+                    },
+                );
             let mut panel = OutputPanel::new(
                 output.id.clone(),
                 output.geometry,

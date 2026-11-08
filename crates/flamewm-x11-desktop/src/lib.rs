@@ -315,7 +315,11 @@ impl X11Desktop {
             .nth(1)
             .unwrap_or_default()
             .to_owned();
-        let states = reads.states.map_err(FlameError::io)?.reply().map_err(FlameError::io)?;
+        let states = reads
+            .states
+            .map_err(FlameError::io)?
+            .reply()
+            .map_err(FlameError::io)?;
         let (mut fullscreen, mut hidden, mut max_vert, mut max_horz, mut sticky) =
             (false, false, false, false, false);
         for state in states.value32().into_iter().flatten() {

@@ -107,8 +107,8 @@ pub fn merge_dock(pinned: &[String], running: &[String], show_running: bool) -> 
             });
         }
     }
-    let separator_after = (pinned_count > 0 && entries.len() > pinned_count)
-        .then(|| pinned_count - 1);
+    let separator_after =
+        (pinned_count > 0 && entries.len() > pinned_count).then(|| pinned_count - 1);
     DockLayout {
         entries,
         separator_after,
@@ -302,6 +302,10 @@ mod tests {
         let end = gradient_ramp([1, 2, 3], 200, 4, false);
         assert_eq!(&end[..4], &[1, 2, 3, 0]);
         assert_eq!(&end[12..], &[1, 2, 3, 200]);
-        assert_eq!(gradient_ramp([0, 0, 0], 255, 1, true).len(), 8, "steps clamp to two samples");
+        assert_eq!(
+            gradient_ramp([0, 0, 0], 255, 1, true).len(),
+            8,
+            "steps clamp to two samples"
+        );
     }
 }

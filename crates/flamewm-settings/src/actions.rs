@@ -390,8 +390,12 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "command" => return Ok(SettingsAction::StartupCommandFocus),
             _ => {}
         }
-        let (verb, slot) = rest.split_once('.').ok_or_else(|| format!("unknown startup action '{action}'"))?;
-        let slot: usize = slot.parse().map_err(|_| format!("unknown startup row '{slot}'"))?;
+        let (verb, slot) = rest
+            .split_once('.')
+            .ok_or_else(|| format!("unknown startup action '{action}'"))?;
+        let slot: usize = slot
+            .parse()
+            .map_err(|_| format!("unknown startup row '{slot}'"))?;
         if slot >= crate::startup_page::SLOTS {
             return Err(format!("startup row {slot} is out of range"));
         }
@@ -403,7 +407,9 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         };
     }
     if let Some(slot) = action.strip_prefix("settings.defaults.cycle.") {
-        let slot: usize = slot.parse().map_err(|_| format!("unknown defaults row '{slot}'"))?;
+        let slot: usize = slot
+            .parse()
+            .map_err(|_| format!("unknown defaults row '{slot}'"))?;
         if slot >= crate::default_apps_page::GROUPS.len() {
             return Err(format!("defaults row {slot} is out of range"));
         }
@@ -538,7 +544,10 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
     {
         return Ok(SettingsAction::DesktopEntrySize(direction));
     }
-    if let Some(direction) = action.strip_prefix("settings.dock.icon-size.").and_then(step) {
+    if let Some(direction) = action
+        .strip_prefix("settings.dock.icon-size.")
+        .and_then(step)
+    {
         return Ok(SettingsAction::DockIconSize(direction));
     }
     if let Some(direction) = action.strip_prefix("settings.font-size.").and_then(step) {

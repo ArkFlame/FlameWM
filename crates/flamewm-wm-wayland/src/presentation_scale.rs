@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use smithay::delegate_fractional_scale;
 use smithay::delegate_presentation;
-use smithay::desktop::utils::{OutputPresentationFeedback, take_presentation_feedback_surface_tree};
+use smithay::desktop::utils::{
+    OutputPresentationFeedback, take_presentation_feedback_surface_tree,
+};
 use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::output::{Output, Scale};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
@@ -101,7 +103,13 @@ pub fn collect_feedback(state: &State, output: &Output) -> OutputPresentationFee
 /// Reports the collected feedback as presented now (nested host: no hardware timestamp).
 pub fn presented(feedback: OutputPresentationFeedback, output: &Output) {
     let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    report(feedback, output, monotonic_now(), seq, wp_presentation_feedback::Kind::empty());
+    report(
+        feedback,
+        output,
+        monotonic_now(),
+        seq,
+        wp_presentation_feedback::Kind::empty(),
+    );
 }
 
 fn monotonic_now() -> Duration {
@@ -141,7 +149,9 @@ fn report(
 ) {
     let refresh = output
         .current_mode()
-        .map_or(Duration::from_millis(16), |mode| refresh_period(mode.refresh));
+        .map_or(Duration::from_millis(16), |mode| {
+            refresh_period(mode.refresh)
+        });
     feedback.presented::<_, Monotonic>(time, Refresh::Fixed(refresh), seq, kind);
 }
 

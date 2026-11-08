@@ -118,14 +118,30 @@ mod tests {
 
     #[test]
     fn finds_case_insensitive_matches_in_reading_order() {
-        let lines = vec![chars("Hello World"), chars("no hit here"), chars("WORLD of worlds")];
+        let lines = vec![
+            chars("Hello World"),
+            chars("no hit here"),
+            chars("WORLD of worlds"),
+        ];
         let found = find_in(&lines, "world");
         assert_eq!(
             found,
             vec![
-                Match { line: 0, col: 6, len: 5 },
-                Match { line: 2, col: 0, len: 5 },
-                Match { line: 2, col: 9, len: 5 },
+                Match {
+                    line: 0,
+                    col: 6,
+                    len: 5
+                },
+                Match {
+                    line: 2,
+                    col: 0,
+                    len: 5
+                },
+                Match {
+                    line: 2,
+                    col: 9,
+                    len: 5
+                },
             ]
         );
     }
@@ -149,14 +165,31 @@ mod tests {
     fn non_ascii_folds_by_char() {
         let lines = vec![chars("Ünïcode ÉCOLE")];
         let found = find_in(&lines, "école");
-        assert_eq!(found, vec![Match { line: 0, col: 8, len: 5 }]);
+        assert_eq!(
+            found,
+            vec![Match {
+                line: 0,
+                col: 8,
+                len: 5
+            }]
+        );
     }
 
     #[test]
     fn wide_spacer_cells_never_match_the_query() {
         let line = vec![
-            Cell { ch: '漢', fg: crate::screen::Color::Default, bg: crate::screen::Color::Default, attrs: attr::WIDE },
-            Cell { ch: ' ', fg: crate::screen::Color::Default, bg: crate::screen::Color::Default, attrs: attr::SPACER },
+            Cell {
+                ch: '漢',
+                fg: crate::screen::Color::Default,
+                bg: crate::screen::Color::Default,
+                attrs: attr::WIDE,
+            },
+            Cell {
+                ch: ' ',
+                fg: crate::screen::Color::Default,
+                bg: crate::screen::Color::Default,
+                attrs: attr::SPACER,
+            },
         ];
         assert_eq!(line_chars(&line), vec!['漢', '\0']);
         assert!(find_in(&[line_chars(&line)], " ").is_empty());
@@ -175,17 +208,39 @@ mod tests {
     fn view_offset_brings_a_scrollback_line_into_view() {
         let mut screen = Screen::new(8, 2, 10);
         Parser::new().advance(b"one\r\ntwo\r\nthree\r\nfour", &mut screen);
-        assert_eq!(view_for_line(&screen, screen.total_lines() - 1), 0, "live line stays at bottom");
+        assert_eq!(
+            view_for_line(&screen, screen.total_lines() - 1),
+            0,
+            "live line stays at bottom"
+        );
         let offset = view_for_line(&screen, 0);
         assert!(offset > 0 && offset <= screen.scrollback_len());
         let top = screen.total_lines() - (screen.rows() + offset);
-        assert!((top..top + screen.rows()).contains(&0), "line 0 inside view");
+        assert!(
+            (top..top + screen.rows()).contains(&0),
+            "line 0 inside view"
+        );
     }
 
     #[test]
     fn search_state_reports_the_current_match() {
-        let mut state = Search { query: "x".into(), matches: vec![Match { line: 1, col: 0, len: 1 }], current: 0 };
-        assert_eq!(state.current_match(), Some(Match { line: 1, col: 0, len: 1 }));
+        let mut state = Search {
+            query: "x".into(),
+            matches: vec![Match {
+                line: 1,
+                col: 0,
+                len: 1,
+            }],
+            current: 0,
+        };
+        assert_eq!(
+            state.current_match(),
+            Some(Match {
+                line: 1,
+                col: 0,
+                len: 1
+            })
+        );
         state.matches.clear();
         assert_eq!(state.current_match(), None);
     }
@@ -198,6 +253,9 @@ mod tests {
         let found = find(&screen, "NEEDLE");
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].line, 0, "first hit is in scrollback");
-        assert!(found[1].line >= screen.scrollback_len(), "second hit is on the live grid");
+        assert!(
+            found[1].line >= screen.scrollback_len(),
+            "second hit is on the live grid"
+        );
     }
 }

@@ -42,7 +42,10 @@ impl ShellLoop {
             return;
         };
         if let Err(error) = provider.on_ready() {
-            crate::log_limit::emit("KIO job progress event failed", format_args!("flamewm-shell: KIO job progress event failed: {error}"));
+            crate::log_limit::emit(
+                "KIO job progress event failed",
+                format_args!("flamewm-shell: KIO job progress event failed: {error}"),
+            );
             self.job_view_provider = None;
             self.task_progress.clear();
             self.task_progress_pending = true;
@@ -79,7 +82,10 @@ impl ShellLoop {
             return;
         };
         if let Err(error) = provider.on_ready() {
-            crate::log_limit::emit("launcher progress event failed", format_args!("flamewm-shell: launcher progress event failed: {error}"));
+            crate::log_limit::emit(
+                "launcher progress event failed",
+                format_args!("flamewm-shell: launcher progress event failed: {error}"),
+            );
             self.launcher_entry_provider = None;
             self.refresh_task_progress();
             return;

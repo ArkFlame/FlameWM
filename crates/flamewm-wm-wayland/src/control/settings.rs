@@ -4,7 +4,9 @@ use super::*;
 
 /// `showContentWhileDragging`: true moves the live window during a drag; false (the default, as on
 /// X11) keeps the window in place and draws an outline of where it would land.
-pub(super) fn show_content_while_dragging(snapshot: &flamewm_api::settings::SettingsSnapshot) -> bool {
+pub(super) fn show_content_while_dragging(
+    snapshot: &flamewm_api::settings::SettingsSnapshot,
+) -> bool {
     use flamewm_api::settings::SettingValue;
     matches!(
         snapshot.values.get("showContentWhileDragging"),
@@ -32,14 +34,21 @@ mod snap_preview_tests {
         if let Some(value) = value {
             values.insert("snapPreviewEnabled".to_owned(), value);
         }
-        SettingsSnapshot { revision: 1, values }
+        SettingsSnapshot {
+            revision: 1,
+            values,
+        }
     }
 
     #[test]
     fn preview_is_on_by_default_and_only_false_hides_it() {
         assert!(super::snap_preview_enabled(&snapshot(None)));
-        assert!(super::snap_preview_enabled(&snapshot(Some(SettingValue::Boolean(true)))));
-        assert!(!super::snap_preview_enabled(&snapshot(Some(SettingValue::Boolean(false)))));
+        assert!(super::snap_preview_enabled(&snapshot(Some(
+            SettingValue::Boolean(true)
+        ))));
+        assert!(!super::snap_preview_enabled(&snapshot(Some(
+            SettingValue::Boolean(false)
+        ))));
     }
 }
 
@@ -53,15 +62,24 @@ mod content_drag_tests {
         if let Some(value) = value {
             values.insert("showContentWhileDragging".to_owned(), value);
         }
-        SettingsSnapshot { revision: 1, values }
+        SettingsSnapshot {
+            revision: 1,
+            values,
+        }
     }
 
     #[test]
     fn outline_is_the_default_and_content_needs_true() {
         assert!(!super::show_content_while_dragging(&snapshot(None)));
-        assert!(!super::show_content_while_dragging(&snapshot(Some(SettingValue::Boolean(false)))));
-        assert!(!super::show_content_while_dragging(&snapshot(Some(SettingValue::Text("true".into())))));
-        assert!(super::show_content_while_dragging(&snapshot(Some(SettingValue::Boolean(true)))));
+        assert!(!super::show_content_while_dragging(&snapshot(Some(
+            SettingValue::Boolean(false)
+        ))));
+        assert!(!super::show_content_while_dragging(&snapshot(Some(
+            SettingValue::Text("true".into())
+        ))));
+        assert!(super::show_content_while_dragging(&snapshot(Some(
+            SettingValue::Boolean(true)
+        ))));
     }
 }
 
@@ -87,7 +105,10 @@ pub(super) fn saved_shell_scales() -> BTreeMap<String, u16> {
 
 /// The saved scale of the nested output in percent (100 when none is saved), read at startup.
 pub(crate) fn nested_output_scale_percent() -> u16 {
-    saved_shell_scales().get(OUTPUT_NAME).copied().unwrap_or(100)
+    saved_shell_scales()
+        .get(OUTPUT_NAME)
+        .copied()
+        .unwrap_or(100)
 }
 
 /// `titlebars` and `windowMargin` from a committed settings snapshot.

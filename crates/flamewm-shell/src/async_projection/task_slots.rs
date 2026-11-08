@@ -399,12 +399,7 @@ mod tests {
         let tone = crate::projection::TASK_NOT_RESPONDING;
         assert_eq!(
             (tone.r, tone.g, tone.b, tone.a),
-            (
-                (rgb >> 16) as u8,
-                (rgb >> 8) as u8,
-                rgb as u8,
-                0xff
-            )
+            ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 0xff)
         );
     }
 

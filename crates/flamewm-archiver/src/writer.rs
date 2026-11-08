@@ -9,9 +9,9 @@ use bzip2::write::BzEncoder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use xz2::write::XzEncoder;
-use zstd::stream::write::Encoder as ZstdEncoder;
-use zip::{AesMode, CompressionMethod};
 use zip::write::SimpleFileOptions;
+use zip::{AesMode, CompressionMethod};
+use zstd::stream::write::Encoder as ZstdEncoder;
 
 use crate::error::{ArchiveError, Result};
 use crate::format::Format;

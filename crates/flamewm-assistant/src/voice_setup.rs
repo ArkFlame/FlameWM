@@ -8,13 +8,11 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use flamewm_assistant_core::{
+    AssistantError, CancelToken, CurlFetcher, DiskModelStore, ModelStore, ProcessRunner, Sha256,
+    SpeechConfig, SystemRunner, default_models_dir, tts_manifest,
+};
 use rustix::fs::{FlockOperation, flock};
-
-use crate::download::{CurlFetcher, DiskModelStore};
-use crate::process::SystemRunner;
-use crate::sha256::Sha256;
-use crate::speech::{ModelStore, tts_manifest};
-use crate::{AssistantError, CancelToken, ProcessRunner, SpeechConfig, default_models_dir};
 
 const TORCH_INDEX: &str = "https://download.pytorch.org/whl/cpu";
 const TTS_MODEL: &str = "tts-phonon-local";
@@ -216,7 +214,11 @@ fn create_venv(
         argv.push("--without-pip");
     }
     argv.push(venv_arg.as_str());
-    step("creating the voice environment", VENV_HINT, exec(runner, cancel, &argv))?;
+    step(
+        "creating the voice environment",
+        VENV_HINT,
+        exec(runner, cancel, &argv),
+    )?;
     if !bootstrap {
         return Ok(());
     }
@@ -224,7 +226,11 @@ fn create_venv(
     fetch_get_pip(runner, cancel, &script, get_pip_sha256)?;
     let python = path_arg(&venv.join("bin/python"));
     let script_arg = path_arg(&script);
-    let installed = exec(runner, cancel, &[python.as_str(), script_arg.as_str(), "--quiet"]);
+    let installed = exec(
+        runner,
+        cancel,
+        &[python.as_str(), script_arg.as_str(), "--quiet"],
+    );
     let _ = fs::remove_file(&script);
     step("installing pip", NET_HINT, installed)
 }
@@ -238,8 +244,20 @@ fn fetch_get_pip(
 ) -> Result<(), AssistantError> {
     let _ = fs::remove_file(script);
     let target = path_arg(script);
-    let argv = ["curl", "-fsSL", "--proto", "=https", "-o", target.as_str(), GET_PIP_URL];
-    step("downloading the pip bootstrap", NET_HINT, exec(runner, cancel, &argv))?;
+    let argv = [
+        "curl",
+        "-fsSL",
+        "--proto",
+        "=https",
+        "-o",
+        target.as_str(),
+        GET_PIP_URL,
+    ];
+    step(
+        "downloading the pip bootstrap",
+        NET_HINT,
+        exec(runner, cancel, &argv),
+    )?;
     let mut hasher = Sha256::new();
     hasher.update(&fs::read(script)?);
     if hasher.hex() != expected_sha256 {
@@ -333,7 +351,7 @@ fn path_arg(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::speech::ModelManifest;
+    use flamewm_assistant_core::{ModelManifest, expand};
 
     #[derive(Default)]
     struct FakeRunner {
@@ -353,8 +371,7 @@ mod tests {
             let line = argv.join(" ");
             self.calls.push(line.clone());
             if argv.first().map(String::as_str) == Some("curl") {
-                if let (Some(bytes), Some(i)) =
-                    (&self.payload, argv.iter().position(|a| a == "-o"))
+                if let (Some(bytes), Some(i)) = (&self.payload, argv.iter().position(|a| a == "-o"))
                 {
                     fs::write(&argv[i + 1], bytes).expect("payload");
                 }
@@ -416,8 +433,16 @@ mod tests {
 
         assert_eq!(model, dir.join("models/tts-phonon-local"));
         assert_eq!(runner.calls.len(), 6, "{:?}", runner.calls);
-        assert!(runner.calls[0].starts_with("python3 -c import sys"), "{:?}", runner.calls);
-        assert!(runner.calls[1].starts_with("python3 -c import ensurepip"), "{:?}", runner.calls);
+        assert!(
+            runner.calls[0].starts_with("python3 -c import sys"),
+            "{:?}",
+            runner.calls
+        );
+        assert!(
+            runner.calls[1].starts_with("python3 -c import ensurepip"),
+            "{:?}",
+            runner.calls
+        );
         assert!(
             runner.calls[2].starts_with("python3 -m venv "),
             "{}",
@@ -666,7 +691,12 @@ mod tests {
         };
         let route = preflight(&mut runner, &CancelToken::new()).expect("route");
         assert_eq!(route, VenvRoute::Bootstrap);
-        assert!(runner.calls.iter().all(|c| !c.contains("sudo") && !c.contains("apt")));
+        assert!(
+            runner
+                .calls
+                .iter()
+                .all(|c| !c.contains("sudo") && !c.contains("apt"))
+        );
     }
 
     #[test]
@@ -695,14 +725,36 @@ mod tests {
             payload: Some(script_bytes),
             ..FakeRunner::default()
         };
-        create_venv(&mut runner, &CancelToken::new(), &dir, &venv, VenvRoute::Bootstrap, &sha)
-            .expect("bootstrap");
+        create_venv(
+            &mut runner,
+            &CancelToken::new(),
+            &dir,
+            &venv,
+            VenvRoute::Bootstrap,
+            &sha,
+        )
+        .expect("bootstrap");
         assert_eq!(runner.calls.len(), 3, "{:?}", runner.calls);
-        assert!(runner.calls[0].starts_with("python3 -m venv --without-pip "), "{:?}", runner.calls);
-        assert!(runner.calls[1].starts_with("curl -fsSL --proto =https "), "{:?}", runner.calls);
+        assert!(
+            runner.calls[0].starts_with("python3 -m venv --without-pip "),
+            "{:?}",
+            runner.calls
+        );
+        assert!(
+            runner.calls[1].starts_with("curl -fsSL --proto =https "),
+            "{:?}",
+            runner.calls
+        );
         assert!(runner.calls[1].ends_with(GET_PIP_URL), "{:?}", runner.calls);
-        assert!(runner.calls[2].ends_with("get-pip.py --quiet"), "{:?}", runner.calls);
-        assert!(!dir.join(GET_PIP_FILE).exists(), "the bootstrap script is removed after use");
+        assert!(
+            runner.calls[2].ends_with("get-pip.py --quiet"),
+            "{:?}",
+            runner.calls
+        );
+        assert!(
+            !dir.join(GET_PIP_FILE).exists(),
+            "the bootstrap script is removed after use"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -724,8 +776,15 @@ mod tests {
             GET_PIP_SHA256,
         )
         .expect_err("checksum must fail");
-        assert!(matches!(error, AssistantError::ChecksumMismatch(_)), "{error:?}");
-        assert_eq!(runner.calls.len(), 2, "pip is never run from an unverified script");
+        assert!(
+            matches!(error, AssistantError::ChecksumMismatch(_)),
+            "{error:?}"
+        );
+        assert_eq!(
+            runner.calls.len(),
+            2,
+            "pip is never run from an unverified script"
+        );
         assert!(!dir.join(GET_PIP_FILE).exists());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -751,7 +810,7 @@ mod tests {
         apply_defaults(&mut cfg, &dir);
         let model_arg = model.to_string_lossy().into_owned();
         let mut runner = SystemRunner;
-        let synth = crate::expand(
+        let synth = expand(
             cfg.synthesize.as_deref().expect("synth"),
             &[("model", &model_arg)],
         )
@@ -765,7 +824,7 @@ mod tests {
             wav.len()
         );
 
-        let stt = crate::expand(
+        let stt = expand(
             cfg.transcribe.as_deref().expect("stt"),
             &[("model", &model_arg)],
         )

@@ -322,10 +322,12 @@ impl Drm {
 
         // Cursor first: it is the topmost element and the one the cursor plane can take. It is rebuilt
         // on every paint, since its position is the common reason to paint at all.
-        let cursor =
-            state
-                .cursors
-                .elements(&mut self.renderer, &state.cursor_status, state.pointer, state.output_scale());
+        let cursor = state.cursors.elements(
+            &mut self.renderer,
+            &state.cursor_status,
+            state.pointer,
+            state.output_scale(),
+        );
         let scene_dirty = state.take_scene_dirty();
         let cached = self.scene.take();
         let scene = if let (SceneBuild::CursorOnly, Some(mut scene)) =
@@ -491,12 +493,9 @@ impl Drm {
                     // of step and the kernel starts reporting buffer/IO errors.
                     let (decision, waited) = frame_sync_wait(&result, already_waited);
                     match decision {
-                        SyncWait::Wait => match out
-                            .compositor
-                            .queue_frame(Some(presentation_scale::collect_feedback(
-                                state,
-                                &out.output,
-                            ))) {
+                        SyncWait::Wait => match out.compositor.queue_frame(Some(
+                            presentation_scale::collect_feedback(state, &out.output),
+                        )) {
                             Ok(()) => {
                                 out.frames.queue();
                                 queued.push(u32::from(out.crtc));

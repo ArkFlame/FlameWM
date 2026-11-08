@@ -4,12 +4,12 @@
 use super::*;
 use flamewm_api::PanelEdge;
 
-use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
+use crate::notification_center::is_escape_key;
 use flamewm_shell::dock::{self, DockSettings};
 use flamewm_shell::icon_loader::IconTarget;
 use flamewm_shell_core::dock::{drag_off_removes, move_pinned, slot_at, Edge};
-use crate::notification_center::is_escape_key;
 use flamewm_ui_document::UiDocumentAccess;
+use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
 
 /// Pointer distance (surface px) before a pressed pinned slot becomes a drag.
 const DRAG_START_PX: f32 = 6.0;
@@ -26,7 +26,12 @@ pub(crate) struct DockDrag {
 }
 
 /// Last projected dock state; an identical state skips the document write.
-pub(crate) type DockSync = (dock::DockFrame, (i32, i32, u32, u32), Vec<String>, Vec<flamewm_shell_core::dock::DockEntry>);
+pub(crate) type DockSync = (
+    dock::DockFrame,
+    (i32, i32, u32, u32),
+    Vec<String>,
+    Vec<flamewm_shell_core::dock::DockEntry>,
+);
 
 fn strut_edge(edge: Edge) -> DockEdge {
     match edge {
@@ -63,7 +68,12 @@ impl ShellLoop {
         let Some(panel) = snapshot.panels.panels.first() else {
             return;
         };
-        let Some(output) = snapshot.displays.outputs.iter().find(|o| o.id == panel.output) else {
+        let Some(output) = snapshot
+            .displays
+            .outputs
+            .iter()
+            .find(|o| o.id == panel.output)
+        else {
             return;
         };
         let layout = dock::layout_for(&settings, &snapshot.windows);
@@ -85,7 +95,12 @@ impl ShellLoop {
                 .find(|app| app.id.as_str() == id)
         };
         let running: Vec<bool> = layout.entries.iter().map(|entry| entry.running).collect();
-        let frame = dock::dock_frame(&running, layout.separator_after, settings.icon_size, settings.edge);
+        let frame = dock::dock_frame(
+            &running,
+            layout.separator_after,
+            settings.icon_size,
+            settings.edge,
+        );
         let scale = flamewm_shell::runtime::panel_ui_scale(output.shell_scale_percent);
         // The taskbar keeps its strip when the dock shares its edge, unless `taskbar.enabled` is off.
         let taskbar_shown = self.settings_cache.as_ref().is_none_or(taskbar_enabled);
@@ -122,8 +137,7 @@ impl ShellLoop {
             .entries
             .iter()
             .map(|entry| {
-                lookup(&entry.app_id)
-                    .map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
+                lookup(&entry.app_id).map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
             })
             .collect();
         let state: DockSync = (frame.clone(), rect, names.clone(), layout.entries.clone());
@@ -135,8 +149,7 @@ impl ShellLoop {
             .entries
             .iter()
             .map(|entry| {
-                lookup(&entry.app_id)
-                    .map_or_else(String::new, |app| app.icon_name.clone())
+                lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
             })
             .collect();
         async_projection::bump_dock_view_epoch();
@@ -150,7 +163,11 @@ impl ShellLoop {
         }
         let _ = runtime.move_resize(surface, rect.0, rect.1, rect.2, rect.3);
         // Reserve only the bar, not the hover-label room the window also covers.
-        let bar_css = if frame.edge.is_vertical() { frame.bar.w } else { frame.bar.h };
+        let bar_css = if frame.edge.is_vertical() {
+            frame.bar.w
+        } else {
+            frame.bar.h
+        };
         let _ = runtime.set_dock_frame(
             surface,
             Some(strut_edge(frame.edge)),
@@ -160,7 +177,11 @@ impl ShellLoop {
         if let Err(error) = runtime.with_document(surface, |document| {
             dock::project_dock(document, &frame, &names)?;
             for index in 0..icon_names.len() {
-                async_projection::apply_cached_binding(document, IconTarget::DockSlot(index as u8), icon_px)?;
+                async_projection::apply_cached_binding(
+                    document,
+                    IconTarget::DockSlot(index as u8),
+                    icon_px,
+                )?;
             }
             Ok::<(), String>(())
         }) {
@@ -303,9 +324,8 @@ impl ShellLoop {
             if hovered != self.dock_hover {
                 self.dock_hover = hovered;
                 if let Some(surface) = self.dock_surface {
-                    let _ = runtime.with_document(surface, |document| {
-                        dock::project_hover(document, hovered)
-                    });
+                    let _ = runtime
+                        .with_document(surface, |document| dock::project_hover(document, hovered));
                     let _ = runtime.redraw(surface);
                 }
             }
@@ -328,7 +348,6 @@ impl ShellLoop {
         Ok(())
     }
 }
-
 
 impl ShellLoop {
     /// Hides the right-click menu. The surface stays alive for the next open.
@@ -358,10 +377,22 @@ impl ShellLoop {
         let (w, h) = (w.round() as i32, h.round() as i32);
         let bar = frame.bar;
         let (x, y) = match frame.edge {
-            Edge::Bottom => (rect.0 + (slot.x * scale) as i32, rect.1 + ((bar.y * scale) as i32) - h - 4),
-            Edge::Top => (rect.0 + (slot.x * scale) as i32, rect.1 + (((bar.y + bar.h) * scale) as i32) + 4),
-            Edge::Left => (rect.0 + (((bar.x + bar.w) * scale) as i32) + 4, rect.1 + (slot.y * scale) as i32),
-            Edge::Right => (rect.0 + ((bar.x * scale) as i32) - w - 4, rect.1 + (slot.y * scale) as i32),
+            Edge::Bottom => (
+                rect.0 + (slot.x * scale) as i32,
+                rect.1 + ((bar.y * scale) as i32) - h - 4,
+            ),
+            Edge::Top => (
+                rect.0 + (slot.x * scale) as i32,
+                rect.1 + (((bar.y + bar.h) * scale) as i32) + 4,
+            ),
+            Edge::Left => (
+                rect.0 + (((bar.x + bar.w) * scale) as i32) + 4,
+                rect.1 + (slot.y * scale) as i32,
+            ),
+            Edge::Right => (
+                rect.0 + ((bar.x * scale) as i32) - w - 4,
+                rect.1 + (slot.y * scale) as i32,
+            ),
         };
         let geometry = (x, y, w.max(1) as u32, h.max(1) as u32);
         let menu = match self.dock_menu {
@@ -403,7 +434,8 @@ impl ShellLoop {
         self.dock_menu_slot = Some(index);
         if let Some(dock_surface) = self.dock_surface {
             self.dock_hover = None;
-            let _ = runtime.with_document(dock_surface, |document| dock::project_hover(document, None));
+            let _ =
+                runtime.with_document(dock_surface, |document| dock::project_hover(document, None));
             let _ = runtime.redraw(dock_surface);
         }
         self.dock_menu_items = items;
@@ -453,13 +485,17 @@ impl ShellLoop {
         match action {
             flamewm_shell_core::dock::DockMenuAction::KeepInDock => {
                 let mut ids = pinned_ids;
-                if !ids.contains(&entry.app_id) && ids.len() < flamewm_shell_core::dock::MAX_PINNED {
+                if !ids.contains(&entry.app_id) && ids.len() < flamewm_shell_core::dock::MAX_PINNED
+                {
                     ids.push(entry.app_id.clone());
                     self.persist_dock_pins(ids);
                 }
             }
             flamewm_shell_core::dock::DockMenuAction::RemoveFromDock => {
-                let ids: Vec<String> = pinned_ids.into_iter().filter(|id| *id != entry.app_id).collect();
+                let ids: Vec<String> = pinned_ids
+                    .into_iter()
+                    .filter(|id| *id != entry.app_id)
+                    .collect();
                 self.persist_dock_pins(ids);
             }
             flamewm_shell_core::dock::DockMenuAction::Open => {

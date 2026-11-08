@@ -293,7 +293,12 @@ impl App {
 
     /// Handles a key while the password prompt is open. Returns the request to retry when Enter
     /// submits a non-empty password. Plain text is typed, Backspace edits, and other keys are ignored.
-    fn prompt_key(&mut self, key: &str, text: Option<&str>, ctrl: bool) -> Option<(Vec<PathBuf>, String)> {
+    fn prompt_key(
+        &mut self,
+        key: &str,
+        text: Option<&str>,
+        ctrl: bool,
+    ) -> Option<(Vec<PathBuf>, String)> {
         let prompt = self.password.as_mut()?;
         match key {
             "return" | "enter" | "kp_enter" => {
@@ -308,7 +313,9 @@ impl App {
                 prompt.typed.pop();
             }
             _ => {
-                if let Some(text) = text.filter(|t| !t.is_empty() && !ctrl && !t.chars().any(char::is_control)) {
+                if let Some(text) =
+                    text.filter(|t| !t.is_empty() && !ctrl && !t.chars().any(char::is_control))
+                {
                     prompt.typed.push_str(text);
                 }
             }
@@ -531,7 +538,11 @@ impl App {
         doc.text("progress-text", format!("{percent}%"))?;
         match &self.password {
             Some(prompt) => {
-                let hint = if prompt.wrong { " (wrong, try again)" } else { "" };
+                let hint = if prompt.wrong {
+                    " (wrong, try again)"
+                } else {
+                    ""
+                };
                 let stars = "*".repeat(prompt.typed.chars().count());
                 doc.text_ref(
                     "status",
@@ -803,7 +814,12 @@ mod tests {
         assert_eq!(typed, "nope");
         app.start_extract(selection, Some(typed)).expect("retry");
         finish_job(&mut app, &rx);
-        assert!(app.password.as_ref().is_some_and(|p| p.wrong), "wrong password not reported: status={} prompt={}", app.status, app.password.is_some());
+        assert!(
+            app.password.as_ref().is_some_and(|p| p.wrong),
+            "wrong password not reported: status={} prompt={}",
+            app.status,
+            app.password.is_some()
+        );
 
         app.password.as_mut().unwrap().typed.clear();
         for ch in "open-sesame".chars() {
@@ -835,7 +851,10 @@ mod tests {
         app.prompt_key("backspace", None, false);
         assert_eq!(app.password.as_ref().unwrap().typed, "a");
         app.prompt_key("backspace", None, false);
-        assert!(app.prompt_key("return", None, false).is_none(), "empty must not submit");
+        assert!(
+            app.prompt_key("return", None, false).is_none(),
+            "empty must not submit"
+        );
         assert!(app.password.is_some());
     }
 }

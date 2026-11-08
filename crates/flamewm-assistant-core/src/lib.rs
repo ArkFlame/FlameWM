@@ -13,7 +13,6 @@ mod sha256;
 mod speech;
 mod sse;
 mod store;
-mod voice_setup;
 
 pub use ark::{
     ARK_BASE_URL, DEFAULT_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS, key_or_default, masked_key,
@@ -37,7 +36,6 @@ pub use speech::{
     encode_wav, tts_manifest,
 };
 pub use store::{ChatStore, Message, MsgState, Role, SessionState, now_ms};
-pub use voice_setup::{SETUP_BUSY, STATUS_FILE, apply_defaults, default_voice_dir, ready_model, setup_default};
 
 use std::fmt;
 use std::sync::Arc;

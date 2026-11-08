@@ -258,7 +258,7 @@ pub trait InputPort {
 
 pub trait ApplicationPort {
     fn launch(&mut self, app: &DesktopAppId, options: &ApplicationLaunchOptions)
-        -> FlameResult<()>;
+    -> FlameResult<()>;
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()>;
 }
 

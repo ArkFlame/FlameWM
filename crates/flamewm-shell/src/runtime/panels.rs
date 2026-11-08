@@ -3,7 +3,11 @@ use super::*;
 impl ShellSurfaces {
     /// Builds the gradient taskbar image on every panel from its own edge. Solid is a no-op here:
     /// settings projection hides the image. The image is a bounded 32-step alpha ramp.
-    pub fn apply_taskbar_gradient(&self, runtime: &mut SurfaceRuntime, settings: &flamewm_api::settings::SettingsSnapshot) -> Result<(), String> {
+    pub fn apply_taskbar_gradient(
+        &self,
+        runtime: &mut SurfaceRuntime,
+        settings: &flamewm_api::settings::SettingsSnapshot,
+    ) -> Result<(), String> {
         let text = |key: &str| match settings.values.get(key) {
             Some(flamewm_api::settings::SettingValue::Text(value)) => Some(value.as_str()),
             _ => None,
@@ -21,14 +25,28 @@ impl ShellSurfaces {
                 _ => record.placement.panel.edge,
             };
             // Vertical edges fade down the bar's rows; side edges fade across its columns.
-            let vertical = matches!(origin, flamewm_api::PanelEdge::Top | flamewm_api::PanelEdge::Bottom);
-            let from_start = matches!(origin, flamewm_api::PanelEdge::Top | flamewm_api::PanelEdge::Left);
+            let vertical = matches!(
+                origin,
+                flamewm_api::PanelEdge::Top | flamewm_api::PanelEdge::Bottom
+            );
+            let from_start = matches!(
+                origin,
+                flamewm_api::PanelEdge::Top | flamewm_api::PanelEdge::Left
+            );
             let (width, height) = if vertical { (1, STEPS) } else { (STEPS, 1) };
             // The fill colour is the bar's own surface colour: read back from the taskbar background.
             let colour = crate::projection::taskbar_surface();
-            let pixels = flamewm_shell_core::dock::gradient_ramp([colour.r, colour.g, colour.b], colour.a, STEPS as usize, from_start);
+            let pixels = flamewm_shell_core::dock::gradient_ramp(
+                [colour.r, colour.g, colour.b],
+                colour.a,
+                STEPS as usize,
+                from_start,
+            );
             let image = flamewm_ui_x11::RuntimeImage {
-                source: format!("taskbar-gradient-{origin:?}-{:02x}{:02x}{:02x}{:02x}", colour.r, colour.g, colour.b, colour.a),
+                source: format!(
+                    "taskbar-gradient-{origin:?}-{:02x}{:02x}{:02x}{:02x}",
+                    colour.r, colour.g, colour.b, colour.a
+                ),
                 width,
                 height,
                 pixels,
@@ -45,7 +63,11 @@ impl ShellSurfaces {
 
     /// Shows or hides every taskbar panel surface. Disabling the taskbar hides all of them;
     /// enabling restores only the panels the platform reports visible.
-    pub fn apply_taskbar_enabled(&self, runtime: &mut SurfaceRuntime, enabled: bool) -> Result<(), String> {
+    pub fn apply_taskbar_enabled(
+        &self,
+        runtime: &mut SurfaceRuntime,
+        enabled: bool,
+    ) -> Result<(), String> {
         for record in &self.panels {
             let show = enabled && record.placement.panel.visible;
             let result = if show {

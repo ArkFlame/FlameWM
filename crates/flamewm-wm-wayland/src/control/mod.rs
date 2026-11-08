@@ -22,6 +22,7 @@ use flamewm_api::background::BackgroundState;
 use flamewm_api::blue_light::resolve_at;
 use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
 use flamewm_api::input::PointerPosition;
+use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::ports::{
     ApplicationPort, BackgroundPort, DisplayPort, FdCallback, FdEvents, FdHandle, InputPort,
     MainLoopPort, SessionPort, ShortcutPort, TimerCallback, TimerHandle, TrayPort, WindowPort,
@@ -36,7 +37,6 @@ use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Rect, Size, TransactionId,
     WindowRef, WorkspaceRef,
 };
-use flamewm_api::panels::PanelsSnapshot;
 use flamewm_control_dbus::{ControlServer, ControlSignal};
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_integrations_linux::NetworkManagerSlot;
@@ -69,8 +69,8 @@ use self::apply::*;
 use self::media::*;
 use self::mirror::*;
 use self::session::*;
-use self::settings::*;
 pub(crate) use self::settings::nested_output_scale_percent;
+use self::settings::*;
 use self::switcher::*;
 
 /// Output name the compositor advertises to the shell; the nested compositor has one output.

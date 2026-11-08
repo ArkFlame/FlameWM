@@ -348,7 +348,9 @@ impl LaunchFeedback {
             let backdrop = runtime.desktop_backdrop((x, y, side as u32, side as u32), 100, 0);
             runtime.set_surface_backdrop(
                 surface,
-                backdrop.as_deref().map(|words| (words, side as u32, side as u32)),
+                backdrop
+                    .as_deref()
+                    .map(|words| (words, side as u32, side as u32)),
             )?;
             runtime.redraw(surface)?;
         }

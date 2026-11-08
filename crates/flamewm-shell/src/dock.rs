@@ -35,8 +35,14 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         Some(SettingValue::Text(value)) => Some(value.as_str()),
         _ => None,
     };
-    let enabled = matches!(snapshot.values.get("dock.enabled"), Some(SettingValue::Boolean(true)));
-    let show_running = !matches!(snapshot.values.get("dock.showRunning"), Some(SettingValue::Boolean(false)));
+    let enabled = matches!(
+        snapshot.values.get("dock.enabled"),
+        Some(SettingValue::Boolean(true))
+    );
+    let show_running = !matches!(
+        snapshot.values.get("dock.showRunning"),
+        Some(SettingValue::Boolean(false))
+    );
     let edge = match text("dock.position") {
         Some("left") => Edge::Left,
         Some("right") => Edge::Right,
@@ -82,15 +88,25 @@ pub fn running_apps(windows: &[WindowSnapshot]) -> Vec<String> {
 /// Dock layout for the current settings and windows.
 #[must_use]
 pub fn layout_for(settings: &DockSettings, windows: &[WindowSnapshot]) -> DockLayout {
-    merge_dock(&settings.pinned, &running_apps(windows), settings.show_running)
+    merge_dock(
+        &settings.pinned,
+        &running_apps(windows),
+        settings.show_running,
+    )
 }
 
 /// Click on an app slot: restore a minimised window, focus a running one, or
 /// launch an app with no window. Uses the most recent focused window first.
 #[must_use]
 pub fn click_request(app_id: &str, windows: &[WindowSnapshot]) -> ControlRequest {
-    let candidates = || windows.iter().filter(|w| !w.skip_taskbar && w.app_id.as_str() == app_id);
-    let window = candidates().find(|w| w.focused).or_else(|| candidates().next());
+    let candidates = || {
+        windows
+            .iter()
+            .filter(|w| !w.skip_taskbar && w.app_id.as_str() == app_id)
+    };
+    let window = candidates()
+        .find(|w| w.focused)
+        .or_else(|| candidates().next());
     match window {
         Some(window) if window.state == WindowState::Minimized => {
             ControlRequest::RestoreWindow(window.reference.clone())
@@ -137,7 +153,12 @@ pub struct DockFrame {
 
 /// Lays out `running.len()` slots (one per dock entry, `running[i]` drives the
 /// dot) on `edge`. `icon` is the icon edge in CSS px.
-pub fn dock_frame(running: &[bool], separator_after: Option<usize>, icon: f32, edge: Edge) -> DockFrame {
+pub fn dock_frame(
+    running: &[bool],
+    separator_after: Option<usize>,
+    icon: f32,
+    edge: Edge,
+) -> DockFrame {
     let count = running.len().min(MAX_SLOTS);
     let slot = icon + 2.0 * GAP;
     let vertical = edge.is_vertical();
@@ -147,16 +168,44 @@ pub fn dock_frame(running: &[bool], separator_after: Option<usize>, icon: f32, e
     // Bottom puts the label room above the bar; top puts it below.
     let bar_y = if edge == Edge::Bottom { room } else { 0.0 };
     let (width, height, bar) = if vertical {
-        (cross, main, Rect { x: 0.0, y: 0.0, w: cross, h: main })
+        (
+            cross,
+            main,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: cross,
+                h: main,
+            },
+        )
     } else {
-        (main, cross + room, Rect { x: 0.0, y: bar_y, w: main, h: cross })
+        (
+            main,
+            cross + room,
+            Rect {
+                x: 0.0,
+                y: bar_y,
+                w: main,
+                h: cross,
+            },
+        )
     };
     // Maps a bar-local (along, across) pair to surface coordinates for a rect of the given size.
     let map = |along: f32, across: f32, w: f32, h: f32| -> Rect {
         if vertical {
-            Rect { x: bar.x + across, y: bar.y + along, w, h }
+            Rect {
+                x: bar.x + across,
+                y: bar.y + along,
+                w,
+                h,
+            }
         } else {
-            Rect { x: bar.x + along, y: bar.y + across, w, h }
+            Rect {
+                x: bar.x + along,
+                y: bar.y + across,
+                w,
+                h,
+            }
         }
     };
     let mut slots = Vec::with_capacity(count);
@@ -167,18 +216,42 @@ pub fn dock_frame(running: &[bool], separator_after: Option<usize>, icon: f32, e
         let along = PAD + i as f32 * slot;
         let s = map(along, PAD, slot, slot);
         slots.push(s);
-        icons.push(Rect { x: s.x + GAP, y: s.y + GAP, w: icon, h: icon });
+        icons.push(Rect {
+            x: s.x + GAP,
+            y: s.y + GAP,
+            w: icon,
+            h: icon,
+        });
         dots.push(running.then(|| {
             if vertical {
-                Rect { x: s.x + 1.0, y: s.y + (slot - DOT) / 2.0, w: DOT, h: DOT }
+                Rect {
+                    x: s.x + 1.0,
+                    y: s.y + (slot - DOT) / 2.0,
+                    w: DOT,
+                    h: DOT,
+                }
             } else {
-                Rect { x: s.x + (slot - DOT) / 2.0, y: s.y + slot - DOT - 1.0, w: DOT, h: DOT }
+                Rect {
+                    x: s.x + (slot - DOT) / 2.0,
+                    y: s.y + slot - DOT - 1.0,
+                    w: DOT,
+                    h: DOT,
+                }
             }
         }));
         labels.push(if vertical {
-            Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            }
         } else {
-            let label_y = if edge == Edge::Bottom { 2.0 } else { bar.y + cross + 2.0 };
+            let label_y = if edge == Edge::Bottom {
+                2.0
+            } else {
+                bar.y + cross + 2.0
+            };
             Rect {
                 x: s.x + slot / 2.0 - LABEL_W / 2.0,
                 y: label_y,
@@ -192,9 +265,19 @@ pub fn dock_frame(running: &[bool], separator_after: Option<usize>, icon: f32, e
         .map(|after| {
             let at = PAD + (after + 1) as f32 * slot - 0.5;
             if vertical {
-                Rect { x: bar.x + PAD + 4.0, y: bar.y + at, w: cross - 2.0 * (PAD + 4.0), h: 1.0 }
+                Rect {
+                    x: bar.x + PAD + 4.0,
+                    y: bar.y + at,
+                    w: cross - 2.0 * (PAD + 4.0),
+                    h: 1.0,
+                }
             } else {
-                Rect { x: bar.x + at, y: bar.y + PAD + 4.0, w: 1.0, h: cross - 2.0 * (PAD + 4.0) }
+                Rect {
+                    x: bar.x + at,
+                    y: bar.y + PAD + 4.0,
+                    w: 1.0,
+                    h: cross - 2.0 * (PAD + 4.0),
+                }
             }
         });
     DockFrame {
@@ -213,7 +296,12 @@ pub fn dock_frame(running: &[bool], separator_after: Option<usize>, icon: f32, e
 /// Device-px placement of a dock surface on `output` (device px). `inset` is
 /// the reserved strip on the dock's edge (for example the taskbar height when
 /// both sit on the same edge). Centred along the edge.
-pub fn place(frame: &DockFrame, output: (i32, i32, i32, i32), scale: f32, inset: i32) -> (i32, i32, u32, u32) {
+pub fn place(
+    frame: &DockFrame,
+    output: (i32, i32, i32, i32),
+    scale: f32,
+    inset: i32,
+) -> (i32, i32, u32, u32) {
     let w = (frame.width * scale).round() as i32;
     let h = (frame.height * scale).round() as i32;
     let (ox, oy, ow, oh) = output;
@@ -337,14 +425,21 @@ mod tests {
         let split = dock_frame(&[true, true, false], Some(1), 48.0, Edge::Bottom);
         let sep = split.separator.expect("separator");
         assert!((sep.x - (PAD + 2.0 * 60.0 - 0.5)).abs() < 1e-3);
-        assert!(dock_frame(&[true], None, 48.0, Edge::Bottom).separator.is_none());
-        assert!(dock_frame(&[true], Some(0), 48.0, Edge::Bottom).separator.is_none());
+        assert!(dock_frame(&[true], None, 48.0, Edge::Bottom)
+            .separator
+            .is_none());
+        assert!(dock_frame(&[true], Some(0), 48.0, Edge::Bottom)
+            .separator
+            .is_none());
     }
 
     #[test]
     fn slot_count_is_capped() {
         let running = vec![false; MAX_SLOTS + 5];
-        assert_eq!(dock_frame(&running, None, 48.0, Edge::Bottom).slots.len(), MAX_SLOTS);
+        assert_eq!(
+            dock_frame(&running, None, 48.0, Edge::Bottom).slots.len(),
+            MAX_SLOTS
+        );
     }
 
     #[test]

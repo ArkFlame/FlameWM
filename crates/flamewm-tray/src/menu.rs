@@ -112,10 +112,7 @@ pub fn top_level_rows(entries: &[MenuEntry]) -> Vec<TrayMenuRow> {
         .iter()
         .filter_map(|entry| match entry {
             MenuEntry::Item {
-                id,
-                label,
-                enabled,
-                ..
+                id, label, enabled, ..
             } => Some(TrayMenuRow {
                 id: *id,
                 label: label.clone(),

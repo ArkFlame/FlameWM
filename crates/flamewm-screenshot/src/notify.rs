@@ -36,18 +36,36 @@ pub struct StopIndicator {
     id: u32,
 }
 
-pub fn recording_indicator(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Option<StopIndicator> {
+pub fn recording_indicator(
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Option<StopIndicator> {
     let mut monitor = Command::new("dbus-monitor")
-        .args(["--session", "interface='org.freedesktop.Notifications',member='ActionInvoked'"])
+        .args([
+            "--session",
+            "interface='org.freedesktop.Notifications',member='ActionInvoked'",
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
     let reply = Command::new("gdbus")
-        .args(["call", "--session", "--dest", NOTIFY_NAME, "--object-path", NOTIFY_PATH])
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            NOTIFY_NAME,
+            "--object-path",
+            NOTIFY_PATH,
+        ])
         .args(["--method", "org.freedesktop.Notifications.Notify"])
-        .args(["FlameWM", "uint32 0", "", "Recording screen", "Press Stop recording to finish"])
+        .args([
+            "FlameWM",
+            "uint32 0",
+            "",
+            "Recording screen",
+            "Press Stop recording to finish",
+        ])
         .args(["['stop', 'Stop recording']", "{}", "int32 0"])
         .output();
     let id = reply
@@ -62,7 +80,10 @@ pub fn recording_indicator(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) 
     let reader = std::thread::spawn(move || {
         use std::io::BufRead;
         let mut parser = ActionParser::default();
-        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
             if let Some((invoked, action)) = parser.feed(&line) {
                 if invoked == id && action == "stop" {
                     stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -112,7 +133,11 @@ impl ActionParser {
                 None
             }
             Some(id) => {
-                let action = text.strip_prefix("string ")?.trim().trim_matches('"').to_owned();
+                let action = text
+                    .strip_prefix("string ")?
+                    .trim()
+                    .trim_matches('"')
+                    .to_owned();
                 self.armed = false;
                 self.id = None;
                 Some((id, action))
@@ -130,8 +155,18 @@ impl Drop for StopIndicator {
         }
         // Remove the control once recording ends; best effort, the notification may already be gone.
         let _ = Command::new("gdbus")
-            .args(["call", "--session", "--dest", NOTIFY_NAME, "--object-path", NOTIFY_PATH])
-            .args(["--method", "org.freedesktop.Notifications.CloseNotification"])
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                NOTIFY_NAME,
+                "--object-path",
+                NOTIFY_PATH,
+            ])
+            .args([
+                "--method",
+                "org.freedesktop.Notifications.CloseNotification",
+            ])
             .arg(format!("uint32 {}", self.id))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -142,7 +177,7 @@ impl Drop for StopIndicator {
 
 #[cfg(test)]
 mod stop_control_tests {
-    use super::{parse_notify_reply, ActionParser};
+    use super::{ActionParser, parse_notify_reply};
 
     #[test]
     fn notify_reply_yields_the_notification_id() {
@@ -159,7 +194,10 @@ mod stop_control_tests {
     #[test]
     fn action_invoked_yields_id_and_key() {
         let signal = "signal time=1 sender=:1.2 -> destination=(null destination) serial=2 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=ActionInvoked\n   uint32 5\n   string \"stop\"\n";
-        assert_eq!(feed_all(&mut ActionParser::default(), signal), vec![(5, "stop".to_owned())]);
+        assert_eq!(
+            feed_all(&mut ActionParser::default(), signal),
+            vec![(5, "stop".to_owned())]
+        );
     }
 
     #[test]

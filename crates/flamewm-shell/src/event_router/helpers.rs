@@ -6,7 +6,9 @@ pub(super) enum InteractionOrigin {
     Output(flamewm_api::OutputId),
 }
 
-pub(super) fn resolve_interaction_origin(output: Option<flamewm_api::OutputId>) -> InteractionOrigin {
+pub(super) fn resolve_interaction_origin(
+    output: Option<flamewm_api::OutputId>,
+) -> InteractionOrigin {
     output.map_or(InteractionOrigin::Ignore, InteractionOrigin::Output)
 }
 
@@ -96,7 +98,11 @@ pub(super) fn root_pointer_for_surface(
 
 /// Non-primary releases are dropped, except an outside release: a right-button press outside an
 /// open shell popup must dismiss it (the right-click that opens another menu replaces this one).
-pub(super) fn non_primary_release_is_dropped(action: &str, is_release: bool, button: PointerButton) -> bool {
+pub(super) fn non_primary_release_is_dropped(
+    action: &str,
+    is_release: bool,
+    button: PointerButton,
+) -> bool {
     is_release
         && !matches!(button, PointerButton::Primary)
         && action != "keyboard.input"

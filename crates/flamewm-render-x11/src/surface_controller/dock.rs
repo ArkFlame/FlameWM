@@ -95,7 +95,10 @@ impl SurfaceController {
         if instance.role != SurfaceRole::Dock {
             return Err("set_dock_frame requires a dock surface".to_string());
         }
-        if instance.dock_edge == edge && instance.dock_radius == corner_radius && instance.dock_bar == bar {
+        if instance.dock_edge == edge
+            && instance.dock_radius == corner_radius
+            && instance.dock_bar == bar
+        {
             return Ok(());
         }
         let mask = dock_mask_plan(instance.dock_radius, corner_radius);
