@@ -235,6 +235,7 @@ fn invalid_owned<T>(message: String) -> FlameResult<T> {
     Err(FlameError::new(ErrorCode::InvalidArgument, message))
 }
 
+pub mod icon_theme;
 mod product_validate;
 mod render_backend_migrate;
 use render_backend_migrate::migrate_legacy_acceleration;

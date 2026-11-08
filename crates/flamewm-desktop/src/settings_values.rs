@@ -13,7 +13,15 @@ pub(crate) fn setting_text(snapshot: &SettingsSnapshot, key: &str) -> String {
 
 /// True when the snapshot's `iconTheme` differs from the last applied value.
 pub(crate) fn icon_theme_changed(previous: &str, snapshot: &SettingsSnapshot) -> bool {
-    setting_text(snapshot, "iconTheme") != previous
+    resolved_icon_theme(snapshot) != previous
+}
+
+/// The `iconTheme` the desktop applies: the Breeze family follows `appearance`.
+pub(crate) fn resolved_icon_theme(snapshot: &SettingsSnapshot) -> String {
+    flamewm_integrations_linux::icons::resolve_icon_theme(
+        &setting_text(snapshot, "iconTheme"),
+        &setting_text(snapshot, "appearance"),
+    )
 }
 
 /// Keys that the wallpaper request reads (`refresh::request_wallpaper`).

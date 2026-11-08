@@ -1144,8 +1144,28 @@ fn valid_icon_name(name: &str) -> bool {
     !name.is_empty() && !name.bytes().any(|byte| matches!(byte, b'/' | b'\\' | 0))
 }
 
-/// Product default icon theme, searched after the configured theme and before Breeze.
-pub const DEFAULT_ICON_THEME: &str = "MacTahoe";
+/// Product default icon theme family (Breeze, LGPL-3.0+). Dark or light variant is chosen
+/// by the caller from the appearance; searched after the configured theme and before Breeze.
+pub const DEFAULT_ICON_THEME: &str = "breeze";
+
+/// Resolves the configured `iconTheme` for `appearance` (`dark` unless `light` or `system`).
+/// `Breeze`/`breeze-dark` pick the matching variant; an empty value means the default family;
+/// any other theme name passes through unchanged so `MacTahoe` and friends stay selectable.
+#[must_use]
+pub fn resolve_icon_theme(configured: &str, appearance: &str) -> String {
+    let name = configured.trim();
+    let dark = !matches!(appearance, "light" | "system");
+    let family = if name.is_empty() {
+        DEFAULT_ICON_THEME
+    } else {
+        name
+    };
+    if family.eq_ignore_ascii_case("breeze") || family.eq_ignore_ascii_case("breeze-dark") {
+        if dark { "breeze-dark" } else { "breeze" }.to_owned()
+    } else {
+        family.to_owned()
+    }
+}
 
 /// Theme search chain: `FLAMEWM_ICON_THEME`, the Flame `iconTheme`
 /// preference, the desktop's configured theme (kdeglobals, then GTK), then
@@ -1169,6 +1189,7 @@ pub fn theme_chain(preferred: Option<&str>) -> Vec<String> {
     }
     theme_names.push(DEFAULT_ICON_THEME.to_owned());
     theme_names.push("Breeze".to_owned());
+    theme_names.push("Adwaita".to_owned());
     unique_strings(theme_names)
 }
 

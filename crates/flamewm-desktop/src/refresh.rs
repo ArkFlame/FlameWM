@@ -230,7 +230,7 @@ pub(crate) fn refresh_settings_projection(
     }
     publish_wallpaper_mean(state);
     if icon_theme_changed(&state.icon_theme, &state.settings) {
-        state.icon_theme = setting_text(&state.settings, "iconTheme");
+        state.icon_theme = resolved_icon_theme(&state.settings);
         state.icon_theme_pending = true;
     }
     // SettingsSnapshotChanged is the live authority for stickyNotesEnabled,

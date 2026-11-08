@@ -110,7 +110,8 @@ use rubber::{
 use settings_values::{ACCENT_TOKEN_ALPHAS, accent_token_values};
 use settings_values::{
     accent_color, desktop_entry_scale, desktop_visual_settings_changed, icon_theme_changed,
-    project_accent_tokens, setting_bool, setting_text, wallpaper_settings_changed,
+    project_accent_tokens, resolved_icon_theme, setting_bool, setting_text,
+    wallpaper_settings_changed,
 };
 use slots::{SlotInputs, apply_pending_icon_results, apply_ready_icons, project_slots};
 

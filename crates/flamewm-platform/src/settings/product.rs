@@ -257,7 +257,7 @@ impl Default for ProductSettings {
             panel_custom: false,
             items_custom: false,
             fonts_custom: false,
-            icon_theme: "MacTahoe".to_owned(),
+            icon_theme: icon_theme::DEFAULT_ICON_THEME.to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
             wallpaper_mode: BackgroundMode::Default,

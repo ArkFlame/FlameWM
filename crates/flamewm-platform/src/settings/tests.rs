@@ -38,7 +38,7 @@ fn defaults_match_current_flamewm_product_contract() {
 #[test]
 fn unset_icon_theme_defaults_to_plaguesur_and_writes_nothing() {
     let parsed = load("revision=2\n").expect("valid snapshot");
-    assert_eq!(parsed.icon_theme, "MacTahoe");
+    assert_eq!(parsed.icon_theme, "breeze");
     assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
 }
 

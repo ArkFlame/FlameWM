@@ -689,3 +689,38 @@ fn startup_preference_precedes_breeze_in_theme_chain() {
         "preference must win over Breeze: {names:?}"
     );
 }
+
+#[test]
+fn default_icon_theme_is_breeze_then_adwaita_in_chain() {
+    let chain = theme_chain(None);
+    let default = chain
+        .iter()
+        .position(|name| name == DEFAULT_ICON_THEME)
+        .expect("default theme in chain");
+    let breeze = chain
+        .iter()
+        .position(|name| name == "Breeze")
+        .expect("Breeze");
+    let adwaita = chain
+        .iter()
+        .position(|name| name == "Adwaita")
+        .expect("Adwaita");
+    assert_eq!(DEFAULT_ICON_THEME, "breeze");
+    assert!(default < breeze && breeze < adwaita, "chain: {chain:?}");
+}
+
+#[test]
+fn breeze_family_follows_appearance() {
+    assert_eq!(resolve_icon_theme("breeze", "dark"), "breeze-dark");
+    assert_eq!(resolve_icon_theme("Breeze", "light"), "breeze");
+    assert_eq!(resolve_icon_theme("breeze-dark", "light"), "breeze");
+    assert_eq!(resolve_icon_theme("breeze", "system"), "breeze");
+}
+
+#[test]
+fn empty_means_default_family_and_other_themes_pass_through() {
+    assert_eq!(resolve_icon_theme("", "dark"), "breeze-dark");
+    assert_eq!(resolve_icon_theme("  ", "light"), "breeze");
+    assert_eq!(resolve_icon_theme("MacTahoe", "dark"), "MacTahoe");
+    assert_eq!(resolve_icon_theme("Papirus", "light"), "Papirus");
+}

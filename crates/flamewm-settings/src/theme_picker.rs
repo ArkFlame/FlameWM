@@ -142,7 +142,7 @@ impl ThemeRegistry {
     }
 
     /// Borrow the already-rasterized first preview for the selected directory id.
-    /// An unset icon theme uses `FlameWM`'s `MacTahoe` default; absent or legacy
+    /// An unset icon theme uses `FlameWM`'s `breeze` default; absent or legacy
     /// themes return `None` so the UI can show its static fallback placeholder.
     /// Replacing this registry after an off-thread scan also replaces the cache;
     /// changes to the setting require only a new lookup, never a disk read.
@@ -178,7 +178,7 @@ impl ThemeRegistry {
 }
 
 /// `FlameWM`'s shipped default icon theme stays at the top of the picker.
-pub const BUNDLED_ICON_THEMES: [&str; 1] = ["MacTahoe"];
+pub const BUNDLED_ICON_THEMES: [&str; 1] = ["breeze"];
 
 /// Pin the bundled default first, then keep every discoverable installed theme.
 #[must_use]
@@ -498,14 +498,14 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let empty = with_bundled_icon_themes(Vec::new());
-        assert_eq!(ids(&empty), ["MacTahoe"]);
+        assert_eq!(ids(&empty), ["breeze"]);
         let found = with_bundled_icon_themes(vec![
             item("Papirus", "Papirus"),
-            item("MacTahoe", "Custom display name"),
+            item("breeze", "Custom display name"),
             item("candy-icons", "Candy"),
         ]);
-        assert_eq!(ids(&found), ["MacTahoe", "candy-icons", "Papirus"]);
-        assert_eq!(names(&found), ["MacTahoe", "Candy", "Papirus"]);
+        assert_eq!(ids(&found), ["breeze", "candy-icons", "Papirus"]);
+        assert_eq!(names(&found), ["breeze", "Candy", "Papirus"]);
         assert_eq!(found.len(), 3);
         let only_cursor = item("Bibata", "Bibata");
         let mut registry = ThemeRegistry::default();
