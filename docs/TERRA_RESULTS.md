@@ -129,3 +129,18 @@
 - Commits: 993a6ee9 (clipboard), pixel proof, fault-path tests, 2f48e017 (G9 recording), 51705bc7 (guard fix: x11rb kept in `capture.rs`; stale `main.rs` env exception removed from `docs/ARCHITECTURE_EXCEPTIONS.toml`).
 - Gates: `cargo test -p flamewm-screenshot` exit 0, 34 passed, zero warnings; `python3 tools/architecture_guard.py` exit 0; release build exit 0, zero warnings.
 - Not done: MIT-SHM capture (current path is XGetImage); Esc cancellation at runtime; stop-indicator click at runtime; Wayland backend. Haiku vs Sonnet trailer conflict on earlier commits: 993a6ee9, pixel and fault commits use Haiku 5.5 (not rewritten), later commits use Sonnet 5.5.
+
+## G12 Archiver — PARTIAL
+
+- Added tests in `crates/flamewm-archiver/src/tests/safety.rs`: zip symlink entry followed by a write through it (`zip_symlink_entry_cannot_redirect_a_later_write`), cancel mid-extract for tar.xz with partial-output removal, and cancel before create leaving no archive or `.partial` file. Existing traversal tests already covered zip-slip and tar/tar.gz/tar.xz/tar.bz2 `..`/absolute names, symlink entries and write-through-symlink.
+- `flock -w 1800 /tmp/opencode/flamewm-terra2.lock env CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-terra2 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p flamewm-archiver`: exit 0, 32 passed, 0 warnings. `python3 tools/architecture_guard.py`: exit 0. Commit pushed.
+- Not done: zstd (needs a new dependency and Cargo.lock change, not authorised), password-protected zip (zip crate built without AES/ZipCrypto features; encrypted entries not supported), and a formal progress-throughput check.
+
+## G11 Task Manager — PARTIAL
+
+- Already present before this pass: visibility gate that sleeps with no timer while obscured (`src/sample_gate.rs`), incremental `/proc` cache with per-PID state, 1 s sample cadence.
+- Added `ppid` and `depth` to `Process` (`src/model.rs`), `assign_depths` bounded at 32 levels with cycle guard, and indented names in the table (`src/lib.rs`). Tests: `stat_parses_parent_pid_after_comm_with_parens`, `depths_follow_parent_chain_and_stop_at_missing_or_cyclic_parents`; existing stat fixture fixed to set ppid. `cargo test -p flamewm-task-manager`: exit 0, 23 passed, 1 ignored, 0 warnings. `cargo build -p flamewm-task-manager --bins`: exit 0.
+- Idle measurement, isolated Xvfb `:97`, no window manager, 976 host processes, 10 s window after 6 s warm-up, run after the tree change: total about 2.0–2.75 CPU-s per 10 s (20–27%); main thread 155 ticks and sampler thread 42 ticks in one run (about 15% and 4%). This is far above the <1% target. Before-change baseline was not measured separately; the tree change only adds one field parse and one linear pass, so it is not the cause.
+- Root cause not established. `perf` is blocked by `perf_event_paranoid` (kernel profiling disallowed). Suspect: the main-thread path per one-second snapshot (`accept` → `paint_metrics`/`paint_graphs` → `sorted()` on about 1000 processes → full X11 document paint), which lies partly in Claude-owned render code. No fix applied.
+- Unverified: RSS trend, pause-when-hidden under a real obscuring window, process-tree screenshot. Screenshot taken at `/run/media/linsaftw/SDD/tmp-tm-Z73X/shot.png`, not inspected.
+- Not done: G7 Finder, G8 Terminal, G10 Image Viewer features (not started).
