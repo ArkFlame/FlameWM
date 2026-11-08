@@ -292,6 +292,23 @@ mod titlebar_fill_tests {
     use super::*;
 
     #[test]
+    fn taskbar_surface_fill_matches_the_surfaces_switch_and_opacity() {
+        // SS07 inputs: surfaceColor #284F77 at surfaceOpacity 67 gives alpha 171/255 (67.06%).
+        // Composited over black that is (27,53,80), the harness expectation.
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in [
+            ("surfaceCustom", SettingValue::Boolean(true)),
+            ("surfaceColor", SettingValue::Text("#284F77".into())),
+            ("surfaceOpacity", SettingValue::Percent(67)),
+        ] {
+            snapshot.values.insert(key.into(), value);
+        }
+        let fill = surface_fill(&snapshot);
+        assert_eq!(fill.rgb, 0x284F77);
+        assert_eq!(fill.alpha, 171);
+    }
+
+    #[test]
     fn titlebar_uses_the_shared_surface_fill_policy() {
         let snapshot = SettingsSnapshot::new(1);
         assert_eq!(titlebar_fill(&snapshot), surface_fill(&snapshot));
