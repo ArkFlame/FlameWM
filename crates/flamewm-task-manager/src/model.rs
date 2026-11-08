@@ -7,6 +7,9 @@ use std::time::Instant;
 #[derive(Clone, Debug, Default)]
 pub struct Process {
     pub pid: u32,
+    pub ppid: u32,
+    /// Number of ancestors that are also in the snapshot; 0 for roots. Drives tree indentation.
+    pub depth: u32,
     pub start: u64,
     pub name: String,
     pub uid: u32,
@@ -132,6 +135,7 @@ pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
     let pages = fields[21].parse::<u64>().ok()?;
     Some(Process {
         pid,
+        ppid: fields[1].parse().ok()?,
         name: sanitize(text.get(first + 1..last)?, 64),
         state: fields[0].chars().next()?,
         priority: fields[15].parse().ok()?,
@@ -337,6 +341,7 @@ impl Sampler {
             result.processes.push(task);
         }
         self.tasks.retain(|_, cached| cached.seen == tick);
+        assign_depths(&mut result.processes);
         result.tasks = result.processes.len();
         let (rx, tx) = parse_net_dev(&fs::read_to_string("/proc/net/dev").unwrap_or_default());
         let sampled = Instant::now();
@@ -403,6 +408,27 @@ impl Sampler {
     }
 }
 
+/// Tree depth from `ppid` links inside the snapshot. Bounded, so a corrupt cycle cannot loop.
+pub fn assign_depths(processes: &mut [Process]) {
+    const MAX_DEPTH: u32 = 32;
+    let parents: HashMap<u32, u32> = processes.iter().map(|p| (p.pid, p.ppid)).collect();
+    for process in processes.iter_mut() {
+        let mut depth = 0;
+        let mut parent = process.ppid;
+        while depth < MAX_DEPTH {
+            let Some(&next) = parents.get(&parent) else {
+                break;
+            };
+            if parent == process.pid {
+                break;
+            }
+            depth += 1;
+            parent = next;
+        }
+        process.depth = depth;
+    }
+}
+
 /// Refuse PID reuse between display and process operation. No shell expansion is possible.
 pub fn check_identity(pid: u32, start: u64) -> bool {
     let path = format!("/proc/{pid}/stat");
@@ -451,6 +477,7 @@ mod tests {
     #[test]
     fn parse_stat_handles_spaces_and_closing_paren_in_command() {
         let mut fields = vec!["S".to_string(); 22];
+        fields[1] = "1".into();
         fields[11] = "120".into();
         fields[12] = "30".into();
         fields[15] = "25".into();
@@ -597,5 +624,45 @@ mod bench {
         println!(
             "bench samples={SAMPLES} processes={processes} cpu_ms_per_sample={cpu:.3} wall_ms_per_sample={wall:.3}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    fn proc_at(pid: u32, ppid: u32) -> Process {
+        Process {
+            pid,
+            ppid,
+            ..Process::default()
+        }
+    }
+
+    #[test]
+    fn stat_parses_parent_pid_after_comm_with_parens() {
+        let text = "42 (a (b) c) S 7 42 42 0 -1 0 0 0 0 0 1 2 0 0 20 0 1 0 100 0 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        let p = parse_stat(42, text, 4096).expect("parse");
+        assert_eq!(p.ppid, 7);
+        assert_eq!(p.name, "a (b) c");
+    }
+
+    #[test]
+    fn depths_follow_parent_chain_and_stop_at_missing_or_cyclic_parents() {
+        let mut list = vec![
+            proc_at(1, 0),
+            proc_at(10, 1),
+            proc_at(11, 10),
+            proc_at(20, 999),
+            proc_at(30, 31),
+            proc_at(31, 30),
+        ];
+        assign_depths(&mut list);
+        let depth = |pid| list.iter().find(|p| p.pid == pid).unwrap().depth;
+        assert_eq!(depth(1), 0);
+        assert_eq!(depth(10), 1);
+        assert_eq!(depth(11), 2);
+        assert_eq!(depth(20), 0);
+        assert!(depth(30) <= 32 && depth(31) <= 32);
     }
 }

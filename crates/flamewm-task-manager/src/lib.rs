@@ -216,7 +216,10 @@ impl Application {
     }
     fn paint_theme(&self, doc: &mut impl UiDocumentAccess, accent: u32) -> Result<(), String> {
         let surface = surface_fill(&self.theme);
-        doc.background("task-manager", UiColor::from_rgb(surface.rgb, surface.alpha))?;
+        doc.background(
+            "task-manager",
+            UiColor::from_rgb(surface.rgb, surface.alpha),
+        )?;
         flamewm_ui_x11::surface_style::project_surface_outline(doc, "task-manager", &self.theme)?;
         doc.color_variable("--accent", UiColor::from_rgb(accent, 255))?;
         doc.color_variable("--accent-soft", UiColor::from_rgb(accent, 42))?;
@@ -228,7 +231,10 @@ impl Application {
         )?;
         let menu = menu_surface(&self.theme);
         for id in ["context", "confirm"] {
-            doc.background(id, UiColor::from_rgb(menu.fill.rgb, menu.fill.alpha.max(242)))?;
+            doc.background(
+                id,
+                UiColor::from_rgb(menu.fill.rgb, menu.fill.alpha.max(242)),
+            )?;
             doc.corner_radius(id, menu.radius as f32)?;
         }
         doc.foreground("menu-end-text", UiColor::from_rgb(DANGER_RGB, 255))
@@ -415,7 +421,8 @@ impl Application {
             let p = &self.snapshot.processes[hits[self.first + slot]];
             self.rows.push((p.pid, p.start));
             let id = |name: &str| format!("r-{slot}-{name}");
-            doc.text(&id("name"), display_name(p))?;
+            let indent = "  ".repeat(p.depth.min(8) as usize);
+            doc.text(&id("name"), format!("{indent}{}", display_name(p)))?;
             doc.background(&id("dot"), UiColor::from_rgb(state_color(p.state), 255))?;
             doc.text(&id("pid"), p.pid.to_string())?;
             doc.text_ref(&id("user"), &p.user)?;
@@ -428,8 +435,14 @@ impl Application {
             doc.text(&id("mem"), memory_text(p.rss_kib))?;
             doc.text_ref(&id("cmd"), &p.command)?;
             let memory_share = 100.0 * p.rss_kib as f64 / total as f64;
-            doc.background(&id("cpu"), UiColor::from_rgb(HEAT_RGB, heat_alpha(p.cpu / 50.0)))?;
-            doc.background(&id("mem"), UiColor::from_rgb(HEAT_RGB, heat_alpha(memory_share / 10.0)))?;
+            doc.background(
+                &id("cpu"),
+                UiColor::from_rgb(HEAT_RGB, heat_alpha(p.cpu / 50.0)),
+            )?;
+            doc.background(
+                &id("mem"),
+                UiColor::from_rgb(HEAT_RGB, heat_alpha(memory_share / 10.0)),
+            )?;
             let row = format!("row-{slot}");
             if self.selected == Some((p.pid, p.start)) {
                 doc.background(&row, UiColor::from_rgb(accent, 60))?;
@@ -785,7 +798,8 @@ fn fraction_width(used: u64, total: u64, width: u32) -> f32 {
     } else {
         (used.min(total) as f64 / total as f64 * f64::from(width)) as f32
     }
-}fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
+}
+fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
     let name = match snapshot.values.get("accent") {
         Some(SettingValue::Text(text)) => text.as_str(),
         _ => "#3daee9",
