@@ -159,7 +159,8 @@ impl<C: Connection> Wm<'_, C> {
                 event.window,
                 &desktop_stack_policy(ConfigureWindowAux::from_configure_request(&event), kind),
             )?;
-            return Ok(());
+            // An unframed dock (the taskbar) may restack itself over a reveal strip.
+            return self.raise_reveal_strips();
         };
         let Some(controller) = self.controller_for(client_id) else {
             return Ok(());
