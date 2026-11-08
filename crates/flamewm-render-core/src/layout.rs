@@ -330,7 +330,7 @@ impl LayoutResult {
 /// Parent index when `index` is an absolutely positioned element holding nothing but text, whose
 /// box is fixed by its parent's box alone. The element itself may be hidden. Rejects any node in
 /// `moved` on the path to the root (its box moves too), any scrolling (Auto/Scroll) or
-/// hidden-display ancestor, a scrolling box or text, and non-element parents.
+/// hidden-display ancestor, a scrolling box or text, flex parents, and non-element parents.
 fn isolated_leaf_parent(
     document: &RuntimeDocument,
     interaction: InteractionState,
@@ -357,6 +357,11 @@ fn isolated_leaf_parent(
             return None;
         }
         child = text.next_sibling;
+    }
+    // A flex container offsets its absolute children by the flow cursor in a full compute, so a
+    // block-origin placement would disagree with it. Such a parent takes the full compute.
+    if document.runtime_style_cow(parent, interaction).display == Display::Flex {
+        return None;
     }
     let mut ancestor = Some(parent);
     while let Some(current) = ancestor {

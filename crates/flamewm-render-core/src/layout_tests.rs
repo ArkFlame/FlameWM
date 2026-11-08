@@ -519,3 +519,89 @@ fn explicit_px_width_overflows_parent_but_max_width_percent_clamps_to_it() {
     assert_eq!(layout.boxes[1].rect.width, 300.0);
     assert_eq!(layout.boxes[2].rect.width, 200.0);
 }
+
+/// An absolute element with no children (a caret-like marker) beside a text box. Repeated
+/// isolated position writes must patch to the same boxes a full compute produces.
+#[test]
+fn isolated_childless_box_patch_matches_full_compute() {
+    let padded_flex = Style {
+        display: Display::Flex,
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        padding: Edges {
+            top: 6.0,
+            right: 8.0,
+            bottom: 6.0,
+            left: 8.0,
+        },
+        overflow_x: Overflow::Hidden,
+        overflow_y: Overflow::Hidden,
+        ..absolute_box(300.0, 50.0)
+    };
+    childless_patch_matches_full_compute(absolute_box(300.0, 50.0), true);
+    // Flex parent: the full compute offsets the caret by the flow cursor, so the patch declines.
+    childless_patch_matches_full_compute(padded_flex, false);
+}
+
+fn childless_patch_matches_full_compute(pill: Style, expect_patch: bool) {
+    let interaction = InteractionState::default();
+    // root > pill > [label (flow, text), caret (absolute, childless)]: the caret shares its flex
+    // parent with in-flow siblings, as the assistant composer does.
+    let nodes = vec![
+        geometry_node(
+            NodeKind::Element,
+            None,
+            Some(1),
+            None,
+            "root",
+            Style::default(),
+        ),
+        geometry_node(
+            NodeKind::Element,
+            Some(0),
+            Some(2),
+            None,
+            "pill",
+            pill,
+        ),
+        geometry_node(
+            NodeKind::Element,
+            Some(1),
+            Some(4),
+            Some(3),
+            "label",
+            Style::default(),
+        ),
+        geometry_node(NodeKind::Text, Some(2), None, None, "", Style::default()),
+        geometry_node(
+            NodeKind::Element,
+            Some(1),
+            None,
+            None,
+            "caret",
+            absolute_box(2.0, 16.0),
+        ),
+    ];
+    let mut doc = RuntimeDocument::new(CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets: Vec::new(),
+        nodes,
+    })
+    .expect("document validates");
+    let mut layout = LayoutEngine::compute(&doc, 800.0, 600.0, interaction);
+    for step in 0..12u32 {
+        let (x, y) = (10.0 + step as f32 * 7.0, 4.0 + (step % 3) as f32 * 9.0);
+        doc.set_position_px("caret", x, y).expect("caret move");
+        let patched = doc.patch_layout(&mut layout, interaction);
+        assert_eq!(patched, expect_patch, "step {step}: patch decision");
+        if !patched {
+            layout = LayoutEngine::compute(&doc, 800.0, 600.0, interaction);
+        }
+        assert_same_layout(
+            &layout,
+            &LayoutEngine::compute(&doc, 800.0, 600.0, interaction),
+        );
+    }
+}
