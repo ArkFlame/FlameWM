@@ -29,7 +29,7 @@ jobs:
         run: |
           sed -i '/^NoExtract/d' /etc/pacman.conf
           pacman -Syu --noconfirm --needed git namcap
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Build the Arch package
@@ -40,7 +40,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           sudo -u builder -H ./scripts/build-arch --syncdeps --noconfirm
           test -n "$(find .target/dist -name 'flamewm-git-[0-9]*.pkg.tar.zst')"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist-arch
           path: .target/dist/flamewm-git-*.pkg.tar.zst
@@ -50,13 +50,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # ./scripts/build-deb reads packaging/target-baseline.toml and re-executes
       # itself inside that pinned container image, so the job needs no host apt
       # list, Rust toolchain or cache step.
       - name: Build the Debian package in the baseline container
         run: ./scripts/build-deb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist-deb
           path: |
@@ -71,7 +71,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Log in to GHCR
         if: inputs.push_cpak
         run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -83,7 +83,7 @@ jobs:
           else
             ./scripts/build-cpak --engine docker --image "$image"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist-cpak
           path: .target/dist/flamewm-terminal-*
@@ -93,7 +93,7 @@ jobs:
     needs: [arch, deb, cpak]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: dist-*
           path: dist
@@ -103,7 +103,7 @@ jobs:
           cd dist
           sha256sum -- * >SHA256SUMS
           ls -l
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flamewm-dist
           path: dist/
