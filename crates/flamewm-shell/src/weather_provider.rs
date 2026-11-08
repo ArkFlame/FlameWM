@@ -87,8 +87,8 @@ pub fn parse_forecast(
     let is_day = match current.optional("is_day")? {
         None => true,
         Some(value) => match number(value)? {
-            flag if flag == 1.0 => true,
-            flag if flag == 0.0 => false,
+            1.0 => true,
+            0.0 => false,
             _ => return Err(WeatherError::Parse("value out of range")),
         },
     };
