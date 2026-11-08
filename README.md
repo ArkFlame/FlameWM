@@ -6,7 +6,7 @@
  </picture>
 </a>
 <img width="1080" height="1440" alt="image" src="https://github.com/user-attachments/assets/44501e7d-7012-47ee-9830-50ccb9caa126" />
-<img width="1344" height="756" alt="FlameWM desktop with a Terminal running flamefetch, an Explorer window, taskbar widgets and the clock" src="assets/screenshots/overview.webp" />
+<img width="1344" height="756" alt="FlameWM desktop with a Terminal running flamefetch, an Explorer window, desktop widgets (clock, CPU, memory, media) and the taskbar" src="assets/screenshots/overview.webp" />
 
 # FlameWM
 
