@@ -7,6 +7,7 @@
 use super::*;
 use crate::weather_host::{LocationSearch, SearchStatus};
 use flamewm_weather::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
+use flamewm_weather::weather_tint::Rgba;
 pub use flamewm_weather::weather_view::{
     condition_label, place_name, popup_view, tray_view, WEATHER_DAY_ROWS,
 };
@@ -49,14 +50,32 @@ fn set_icons(
     Ok(())
 }
 
+/// Only the active icon carries a tint. `None` clears it, so the glyph inherits the bar colour.
+fn set_icon_tints(
+    document: &mut impl UiDocumentAccess,
+    active: WeatherCondition,
+    tint: Option<Rgba>,
+) -> Result<(), String> {
+    for condition in WEATHER_CONDITIONS {
+        let id = format!("tray-weather-{}", icon_suffix(condition));
+        match tint.filter(|_| condition == active) {
+            Some([r, g, b, a]) => document.foreground(&id, UiColor { r, g, b, a })?,
+            None => document.foreground_clear(&id)?,
+        }
+    }
+    Ok(())
+}
+
 /// Taskbar tray entry: visibility, one condition icon, and the temperature text under it.
+/// `tint` is the `weatherTint` setting.
 pub fn project_weather_tray(
     document: &mut impl UiDocumentAccess,
     state: &WeatherState,
     units: TemperatureUnit,
     shown: bool,
+    tint: bool,
 ) -> Result<(), String> {
-    let view = tray_view(state, units, shown);
+    let view = tray_view(state, units, shown, tint);
     document.visible("tray-weather", view.visible)?;
     super::project_tray_button(document, "tray-weather", view.visible)?;
     set_icons(
@@ -65,6 +84,7 @@ pub fn project_weather_tray(
         Some(view.condition),
         view.visible,
     )?;
+    set_icon_tints(document, view.condition, view.tint)?;
     document.text("tray-weather-temp", view.temperature)
 }
 
@@ -185,6 +205,7 @@ mod tests {
                     max_c: 14,
                 })
                 .collect(),
+            is_day: true,
             fetched_at: 1,
         }
     }
@@ -209,12 +230,12 @@ mod tests {
             WeatherState::Offline(None),
             WeatherState::Error(WeatherError::Transport),
         ] {
-            let shown = tray_view(&state, TemperatureUnit::Celsius, true);
+            let shown = tray_view(&state, TemperatureUnit::Celsius, true, true);
             assert!(shown.visible, "{state:?}");
             assert_eq!(shown.temperature, "--");
             assert_eq!(shown.condition, WeatherCondition::Unknown);
             assert!(
-                !tray_view(&state, TemperatureUnit::Celsius, false).visible,
+                !tray_view(&state, TemperatureUnit::Celsius, false, true).visible,
                 "{state:?}"
             );
         }
@@ -224,16 +245,16 @@ mod tests {
     fn tray_shows_integer_temperature_for_ready_and_offline_snapshots() {
         let ready = WeatherState::Ready(snapshot(0));
         assert_eq!(
-            tray_view(&ready, TemperatureUnit::Celsius, true).temperature,
+            tray_view(&ready, TemperatureUnit::Celsius, true, true).temperature,
             "12\u{b0}"
         );
         assert_eq!(
-            tray_view(&ready, TemperatureUnit::Fahrenheit, true).temperature,
+            tray_view(&ready, TemperatureUnit::Fahrenheit, true, true).temperature,
             "54\u{b0}"
         );
         let offline = WeatherState::Offline(Some(snapshot(0)));
         assert_eq!(
-            tray_view(&offline, TemperatureUnit::Celsius, true).condition,
+            tray_view(&offline, TemperatureUnit::Celsius, true, true).condition,
             WeatherCondition::Overcast
         );
     }
@@ -245,6 +266,7 @@ mod tests {
             &mut doc,
             &WeatherState::Ready(snapshot(0)),
             TemperatureUnit::Celsius,
+            true,
             true,
         )
         .unwrap();
@@ -259,6 +281,7 @@ mod tests {
             &WeatherState::Disabled,
             TemperatureUnit::Celsius,
             true,
+            true,
         )
         .unwrap();
         assert!(!disabled.visible["tray-weather"]);
@@ -269,6 +292,7 @@ mod tests {
             &mut unconfigured,
             &WeatherState::Unconfigured,
             TemperatureUnit::Celsius,
+            true,
             true,
         )
         .unwrap();
@@ -282,6 +306,7 @@ mod tests {
             &WeatherState::Disabled,
             TemperatureUnit::Celsius,
             false,
+            true,
         )
         .unwrap();
         assert!(!off.visible["tray-weather"]);
@@ -421,6 +446,7 @@ mod panel_tray_tests {
             temperature_c: 21,
             condition: WeatherCondition::Clear,
             days: Vec::new(),
+            is_day: true,
             fetched_at: 1,
         })
     }
@@ -438,11 +464,12 @@ mod panel_tray_tests {
         ];
         for (state, expected) in cases {
             let mut recorder = RecordingUiDoc::default();
-            project_weather_tray(&mut recorder, &state, TemperatureUnit::Celsius, true).unwrap();
+            project_weather_tray(&mut recorder, &state, TemperatureUnit::Celsius, true, true)
+                .unwrap();
             assert_eq!(recorder.texts["tray-weather-temp"], expected);
 
             let mut doc = flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel decodes");
-            project_weather_tray(&mut doc, &state, TemperatureUnit::Celsius, true)
+            project_weather_tray(&mut doc, &state, TemperatureUnit::Celsius, true, true)
                 .unwrap_or_else(|error| panic!("tray projection refused: {error}"));
             let viewport = (1080.0, 72.0);
             let button = doc
@@ -458,5 +485,73 @@ mod panel_tray_tests {
                 && span.1 + span.3 <= button.1 + button.3 + 0.5;
             assert!(inside, "temp span {span:?} outside button {button:?}");
         }
+    }
+
+    // OBSERVABLE: with tinting on only the active condition glyph gets the table colour;
+    // tinting off and unknown data write no foreground at all.
+    // MUTATION: tinting every icon, or tinting Unknown, fails here.
+    #[test]
+    fn tint_is_written_to_the_active_glyph_only() {
+        let rain = WeatherState::Ready(WeatherSnapshot {
+            condition: WeatherCondition::Rain,
+            ..match ready_21c() {
+                WeatherState::Ready(snapshot) => snapshot,
+                _ => unreachable!(),
+            }
+        });
+        let mut on = flamewm_ui_x11::test_support::RecordingUiDoc::default();
+        project_weather_tray(&mut on, &rain, TemperatureUnit::Celsius, true, true).unwrap();
+        assert_eq!(on.foregrounds.len(), 1, "{:?}", on.foregrounds.keys());
+        assert_eq!(
+            on.foregrounds["tray-weather-showers"],
+            UiColor {
+                r: 60,
+                g: 127,
+                b: 224,
+                a: 255
+            }
+        );
+
+        let mut off = flamewm_ui_x11::test_support::RecordingUiDoc::default();
+        project_weather_tray(&mut off, &rain, TemperatureUnit::Celsius, true, false).unwrap();
+        assert!(off.foregrounds.is_empty());
+
+        let mut unknown = flamewm_ui_x11::test_support::RecordingUiDoc::default();
+        project_weather_tray(
+            &mut unknown,
+            &WeatherState::Unconfigured,
+            TemperatureUnit::Celsius,
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(unknown.foregrounds.is_empty());
+    }
+
+    // REGRESSION: the condition glyph and the temperature pill share the taskbar entry's
+    // vertical centre (the pill overlays the glyph). Measured in the real compiled panel.
+    // OBSERVABLE: |glyph centre - entry centre| and |pill centre - entry centre| <= 1px.
+    // MUTATION: restoring the stacked column (text under the glyph) fails here.
+    #[test]
+    fn tray_glyph_and_temperature_share_the_entry_vertical_centre() {
+        let mut doc = flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel decodes");
+        project_weather_tray(&mut doc, &ready_21c(), TemperatureUnit::Celsius, true, true)
+            .expect("tray projection");
+        let viewport = (1080.0, 72.0);
+        let button = doc
+            .layout_box_by_id("tray-weather", viewport)
+            .expect("button");
+        let glyph = doc
+            .layout_box_by_id("tray-weather-clear", viewport)
+            .expect("glyph");
+        let pill = doc
+            .layout_box_by_id("tray-weather-temp", viewport)
+            .expect("pill");
+        let centre_y = button.1 + button.3 / 2.0;
+        let glyph_dy = (glyph.1 + glyph.3 / 2.0 - centre_y).abs();
+        let pill_dy = (pill.1 + pill.3 / 2.0 - centre_y).abs();
+        assert!(glyph_dy <= 1.0, "glyph {glyph:?} off centre {button:?}");
+        assert!(pill_dy <= 1.0, "pill {pill:?} off centre {button:?}");
+        assert!(pill.2 > 0.0 && pill.3 > 0.0, "zero-size pill {pill:?}");
     }
 }

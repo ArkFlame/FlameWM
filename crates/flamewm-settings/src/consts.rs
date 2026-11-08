@@ -14,6 +14,7 @@ pub(crate) const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 /// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
 pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "nav-selection-accent",
+    "weather-tint-on",
     "reduce-transparency-on",
     "anim-global-on",
     "a11y-high-contrast-on",
@@ -207,6 +208,7 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "weather-enabled-off",
         true,
     ),
+    ("weatherTint", "weather-tint-on", "weather-tint-off", true),
     (
         "autoLocationEnabled",
         "weather-auto-location-on",

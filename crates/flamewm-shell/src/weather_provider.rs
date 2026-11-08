@@ -54,7 +54,7 @@ fn validate_query(raw: &str) -> Result<&str, WeatherError> {
 #[must_use]
 pub fn forecast_url(location: &WeatherLocation) -> String {
     format!(
-        "{FORECAST_BASE}?latitude={}&longitude={}&current=temperature_2m,weather_code\
+        "{FORECAST_BASE}?latitude={}&longitude={}&current=temperature_2m,weather_code,is_day\
          &daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days={MAX_FORECAST_DAYS}&timezone=auto",
         location.latitude, location.longitude
     )
@@ -83,6 +83,15 @@ pub fn parse_forecast(
     let current = root.field("current")?;
     let temperature_c = celsius(current.field("temperature_2m")?)?;
     let condition = WeatherCondition::from_wmo_code(wmo_code(current.field("weather_code")?)?);
+    // Absent `is_day` (older payloads) counts as daylight.
+    let is_day = match current.optional("is_day")? {
+        None => true,
+        Some(value) => match number(value)? {
+            flag if flag == 1.0 => true,
+            flag if flag == 0.0 => false,
+            _ => return Err(WeatherError::Parse("value out of range")),
+        },
+    };
 
     let daily = root.field("daily")?;
     let dates = array(daily.field("time")?)?;
@@ -119,6 +128,7 @@ pub fn parse_forecast(
         temperature_c,
         condition,
         days,
+        is_day,
         fetched_at,
     })
 }
@@ -618,5 +628,31 @@ mod tests {
 
         let failing = OpenMeteo(MockHttp::new(Err(WeatherError::Transport)));
         assert_eq!(failing.forecast(&berlin()), Err(WeatherError::Transport));
+    }
+
+    // OBSERVABLE: `current.is_day` 1 is day, 0 is night, an absent key is day (older payloads),
+    // and any other value is a parse error rather than a guess.
+    // MUTATION: treating an absent key as night, or accepting 2, fails here.
+    #[test]
+    fn forecast_is_day_flag_is_strict_and_defaults_to_day() {
+        let at = |current_tail: &str| {
+            FORECAST_FIXTURE.replace(
+                "\"weather_code\":3}",
+                &format!("\"weather_code\":3{current_tail}}}"),
+            )
+        };
+        assert!(parse_forecast(&at(""), berlin(), 1).unwrap().is_day);
+        assert!(
+            parse_forecast(&at(",\"is_day\":1"), berlin(), 1)
+                .unwrap()
+                .is_day
+        );
+        assert!(
+            !parse_forecast(&at(",\"is_day\":0"), berlin(), 1)
+                .unwrap()
+                .is_day
+        );
+        assert!(parse_forecast(&at(",\"is_day\":2"), berlin(), 1).is_err());
+        assert!(parse_forecast(&at(",\"is_day\":\"1\""), berlin(), 1).is_err());
     }
 }

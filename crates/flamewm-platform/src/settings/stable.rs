@@ -129,6 +129,7 @@ stable_settings! {
     (false, taskbar, "taskbarActivities", taskbar_activities),
     (false, taskbar, "taskbarSeparate", taskbar_separate),
     (false, weather, "weatherEnabled", weather_enabled),
+    (false, weather, "weatherTint", weather_tint),
     (false, weather, "weatherLocation", weather_location),
     (false, weather, "weatherUnits", weather_units),
     (false, weather, "autoLocationEnabled", auto_location_enabled),

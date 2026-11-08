@@ -3,6 +3,7 @@
 //! No UI types here; projections only write the strings and visibility these return.
 
 use crate::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
+use crate::weather_tint::{Rgba, icon_tint};
 
 /// Rows in the popup forecast list.
 pub const WEATHER_DAY_ROWS: usize = 7;
@@ -46,23 +47,35 @@ pub struct WeatherTrayView {
     pub visible: bool,
     pub condition: WeatherCondition,
     pub temperature: String,
+    /// Glyph colour; `None` when tinting is off or the condition has no tint.
+    pub tint: Option<Rgba>,
 }
 
 /// Tray entry: shown when `taskbarShowWeather` is on and weather is enabled. Enabled
 /// without a location shows the neutral icon and `--` (the popup offers the picker).
+/// `tint` is the `weatherTint` setting; when off the glyph keeps the inherited colour.
 #[must_use]
-pub fn tray_view(state: &WeatherState, units: TemperatureUnit, shown: bool) -> WeatherTrayView {
+pub fn tray_view(
+    state: &WeatherState,
+    units: TemperatureUnit,
+    shown: bool,
+    tint: bool,
+) -> WeatherTrayView {
     let visible = shown && !matches!(state, WeatherState::Disabled);
     match state {
         WeatherState::Ready(snapshot) | WeatherState::Offline(Some(snapshot)) => WeatherTrayView {
             visible,
             condition: snapshot.condition,
             temperature: format!("{}\u{b0}", units.convert_c(snapshot.temperature_c)),
+            tint: tint
+                .then(|| icon_tint(snapshot.condition, snapshot.is_day))
+                .flatten(),
         },
         _ => WeatherTrayView {
             visible,
             condition: WeatherCondition::Unknown,
             temperature: "--".to_owned(),
+            tint: None,
         },
     }
 }

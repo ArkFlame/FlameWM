@@ -131,6 +131,9 @@ pub struct WeatherSnapshot {
     pub temperature_c: i32,
     pub condition: WeatherCondition,
     pub days: Vec<DayForecast>,
+    /// Whether the location is in daylight now (Open-Meteo `current.is_day`). Only the clear
+    /// sky tint reads it. The published feed does not carry it, so decoded snapshots are day.
+    pub is_day: bool,
     /// Unix seconds when the data was fetched.
     pub fetched_at: u64,
 }
@@ -402,6 +405,7 @@ fn decode_snapshot(text: &str) -> Option<WeatherSnapshot> {
         temperature_c,
         condition,
         days,
+        is_day: true,
         fetched_at,
     })
 }
@@ -495,6 +499,7 @@ mod tests {
             temperature_c: 12,
             condition: WeatherCondition::Overcast,
             days: Vec::new(),
+            is_day: true,
             fetched_at: 1,
         }
     }

@@ -58,7 +58,7 @@ pub fn weather_widget_view(feed: &WeatherFeedSnapshot) -> WeatherWidgetView {
     };
     let units = decoded.settings.units;
     let popup = popup_view(&decoded.state, &decoded.settings);
-    let tray = tray_view(&decoded.state, units, true);
+    let tray = tray_view(&decoded.state, units, true, false);
     let days = match &decoded.state {
         WeatherState::Ready(snapshot) | WeatherState::Offline(Some(snapshot)) => snapshot
             .days
@@ -140,6 +140,7 @@ mod tests {
                     max_c: 12,
                 },
             ],
+            is_day: true,
             fetched_at: 0,
         })
     }
@@ -182,7 +183,7 @@ mod tests {
     fn ready_feed_matches_tray_temperature_and_unit() {
         let feed = feed_of(true, TemperatureUnit::Fahrenheit, ready(), true);
         let view = weather_widget_view(&feed);
-        let tray = tray_view(&ready(), TemperatureUnit::Fahrenheit, true);
+        let tray = tray_view(&ready(), TemperatureUnit::Fahrenheit, true, false);
         assert_eq!(view.temperature, tray.temperature);
         assert_eq!(view.temperature, "68\u{b0}");
         assert_eq!(view.location, "Oslo, Norway");

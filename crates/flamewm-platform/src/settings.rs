@@ -263,6 +263,8 @@ mod switch_contract_tests;
 mod switch_group_tests;
 #[cfg(test)]
 mod switch_migration_tests;
+#[cfg(test)]
+mod weather_tint_settings_tests;
 
 #[cfg(test)]
 mod outline_default_tests {

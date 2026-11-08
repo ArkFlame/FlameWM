@@ -17,13 +17,14 @@ impl ShellLoop {
         let units = feed.settings.units;
         let shown =
             crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref()).weather;
+        let tint = flamewm_weather::weather_tint::tint_enabled(self.settings_cache.as_ref());
         // All native monitor panels own independent retained documents. A weather
         // tick must update every panel, not just the primary surface (a stale
         // second monitor otherwise keeps the previous condition/temperature).
         let mut tray_ok = true;
         for panel in self.surfaces.panel_handles() {
             let projected = runtime.with_document(panel, |document| {
-                projection::project_weather_tray(document, &feed.state, units, shown)
+                projection::project_weather_tray(document, &feed.state, units, shown, tint)
             });
             if let Err(error) = &projected {
                 crate::log_limit::emit(

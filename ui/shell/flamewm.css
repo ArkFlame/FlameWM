@@ -278,9 +278,11 @@ input { cursor:text; }
 .symbolic-icon { -flamewm-image-treatment: symbolic; }
 .favorite-icon { color:var(--sticky-bg); }
 
-/* A09 weather tray: condition icon with the integer temperature directly under it. */
-.tray-weather { flex-direction:column; }
-.tray-weather-temp { font-size:var(--font-xs); color:var(--text); }
+/* A09 weather tray: the condition glyph and the temperature share the entry's vertical centre.
+   The temperature overlays the glyph inside a dark rounded pill (surface token) for legibility. */
+.tray-weather { flex-direction:column; position:relative; }
+.tray-weather-overlay { position:absolute; left:0px; top:0px; width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+.tray-weather-temp { height:14px; padding:0px 5px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:7px; background:var(--surface); font-size:var(--font-xs); color:var(--text); }
 
 /* Top-center application launcher: Start's search field, rows and surface tokens only. */
 .launcher-popup { position:absolute; left:0px; top:0px; width:600px; padding:var(--space-md); box-sizing:border-box; display:flex; flex-direction:column; background:var(--surface); color:var(--text); border:1px solid var(--rim); border-radius:18px; }

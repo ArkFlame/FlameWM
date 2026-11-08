@@ -97,6 +97,8 @@ pub struct ProductSettings {
     /// `taskbarSeparate`: one rounded background per element instead of a unified bar.
     pub taskbar_separate: bool,
     pub weather_enabled: bool,
+    /// `weatherTint`: tint the taskbar weather glyph by condition (default on).
+    pub weather_tint: bool,
     /// Encoded weather location (`lat\tlon\tcountry\tname`); empty means unset.
     pub weather_location: String,
     /// `celsius` or `fahrenheit`.
@@ -304,6 +306,7 @@ impl Default for ProductSettings {
             taskbar_activities: true,
             taskbar_separate: false,
             weather_enabled: true,
+            weather_tint: true,
             weather_location: String::new(),
             weather_units: "celsius".to_owned(),
             auto_location_enabled: true,

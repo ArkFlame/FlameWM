@@ -23,6 +23,7 @@ fn snapshot() -> WeatherSnapshot {
                 max_c: 9,
             },
         ],
+        is_day: true,
         fetched_at: 1_800_000_000,
     }
 }

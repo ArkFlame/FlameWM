@@ -5,4 +5,5 @@
 
 pub mod weather;
 pub mod weather_feed;
+pub mod weather_tint;
 pub mod weather_view;

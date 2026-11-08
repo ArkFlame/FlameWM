@@ -286,6 +286,7 @@ mod tests {
             temperature_c: 9,
             condition: WeatherCondition::Clear,
             days: Vec::new(),
+            is_day: true,
             fetched_at: 1,
         }))
     }
@@ -343,6 +344,7 @@ mod tests {
             temperature_c: 9,
             condition: WeatherCondition::Clear,
             days: Vec::new(),
+            is_day: true,
             fetched_at: 1,
         }))
         .unwrap();
@@ -541,6 +543,7 @@ mod flow_tests {
                     max_c: 14,
                 })
                 .collect(),
+            is_day: true,
             fetched_at: 1,
         }
     }
@@ -554,7 +557,7 @@ mod flow_tests {
     fn tray_of(host: &WeatherHost) -> RecordingUiDoc {
         let feed = host.feed();
         let mut doc = RecordingUiDoc::default();
-        project_weather_tray(&mut doc, &feed.state, feed.settings.units, true).unwrap();
+        project_weather_tray(&mut doc, &feed.state, feed.settings.units, true, true).unwrap();
         doc
     }
 
