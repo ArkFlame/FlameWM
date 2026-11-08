@@ -682,7 +682,8 @@ def wait_for_settings_window(ctx: Ctx, evidence_path: Path, timeout: float = 5.0
 
 
 def ss03_selected_row_matches(pixel: tuple[int, int, int] | None, accent: str) -> bool:
-    expected = expected_selected_row_pixel(accent)
+    """The selected nav row is a solid accent fill (ui/settings.css), not the 56-alpha tint of other rows."""
+    expected = accent_rgb(accent)
     return bool(pixel is not None and expected is not None
                 and max(abs(actual - target) for actual, target in zip(pixel, expected)) <= 8)
 
@@ -712,10 +713,9 @@ def capture_accent_visual(ctx: Ctx, run: Path, name: str, geometry: dict,
     shot = run / "shots" / f"ss03-{name}.png"
     captured, command = capture(ctx, shot)
     expected_rgb = accent_rgb(expected)
-    # Runtime positions nav-selection at x=8 and nav_top(Appearance)=72, with a
-    # 192x38 background; x=170,y=92 samples its interior. x=100 sat on the "Appearance"
-    # label glyphs (ui/settings.css nav label), so the sample read text antialiasing.
-    accent_pixel = image_pixel(shot, geometry["x"] + 170, geometry["y"] + 92) if captured else None
+    # The sidebar Search field now sits above the nav, so the selected "Theme" row is at client y 109..139
+    # (measured on 820x540 captures); y=124 samples its solid accent fill. x=170 is clear of the label glyphs.
+    accent_pixel = image_pixel(shot, geometry["x"] + 170, geometry["y"] + 124) if captured else None
     # HTML/CSS defines a 30x30 button with a centered 9x9 white selected marker.
     # Count marker-colored pixels in that source-defined 9x9 region, not one assumed center pixel.
     marker = image_region_color_count(shot, (geometry["x"] + swatch_point[0] - 4,
@@ -1332,7 +1332,8 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
     # Accent row order (ui/settings.html, Theme page): red 610, blue 648, purple 686, teal 724, then the wheel.
     # The Accent preset Reset was removed (settings.accent.reset is rejected), so the last palette choice
     # is the value that must persist across a WM restart.
-    choices = (("blue", "#3DAEE9", (648, 151)), ("teal", "#1ABC9C", (724, 151)))
+    # Swatch centres measured on the 820x540 client (marker 9x9 probe at the centre): blue (657,155), teal (730,155).
+    choices = (("blue", "#3DAEE9", (657, 155)), ("teal", "#1ABC9C", (730, 155)))
     observations: dict[str, bool | None] = {
         "blue_snapshot": None, "teal_snapshot": None,
         "selected_visuals": None, "reset_persisted_after_restart": None,
