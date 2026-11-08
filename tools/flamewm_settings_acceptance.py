@@ -3323,6 +3323,25 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     return entry
 
 
+def ss10_settings_path(ctx: Ctx) -> Path:
+    return ctx.run / "home" / ".config" / "flamewm" / "settings.toml"
+
+
+def ss10_read_settings(ctx: Ctx) -> str | None:
+    path = ss10_settings_path(ctx)
+    return path.read_text() if path.exists() else None
+
+
+def ss10_restore_settings(ctx: Ctx, args: argparse.Namespace, original: str | None) -> None:
+    """Put the run config back as it was before SS10 and restart the owned WM onto it."""
+    path = ss10_settings_path(ctx)
+    if original is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(original)
+    restart_owned_wm(ctx, args, "wm-ss10-reset")
+
+
 def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Click the 125 Displays scale button; PASS needs the snapshot change and the value after a WM restart."""
     observations: dict[str, bool | None] = {"scale_changed_snapshot": None, "mode_list_unchanged": None,
@@ -3346,6 +3365,8 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
     if shutil.which("gdbus") is None:
         return result_entry("SS10", STATUS_NOT_RUN, "SS10 needs gdbus for the authoritative Displays snapshot")
 
+    # The scale click persists to the shared run config; SS17 later reuses this session, so restore it after SS10.
+    original_settings = ss10_read_settings(ctx)
     settings = ctx.spawn("settings-ss10-displays", [args.settings_bin, "--page", "displays", "--window-size", f"{SS10_CLIENT[0]}x{SS10_CLIENT[1]}"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "displays", "--window-size", f"{SS10_CLIENT[0]}x{SS10_CLIENT[1]}"]))
     time.sleep(args.settle_seconds)
@@ -3426,6 +3447,10 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
             observations["scale_persisted_after_restart"] = persisted_scales.get(output_id) == SS10_TARGET_SCALE
     elif observations["scale_changed_snapshot"] is True:
         details["reason"] = "owned WM could not be restarted to verify persistence"
+    if observations["scale_changed_snapshot"] is not None:
+        # Restore the pre-run config and restart so later rows (SS17 j07 popup) see the baseline scale.
+        ss10_restore_settings(ctx, args, original_settings)
+        details["commands"].append("restore run settings and restart owned WM")
     return finish()
 
 

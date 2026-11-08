@@ -29,5 +29,30 @@ class Ss10ModeCount(unittest.TestCase):
         self.assertIsNone(harness.display_output_mode_count(SNAPSHOT, "missing"))
 
 
+class Ss10RestoreSettings(unittest.TestCase):
+    def _ctx(self, root):
+        import types
+        return types.SimpleNamespace(run=root)
+
+    def test_restores_original_text_and_restarts(self):
+        import tempfile
+        calls = []
+        original_restart = harness.restart_owned_wm
+        harness.restart_owned_wm = lambda ctx, args, name: calls.append(name) or True
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                cfg = root / "home" / ".config" / "flamewm"
+                cfg.mkdir(parents=True)
+                (cfg / "settings.toml").write_text("scale.default=125\n")
+                harness.ss10_restore_settings(self._ctx(root), None, "scale.default=100\n")
+                self.assertEqual((cfg / "settings.toml").read_text(), "scale.default=100\n")
+                harness.ss10_restore_settings(self._ctx(root), None, None)
+                self.assertFalse((cfg / "settings.toml").exists())
+        finally:
+            harness.restart_owned_wm = original_restart
+        self.assertEqual(calls, ["wm-ss10-reset", "wm-ss10-reset"])
+
+
 if __name__ == "__main__":
     unittest.main()
