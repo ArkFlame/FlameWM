@@ -32,7 +32,7 @@ pub(crate) fn audio_pointer_request(
     slot: usize,
     x: f32,
 ) -> Option<ControlRequest> {
-    use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
+    use crate::taskbar::status::audio::{AUDIO_THUMB_SIZE, AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
     let row = crate::taskbar::status::audio::visible_rows(
         &snapshot.system.audio,
         snapshot.audio_tab,
@@ -41,10 +41,11 @@ pub(crate) fn audio_pointer_request(
     .into_iter()
     .nth(slot)?;
     let spec = snapshot.audio_settings.slider_spec(row.volume_percent);
+    // The knob centre travels inside the track: pointer at knob centre reads back its value.
     let value = flamewm_ui_core::range::RangeState::value_from_pointer(
         spec,
-        AUDIO_TRACK_X,
-        AUDIO_TRACK_WIDTH,
+        AUDIO_TRACK_X + AUDIO_THUMB_SIZE / 2.0,
+        AUDIO_TRACK_WIDTH - AUDIO_THUMB_SIZE,
         x,
     );
     crate::taskbar::status::audio::system_action_for_row(

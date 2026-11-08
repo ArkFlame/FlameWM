@@ -69,7 +69,7 @@ pub fn project_audio_full(
         document.visible(&format!("audio-slot-{n}-mute-icon-off"), !row.muted)?;
         document.size(
             &format!("audio-slot-{n}-fill"),
-            crate::taskbar::status::audio::AUDIO_TRACK_WIDTH * shown / spec.max,
+            audio_fill_width(shown, spec.max),
             AUDIO_TRACK_HEIGHT,
         )?;
         document.position(
@@ -99,11 +99,19 @@ const AUDIO_LANE_TRACK_OFFSET: f32 = 6.0;
 /// Thumb top in lane coordinates: centres the knob on the track height.
 const AUDIO_THUMB_TOP: f32 = (AUDIO_TRACK_HEIGHT - AUDIO_THUMB_SIZE) / 2.0;
 
-/// Thumb left edge in lane coordinates: the knob is centred on the fill end,
-/// `AUDIO_TRACK_X + fraction * AUDIO_TRACK_WIDTH` in popup space, the same
-/// mapping `value_from_pointer` inverts for drag.
+/// Fill width: the knob's left half, the value's share of the knob travel, and the right half.
+/// At 0% the fill is one knob wide, so the knob sits flush at the track's left end; at max the
+/// fill spans the track and the knob sits flush at the right end.
+fn audio_fill_width(shown: f32, max: f32) -> f32 {
+    AUDIO_THUMB_SIZE / 2.0
+        + shown / max * (AUDIO_TRACK_WIDTH - AUDIO_THUMB_SIZE)
+        + AUDIO_THUMB_SIZE / 2.0
+}
+
+/// Thumb left edge in lane coordinates: the knob's left edge is the fill end minus one knob,
+/// so it stays inside the track. `value_from_pointer` inverts this mapping for drag.
 fn audio_thumb_left(shown: f32, max: f32) -> f32 {
-    AUDIO_LANE_TRACK_OFFSET + AUDIO_TRACK_WIDTH * shown / max - AUDIO_THUMB_SIZE / 2.0
+    AUDIO_LANE_TRACK_OFFSET + shown / max * (AUDIO_TRACK_WIDTH - AUDIO_THUMB_SIZE)
 }
 
 #[cfg(test)]
@@ -269,7 +277,10 @@ mod audio_template_tests {
         assert_eq!(text(&recorded, "audio-slot-1-value"), "120%");
         assert_eq!(recorded.widths.get("audio-slot-1-fill"), Some(&350.0));
         assert_eq!(text(&recorded, "audio-slot-2-value"), "40%");
-        assert_eq!(recorded.widths.get("audio-slot-2-fill"), Some(&140.0));
+        assert_approx(
+            recorded.widths.get("audio-slot-2-fill").copied(),
+            16.0 + 334.0 * 0.4,
+        );
         assert_eq!(
             recorded.visible.get("audio-slot-2-mute-icon-on"),
             Some(&true)
@@ -300,52 +311,59 @@ mod audio_template_tests {
     fn raise_maximum_extends_the_slider_range_to_150_without_rescaling_values() {
         let recorded = fixture(AudioTab::Devices, true);
         assert_eq!(text(&recorded, "audio-slot-1-value"), "120%");
-        assert_eq!(recorded.widths.get("audio-slot-1-fill"), Some(&280.0));
-        let headphones = recorded
-            .widths
-            .get("audio-slot-2-fill")
-            .copied()
-            .unwrap_or(-1.0);
-        assert!(
-            (headphones - 350.0 * 40.0 / 150.0).abs() < 0.01,
-            "got {headphones}"
+        assert_approx(
+            recorded.widths.get("audio-slot-1-fill").copied(),
+            16.0 + 334.0 * 0.8,
+        );
+        assert_approx(
+            recorded.widths.get("audio-slot-2-fill").copied(),
+            16.0 + 334.0 * 40.0 / 150.0,
         );
         assert_eq!(recorded.toggles.get("audio-raise-track"), Some(&true));
     }
 
-    #[test]
-    fn thumb_centre_maps_fraction_of_track_at_0_100_and_150_caps() {
-        // Lane x of the knob centre is track start + fraction * width; the left edge is
-        // that centre minus the half knob (7px), so 0% hangs 1px left of the track start.
-        assert_eq!(audio_thumb_left(0.0, 100.0), -1.0);
-        assert_eq!(audio_thumb_left(100.0, 100.0), 349.0);
-        assert_eq!(audio_thumb_left(150.0, 150.0), 349.0);
-        assert_eq!(audio_thumb_left(75.0, 150.0), 174.0);
-        assert_eq!(
-            AUDIO_THUMB_TOP, 1.0,
-            "knob centre sits on the 16px track centre"
+    fn assert_approx(actual: Option<f32>, expected: f32) {
+        let actual = actual.expect("fill width recorded");
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "got {actual}, want {expected}"
+        );
+    }
+
+    fn assert_thumb_at(recorded: &Recorded, id: &str, left: f32) {
+        let (x, y) = *recorded.positions.get(id).expect("thumb position recorded");
+        assert!(
+            (x - left).abs() < 0.01 && y == 0.0,
+            "{id}: got ({x}, {y}), want ({left}, 0)"
         );
     }
 
     #[test]
+    fn thumb_centre_maps_fraction_of_track_at_0_100_and_150_caps() {
+        // The knob stays inside the track: left edge flush at 0% (lane x 6), right edge flush
+        // at max (lane x 6 + 350 - 16 = 340 left edge).
+        assert_eq!(audio_thumb_left(0.0, 100.0), 6.0);
+        assert_eq!(audio_thumb_left(100.0, 100.0), 340.0);
+        assert_eq!(audio_thumb_left(150.0, 150.0), 340.0);
+        assert_eq!(audio_thumb_left(75.0, 150.0), 173.0);
+        assert_eq!(
+            AUDIO_THUMB_TOP, 0.0,
+            "16px knob spans the 16px track height"
+        );
+        // Fill is one knob wide at 0% and spans the track at max.
+        assert_eq!(audio_fill_width(0.0, 100.0), 16.0);
+        assert_eq!(audio_fill_width(100.0, 100.0), 350.0);
+    }
+
+    #[test]
     fn thumb_position_follows_snapped_fill_under_cap() {
-        // Cap 100: 120% snaps to the track end, so the knob centre lands on the fill end
-        // (lane x 6 + 350) and its left edge is 7px earlier at 349.
+        // Cap 100: 120% snaps to the track end, so the knob's right edge is flush at lane 6 + 350.
         let capped = fixture(AudioTab::Devices, false);
-        assert_eq!(
-            capped.positions.get("audio-slot-1-thumb"),
-            Some(&(349.0, 1.0))
-        );
-        assert_eq!(
-            capped.positions.get("audio-slot-2-thumb"),
-            Some(&(139.0, 1.0))
-        );
-        // Raise maximum: 120% of 150 is 280 px of fill, so the knob left edge is 279.
+        assert_thumb_at(&capped, "audio-slot-1-thumb", 340.0);
+        assert_thumb_at(&capped, "audio-slot-2-thumb", 6.0 + 334.0 * 0.4);
+        // Raise maximum: 120% of 150 is 0.8 of the travel.
         let raised = fixture(AudioTab::Devices, true);
-        assert_eq!(
-            raised.positions.get("audio-slot-1-thumb"),
-            Some(&(279.0, 1.0))
-        );
+        assert_thumb_at(&raised, "audio-slot-1-thumb", 6.0 + 334.0 * 0.8);
     }
 
     #[test]
@@ -529,16 +547,22 @@ mod audio_template_tests {
             let mute = layout_rect(document, &format!("audio-slot-{n}-mute"));
             let group = layout_rect(document, &format!("audio-slot-{n}"));
 
-            let expected_x = track.0 + (percent / 150.0) * track.2;
+            // Knob centre is inset by half a knob: X + d/2 + fraction * (W - d).
+            let travel = track.2 - AUDIO_THUMB_SIZE;
+            let expected_x = track.0 + AUDIO_THUMB_SIZE / 2.0 + (percent / 150.0) * travel;
             let fill = layout_rect(document, &format!("audio-slot-{n}-fill"));
             assert!(
                 (fill.3 - track.3).abs() <= 1.0 && (fill.1 - track.1).abs() <= 1.0,
                 "slot {n} ({percent}%): fill {fill:?} must share track {track:?} height and top"
             );
             assert!(
-                (fill.2 - (percent / 150.0) * track.2).abs() <= 1.0,
-                "slot {n} ({percent}%): fill width {} != value x track width",
+                (fill.2 - (AUDIO_THUMB_SIZE + (percent / 150.0) * travel)).abs() <= 1.0,
+                "slot {n} ({percent}%): fill width {} != knob + value x travel",
                 fill.2
+            );
+            assert!(
+                thumb.0 >= track.0 - 1.0 && thumb.0 + thumb.2 <= track.0 + track.2 + 1.0,
+                "slot {n} ({percent}%): knob {thumb:?} must stay inside track {track:?}"
             );
             let thumb_cx = thumb.0 + thumb.2 / 2.0;
             assert!(
@@ -698,16 +722,22 @@ mod audio_render_tests {
                 );
             }
 
-            // The knob is white at its centre and that centre sits on the fill end.
+            // The knob is white at its centre and stays inside the track at every step.
             let knob_centre = (knob.0 + knob.2 / 2.0, knob.1 + knob.3 / 2.0);
             assert!(
                 is_fill(pixel(&frame, knob_centre.0 as u32, knob_centre.1 as u32)),
                 "{percent}%: knob must paint white at its centre"
             );
-            let expected_x = track.0 + track.2 * percent as f32 / 100.0;
+            assert!(
+                knob.0 >= track.0 - 1.0 && knob.0 + knob.2 <= track.0 + track.2 + 1.0,
+                "{percent}%: knob {knob:?} leaves track {track:?}"
+            );
+            let expected_x = track.0
+                + AUDIO_THUMB_SIZE / 2.0
+                + (track.2 - AUDIO_THUMB_SIZE) * percent as f32 / 100.0;
             assert!(
                 (knob_centre.0 - expected_x).abs() <= 1.0,
-                "{percent}%: knob centre {} != fill end {expected_x}",
+                "{percent}%: knob centre {} != inset expectation {expected_x}",
                 knob_centre.0
             );
         }

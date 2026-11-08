@@ -24,9 +24,9 @@ pub const AUDIO_TRACK_WIDTH: f32 = 350.0;
 /// Track and fill height, matching `.audio-track` and `.audio-track-fill` in ui/shell/audio.html.
 /// The fill shares the track's height and radius, so the iOS-style pill reads as one control.
 pub const AUDIO_TRACK_HEIGHT: f32 = 16.0;
-/// Round knob at the fill end, matching `.audio-thumb` in ui/shell/audio.html.
-pub const AUDIO_THUMB_SIZE: f32 = 14.0;
-/// Thumb is 12px (`.audio-thumb`); at 150% it ends at popup x=414, where the percent label starts.
+/// Round knob, matching `.audio-thumb` in ui/shell/audio.html. The knob stays inside the track:
+/// its centre travels from `AUDIO_THUMB_SIZE / 2` to `AUDIO_TRACK_WIDTH - AUDIO_THUMB_SIZE / 2`.
+pub const AUDIO_THUMB_SIZE: f32 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioRowKind {

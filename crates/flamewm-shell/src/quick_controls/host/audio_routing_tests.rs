@@ -53,13 +53,10 @@ fn weather_pick_is_accepted_by_real_settings_store_and_enables_feed() {
     let mut snapshot = quick(AudioTab::Devices, false);
     snapshot.settings = service.snapshot();
     snapshot.weather.settings.enabled = true;
-    snapshot.weather_search.results = vec![flamewm_weather::weather::WeatherLocation::new(
-        "Berlin",
-        52.52,
-        13.405,
-        Some("Germany"),
-    )
-    .unwrap()];
+    snapshot.weather_search.results = vec![
+        flamewm_weather::weather::WeatherLocation::new("Berlin", 52.52, 13.405, Some("Germany"))
+            .unwrap(),
+    ];
     let pick = weather_pick_for(&snapshot, 0).expect("pick");
     let ControlRequest::ApplySettings(transaction) = &pick.request else {
         panic!("pick must be a settings transaction");
@@ -216,17 +213,14 @@ fn row_mute_routes_to_the_projected_tab_row() {
 
 #[test]
 fn pointer_on_thumb_centre_reads_back_its_value_and_drag_clamps_at_both_ends() {
-    use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
+    use crate::taskbar::status::audio::{AUDIO_THUMB_SIZE, AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
     let percent = audio_slider_percent;
-    // Thumb centre for 120% under cap 150 is X + (120 / 150) * W; pointer there reads 120 back.
-    assert_eq!(
-        percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH * 120.0 / 150.0),
-        Some(120)
-    );
-    assert_eq!(
-        percent(false, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH * 0.5),
-        Some(50)
-    );
+    // Knob centre for fraction f is X + d/2 + f * (W - d); a pointer there reads f back.
+    let knob_centre = |f: f32| {
+        AUDIO_TRACK_X + AUDIO_THUMB_SIZE / 2.0 + (AUDIO_TRACK_WIDTH - AUDIO_THUMB_SIZE) * f
+    };
+    assert_eq!(percent(true, knob_centre(120.0 / 150.0)), Some(120));
+    assert_eq!(percent(false, knob_centre(0.5)), Some(50));
     // Drag past either end clamps to 0 and to the active cap.
     assert_eq!(percent(false, AUDIO_TRACK_X - 500.0), Some(0));
     assert_eq!(
@@ -241,14 +235,25 @@ fn pointer_on_thumb_centre_reads_back_its_value_and_drag_clamps_at_both_ends() {
 
 #[test]
 fn pointer_drag_to_track_end_is_capped_at_100_or_150() {
-    use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
+    use crate::taskbar::status::audio::{AUDIO_THUMB_SIZE, AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
     let end = AUDIO_TRACK_X + AUDIO_TRACK_WIDTH;
     let percent = audio_slider_percent;
+    // The knob's right edge is flush with the track end at max, so its centre reads the cap.
+    assert_eq!(percent(false, end - AUDIO_THUMB_SIZE / 2.0), Some(100));
+    assert_eq!(percent(true, end - AUDIO_THUMB_SIZE / 2.0), Some(150));
     assert_eq!(percent(false, end), Some(100));
     assert_eq!(percent(true, end), Some(150));
+    // The knob's left edge is flush with the track start at 0%.
+    assert_eq!(
+        percent(false, AUDIO_TRACK_X + AUDIO_THUMB_SIZE / 2.0),
+        Some(0)
+    );
     assert_eq!(percent(false, AUDIO_TRACK_X), Some(0));
     assert_eq!(
-        percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH / 2.0),
+        percent(
+            true,
+            AUDIO_TRACK_X + AUDIO_THUMB_SIZE / 2.0 + (AUDIO_TRACK_WIDTH - AUDIO_THUMB_SIZE) / 2.0
+        ),
         Some(75)
     );
 }
