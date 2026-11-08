@@ -502,6 +502,18 @@ fn badge_position(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn icon_mask_drops_transparent_corners_and_keeps_the_half_alpha_edge() {
+        // 3x1 icon: alpha 0 corner (RGB 000000), half-alpha edge, opaque centre.
+        let pixels = [0, 0, 0, 0, 200, 50, 50, 128, 255, 255, 255, 255];
+        assert_eq!(
+            alpha_shape_spans(&pixels, 3, 1),
+            Some(vec![(0, 1, 3)]),
+            "transparent corner is outside the shape; the edge is inside"
+        );
+        assert_eq!(alpha_shape_spans(&[0, 0, 0, 0], 1, 1), None);
+    }
+
     use super::*;
     use flamewm_api::{ModeId, OutputId, Rect};
     fn snapshot() -> DisplaySnapshot {

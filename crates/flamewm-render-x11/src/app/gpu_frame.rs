@@ -507,4 +507,45 @@ mod tests {
         );
         assert!(frame_ops(&[fill(10.0, 50.0, 6.0)], 2.0, &[], SCENE, None).is_ok());
     }
+
+    /// The launch badge icon as the frame sees it: alpha 0 with RGB 000000, a half-alpha edge
+    /// (straight 200,50,50) and an opaque centre, premultiplied as `scale_and_premultiply` leaves
+    /// them. Composited over the surface snapshot, the badge must show the backdrop where alpha
+    /// is 0, blend the edge toward the backdrop, and never print black.
+    #[test]
+    fn launch_icon_edges_blend_over_the_backdrop_and_never_print_black() {
+        let icon = FrameSource::Image {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 1,
+            rgba: vec![0, 0, 0, 0, 100, 25, 25, 128, 255, 255, 255, 255],
+        };
+        let backdrop = [30_u8, 60, 90, 255].repeat(3);
+        let command = PaintCommand::Image {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 3.0,
+                height: 1.0,
+            },
+            asset: 0,
+            node: 0,
+            revision: 0,
+            treatment: flamewm_render_core::ImageTreatment::Original,
+            tint: None,
+        };
+        let commands = [command];
+        let sources = [icon];
+        let ops = frame_ops(&commands, 1.0, &sources, (3, 1), Some((3, 1, &backdrop)))
+            .expect("badge frame lowers");
+        let mut scene = vec![0_u8; 12];
+        crate::accel::paint_batch(&mut scene, 3, 1, &ops).expect("badge composites");
+        assert_eq!(&scene[0..4], &[30, 60, 90, 255], "alpha 0 keeps the backdrop");
+        assert_eq!(scene[7], 255, "the edge stays opaque over the backdrop");
+        for (got, want) in scene[4..7].iter().zip([115_u8, 55, 70]) {
+            assert!(got.abs_diff(want) <= 2, "edge {got} != blend {want}");
+        }
+        assert_eq!(&scene[8..12], &[255, 255, 255, 255], "opaque centre");
+    }
 }
