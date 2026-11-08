@@ -17,10 +17,14 @@ pub use appearance::{
     resolve_startup_appearance,
 };
 
-/// Emergency bundled fallback. Retained for machines without either curated
-/// cursor family, and for explicit saved selections from earlier FlameWM builds.
+/// Default cursor: the bundled Breeze theme (LGPL-3.0, `assets/cursors`).
+/// Also the final fallback, and the id used for explicit saved selections from earlier builds.
 pub const CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark";
-/// Preferred theme on a fresh profile, when present under XCURSOR_PATH.
+/// Installed Breeze cursor family, used when the bundled theme is absent.
+pub const BREEZE_CURSOR_THEME_ID: &str = "breeze_cursors";
+/// Adwaita (LGPL-3.0 or CC-BY-SA), the second fallback after Breeze.
+pub const ADWAITA_CURSOR_THEME_ID: &str = "Adwaita";
+/// Detect-only (GPL-3.0 upstream, never bundled). Selected only when the user names it.
 pub const MACTAHOE_CURSOR_THEME_ID: &str = "MacTahoe-dark-cursors";
 pub const CURSOR_SIZE: &str = "24";
 
@@ -51,9 +55,10 @@ pub fn cursor_theme_family(id: &str) -> Option<CursorThemeFamily> {
 }
 
 /// Resolve the cursor used by the WM and XSETTINGS. Explicit installed ids
-/// (including older third-party choices) win. Otherwise choose MacTahoe,
-/// then a verified installed Oxygen variant, then bundled Breeze as a last
-/// resort. Never creates, deletes, or mutates host cursor directories.
+/// (including detect-only third-party choices) win. Otherwise the Breeze
+/// family: bundled Breeze, then installed `breeze_cursors`, then Adwaita,
+/// then the bundled id. Never auto-selects detect-only themes and never
+/// creates, deletes, or mutates host cursor directories.
 #[must_use]
 pub fn resolve_cursor_theme(requested: &str, search_path: &str) -> String {
     let roots: Vec<&str> = search_path
@@ -80,40 +85,15 @@ pub fn resolve_cursor_theme(requested: &str, search_path: &str) -> String {
                 .is_file()
         })
     };
-    if installed(MACTAHOE_CURSOR_THEME_ID) && has_pointer(MACTAHOE_CURSOR_THEME_ID) {
-        return MACTAHOE_CURSOR_THEME_ID.to_owned();
-    }
-    // Other MacTahoe variants are valid independent theme directory ids.
-    // Sort for deterministic selection when multiple system roots exist.
-    let mut candidates = Vec::new();
-    for root in &roots {
-        let Ok(entries) = std::fs::read_dir(root) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            if cursor_theme_family(&id).is_some() && installed(&id) && has_pointer(&id) {
-                candidates.push(id);
-            }
-        }
-    }
-    candidates.sort_by_key(|id| id.to_ascii_lowercase());
-    candidates.dedup();
-    if let Some(id) = candidates
-        .iter()
-        .find(|id| cursor_theme_family(id) == Some(CursorThemeFamily::MacTahoe))
-    {
-        return id.clone();
-    }
-    if let Some(id) = candidates
-        .iter()
-        .find(|id| cursor_theme_family(id) == Some(CursorThemeFamily::Oxygen))
-    {
-        return id.clone();
-    }
-    CURSOR_THEME_ID.to_owned()
+    [
+        CURSOR_THEME_ID,
+        BREEZE_CURSOR_THEME_ID,
+        ADWAITA_CURSOR_THEME_ID,
+    ]
+    .into_iter()
+    .find(|id| has_pointer(id))
+    .unwrap_or(CURSOR_THEME_ID)
+    .to_owned()
 }
 
 /// Resolves a request and returns it only when the applied theme would change.
@@ -1038,43 +1018,37 @@ mod tests {
     fn cursor_theme_resolution_order_and_fallback_chain() {
         let root = cursor_test_root("chain");
         let search = root.display().to_string();
-        // Nothing installed: bundled FlameWM theme.
+        // Nothing installed: bundled Breeze.
         assert_eq!(resolve_cursor_theme("", &search), CURSOR_THEME_ID);
         assert_eq!(resolve_cursor_theme("Missing", &search), CURSOR_THEME_ID);
-        // Bundled MacTahoe wins over the FlameWM default when present.
+        // Detect-only MacTahoe is never auto-selected, only by explicit name.
         install_cursor_theme(&root, MACTAHOE_CURSOR_THEME_ID);
-        assert_eq!(resolve_cursor_theme("", &search), MACTAHOE_CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("", &search), CURSOR_THEME_ID);
         assert_eq!(
-            resolve_cursor_theme("Missing", &search),
+            resolve_cursor_theme(MACTAHOE_CURSOR_THEME_ID, &search),
             MACTAHOE_CURSOR_THEME_ID
         );
-        // An installed Oxygen theme wins when MacTahoe is missing.
-        let oxygen_only = cursor_test_root("oxygen-only");
-        install_cursor_theme(&oxygen_only, "Oxygen_Black");
-        assert_eq!(
-            resolve_cursor_theme("", &oxygen_only.display().to_string()),
-            "Oxygen_Black"
-        );
-        assert_eq!(
-            resolve_cursor_theme("Missing", &oxygen_only.display().to_string()),
-            "Oxygen_Black"
-        );
-        let _ = std::fs::remove_dir_all(&oxygen_only);
-        // Explicit installed theme wins over both.
+        // Explicit installed theme wins.
         install_cursor_theme(&root, "Custom");
         assert_eq!(resolve_cursor_theme("Custom", &search), "Custom");
         // A directory without a cursors/ subdir is a broken theme and never selected.
         std::fs::create_dir_all(root.join("Broken")).expect("broken theme");
-        assert_eq!(
-            resolve_cursor_theme("Broken", &search),
-            MACTAHOE_CURSOR_THEME_ID
-        );
+        assert_eq!(resolve_cursor_theme("Broken", &search), CURSOR_THEME_ID);
         // Path-like names never resolve outside the search roots.
-        assert_eq!(
-            resolve_cursor_theme("../Custom", &search),
-            MACTAHOE_CURSOR_THEME_ID
-        );
+        assert_eq!(resolve_cursor_theme("../Custom", &search), CURSOR_THEME_ID);
         let _ = std::fs::remove_dir_all(&root);
+        // Fallback order without the bundled theme: breeze_cursors, then Adwaita.
+        let fallback = cursor_test_root("fallback-order");
+        let fallback_search = fallback.display().to_string();
+        install_cursor_theme(&fallback, "Adwaita");
+        install_cursor_theme(&fallback, "Oxygen_Black");
+        assert_eq!(resolve_cursor_theme("", &fallback_search), "Adwaita");
+        install_cursor_theme(&fallback, BREEZE_CURSOR_THEME_ID);
+        assert_eq!(
+            resolve_cursor_theme("", &fallback_search),
+            BREEZE_CURSOR_THEME_ID
+        );
+        let _ = std::fs::remove_dir_all(&fallback);
     }
 
     #[test]
@@ -1131,11 +1105,11 @@ mod tests {
         install_cursor_theme(&root, "Oxygen_White");
         install_cursor_theme(&root, "Oxygen_Black");
         let search = root.display().to_string();
-        assert_eq!(resolve_cursor_theme("", &search), "Oxygen_Black");
+        // Detect-only families are never auto-selected.
+        assert_eq!(resolve_cursor_theme("", &search), CURSOR_THEME_ID);
         install_cursor_theme(&root, "MacTahoe_Dark");
-        assert_eq!(resolve_cursor_theme("", &search), "MacTahoe_Dark");
         install_cursor_theme(&root, MACTAHOE_CURSOR_THEME_ID);
-        assert_eq!(resolve_cursor_theme("", &search), MACTAHOE_CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("", &search), CURSOR_THEME_ID);
         assert_eq!(
             resolve_cursor_theme("Oxygen_White", &search),
             "Oxygen_White"
@@ -1161,7 +1135,7 @@ mod tests {
     #[test]
     fn session_env_and_resolver_agree_on_installed_bundled_theme() {
         let root = cursor_test_root("env");
-        // Session search root is <data_root>/icons.
+        // Session search root is <data_root>/icons. Installed MacTahoe is detect-only.
         install_cursor_theme(&root.join("icons"), MACTAHOE_CURSOR_THEME_ID);
         let paths = SessionPaths {
             bindir: "/usr/bin".into(),
@@ -1172,7 +1146,7 @@ mod tests {
         let environment = &plan.processes[0].environment;
         assert_eq!(
             environment.get("XCURSOR_THEME").map(String::as_str),
-            Some(MACTAHOE_CURSOR_THEME_ID)
+            Some(CURSOR_THEME_ID)
         );
         let _ = std::fs::remove_dir_all(&root);
     }

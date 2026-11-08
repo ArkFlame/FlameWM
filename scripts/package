@@ -183,11 +183,8 @@ cp -a "$ROOT/assets/cursors/cursors" "$STAGE/usr/share/icons/FlameWM-Breeze-Dark
 sed -e 's/^Name=Breeze Dark/Name=FlameWM-Breeze-Dark/' \
     "$ROOT/assets/cursors/index.theme" > "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
 chmod 0644 "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
-# Shipped default icon theme (MacTahoe) and default cursor theme (MacTahoe dark).
-# Oxygen and other cursor themes resolve from installed Xcursor themes at runtime.
-mkdir -p "$STAGE/usr/share/icons"
-cp -a "$ROOT/assets/themes/icons/MacTahoe" "$STAGE/usr/share/icons/MacTahoe"
-cp -a "$ROOT/assets/themes/cursors/MacTahoe-dark-cursors" "$STAGE/usr/share/icons/MacTahoe-dark-cursors"
+# GPL-3.0 themes (MacTahoe, Papirus, Bibata) are never bundled: detect-installed only.
+# Icon theme: Breeze comes from the distro package (see packaging/arch and debian).
 if [[ -n "$STAGE_ONLY" ]]; then
     printf 'OK stage: %s\n' "$STAGE"
     exit 0

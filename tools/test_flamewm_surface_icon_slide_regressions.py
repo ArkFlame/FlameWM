@@ -46,10 +46,11 @@ class OnlyTwoIconThemes(unittest.TestCase):
 
     def test_no_old_icon_packs_in_binary_package(self):
         pkg = src('scripts/package')
-        install = pkg.split('# Shipped default icon theme (MacTahoe)',1)[1]
+        install = pkg.split('# GPL-3.0 themes (MacTahoe, Papirus, Bibata)',1)[1]
         self.assertNotIn('candy-icons', install)
         self.assertNotIn('McMojave-circle', install)
-        self.assertIn('assets/themes/icons/MacTahoe"', install)
+        self.assertNotIn('assets/themes/icons/MacTahoe', pkg)
+        self.assertNotIn('assets/themes/cursors/MacTahoe-dark-cursors', pkg)
         manifest = src('packaging/install-manifest.txt')
         self.assertNotIn('assets/themes/icons/candy-icons ',manifest)
         self.assertNotIn('assets/themes/icons/McMojave-circle ',manifest)
