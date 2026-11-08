@@ -223,11 +223,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ss10-scrolled-click", metavar="X,Y", default=None,
                         help="SS10 client-relative click on the 125 scale button after the wheel scroll (960x640 client); "
                              "required when the output lists modes")
+    parser.add_argument("--only", metavar="SSxx[,SSyy]", default="",
+                        help="run only these runner scenarios (debug/targeted reruns); default runs all")
     parser.add_argument("--ss11-family-click", metavar="X,Y", default="697,150",
                         help="SS11 client-relative click on the Font family control of the Fonts page (820x540 client); default measured")
     parser.add_argument("--ss11-size-click", metavar="X,Y", default="760,254",
                         help="SS11 client-relative click on the Text size + control of the Fonts page (820x540 client); default measured")
     args = parser.parse_args(argv)
+    args.only = [part for part in (args.only or "").split(",") if part]
+    unknown = sorted(set(args.only) - set(CANONICAL_IDS))
+    if unknown:
+        parser.error(f"--only has unknown ids: {', '.join(unknown)}")
     # Children start with cwd set to the run directory, so relative binary paths must be resolved first.
     args.wm_bin = str(Path(args.wm_bin).resolve())
     for name in ("settings", "shell", "desktop"):
@@ -4225,6 +4231,11 @@ def ss18_result(args: argparse.Namespace, run: Path) -> dict:
 
 
 def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) -> None:
+    only = set(args.only)
+
+    def wanted(sid: str) -> bool:
+        return not only or sid in only
+
     ctx.display = pick_display(args.display)
     if ctx.display is None:
         block_runner_ids(results, "no free display in :90..:99")
@@ -4290,7 +4301,8 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
             results["SS02"] = result_entry("SS02", STATUS_PASS, "", [s["shot"] for s in all_shots],
                                            [c for s in all_shots for c in s["commands"]])
 
-    results["SS03"] = run_ss03(ctx, args)
+    if wanted("SS03"):
+        results["SS03"] = run_ss03(ctx, args)
 
     # NATIVE_ONE_OUTPUT (legacy, was labelled SS03): Displays page with one connected output.
     # It covers only the single-output case of canonical SS08, so it never makes SS08 PASS.
@@ -4314,31 +4326,43 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
     # NATIVE_HOTKEY_INPUT (legacy, was labelled SS06): PASS only on a measured effect (see run_ss06).
     results["NATIVE_HOTKEY_INPUT"] = run_ss06(ctx, args)
     results["SS04"] = run_ss04(ctx, args)
-    results["SS05"] = run_ss05(ctx, args)
-    results["SS06"] = run_ss06_desktop(ctx, args)
-    results["SS07"] = run_ss07(ctx, args)
-    results["SS10"] = run_ss10(ctx, args)
-    results["SS11"] = run_ss11(ctx, args)
+    if wanted("SS05"):
+        results["SS05"] = run_ss05(ctx, args)
+    if wanted("SS06"):
+        results["SS06"] = run_ss06_desktop(ctx, args)
+    if wanted("SS07"):
+        results["SS07"] = run_ss07(ctx, args)
+    if wanted("SS10"):
+        results["SS10"] = run_ss10(ctx, args)
+    if wanted("SS11"):
+        results["SS11"] = run_ss11(ctx, args)
     # SS12 is stricter than pixel-based capture smoke: verify lease method ownership,
     # authoritative shortcut state, normal Start replay, owner-loss restoration, and
     # Escape clear / Reset persistence.
-    results["SS12"] = run_ss12(ctx, args)
+    if wanted("SS12"):
+        results["SS12"] = run_ss12(ctx, args)
     results["SS13"] = run_ss13(ctx, args)
-    results["SS15"] = run_ss15(ctx, args)
+    if wanted("SS15"):
+        results["SS15"] = run_ss15(ctx, args)
     # SS14 currently exercises only Settings.accent: full status remains NOT_RUN until
     # independent panels, shortcuts, display rollback and signal-loss scenarios exist.
-    results["SS14"] = run_ss14(ctx, args)
-    ss14_observations = results["SS14"].get("details", {}).get("observations", {})
+    if wanted("SS14"):
+        results["SS14"] = run_ss14(ctx, args)
+    ss14_observations = results.get("SS14", {}).get("details", {}).get("observations", {})
     external_update = ss14_observations.get("settings_visible_without_input")
-    results["SS19"] = run_ss19(ctx, args, external_update)
-    results["SS17"] = run_ss17(ctx, args, results.get("SS10"))
-    results["SS08"] = run_ss08(ctx, args, results.get("NATIVE_ONE_OUTPUT"))
+    if wanted("SS19"):
+        results["SS19"] = run_ss19(ctx, args, external_update)
+    if wanted("SS17"):
+        results["SS17"] = run_ss17(ctx, args, results.get("SS10"))
+    if wanted("SS08"):
+        results["SS08"] = run_ss08(ctx, args, results.get("NATIVE_ONE_OUTPUT"))
     # SS09 changes the owned screen size (and restores it): keep it after every pixel scenario.
-    results["SS09"] = run_ss09(ctx, args)
+    if wanted("SS09"):
+        results["SS09"] = run_ss09(ctx, args)
     # SS14 display_rollback_signal: the unattended revert must have emitted a Displays signal (no client input).
-    rollback_signal = results["SS09"]["details"]["observations"].get("native_rollback_signal")
-    ss14 = results["SS14"]
-    ss14_observations = ss14.get("details", {}).get("observations")
+    rollback_signal = results.get("SS09", {}).get("details", {}).get("observations", {}).get("native_rollback_signal")
+    ss14 = results.get("SS14")
+    ss14_observations = ss14.get("details", {}).get("observations") if ss14 else None
     if ss14_observations is not None and rollback_signal is not None:
         ss14_observations["display_rollback_signal"] = rollback_signal
         ss14["status"], ss14["reason"] = assess_ss14(ss14_observations)
