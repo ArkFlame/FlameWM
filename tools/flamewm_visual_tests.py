@@ -227,6 +227,17 @@ class Session:
                     result.add(window.id)
         return result
 
+    def describe_windows(self):
+        """One line per root child (id, map state, geometry, name, children) for failure diagnosis."""
+        lines = []
+        for window in self.x.screen().root.query_tree().children:
+            with contextlib.suppress(Exception):
+                state = window.get_attributes().map_state
+                geo = self.geometry(window)
+                kids = [(c.id, c.get_wm_name()) for c in window.query_tree().children]
+                lines.append(f"  0x{window.id:x} map={state} geo={geo} name={window.get_wm_name()!r} kids={kids}")
+        return "\n".join(lines)
+
     def frame_of(self, client_id):
         window = self.x.create_resource_object("window", client_id)
         root = self.x.screen().root.id
@@ -403,6 +414,9 @@ def check_second_output(session, results, baseline):
     rect = session.geometry(frame)
     on_second = rect[0] >= second[0]
     results.check("second-output.placed", on_second, f"frame={rect}")
+    if not on_second:
+        print(f"second-output diagnosis: client=0x{client:x} frame=0x{frame.id:x} outputs={session.outputs}\n"
+              f"{session.describe_windows()}", flush=True)
     black, _, changed = session.capture("second-output").region_stats(content_band(session.outputs[0]), baseline)
     results.check("second-output.first-untouched", black < 0.05 and changed < 0.03,
                   f"black={black:.3f} changed={changed:.3f}")
