@@ -118,7 +118,7 @@ are relabeled.
 - SS11 `--ss11-family-click X,Y` and `--ss11-size-click X,Y` are client-relative clicks on the Fonts
   page in an 820x540 client. The family click must change `fontFamily`; the size + click must raise
   `fontSizeOffset` by exactly one with the family unchanged. Both values must persist after an owned
-  WM restart. Defaults `697,150` and `760,254` were measured from pixels at 820x540.
+  WM restart. Defaults `717,207` (font family select) and `761,359` (size offset +) were measured from pixels at 820x540 after the Custom typography switch (759,155) is turned on.
 - SS13 opens `flamewm-settings --page about` at each matrix size and requires an exact measured client
   size and a non-blank capture. The exact About text (`Version <FLAMEWM_VERSION>`) is verified by the Rust
   test `about_version_text_is_exact_flamewm_version` in `crates/flamewm-settings/src/controller.rs`. The

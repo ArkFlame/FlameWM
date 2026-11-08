@@ -232,9 +232,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                              "required when the output lists modes")
     parser.add_argument("--only", metavar="SSxx[,SSyy]", default="",
                         help="run only these runner scenarios (debug/targeted reruns); default runs all")
-    parser.add_argument("--ss11-family-click", metavar="X,Y", default="697,150",
+    parser.add_argument("--ss11-family-click", metavar="X,Y", default="717,207",
                         help="SS11 client-relative click on the Font family control of the Fonts page (820x540 client); default measured")
-    parser.add_argument("--ss11-size-click", metavar="X,Y", default="760,254",
+    parser.add_argument("--ss11-size-click", metavar="X,Y", default="761,359",
                         help="SS11 client-relative click on the Text size + control of the Fonts page (820x540 client); default measured")
     args = parser.parse_args(argv)
     args.only = [part for part in (args.only or "").split(",") if part]
@@ -3393,6 +3393,10 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
     return finish()
 
 
+# "Custom typography" switch on the Fonts page (820x540 client, measured from ui/settings.html layout).
+SS11_CUSTOM_TOGGLE = (759, 155)
+
+
 def run_ss11(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Click the Fonts family and size controls; PASS needs both snapshot changes and persistence after a restart."""
     observations: dict[str, bool | None] = {"family_changed_snapshot": None, "size_changed_snapshot": None,
@@ -3415,6 +3419,8 @@ def run_ss11(ctx: Ctx, args: argparse.Namespace) -> dict:
     if shutil.which("gdbus") is None:
         return result_entry("SS11", STATUS_NOT_RUN, "SS11 needs gdbus for the authoritative Settings snapshot")
 
+    # --window-size is only a request: a remembered frame rect for FlameWM Settings wins (wm/manage.rs recall).
+    fresh_wm_for_requested_size(ctx, args)
     settings = ctx.spawn("settings-ss11-fonts", [args.settings_bin, "--page", "fonts", "--window-size", "820x540"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "fonts", "--window-size", "820x540"]))
     time.sleep(args.settle_seconds)
@@ -3436,6 +3442,14 @@ def run_ss11(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["reason"] = "text size offset is already at its maximum (4); no size step to observe"
         return finish()
 
+    # The family and size controls live in #fonts-custom-body, shown only when "Custom typography" is on.
+    if gvariant_field_bool(before_text or "", "fontsCustom") is False:
+        toggle_code, toggle_command = send_input(ctx, settings_relative_point(ctx, geometry, SS11_CUSTOM_TOGGLE), None)
+        details["commands"].append(toggle_command)
+        time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+        details["custom_toggle_exit"] = toggle_code
+        custom_shot = capture(ctx, ctx.run / "shots" / "ss11-custom-on.png")
+        details.setdefault("evidence", []).append(str(ctx.run / "shots" / "ss11-custom-on.png"))
     family_point = tuple(int(part) for part in args.ss11_family_click.split(","))
     family_code, family_command = send_input(ctx, settings_relative_point(ctx, geometry, family_point), None)
     details["commands"].append(family_command)
