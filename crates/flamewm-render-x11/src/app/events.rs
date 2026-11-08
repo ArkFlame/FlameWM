@@ -33,16 +33,6 @@ pub(crate) fn reactor_wait_timeout(
     }
 }
 
-/// Queued X events one reactor turn consumes before it paints anyway. A foreign-event stream
-/// (root SubstructureNotify) can keep the queue non-empty indefinitely; without this bound a
-/// wake-driven repaint waits for an empty queue that never arrives.
-pub(crate) const WAKE_EVENT_BUDGET: u32 = 64;
-
-/// Whether a reactor turn paints now: an empty queue, or the turn's event budget is spent.
-pub(crate) fn wake_paint_due(events_queued: bool, drained_this_turn: u32, budget: u32) -> bool {
-    !events_queued || drained_this_turn >= budget
-}
-
 #[cfg(test)]
 #[path = "events/tests/key_text_regressions.rs"]
 mod key_text_regressions;
@@ -53,10 +43,6 @@ mod key_text_regressions;
 #[cfg(test)]
 #[path = "events/tests/xkb_lookup_runtime.rs"]
 mod xkb_lookup_runtime;
-
-#[cfg(test)]
-#[path = "events/tests/wake_paint_gate_regressions.rs"]
-mod wake_paint_gate_regressions;
 
 #[cfg(test)]
 #[path = "events/tests/configure_coalescing_regressions.rs"]
@@ -1073,7 +1059,6 @@ impl X11App {
         P: FnMut(&RawPress, &mut RuntimeDocument) -> Result<(), String>,
     {
         // No unconditional redraw on entry; reactor ticks/damage drive paints.
-        let mut drained_this_turn = 0u32;
         loop {
             // SAFETY: the press watch is only read here; sync touches this app's live display.
             unsafe { self.sync_raw_press_observer(press_watch) };
@@ -1109,9 +1094,7 @@ impl X11App {
             // an X event. The retained damage/revision gate presents that
             // mutation once and skips no-op wakes. Queued X events paint first.
             // SAFETY: self.display is the live display owned by this app.
-            let queued = unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } > 0;
-            if wake_paint_due(queued, drained_this_turn, WAKE_EVENT_BUDGET) {
-                drained_this_turn = 0;
+            if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
                 unsafe { self.flush_pending_window_resize(document, on_action)? };
                 unsafe { self.redraw_if_dirty(document)? };
                 if self.close_requested {
@@ -1119,7 +1102,6 @@ impl X11App {
                 }
                 continue;
             }
-            drained_this_turn += 1;
             self.single_event = true;
             // SAFETY: The caller owns the live X11 display and app resources.
             unsafe { self.event_loop(document, on_action)? };
