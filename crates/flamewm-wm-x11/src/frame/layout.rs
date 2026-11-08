@@ -158,7 +158,8 @@ pub fn layout_frame_children(
     // in the last client pixels and must keep their clicks. The frame has no outside band to
     // extend into, so these handles stay inside the frame at that depth.
     let rb = t.min(RESIZE_EDGE_RB);
-    let side_h = (h - grip - rb).max(0);
+    // Both bottom corners are full grip squares, so the side strips stop at the corner tops.
+    let side_h = (h - 2 * grip).max(0);
 
     // Controls from the skin formula, then clipped below the top strip
     // when touching it (control top lives at y=0, strip owns y=0..t).
@@ -176,8 +177,8 @@ pub fn layout_frame_children(
     FrameChildLayout {
         top_left: FrameRect::new(0, 0, grip, grip),
         top_right: FrameRect::new(w - grip, 0, grip, grip),
-        bottom_left: FrameRect::new(0, h - rb, grip, rb),
-        bottom_right: FrameRect::new(w - grip, h - rb, grip, rb),
+        bottom_left: FrameRect::new(0, h - grip, grip, grip),
+        bottom_right: FrameRect::new(w - grip, h - grip, grip, grip),
         top: FrameRect::new(grip, 0, strip_w, t),
         bottom: FrameRect::new(grip, h - rb, strip_w, rb),
         left: FrameRect::new(0, grip, t, side_h),
@@ -218,12 +219,12 @@ mod tests {
         assert_eq!(corner_grip_for_titlebar(TITLEBAR_H), 16);
         assert_eq!(l.top_left, FrameRect::new(0, 0, 16, 16));
         assert_eq!(l.top_right, FrameRect::new(384, 0, 16, 16));
-        assert_eq!(l.bottom_left, FrameRect::new(0, 298, 16, 2));
-        assert_eq!(l.bottom_right, FrameRect::new(384, 298, 16, 2));
+        assert_eq!(l.bottom_left, FrameRect::new(0, 284, 16, 16));
+        assert_eq!(l.bottom_right, FrameRect::new(384, 284, 16, 16));
         assert_eq!(l.top, FrameRect::new(16, 0, 368, 6));
         assert_eq!(l.bottom, FrameRect::new(16, 298, 368, 2));
-        assert_eq!(l.left, FrameRect::new(0, 16, 6, 282));
-        assert_eq!(l.right, FrameRect::new(398, 16, 2, 282));
+        assert_eq!(l.left, FrameRect::new(0, 16, 6, 268));
+        assert_eq!(l.right, FrameRect::new(398, 16, 2, 268));
         assert_eq!(l.title_drag, FrameRect::new(6, 6, 280, 25));
         assert_eq!(
             l.controls,
@@ -353,16 +354,15 @@ mod tests {
                     }
                 }
             }
-            // (c) Top corner grips are grip x grip squares at the outer top corners; bottom corners
-            // are grip wide and only RESIZE_EDGE_RB tall, so the client's bottom scrollbar keeps
-            // its clicks.
+            // (c) All four corner grips are grip x grip squares at the outer frame corners. Only
+            // the right and bottom edge strips are RESIZE_EDGE_RB deep, so scrollbar clicks stay.
             let grip = corner_grip_for_titlebar(titlebar).min(w / 2).min(h / 2);
             let rb = RESIZE_EDGE_RB.min(t);
             let expected = [
                 FrameRect::new(0, 0, grip, grip),
                 FrameRect::new(w - grip, 0, grip, grip),
-                FrameRect::new(0, h - rb, grip, rb),
-                FrameRect::new(w - grip, h - rb, grip, rb),
+                FrameRect::new(0, h - grip, grip, grip),
+                FrameRect::new(w - grip, h - grip, grip, grip),
             ];
             for (rect, want) in l.resize_rects().into_iter().take(4).zip(expected) {
                 assert_eq!(rect, want);
@@ -371,6 +371,26 @@ mod tests {
             assert!(l.right.x >= w - RESIZE_EDGE_RB && l.right.x + l.right.w == w);
             assert!(l.bottom.y >= h - RESIZE_EDGE_RB && l.bottom.y + l.bottom.h == h);
         }
+    }
+
+    #[test]
+    fn bottom_corner_grips_are_reachable_grip_squares() {
+        let l = layout();
+        let g = corner_grip_for_titlebar(TITLEBAR_H);
+        // Both bottom corners are the same grip x grip square as the top ones, flush with the
+        // frame corner, so a press on the rounded arc still lands on the handle.
+        assert_eq!(l.bottom_left, FrameRect::new(0, H - g, g, g));
+        assert_eq!(l.bottom_right, FrameRect::new(W - g, H - g, g, g));
+        // Corner squares never overlap the edge strips that meet them.
+        assert!(!overlaps(l.bottom_left, l.left));
+        assert!(!overlaps(l.bottom_left, l.bottom));
+        assert!(!overlaps(l.bottom_right, l.right));
+        assert!(!overlaps(l.bottom_right, l.bottom));
+        // The side strips end at the corner tops; the right and bottom strips stay 2 px deep.
+        assert_eq!(l.left.y + l.left.h, H - g);
+        assert_eq!(l.right.y + l.right.h, H - g);
+        assert_eq!(l.right.w, RESIZE_EDGE_RB);
+        assert_eq!(l.bottom.h, RESIZE_EDGE_RB);
     }
 
     #[test]
