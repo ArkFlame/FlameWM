@@ -89,6 +89,8 @@ enum Overlay {
     Setup,
     /// Tab sheet of actions for the selected file or app.
     Verbs,
+    /// Cancel-first sheet before a session-ending system action runs.
+    Confirm,
 }
 
 /// One row or tile of the current view.
@@ -193,6 +195,8 @@ struct Finder {
     actions: Vec<&'static quick::SystemAction>,
     /// Stays false until the session says logout is allowed (fail closed).
     logout: bool,
+    /// System action waiting for the confirm sheet's Confirm row.
+    pending: Option<&'static quick::SystemAction>,
     /// Actions for the selected result while the Tab sheet is open.
     verbs: &'static [verbs::Verb],
     /// Highlighted row of the Tab sheet.
@@ -264,6 +268,7 @@ impl Finder {
             app_hits: Vec::new(),
             actions: Vec::new(),
             logout: false,
+            pending: None,
             verbs: &[],
             verb: 0,
             frecency: quick::Frecency::default(),
@@ -480,7 +485,26 @@ impl Finder {
             verbs::Verb::Reveal => self.open_selected(true),
             verbs::Verb::Preview => self.toggle(Overlay::Preview),
             verbs::Verb::Details => self.toggle(Overlay::Details),
+            verbs::Verb::Cancel => {}
+            verbs::Verb::Confirm => {
+                if let Some(action) = self.pending.take() {
+                    self.run_quick_action(action);
+                }
+            }
         }
+    }
+
+    /// Tab's sheet or the confirm sheet is open; its rows take Up, Down and Enter.
+    fn sheet_open(&self) -> bool {
+        matches!(self.overlay, Overlay::Verbs | Overlay::Confirm)
+    }
+
+    /// Asks before a session-ending action. The sheet starts on Cancel.
+    fn open_confirm(&mut self, action: &'static quick::SystemAction) {
+        self.pending = Some(action);
+        self.verbs = verbs::CONFIRM_VERBS;
+        self.verb = 0;
+        self.overlay = Overlay::Confirm;
     }
 
     fn toggle(&mut self, overlay: Overlay) {
@@ -524,6 +548,7 @@ impl Finder {
             Some(Item::Scope(choice)) => self.set_query(choice.query),
             Some(Item::Calc(answer)) => self.set_query(answer.result),
             Some(Item::App(position)) => self.launch_app(position),
+            Some(Item::Action(action)) if action.confirm => self.open_confirm(action),
             Some(Item::Action(action)) => self.run_quick_action(action),
             None => {}
         }
@@ -585,6 +610,10 @@ impl Finder {
                 command,
                 Command::Escape | Command::Actions | Command::Up | Command::Down | Command::Open
             ),
+            Overlay::Confirm => matches!(
+                command,
+                Command::Escape | Command::Up | Command::Down | Command::Open
+            ),
             Overlay::Help | Overlay::Duplicates | Overlay::Setup => {
                 matches!(command, Command::Escape | Command::Help)
             }
@@ -598,14 +627,14 @@ impl Finder {
                 _ => self.overlay = Overlay::None,
             },
             Command::Help => self.toggle(Overlay::Help),
-            Command::Open if self.overlay == Overlay::Verbs => self.run_verb(self.verb),
+            Command::Open if self.sheet_open() => self.run_verb(self.verb),
             Command::Open => self.activate_selected(),
             Command::Reveal => self.open_selected(true),
             Command::Preview => self.toggle(Overlay::Preview),
             Command::Details => self.toggle(Overlay::Details),
             Command::Actions => self.toggle_verbs(),
-            Command::Up if self.overlay == Overlay::Verbs => self.move_verb(-1),
-            Command::Down if self.overlay == Overlay::Verbs => self.move_verb(1),
+            Command::Up if self.sheet_open() => self.move_verb(-1),
+            Command::Down if self.sheet_open() => self.move_verb(1),
             Command::Previous => {
                 self.navigating = true;
                 self.step(-1);
@@ -948,10 +977,10 @@ impl Finder {
         doc.visible("help", self.overlay == Overlay::Help)?;
         doc.visible("duplicates", self.overlay == Overlay::Duplicates)?;
         doc.visible("setup", self.overlay == Overlay::Setup)?;
-        doc.visible("verbs", self.overlay == Overlay::Verbs)?;
+        doc.visible("verbs", self.sheet_open())?;
         match self.overlay {
             Overlay::None | Overlay::Help => Ok(()),
-            Overlay::Verbs => self.paint_verbs(doc),
+            Overlay::Verbs | Overlay::Confirm => self.paint_verbs(doc),
             Overlay::Preview => self.paint_preview(doc),
             Overlay::Details => self.paint_details(doc),
             Overlay::Duplicates => self.paint_duplicates(doc),
@@ -1008,9 +1037,12 @@ impl Finder {
     }
 
     fn paint_verbs(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let title = self
-            .selected_entry()
-            .map_or_else(|| "Actions".to_owned(), |entry| entry.name().to_owned());
+        let title = match (self.overlay, self.pending) {
+            (Overlay::Confirm, Some(action)) => format!("{}?", action.label),
+            _ => self
+                .selected_entry()
+                .map_or_else(|| "Actions".to_owned(), |entry| entry.name().to_owned()),
+        };
         doc.text_ref("verbs-title", &title)?;
         for slot in 0..verbs::SLOTS {
             let verb = self.verbs.get(slot);

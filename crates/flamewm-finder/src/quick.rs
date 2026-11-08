@@ -389,6 +389,9 @@ pub struct SystemAction {
     /// Space-separated words that the query may start with.
     pub words: &'static str,
     pub run: Run,
+    /// Ends or suspends the session: Enter opens a Cancel-first sheet, and only its Confirm row runs
+    /// the action, so a typed query plus Enter never does it alone.
+    pub confirm: bool,
 }
 
 pub const ACTIONS: [SystemAction; 3] = [
@@ -396,16 +399,19 @@ pub const ACTIONS: [SystemAction; 3] = [
         label: "Lock screen",
         words: "lock screen",
         run: Run::Argv(&["loginctl", "lock-session"]),
+        confirm: false,
     },
     SystemAction {
         label: "Suspend",
         words: "suspend sleep",
         run: Run::Argv(&["systemctl", "suspend"]),
+        confirm: true,
     },
     SystemAction {
         label: "Log out",
         words: "log logout sign",
         run: Run::Logout,
+        confirm: true,
     },
 ];
 
@@ -594,6 +600,14 @@ mod tests {
         assert_eq!(actions_matching("logout", true)[0].label, "Log out");
         assert_eq!(actions_matching("sign", true)[0].label, "Log out");
         assert!(actions_matching("out", false).is_empty());
+    }
+
+    #[test]
+    fn session_ending_actions_need_confirmation_and_lock_does_not() {
+        let by_label = |label: &str| ACTIONS.iter().find(|action| action.label == label).unwrap();
+        assert!(by_label("Log out").confirm);
+        assert!(by_label("Suspend").confirm);
+        assert!(!by_label("Lock screen").confirm);
     }
 
     #[test]

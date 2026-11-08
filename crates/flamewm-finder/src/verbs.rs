@@ -13,6 +13,10 @@ pub enum Verb {
     Preview,
     /// Toggle the details panel of the file.
     Details,
+    /// Keep the pending system action off; the default row of the confirm sheet.
+    Cancel,
+    /// Run the pending system action.
+    Confirm,
 }
 
 /// What the selected result is.
@@ -27,6 +31,8 @@ pub const SLOTS: usize = 4;
 
 const FILE_VERBS: &[Verb] = &[Verb::Open, Verb::Reveal, Verb::Preview, Verb::Details];
 const APP_VERBS: &[Verb] = &[Verb::Launch];
+/// Confirm sheet for a session-ending action. Cancel comes first so Enter defaults to it.
+pub const CONFIRM_VERBS: &[Verb] = &[Verb::Cancel, Verb::Confirm];
 
 /// Actions for `subject`. The first one is the default that Enter runs.
 #[must_use]
@@ -45,6 +51,8 @@ pub fn label(verb: Verb) -> &'static str {
         Verb::Reveal => "Show in folder",
         Verb::Preview => "Preview",
         Verb::Details => "Details",
+        Verb::Cancel => "Cancel",
+        Verb::Confirm => "Confirm",
     }
 }
 
@@ -60,6 +68,12 @@ mod tests {
             .collect();
         assert_eq!(labels, ["Open", "Show in folder", "Preview", "Details"]);
         assert!(for_subject(Subject::File).len() <= SLOTS);
+    }
+
+    #[test]
+    fn confirm_sheet_defaults_to_cancel_then_confirm() {
+        let labels: Vec<&str> = CONFIRM_VERBS.iter().map(|verb| label(*verb)).collect();
+        assert_eq!(labels, ["Cancel", "Confirm"]);
     }
 
     #[test]
