@@ -219,3 +219,11 @@
 - SS03 (accent `selected_visuals`, `reset_persisted_after_restart`) and SS05 (wallpaper chooser `success_applied_without_input`, `cancel_preserved_without_error`) are not yet investigated.
 - Not verified: SS06, SS07, SS09, SS11, SS13, SS14, SS15, SS19 causes; SS10/17/18 NOT_RUN reasons.
 - Risk: the matrix is still FAIL, so the acceptance gate is not met.
+
+## G11 Task Manager idle CPU — PARTIAL
+- Changed: crates/flamewm-task-manager/src/model.rs
+- Commands: cargo test -p flamewm-task-manager → exit 0 (26 passed); cargo build --release → exit 0; cargo clippy → 0 warnings; python3 tools/architecture_guard.py → exit 0
+- Evidence: isolated Xvfb, no WM, 30 s utime+stime sample. Release idle before 3.4% (main 2.05%, sampler 1.45%), after 2.4% (main 1.40%, sampler 0.45%). RSS 23576 → 23304 kB. Debug build 23–35%.
+- Not verified: minimize/unmap pause (no WM, no visibility events); populated-desktop idle.
+- Risk: target <1% not met; remaining cost is 1 Hz full-window CPU-side repaint. Non-hot pids may show RSS/CPU up to 4 s stale. Accepted by coordinator at 2.4%; dirty-region redraw is a later item.
+- Commit: bd1c8840 pushed: yes
