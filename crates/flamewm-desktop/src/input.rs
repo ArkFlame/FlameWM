@@ -1,4 +1,5 @@
 use super::*;
+use flamewm_ui_x11::{DropPayload, UiDragEvent};
 
 /// Desktop keyboard actions are delivered as typed key events, not `keyboard.input`
 /// action strings. Suppress Delete in rename/sticky editors and modifier chords.
@@ -49,11 +50,7 @@ pub(crate) fn paste_clipboard_files(directory: PathBuf) {
             match read {
                 Ok(Some((paths, op))) => {
                     let cut = matches!(op, flamewm_clipboard::FileOp::Cut);
-                    for outcome in flamewm_desktop_core::paste::paste_into(&directory, &paths, cut) {
-                        if let Err(error) = outcome {
-                            report_action_failure("paste file", error);
-                        }
-                    }
+                    paste_paths_now(&directory, &paths, cut);
                 }
                 Ok(None) => {}
                 Err(error) => report_action_failure("read clipboard files", error),
@@ -62,6 +59,38 @@ pub(crate) fn paste_clipboard_files(directory: PathBuf) {
     if let Err(error) = spawned {
         report_action_failure("start paste", error.to_string());
     }
+}
+
+/// Copies or moves `paths` into `directory` on the calling (worker) thread, reporting each failure.
+fn paste_paths_now(directory: &Path, paths: &[PathBuf], cut: bool) {
+    for outcome in flamewm_desktop_core::paste::paste_into(directory, paths, cut) {
+        if let Err(error) = outcome {
+            report_action_failure("paste file", error);
+        }
+    }
+}
+
+/// Files dropped from another application (XDND) are copied into the Desktop folder. The drop
+/// protocol offers only copy, so no move is applied here.
+pub(crate) fn handle_desktop_drag(drag: &UiDragEvent, state: &DesktopState) -> Result<(), String> {
+    if let UiDragEvent::Drop {
+        paths,
+        payload: DropPayload::Uris,
+        ..
+    } = drag
+    {
+        if !paths.is_empty() {
+            let directory = state.directory.clone();
+            let paths = paths.clone();
+            let spawned = std::thread::Builder::new()
+                .name("flamewm-drop".to_owned())
+                .spawn(move || paste_paths_now(&directory, &paths, false));
+            if let Err(error) = spawned {
+                report_action_failure("start drop", error.to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn wheel_bounds(state: &DesktopState) -> Option<Rect> {

@@ -393,7 +393,7 @@ pub fn main() -> Result<(), String> {
                     }
                     UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state),
                     UiControllerEvent::Resized { .. } => Ok(()),
-                    UiControllerEvent::Drag(_) => Ok(()),
+                    UiControllerEvent::Drag(drag) => handle_desktop_drag(drag, &state),
                     UiControllerEvent::Visibility { obscured } => {
                         widgets::set_obscured(document, &mut state, *obscured)
                     }
@@ -728,10 +728,12 @@ fn register_icon_and_wallpaper_wakes(
 fn initial_document(
     state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
 ) -> Result<flamewm_ui_x11::UiDocument, String> {
+    // Opted into XDND so files dragged from other applications land in the Desktop folder.
     let mut document = decode_document(include_bytes!(concat!(
         env!("OUT_DIR"),
         "/flamewm-desktop.rwr"
-    )))?;
+    )))?
+    .with_file_drop_target();
     ui_contract::require_desktop_nodes(|id| document.has_node(id))?;
     {
         let state = state_cell.borrow();
