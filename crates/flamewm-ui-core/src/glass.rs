@@ -496,10 +496,15 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         (None, None) => defaults.glass_blur_px,
     }
     .min(54);
-    let glass_opacity_percent = percent("glassOpacityPercent")
-        .or_else(|| percent("surfaceOpacity"))
-        .unwrap_or(defaults.glass_opacity_percent)
-        .min(100);
+    // The Surfaces slider writes surfaceOpacity only, so while the glass group is not custom the
+    // surface key is the live value and the glass mirror is stale. A custom glass group owns its key.
+    let glass_opacity_percent = if flag("glassCustom", false) {
+        percent("glassOpacityPercent").or_else(|| percent("surfaceOpacity"))
+    } else {
+        percent("surfaceOpacity").or_else(|| percent("glassOpacityPercent"))
+    }
+    .unwrap_or(defaults.glass_opacity_percent)
+    .min(100);
     let custom_tint = match snapshot.values.get("taskbarCustomTint") {
         Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
         _ => None,
@@ -1181,5 +1186,41 @@ mod translucent_default_gate_tests {
         );
         assert!(!material.is_opaque());
         assert_eq!(material.blur_px, 28);
+    }
+}
+
+#[cfg(test)]
+mod surface_opacity_mapping_tests {
+    use super::*;
+    use crate::surface::surface_fill;
+
+    fn snapshot(entries: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in entries {
+            snapshot.values.insert((*key).into(), value.clone());
+        }
+        snapshot
+    }
+
+    #[test]
+    fn surfaces_opacity_wins_over_a_stale_glass_mirror_when_glass_is_not_custom() {
+        // The Surfaces slider writes only surfaceOpacity; glassOpacityPercent keeps its old 75.
+        let snapshot = snapshot(&[
+            ("surfaceCustom", SettingValue::Boolean(true)),
+            ("surfaceOpacity", SettingValue::Percent(67)),
+            ("glassOpacityPercent", SettingValue::Percent(75)),
+        ]);
+        assert_eq!(appearance_from_settings(&snapshot).glass_opacity_percent, 67);
+        assert_eq!(surface_fill(&snapshot).alpha, 171);
+    }
+
+    #[test]
+    fn custom_glass_group_keeps_its_own_opacity() {
+        let snapshot = snapshot(&[
+            ("glassCustom", SettingValue::Boolean(true)),
+            ("surfaceOpacity", SettingValue::Percent(67)),
+            ("glassOpacityPercent", SettingValue::Percent(75)),
+        ]);
+        assert_eq!(appearance_from_settings(&snapshot).glass_opacity_percent, 75);
     }
 }
