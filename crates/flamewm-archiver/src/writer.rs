@@ -10,7 +10,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use xz2::write::XzEncoder;
 use zstd::stream::write::Encoder as ZstdEncoder;
-use zip::CompressionMethod;
+use zip::{AesMode, CompressionMethod};
 use zip::write::SimpleFileOptions;
 
 use crate::error::{ArchiveError, Result};
@@ -18,23 +18,24 @@ use crate::format::Format;
 use crate::progress::{Reporter, Tracked, copy_tracked};
 
 pub enum Writer {
-    Zip(zip::ZipWriter<File>),
+    /// Zip with an optional AES-256 password applied to every file entry.
+    Zip(zip::ZipWriter<File>, Option<String>),
     /// Every tar variant shares this one builder; only `Sink` differs by compression.
     Tar(tar::Builder<Sink>),
 }
 
 impl Writer {
-    pub fn create(format: Format, path: &Path) -> Result<Self> {
+    pub fn create(format: Format, path: &Path, password: Option<&str>) -> Result<Self> {
         let file = File::create(path)?;
         Ok(match format {
-            Format::Zip => Self::Zip(zip::ZipWriter::new(file)),
+            Format::Zip => Self::Zip(zip::ZipWriter::new(file), password.map(str::to_owned)),
             other => Self::Tar(tar::Builder::new(Sink::create(other, file)?)),
         })
     }
 
     pub fn add_dir(&mut self, name: &Path, mode: u32) -> Result<()> {
         match self {
-            Self::Zip(zip) => {
+            Self::Zip(zip, _) => {
                 let options = SimpleFileOptions::default().unix_permissions(mode & 0o777);
                 zip.add_directory(zip_name(name)?, options)?;
             }
@@ -52,10 +53,13 @@ impl Writer {
         rep: &mut Reporter<'_>,
     ) -> Result<()> {
         match self {
-            Self::Zip(zip) => {
-                let options = SimpleFileOptions::default()
+            Self::Zip(zip, password) => {
+                let mut options = SimpleFileOptions::default()
                     .compression_method(CompressionMethod::Deflated)
                     .unix_permissions(mode & 0o777);
+                if let Some(password) = password.as_deref() {
+                    options = options.with_aes_encryption(AesMode::Aes256, password);
+                }
                 zip.start_file(zip_name(name)?, options)?;
                 copy_tracked(data, zip, rep)?;
             }
@@ -66,7 +70,7 @@ impl Writer {
 
     pub fn finish(self) -> Result<()> {
         match self {
-            Self::Zip(zip) => {
+            Self::Zip(zip, _) => {
                 zip.finish()?;
             }
             Self::Tar(mut tar) => {

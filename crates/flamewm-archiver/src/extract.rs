@@ -5,12 +5,12 @@ use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{ArchiveError, Result};
 use crate::progress::{CancelToken, Progress, Reporter, Summary, copy_tracked};
 use crate::safe_path;
-use crate::visit::{Entry, Kind, list, under_any, visit};
+use crate::visit::{Entry, Kind, list, under_any, visit_with_password};
 
-/// Extracts `archive` into `dest`.
+/// Extracts `archive` into `dest`. Encrypted zip entries need `extract_with_password`.
 ///
 /// An empty `selection` extracts everything. A selected directory includes its contents.
 /// Every listed entry name is validated before the first write. If the archive stays unchanged,
@@ -21,6 +21,20 @@ pub fn extract(
     archive: &Path,
     dest: &Path,
     selection: &[PathBuf],
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(Progress),
+) -> Result<Summary> {
+    extract_with_password(archive, dest, selection, None, cancel, sink)
+}
+
+/// Extracts `archive` like `extract`, unlocking encrypted zip entries with `password`.
+///
+/// A selected encrypted entry without a password fails before any write.
+pub fn extract_with_password(
+    archive: &Path,
+    dest: &Path,
+    selection: &[PathBuf],
+    password: Option<&str>,
     cancel: &CancelToken,
     sink: &mut dyn FnMut(Progress),
 ) -> Result<Summary> {
@@ -43,6 +57,9 @@ pub fn extract(
             continue;
         };
         if is_selected(&rel, &roots, nothing_selected) {
+            if entry.encrypted && password.is_none() {
+                return Err(ArchiveError::PasswordRequired);
+            }
             entries_total += 1;
             if entry.kind == Kind::File {
                 bytes_total += entry.size;
@@ -59,7 +76,7 @@ pub fn extract(
     }
     let mut rep = Reporter::new(bytes_total, entries_total, cancel, sink);
     let mut summary = Summary::default();
-    let outcome = visit(archive, |entry: Entry, data: &mut dyn Read| {
+    let outcome = visit_with_password(archive, password, |entry: Entry, data: &mut dyn Read| {
         rep.check()?;
         let Some(rel) = safe_path::sanitize(&entry.path)? else {
             return Ok(());

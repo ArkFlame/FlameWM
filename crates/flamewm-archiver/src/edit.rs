@@ -105,7 +105,7 @@ fn write_rewrite(
     rep: &mut Reporter<'_>,
     summary: &mut Summary,
 ) -> Result<()> {
-    let mut writer = Writer::create(format, partial)?;
+    let mut writer = Writer::create(format, partial, None)?;
     visit(archive, |entry: Entry, data: &mut dyn Read| {
         rep.check()?;
         let Some(rel) = sanitize(&entry.path)? else {

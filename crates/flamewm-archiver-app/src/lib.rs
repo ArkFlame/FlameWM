@@ -85,6 +85,7 @@ mod tests {
             size: 42,
             kind: Kind::File,
             mode: None,
+            encrypted: false,
         };
         assert_eq!(format_entry(&entry), "file           42  docs/a.txt");
     }

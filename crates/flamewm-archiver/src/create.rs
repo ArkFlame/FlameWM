@@ -28,7 +28,37 @@ pub fn create(
     cancel: &CancelToken,
     sink: &mut dyn FnMut(Progress),
 ) -> Result<Summary> {
+    create_inner(out, inputs, None, cancel, sink)
+}
+
+/// Creates a password-protected zip whose file entries use AES-256. Only `.zip` names accept a password.
+pub fn create_encrypted(
+    out: &Path,
+    inputs: &[PathBuf],
+    password: &str,
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(Progress),
+) -> Result<Summary> {
+    if password.is_empty() {
+        return Err(ArchiveError::Unsupported("empty password".to_owned()));
+    }
+    create_inner(out, inputs, Some(password), cancel, sink)
+}
+
+fn create_inner(
+    out: &Path,
+    inputs: &[PathBuf],
+    password: Option<&str>,
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(Progress),
+) -> Result<Summary> {
     let format = Format::detect(out)?;
+    if password.is_some() && format != Format::Zip {
+        return Err(ArchiveError::Unsupported(format!(
+            "{}: only .zip archives take a password",
+            out.display()
+        )));
+    }
     let (sources, skipped) = collect(inputs)?;
     let bytes_total = sources.iter().filter(|s| !s.is_dir).map(|s| s.size).sum();
     let mut rep = Reporter::new(bytes_total, sources.len(), cancel, sink);
@@ -37,7 +67,7 @@ pub fn create(
         skipped,
         ..Summary::default()
     };
-    match write_sources(format, &partial, &sources, &mut rep, &mut summary) {
+    match write_sources(format, &partial, &sources, password, &mut rep, &mut summary) {
         Ok(()) => {
             fs::rename(&partial, out)?;
             Ok(summary)
@@ -96,10 +126,11 @@ fn write_sources(
     format: Format,
     partial: &Path,
     sources: &[Source],
+    password: Option<&str>,
     rep: &mut Reporter<'_>,
     summary: &mut Summary,
 ) -> Result<()> {
-    let mut writer = Writer::create(format, partial)?;
+    let mut writer = Writer::create(format, partial, password)?;
     write_sources_into(&mut writer, sources, rep, summary)?;
     writer.finish()
 }

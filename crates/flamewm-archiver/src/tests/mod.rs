@@ -2,6 +2,7 @@
 //! `TMPDIR` on the SDD disk because `/tmp` is nearly full.
 
 mod create_edit;
+mod encrypted;
 mod interop;
 mod listing_extract;
 mod safety;

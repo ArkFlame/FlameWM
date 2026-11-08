@@ -14,6 +14,10 @@ pub enum ArchiveError {
     Unsupported(String),
     /// The operation was cancelled through its `CancelToken`.
     Cancelled,
+    /// An encrypted entry was reached without a password.
+    PasswordRequired,
+    /// The supplied password does not open the encrypted entry.
+    WrongPassword,
 }
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;
@@ -26,6 +30,8 @@ impl fmt::Display for ArchiveError {
             Self::UnsafePath(path) => write!(f, "unsafe archive path rejected: {}", path.display()),
             Self::Unsupported(what) => write!(f, "unsupported archive or name: {what}"),
             Self::Cancelled => f.write_str("operation cancelled"),
+            Self::PasswordRequired => f.write_str("archive entry is encrypted; a password is required"),
+            Self::WrongPassword => f.write_str("wrong password for encrypted archive entry"),
         }
     }
 }

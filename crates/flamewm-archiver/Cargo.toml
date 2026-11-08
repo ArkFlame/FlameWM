@@ -13,7 +13,7 @@ bzip2 = { version = "=0.6.1", default-features = false, features = ["bzip2-sys"]
 flate2 = "=1.1.10"
 tar = "=0.4.46"
 xz2 = "=0.1.7"
-zip = { version = "=9.2.0", default-features = false, features = ["deflate"] }
+zip = { version = "=9.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
 zstd = { version = "=0.14.2", default-features = false }
 
 [lints]

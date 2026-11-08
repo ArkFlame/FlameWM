@@ -18,11 +18,11 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use create::{Source, collect, create};
+pub use create::{Source, collect, create, create_encrypted};
 pub use edit::{add, remove};
 pub use error::{ArchiveError, Result};
-pub use extract::extract;
+pub use extract::{extract, extract_with_password};
 pub use format::Format;
 pub use progress::{CancelToken, Progress, Summary};
 pub use safe_path::sanitize;
-pub use visit::{Entry, Kind, list, visit};
+pub use visit::{Entry, Kind, list, visit, visit_with_password};
