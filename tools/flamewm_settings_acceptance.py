@@ -1656,7 +1656,7 @@ def display_mode_count(snapshot: str) -> int | None:
     span = next(brace_spans(body[first_start:]), None)
     if span is None:
         return None
-    modes = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*?)\]>", body[first_start:first_start + span[1]], re.DOTALL)
+    modes = re.search(r"['\"]modes['\"]\s*:\s*<(?:@[^\s\[]+\s+)?\[(.*?)\]>", body[first_start:first_start + span[1]], re.DOTALL)
     if modes is None:
         return None
     mode_body = modes.group(1)
@@ -2960,7 +2960,9 @@ def ss06_snap_preview(ctx: Ctx, args: argparse.Namespace, details: dict, observa
         time.sleep(settle)
         control = ss06_capture(ctx, "ss06-snap-control")
         control2 = ss06_capture(ctx, "ss06-snap-control2")
-        preview_before = ss06_is_snap_rect(ss06_preview_rect(ctx), geometry)
+        control_rect = ss06_preview_rect(ctx)
+        record["control_rect"] = control_rect
+        preview_before = ss06_is_snap_rect(control_rect, geometry)
         code2, command = send_input(ctx, None, None, drag=f"{mid[0]},{mid[1]},{edge[0]},{edge[1]}:15:300",
                                     drag_keep=True)
         details["commands"].append(command)
@@ -3957,7 +3959,7 @@ def xrandr_current_size(ctx: Ctx) -> tuple[int, int] | None:
 
 def display_modes(snapshot: str) -> list[tuple[int, int, int]]:
     """(id, width, height) of every mode of the first output in a Displays snapshot."""
-    match = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*?)\]>", snapshot, re.DOTALL)
+    match = re.search(r"['\"]modes['\"]\s*:\s*<(?:@[^\s\[]+\s+)?\[(.*?)\]>", snapshot, re.DOTALL)
     modes = []
     for block in top_level_blocks(match.group(1)) if match else []:
         mode_id, width, height = (gvariant_field_u64(block, "id"), gvariant_field_int(block, "width"),
