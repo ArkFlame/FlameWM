@@ -1,7 +1,7 @@
 //! Pointer input: motion, hit routing, focus-follows-mouse, and axis scrolling.
 
 use super::*;
-use smithay::input::pointer::{PointerHandle, RelativeMotionEvent};
+use smithay::input::pointer::{CursorIcon, PointerHandle, RelativeMotionEvent};
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 
 /// Pick the first owner that actually contains the point. The same helper makes front-to-back
@@ -35,6 +35,19 @@ pub(super) enum PointerRoute {
     Compositor,
     /// Nothing managed here; fall through to docks, menus and the desktop.
     Unmanaged,
+}
+
+/// Pointer image for a compositor resize handle: the edge or corner arrow that names the drag.
+pub(super) fn resize_cursor(edge: ResizeEdge) -> Option<CursorIcon> {
+    Some(match (edge.left, edge.right, edge.top, edge.bottom) {
+        (true, false, true, false) => CursorIcon::NwResize,
+        (false, true, true, false) => CursorIcon::NeResize,
+        (true, false, false, true) => CursorIcon::SwResize,
+        (false, true, false, true) => CursorIcon::SeResize,
+        (true, false, false, false) | (false, true, false, false) => CursorIcon::EwResize,
+        (false, false, true, false) | (false, false, false, true) => CursorIcon::NsResize,
+        _ => return None,
+    })
 }
 
 pub(super) fn pointer_route(hit: Option<Hit>) -> PointerRoute {
@@ -170,6 +183,21 @@ impl State {
             }
         }
         let target = self.pointer_target(location);
+        let decor_cursor = match target.managed_hit {
+            Some(Hit::Resize(id)) => self.model.get(id).and_then(|window| {
+                resize_cursor(resize_edge_at(
+                    window.frame(),
+                    window.rect,
+                    location.x,
+                    location.y,
+                ))
+            }),
+            _ => None,
+        };
+        if self.decor_cursor != decor_cursor {
+            self.decor_cursor = decor_cursor;
+            self.refresh_cursor_status();
+        }
         // `focusFollowsMouse` is off by default: without it, entry only updates hover and the
         // click path still owns focus. A drag never steals focus from the window it is carrying.
         if self.focus_follows_mouse && self.grab.is_none() {

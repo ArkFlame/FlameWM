@@ -222,7 +222,9 @@ fn hit_test_prefers_topmost_and_classifies_titlebar_and_buttons() {
 fn resize_grip_is_bottom_right_corner_of_client() {
     let mut model = WindowModel::new(1);
     model.add(7, Rect::new(0, 28, 200, 200), 0);
-    assert_eq!(model.hit(195.0, 225.0), Some(Hit::Resize(7)));
+    // The grip reaches 2 px into the client's bottom-right pixels; 195,225 is the scrollbar area.
+    assert_eq!(model.hit(199.0, 227.0), Some(Hit::Resize(7)));
+    assert_eq!(model.hit(195.0, 225.0), Some(Hit::Client(7)));
     assert_eq!(model.hit(50.0, 50.0), Some(Hit::Client(7)));
 }
 
@@ -1198,4 +1200,39 @@ fn clamp_into_output_handles_one_pixel_and_odd_outputs() {
     assert_eq!(odd, Rect::new(1000, 0, 333, 333));
     let inside = Rect::new(3, 4, 5, 6);
     assert_eq!(clamp_into_output(inside, Rect::new(0, 0, 999, 999)), inside);
+}
+
+/// Right and bottom handles never take the client's last pixels: a press 3 px inside either edge
+/// stays a client press (scrollbar), while the handle reaches outside the client rect.
+#[test]
+fn right_and_bottom_handles_leave_the_scrollbar_clickable() {
+    let mut model = WindowModel::new(1);
+    model.add(1, Rect::new(100, 100, 300, 200), 0);
+    let window = model.get(1).unwrap();
+    let (rect, frame) = (window.rect, window.frame());
+    let mid_x = f64::from(rect.x + rect.w / 2);
+    let mid_y = f64::from(rect.y + rect.h / 2);
+    let right = f64::from(rect.x + rect.w);
+    let bottom = f64::from(rect.y + rect.h);
+    assert_eq!(model.hit(right - 3.0, mid_y), Some(Hit::Client(1)));
+    assert_eq!(model.hit(mid_x, bottom - 3.0), Some(Hit::Client(1)));
+    assert_eq!(model.hit(right - 1.0, mid_y), Some(Hit::Resize(1)));
+    assert_eq!(model.hit(mid_x, bottom - 1.0), Some(Hit::Resize(1)));
+    assert_eq!(model.hit(right + 3.0, mid_y), Some(Hit::Resize(1)));
+    assert_eq!(model.hit(mid_x, bottom + 3.0), Some(Hit::Resize(1)));
+    assert_eq!(model.hit(right + 6.0, mid_y), None, "reach ends at 6 px");
+    // Bottom-right corner: both axes, inside and outside the client.
+    let corner = resize_edge_at(frame, rect, right + 3.0, bottom + 3.0);
+    assert_eq!(
+        corner,
+        ResizeEdge {
+            left: false,
+            right: true,
+            top: false,
+            bottom: true,
+        }
+    );
+    assert_eq!(model.hit(right - 1.0, bottom - 1.0), Some(Hit::Resize(1)));
+    // Left and top keep their 12 px client band.
+    assert_eq!(model.hit(f64::from(rect.x) + 5.0, mid_y), Some(Hit::Resize(1)));
 }

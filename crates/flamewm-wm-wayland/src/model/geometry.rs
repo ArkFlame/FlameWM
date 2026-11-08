@@ -105,32 +105,42 @@ pub(super) fn button_at(frame: Rect, px: f64, py: f64) -> Option<Button> {
         .find(|button| button_rect(frame, *button).contains(px, py))
 }
 
-/// Client rect inside a grip band along any edge (client corners included) starts a resize.
+/// Client rect inside a grip band along any edge starts a resize. The right and bottom bands are
+/// only [`RESIZE_EDGE_RB`] deep, so client scrollbars keep their clicks.
 pub(super) fn in_resize_grip(rect: Rect, px: f64, py: f64) -> bool {
     if !rect.contains(px, py) {
         return false;
     }
-    let grip = f64::from(RESIZE_GRIP);
-    px < f64::from(rect.x) + grip
-        || px >= f64::from(rect.x + rect.w) - grip
-        || py < f64::from(rect.y) + grip
-        || py >= f64::from(rect.y + rect.h) - grip
+    ResizeEdge::at(rect, px, py).any()
 }
 
-/// Two-axis resize edges when `(px, py)` is in the [`CORNER_GRIP`] square at a `frame` corner.
+/// The frame plus the outside reach of the right and bottom handles.
+pub(super) fn handle_reach(frame: Rect) -> Rect {
+    Rect::new(
+        frame.x,
+        frame.y,
+        frame.w + RESIZE_OUTSIDE,
+        frame.h + RESIZE_OUTSIDE,
+    )
+}
+
+/// Two-axis resize edges when `(px, py)` is in a corner square at a `frame` corner.
 ///
 /// The square belongs to the frame, not the client: a decorated window's top corners are in the
 /// titlebar band, outside the client rect [`in_resize_grip`] inspects. The close button starts at
-/// the same frame corner, so only the square it shares with that handle resizes.
+/// the same frame corner, so only the square it shares with that handle resizes. Bottom corners
+/// reach only [`RESIZE_EDGE_RB`] into the client, so the client's scrollbar arrows stay clickable.
 pub fn corner_at(frame: Rect, px: f64, py: f64) -> Option<ResizeEdge> {
-    if !frame.contains(px, py) {
+    if !handle_reach(frame).contains(px, py) {
         return None;
     }
     let grip = f64::from(CORNER_GRIP);
+    let edge = f64::from(RESIZE_EDGE_RB);
+    let bottom = py >= f64::from(frame.y + frame.h) - edge;
     let left = px < f64::from(frame.x) + grip;
-    let right = px >= f64::from(frame.x + frame.w) - grip;
+    let right_depth = if bottom { edge } else { grip };
+    let right = px >= f64::from(frame.x + frame.w) - right_depth;
     let top = py < f64::from(frame.y) + grip;
-    let bottom = py >= f64::from(frame.y + frame.h) - grip;
     ((left || right) && (top || bottom)).then_some(ResizeEdge {
         left,
         right,
@@ -156,15 +166,22 @@ pub struct ResizeEdge {
 }
 
 impl ResizeEdge {
-    /// Edges under `(px, py)` inside the grip band of `rect`.
+    /// Edges under `(px, py)` inside the grip band of `rect`; right and bottom bands are
+    /// [`RESIZE_EDGE_RB`] deep and also reach outside the rect.
     pub fn at(rect: Rect, px: f64, py: f64) -> Self {
         let grip = f64::from(RESIZE_GRIP);
+        let edge = f64::from(RESIZE_EDGE_RB);
         Self {
             left: px < f64::from(rect.x) + grip,
-            right: px >= f64::from(rect.x + rect.w) - grip,
+            right: px >= f64::from(rect.x + rect.w) - edge,
             top: py < f64::from(rect.y) + grip,
-            bottom: py >= f64::from(rect.y + rect.h) - grip,
+            bottom: py >= f64::from(rect.y + rect.h) - edge,
         }
+    }
+
+    /// True when any edge or corner flag is set.
+    pub fn any(self) -> bool {
+        self.left || self.right || self.top || self.bottom
     }
 
     /// Quadrant of `rect` holding `(px, py)`: Ctrl+Super+right resizes the corner nearest the grab.

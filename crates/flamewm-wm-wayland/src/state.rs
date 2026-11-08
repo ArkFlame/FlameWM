@@ -17,7 +17,7 @@ use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::desktop::{PopupManager, layer_map_for_output};
-use smithay::input::pointer::CursorImageStatus;
+use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
@@ -389,6 +389,10 @@ pub struct State {
     /// still; relative motion is measured from here so locked deltas are not lost or doubled.
     pub raw_pointer: Point<f64, Logical>,
     /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
+    pub client_cursor_status: CursorImageStatus,
+    /// Resize cursor of the compositor handle under the pointer; it overrides the client's request.
+    pub decor_cursor: Option<CursorIcon>,
+    /// Pointer image in effect: the decoration cursor when set, else the client's request.
     pub cursor_status: CursorImageStatus,
     /// Session xcursor theme and the cursors decoded from it.
     pub cursors: crate::cursor::Cursors,
@@ -538,6 +542,8 @@ impl State {
             shortcuts,
             pointer: Point::from((0.0, 0.0)),
             raw_pointer: Point::from((0.0, 0.0)),
+            client_cursor_status: CursorImageStatus::default_named(),
+            decor_cursor: None,
             cursor_status: CursorImageStatus::default_named(),
             cursors: crate::cursor::Cursors::from_env(),
             decorations: RefCell::default(),
@@ -896,6 +902,20 @@ impl State {
             status,
             CursorImageStatus::Named(_) | CursorImageStatus::Hidden
         )
+    }
+
+    /// Recomputes [`Self::cursor_status`]: a decoration resize cursor under the pointer wins over
+    /// the client's request, which is kept so leaving the handle restores it.
+    pub fn refresh_cursor_status(&mut self) {
+        let wanted = match self.decor_cursor {
+            Some(icon) => CursorImageStatus::Named(icon),
+            None => self.client_cursor_status.clone(),
+        };
+        if wanted != self.cursor_status {
+            self.cursor_status = wanted;
+            self.sync_host_cursor();
+            self.request_redraw();
+        }
     }
 
     /// Nested winit only: mirrors the pointer image onto the host window. A surface or hidden

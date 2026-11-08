@@ -34,6 +34,9 @@ pub const BUTTON_WIDTH: i32 = 38;
 pub const RESIZE_T: i32 = 6;
 /// Corner grip side in logical pixels: `flamewm-wm-wayland`'s unclipped `CORNER_GRIP` square.
 const CORNER_GRIP: i32 = 16;
+/// Deepest a right or bottom handle reaches into the client. Mirrors `RESIZE_EDGE_RB` in
+/// `flamewm-wm-wayland`, so client scrollbars keep their clicks in both sessions.
+pub const RESIZE_EDGE_RB: i32 = 2;
 
 /// Convert authoritative logical control width to the physical titlebar size.
 /// The titlebar height is supplied by the frame-extents authority, so hit,
@@ -151,7 +154,11 @@ pub fn layout_frame_children(
     let grip = corner_grip_for_titlebar(titlebar_h).min(w / 2).min(h / 2);
     let strip_w = (w - 2 * grip).max(0);
     let drag_w = (w - cw - t).max(0);
-    let side_h = (h - 2 * grip).max(0);
+    // Right and bottom handles reach at most `RESIZE_EDGE_RB` into the client: its scrollbars sit
+    // in the last client pixels and must keep their clicks. The frame has no outside band to
+    // extend into, so these handles stay inside the frame at that depth.
+    let rb = t.min(RESIZE_EDGE_RB);
+    let side_h = (h - grip - rb).max(0);
 
     // Controls from the skin formula, then clipped below the top strip
     // when touching it (control top lives at y=0, strip owns y=0..t).
@@ -169,12 +176,12 @@ pub fn layout_frame_children(
     FrameChildLayout {
         top_left: FrameRect::new(0, 0, grip, grip),
         top_right: FrameRect::new(w - grip, 0, grip, grip),
-        bottom_left: FrameRect::new(0, h - grip, grip, grip),
-        bottom_right: FrameRect::new(w - grip, h - grip, grip, grip),
+        bottom_left: FrameRect::new(0, h - rb, grip, rb),
+        bottom_right: FrameRect::new(w - grip, h - rb, grip, rb),
         top: FrameRect::new(grip, 0, strip_w, t),
-        bottom: FrameRect::new(grip, h - t, strip_w, t),
+        bottom: FrameRect::new(grip, h - rb, strip_w, rb),
         left: FrameRect::new(0, grip, t, side_h),
-        right: FrameRect::new(w - t, grip, t, side_h),
+        right: FrameRect::new(w - rb, grip, rb, side_h),
         title_drag: FrameRect::new(t, t, drag_w, (tb - t).max(0)),
         controls,
     }
@@ -211,12 +218,12 @@ mod tests {
         assert_eq!(corner_grip_for_titlebar(TITLEBAR_H), 16);
         assert_eq!(l.top_left, FrameRect::new(0, 0, 16, 16));
         assert_eq!(l.top_right, FrameRect::new(384, 0, 16, 16));
-        assert_eq!(l.bottom_left, FrameRect::new(0, 284, 16, 16));
-        assert_eq!(l.bottom_right, FrameRect::new(384, 284, 16, 16));
+        assert_eq!(l.bottom_left, FrameRect::new(0, 298, 16, 2));
+        assert_eq!(l.bottom_right, FrameRect::new(384, 298, 16, 2));
         assert_eq!(l.top, FrameRect::new(16, 0, 368, 6));
-        assert_eq!(l.bottom, FrameRect::new(16, 294, 368, 6));
-        assert_eq!(l.left, FrameRect::new(0, 16, 6, 268));
-        assert_eq!(l.right, FrameRect::new(394, 16, 6, 268));
+        assert_eq!(l.bottom, FrameRect::new(16, 298, 368, 2));
+        assert_eq!(l.left, FrameRect::new(0, 16, 6, 282));
+        assert_eq!(l.right, FrameRect::new(398, 16, 2, 282));
         assert_eq!(l.title_drag, FrameRect::new(6, 6, 280, 25));
         assert_eq!(
             l.controls,
@@ -297,9 +304,10 @@ mod tests {
         );
     }
 
-    /// Frame chrome = the titlebar band plus the `resize_t` border; the client owns the interior.
-    fn in_chrome(x: i32, y: i32, w: i32, h: i32, tb: i32, t: i32) -> bool {
-        y < tb || x < t || y >= h - t || x >= w - t
+    /// Frame chrome = the titlebar band, the `resize_t` left/top border and the right/bottom
+    /// handle band `rb`; the client owns the rest of the interior.
+    fn in_chrome(x: i32, y: i32, w: i32, h: i32, tb: i32, t: i32, rb: i32) -> bool {
+        y < tb || x < t || y >= h - rb || x >= w - rb
     }
 
     #[test]
@@ -322,7 +330,7 @@ mod tests {
             // (a) No dead zones: every chrome pixel belongs to at least one input child.
             for y in 0..h {
                 for x in 0..w {
-                    if !in_chrome(x, y, w, h, tb, t) {
+                    if !in_chrome(x, y, w, h, tb, t, RESIZE_EDGE_RB.min(t)) {
                         continue;
                     }
                     let hit = all
@@ -345,16 +353,23 @@ mod tests {
                     }
                 }
             }
-            // (c) Every corner grip is a grip x grip square at an outer corner.
+            // (c) Top corner grips are grip x grip squares at the outer top corners; bottom corners
+            // are grip wide and only RESIZE_EDGE_RB tall, so the client's bottom scrollbar keeps
+            // its clicks.
             let grip = corner_grip_for_titlebar(titlebar).min(w / 2).min(h / 2);
-            for (rect, corner) in l.resize_rects().into_iter().take(4).zip([
-                (0, 0),
-                (w - grip, 0),
-                (0, h - grip),
-                (w - grip, h - grip),
-            ]) {
-                assert_eq!(rect, FrameRect::new(corner.0, corner.1, grip, grip));
+            let rb = RESIZE_EDGE_RB.min(t);
+            let expected = [
+                FrameRect::new(0, 0, grip, grip),
+                FrameRect::new(w - grip, 0, grip, grip),
+                FrameRect::new(0, h - rb, grip, rb),
+                FrameRect::new(w - grip, h - rb, grip, rb),
+            ];
+            for (rect, want) in l.resize_rects().into_iter().take(4).zip(expected) {
+                assert_eq!(rect, want);
             }
+            // (d) Right and bottom handles sit within RESIZE_EDGE_RB of the frame's far edges.
+            assert!(l.right.x >= w - RESIZE_EDGE_RB && l.right.x + l.right.w == w);
+            assert!(l.bottom.y >= h - RESIZE_EDGE_RB && l.bottom.y + l.bottom.h == h);
         }
     }
 

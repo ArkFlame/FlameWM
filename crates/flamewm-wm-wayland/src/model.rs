@@ -27,6 +27,12 @@ pub const BUTTON_SIZE: i32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
     .button_width as i32;
 pub const BUTTON_GAP: i32 = 0;
 pub const RESIZE_GRIP: i32 = 12;
+/// Client pixels a right or bottom handle may take. Scrollbars occupy the last client pixels, so
+/// these handles reach only this far inside the client and the rest of their reach lies outside.
+pub const RESIZE_EDGE_RB: i32 = 2;
+/// Outside reach of the right and bottom handles past the client rect. Hit-testing only: nothing
+/// of the client is covered, so its scrollbars keep their clicks.
+pub const RESIZE_OUTSIDE: i32 = 6;
 /// Logical square at each decorated-frame corner that starts a two-axis resize. It covers the
 /// titlebar band, where [`RESIZE_GRIP`] cannot reach. X11 mirrors this number for its own corner
 /// handles, so both sessions agree on where a corner begins; the close button is wider and taller
@@ -409,12 +415,16 @@ impl WindowModel {
                 continue;
             }
             let frame = window.frame();
-            if !frame.contains(px, py) {
+            if !geometry::handle_reach(frame).contains(px, py) {
                 continue;
             }
             // A frame corner resizes: it wins over the titlebar drag and, in the square it shares
             // with the close button, over the button.
             if corner_at(frame, px, py).is_some() {
+                return Some(Hit::Resize(window.id));
+            }
+            // Right and bottom handles reach outside the frame; the client never covers them.
+            if !frame.contains(px, py) {
                 return Some(Hit::Resize(window.id));
             }
             if window.decorated() && !window.rect.contains(px, py) {

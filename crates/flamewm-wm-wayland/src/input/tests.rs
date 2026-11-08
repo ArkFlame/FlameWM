@@ -14,6 +14,7 @@ use flamewm_platform::shortcuts::{
 };
 use flamewm_platform::system::MediaAudioKey;
 use flamewm_window_core::SnapTarget;
+use smithay::input::pointer::CursorIcon;
 use smithay::utils::{Logical, Point};
 
 /// The default registry binds these media actions, so dispatch must recognize the exact ids
@@ -483,4 +484,48 @@ fn settings_readers_work_against_a_real_file() {
     );
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Each compositor handle names the drag direction; a point off every edge keeps the client's image.
+#[test]
+fn resize_handles_name_their_drag_direction() {
+    let edge = |left, right, top, bottom| ResizeEdge {
+        left,
+        right,
+        top,
+        bottom,
+    };
+    assert_eq!(
+        resize_cursor(edge(true, false, true, false)),
+        Some(CursorIcon::NwResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(false, true, true, false)),
+        Some(CursorIcon::NeResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(true, false, false, true)),
+        Some(CursorIcon::SwResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(false, true, false, true)),
+        Some(CursorIcon::SeResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(true, false, false, false)),
+        Some(CursorIcon::EwResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(false, true, false, false)),
+        Some(CursorIcon::EwResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(false, false, true, false)),
+        Some(CursorIcon::NsResize)
+    );
+    assert_eq!(
+        resize_cursor(edge(false, false, false, true)),
+        Some(CursorIcon::NsResize)
+    );
+    assert_eq!(resize_cursor(edge(false, false, false, false)), None);
 }
