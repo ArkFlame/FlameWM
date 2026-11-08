@@ -1,6 +1,6 @@
 //! Linux procfs sampler. All filesystem reads run off the X11/UI thread.
 //! PID plus process start-time is the authority for selecting a live process.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Instant;
 
@@ -55,6 +55,37 @@ pub struct Sampler {
     page_bytes: u64,
     user_cache: Option<HashMap<u32, String>>,
     prev_net: Option<(u64, u64, Instant)>,
+    /// Highest-CPU processes of the last sample: read `/proc/<pid>/stat` every tick.
+    hot: HashSet<u32>,
+}
+
+/// Processes re-read every tick because they carry the most CPU. Others are re-read on a rotating
+/// schedule of one tick in `SLOW_TICKS`, and keep their last sample in between.
+pub const HOT_COUNT: usize = 64;
+pub const SLOW_TICKS: u64 = 4;
+
+/// Whether a non-hot pid is due for its rotating `stat` read on this tick.
+pub fn slow_due(pid: u32, tick: u64) -> bool {
+    tick % SLOW_TICKS == u64::from(pid) % SLOW_TICKS
+}
+
+/// CPU percent of one process over the span of global CPU ticks since its last `stat` read.
+/// A zero span (no time passed) reports 0 rather than dividing by zero.
+pub fn cpu_percent(process_ticks: u64, span_ticks: u64, cpu_count: f64) -> f64 {
+    if span_ticks == 0 {
+        return 0.0;
+    }
+    100.0 * cpu_count * process_ticks as f64 / span_ticks as f64
+}
+
+/// The `HOT_COUNT` pids with the highest CPU in `processes`.
+pub fn hot_pids(processes: &[Process]) -> HashSet<u32> {
+    let mut ranked: Vec<(f64, u32)> = processes.iter().map(|p| (p.cpu, p.pid)).collect();
+    if ranked.len() > HOT_COUNT {
+        ranked.select_nth_unstable_by(HOT_COUNT, |a, b| b.0.total_cmp(&a.0));
+        ranked.truncate(HOT_COUNT);
+    }
+    ranked.into_iter().map(|(_, pid)| pid).collect()
 }
 
 /// Static-per-process fields are re-read on first sight, on a rename (comm changed), and at
@@ -77,6 +108,10 @@ struct Cached {
     uid: u32,
     user: String,
     command: String,
+    /// Last full `stat` sample, reused between rotating reads.
+    last: Option<Process>,
+    /// Global CPU total ticks at this process's last `stat` read.
+    read_total: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -309,9 +344,6 @@ impl Sampler {
                 .collect(),
             ..Snapshot::default()
         };
-        let delta = self
-            .prev_global
-            .map_or(0, |old| now.total.saturating_sub(old.total));
         let cpu_count = cores.len().max(1) as f64;
         if self.page_bytes == 0 {
             self.page_bytes = page_size_bytes();
@@ -331,7 +363,7 @@ impl Sampler {
         pids.sort_unstable();
         pids.dedup();
         for pid in pids {
-            let Some(task) = self.sample_task(pid, tick, delta, cpu_count) else {
+            let Some(task) = self.sample_task(pid, tick, now.total, cpu_count) else {
                 continue;
             };
             result.threads += u64::from(task.threads);
@@ -342,6 +374,7 @@ impl Sampler {
         }
         self.tasks.retain(|_, cached| cached.seen == tick);
         assign_depths(&mut result.processes);
+        self.hot = hot_pids(&result.processes);
         result.tasks = result.processes.len();
         let (rx, tx) = parse_net_dev(&fs::read_to_string("/proc/net/dev").unwrap_or_default());
         let sampled = Instant::now();
@@ -360,17 +393,31 @@ impl Sampler {
 
     /// One task per sample: `stat` every time (CPU and RSS), `status` and `cmdline` only when
     /// the cached static fields are stale. Returns `None` for tasks that vanished mid-read.
-    fn sample_task(&mut self, pid: u32, tick: u64, delta: u64, cpu_count: f64) -> Option<Process> {
+    fn sample_task(&mut self, pid: u32, tick: u64, total: u64, cpu_count: f64) -> Option<Process> {
+        if let Some(cached) = self.tasks.get_mut(&pid)
+            && !self.hot.contains(&pid)
+            && !slow_due(pid, tick)
+            && let Some(last) = cached.last.clone()
+        {
+            // Non-hot and not due: keep the last sample. Its `seen` tick stays current so the
+            // pid is still tracked and vanishes on its next due read.
+            cached.seen = tick;
+            return Some(last);
+        }
         let text = read_proc(&mut self.scratch, &format!("/proc/{pid}/stat"))?;
         let mut task = parse_stat(pid, std::str::from_utf8(text).ok()?, self.page_bytes)?;
         let cached = self.tasks.entry(pid).or_default();
         // Same PID and start time as the previous sample: the delta is meaningful. PID reuse
         // changes the start time, so a recycled PID never inherits the old CPU counter.
         let known = cached.seen != 0 && cached.start == task.start;
-        if known && delta != 0 {
-            task.cpu =
-                100.0 * cpu_count * task.ticks.saturating_sub(cached.ticks) as f64 / delta as f64;
+        if known {
+            task.cpu = cpu_percent(
+                task.ticks.saturating_sub(cached.ticks),
+                total.saturating_sub(cached.read_total),
+                cpu_count,
+            );
         }
+        cached.read_total = total;
         let stale = !known
             || cached.name != task.name
             || tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
@@ -404,6 +451,7 @@ impl Sampler {
         task.uid = cached.uid;
         task.user.clone_from(&cached.user);
         task.command.clone_from(&cached.command);
+        cached.last = Some(task.clone());
         Some(task)
     }
 }
@@ -664,5 +712,48 @@ mod tree_tests {
         assert_eq!(depth(11), 2);
         assert_eq!(depth(20), 0);
         assert!(depth(30) <= 32 && depth(31) <= 32);
+    }
+}
+
+#[cfg(test)]
+mod sampling_schedule_tests {
+    use super::*;
+
+    fn process(pid: u32, cpu: f64) -> Process {
+        Process {
+            pid,
+            cpu,
+            ..Process::default()
+        }
+    }
+
+    #[test]
+    fn every_pid_gets_a_rotating_read_within_slow_ticks() {
+        for pid in [1_u32, 2, 3, 4, 5, 1_234, 99_999] {
+            let due = (1..=SLOW_TICKS).filter(|tick| slow_due(pid, *tick)).count();
+            assert_eq!(due, 1, "pid {pid} must be due exactly once per {SLOW_TICKS} ticks");
+        }
+    }
+
+    #[test]
+    fn cpu_percent_scales_by_span_since_last_read() {
+        // 50 process ticks over 100 global ticks on a 4-cpu box is 50% of one cpu x4 = 200%.
+        assert!((cpu_percent(50, 100, 4.0) - 200.0).abs() < 1e-9);
+        // Same process read after two intervals: the span doubles, so the percentage halves.
+        assert!((cpu_percent(50, 200, 4.0) - 100.0).abs() < 1e-9);
+        assert_eq!(cpu_percent(10, 0, 4.0), 0.0, "zero span reports 0, never NaN");
+    }
+
+    #[test]
+    fn hot_set_is_the_highest_cpu_pids_and_bounded() {
+        let mut processes: Vec<Process> = (0..(HOT_COUNT as u32 + 10))
+            .map(|pid| process(pid, f64::from(pid)))
+            .collect();
+        let hot = hot_pids(&processes);
+        assert_eq!(hot.len(), HOT_COUNT);
+        assert!(hot.contains(&(HOT_COUNT as u32 + 9)));
+        assert!(!hot.contains(&0));
+        processes.truncate(3);
+        assert_eq!(hot_pids(&processes).len(), 3);
     }
 }
