@@ -83,8 +83,15 @@ Only items with a clear win and a plausible match to FlameWM are listed. Others 
 2. XWayland native game resolution on fractional outputs (issue 163). Start with `crates/flamewm-wm-wayland/src/presentation_scale.rs` and `xwayland.rs`.
 3. Pointer lock and resize border visibility (PRs 189, 191, 192). Start with `crates/flamewm-wm-x11/src/frame/layout.rs`.
 
-## Not fixed in this pass
+## Verification of the top 3 (static, 2026-11-08 on origin/main)
 
-- Items 1-3 are not fixed. Each needs a reproduction on Xvfb with two outputs and a runtime test. Several target files (`wm-x11/src/wm/manage.rs`, `events.rs`, `runtime.rs`, `mod.rs`, `flamewm-settings/src/tables.rs`) have uncommitted changes from other agents. Committing into them would mix work.
-- No runtime test was run. All "unknown" and "partial" rows are static evidence only.
+1. Settings write-failure consistency (208/218/221): NOT AFFECTED. Settings writes go through the WM control client (`crates/flamewm-settings/src/app_impl_2.rs:535-566`). Errors come back as `Result` (`control_error`), and values are read back from the client snapshot, not cached in the UI. The only local file write is monitor layout, which already reports "applied but not saved" (`app_impl_2.rs:376`). No fix.
+2. XWayland native resolution on fractional outputs (163): UNVERIFIED. `crates/flamewm-wm-wayland/src/xwayland.rs` has no scale or RandR logic. Whether games see logical or native size needs a runtime repro with a fractional nested output. No fix, because the repro was not run.
+3. Pointer lock and resize borders (189/191/192): NOT AFFECTED. Pointer lock holds the position (`crates/flamewm-wm-wayland/src/input/pointer.rs:99-106, 251-257`), with unit tests (`pointer.rs` 5 `#[test]`s, including `confined_keeps_previous_position_outside`). Resize handles are clipped to the frame, with `RESIZE_EDGE_RB` capping depth (`crates/flamewm-wm-x11/src/frame/layout.rs:37-39, 157-160`), with tests at `layout.rs:369-371`. No fix.
+
+Result: no code change was needed. Nothing was committed for the fixes.
+
+## Not verified
+
+- No runtime or Xvfb test was run. Every "unknown" and "partial" row is static evidence only.
 - Vela's Qt/C++ code was not read or copied.
