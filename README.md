@@ -6,7 +6,7 @@
  </picture>
 </a>
 <img width="1080" height="1440" alt="image" src="https://github.com/user-attachments/assets/44501e7d-7012-47ee-9830-50ccb9caa126" />
-<img width="1344" height="637" alt="image" src="https://github.com/user-attachments/assets/409081ba-ebc5-4069-bf97-5eade755c685" />
+<img width="1344" height="756" alt="FlameWM desktop with a Terminal running flamefetch, an Explorer window, taskbar widgets and the clock" src="assets/screenshots/overview.webp" />
 
 # FlameWM
 
@@ -14,11 +14,11 @@ FlameWM is a window manager and desktop shell written in Rust. The shell UI is w
 
 The package ships two sessions: **FlameWM** on X11 (the default) and **FlameWM (Wayland)**.
 
-| Explorer and Terminal | Start menu |
+| Explorer, Terminal and Dock | Start menu |
 | --- | --- |
-| ![Explorer and Terminal over a blurred wallpaper](assets/screenshots/desktop.webp) | ![Start menu over translucent windows](assets/screenshots/start-menu.webp) |
+| ![Explorer and Terminal over a blurred wallpaper, with the Dock enabled at the bottom](assets/screenshots/desktop.webp) | ![Start menu over translucent windows](assets/screenshots/start-menu.webp) |
 
-The screenshots come from the headless test session (`tools/flamewm_visual_tests.py`) on Xorg's dummy driver.
+The screenshots come from an isolated FlameWM session on a private Xvfb display, with the default wallpaper, sample files and a neutral profile.
 
 ## Status
 
