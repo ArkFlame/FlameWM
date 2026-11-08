@@ -82,3 +82,28 @@ fn app_id_validation_rules() {
     assert!(!is_valid_dock_app_id("a b"));
     assert!(!is_valid_dock_app_id("a=b"));
 }
+
+#[test]
+fn dock_and_taskbar_keys_are_not_reset_by_the_custom_panel_switch() {
+    let settings = ProductSettings {
+        panel_custom: false,
+        dock_enabled: true,
+        dock_position: DockPosition::Left,
+        dock_icon_size: 64,
+        dock_show_running: false,
+        dock_pinned: vec!["firefox".to_owned()],
+        taskbar_fill: TaskbarFill::Gradient,
+        taskbar_gradient_edge: TaskbarGradientEdge::Top,
+        taskbar_enabled: false,
+        ..ProductSettings::default()
+    };
+    let effective = settings.effective();
+    assert!(effective.dock_enabled);
+    assert_eq!(effective.dock_position, DockPosition::Left);
+    assert_eq!(effective.dock_icon_size, 64);
+    assert!(!effective.dock_show_running);
+    assert_eq!(effective.dock_pinned, vec!["firefox".to_owned()]);
+    assert_eq!(effective.taskbar_fill, TaskbarFill::Gradient);
+    assert_eq!(effective.taskbar_gradient_edge, TaskbarGradientEdge::Top);
+    assert!(!effective.taskbar_enabled);
+}

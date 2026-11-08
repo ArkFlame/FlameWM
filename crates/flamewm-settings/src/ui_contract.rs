@@ -698,3 +698,26 @@ pub(crate) fn require_markup_id(id: &str) -> Result<(), String> {
         Err(format!("no item {id}"))
     }
 }
+
+#[test]
+fn sidebar_nav_rows_have_distinct_existing_icons() {
+    let icons: Vec<&str> = MARKUP
+        .split("class=\"nav-row\"")
+        .skip(1)
+        .map(|row| {
+            let row = &row[..row.find("</button>").expect("nav row closes")];
+            let src = row.split("src=\"").nth(1).expect("nav row has an icon");
+            src.split('"').next().expect("icon src closes")
+        })
+        .collect();
+    assert!(icons.len() >= 4, "sidebar rows: {icons:?}");
+    let unique: BTreeSet<&str> = icons.iter().copied().collect();
+    assert_eq!(unique.len(), icons.len(), "duplicate sidebar icons: {icons:?}");
+    let breeze = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/breeze");
+    for icon in icons {
+        let name = icon
+            .strip_prefix("assets/breeze/")
+            .unwrap_or_else(|| panic!("icon outside breeze: {icon}"));
+        assert!(breeze.join(name).is_file(), "missing sidebar icon {icon}");
+    }
+}
