@@ -249,6 +249,20 @@ fn scrollback_is_capped() {
 }
 
 #[test]
+fn shrinking_grid_obeys_scrollback_cap() {
+    for limit in [0, 1, 2] {
+        let mut screen = Screen::new(2, 4, limit);
+        feed(&mut screen, b"a\r\nb\r\nc\r\nd");
+        screen.resize(2, 1);
+        assert_eq!(screen.scrollback_len(), limit);
+        if limit > 0 {
+            assert_eq!(screen.line_abs(limit - 1).unwrap()[0].ch, 'c');
+        }
+        assert_eq!(text(&screen, 0), "d");
+    }
+}
+
+#[test]
 fn rewriting_identical_cells_leaves_rows_clean() {
     let mut screen = Screen::new(10, 3, 0);
     feed(&mut screen, b"\x1b[31mab\x1b[0m");

@@ -262,6 +262,9 @@ impl Screen {
                     let line = self.primary.remove(0);
                     self.scrollback
                         .push_back(History::pack(&line[..history_len(&line)]));
+                    if self.scrollback.len() > self.scrollback_limit {
+                        self.scrollback.pop_front();
+                    }
                     self.primary.push(blank_line(cols, Color::Default));
                     self.row = self.row.saturating_sub(1);
                 }
