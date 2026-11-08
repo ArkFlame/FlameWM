@@ -5,6 +5,7 @@ import argparse
 import ctypes as C
 import ctypes.util
 import json
+import select
 import os
 from pathlib import Path
 import shutil
@@ -46,6 +47,10 @@ X11.XGetWindowProperty.argtypes = [
 X11.XFree.argtypes = [C.c_void_p]
 XTST.XTestFakeMotionEvent.argtypes = [Display, C.c_int, C.c_int, C.c_int, C.c_ulong]
 XTST.XTestFakeButtonEvent.argtypes = [Display, C.c_uint, C.c_int, C.c_ulong]
+XTST.XTestFakeKeyEvent.argtypes = [Display, C.c_uint, C.c_int, C.c_ulong]
+X11.XKeysymToKeycode.argtypes = [Display, C.c_ulong]
+X11.XKeysymToKeycode.restype = C.c_uint
+XK_ESCAPE = 0xFF1B
 
 
 class XSelectionEvent(C.Structure):
@@ -61,6 +66,40 @@ class XEvent(C.Union):
 
 
 X11.XNextEvent.argtypes = [Display, C.POINTER(XEvent)]
+
+
+def wait_for_stderr_line(process, marker, timeout):
+    """Block until the child prints `marker` on stderr; this is a readiness signal, not a delay."""
+    deadline = time.monotonic() + timeout
+    seen = []
+    while True:
+        if process.poll() is not None:
+            raise AssertionError(f"process exited before {marker!r}: {process.poll()} {''.join(seen)}")
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed out waiting for {marker!r}: {''.join(seen)}")
+        if select.select([process.stderr], [], [], 0.05)[0]:
+            line = process.stderr.readline()
+            seen.append(line)
+            if marker in line:
+                return seen
+
+
+def indicator_ids(log_path):
+    if not log_path.exists():
+        return []
+    entries = [json.loads(line) for line in log_path.read_text().splitlines()]
+    return [e["id"] for e in entries if e.get("summary") == "Recording screen"]
+
+
+def wait_for_indicator(log_path, timeout, after_id):
+    """Returns the first recording indicator posted after `after_id` (earlier ones belong to other runs)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        newer = [i for i in indicator_ids(log_path) if i > after_id]
+        if newer:
+            return newer[0]
+        time.sleep(0.05)
+    raise AssertionError("recording indicator notification was not delivered")
 
 
 def open_display(name):
@@ -305,9 +344,7 @@ def main():
             env=env, cwd=evidence / "cwd", stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        time.sleep(0.5)
-        if region.poll() is not None:
-            raise AssertionError(f"region selector exited early: {region.communicate()}")
+        ready_lines = wait_for_stderr_line(region, "region overlay ready", 10)
         driver = open_display(display_name)
         # Paced steps: each request is synced so the grab sees press, motion and release in order.
         for step in (
@@ -321,6 +358,7 @@ def main():
             time.sleep(0.1)
         X11.XCloseDisplay(driver)
         stdout, stderr = region.communicate(timeout=5)
+        stderr = "".join(ready_lines) + stderr
         command_log.write(json.dumps({"command": ["region+drag+copy"], "exit": region.returncode, "stdout": stdout, "stderr": stderr}) + "\n")
         if region.returncode != 0 or png_size(region_path) != (120, 80):
             raise AssertionError(f"interactive region failed: exit={region.returncode} size={png_size(region_path)} stderr={stderr}")
@@ -338,6 +376,28 @@ def main():
         result["region_pixels"] = {"red_columns": 100, "blue_columns": 20, "checked": 120 * 80}
         X11.XDestroyWindow(fixture_display, fixture)
         X11.XCloseDisplay(fixture_display)
+        # Esc cancel: the overlay is ready, Escape is injected with XTest, and nothing is saved.
+        cancel_path = evidence / "cancelled.png"
+        cancel = subprocess.Popen(
+            [str(binary), "--region", "--output", str(cancel_path)],
+            env=env, cwd=evidence / "cwd", stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        wait_for_stderr_line(cancel, "region overlay ready", 10)
+        driver = open_display(display_name)
+        XTST.XTestFakeMotionEvent(driver, -1, 50, 50, 0)
+        X11.XSync(driver, 0)
+        keycode = X11.XKeysymToKeycode(driver, XK_ESCAPE)
+        XTST.XTestFakeKeyEvent(driver, keycode, 1, 0)
+        X11.XSync(driver, 0)
+        XTST.XTestFakeKeyEvent(driver, keycode, 0, 0)
+        X11.XSync(driver, 0)
+        X11.XCloseDisplay(driver)
+        cancel_stdout, cancel_stderr = cancel.communicate(timeout=10)
+        if cancel.returncode != 0 or cancel_path.exists() or "screenshot cancelled" not in cancel_stderr:
+            raise AssertionError(f"Esc cancel failed: exit={cancel.returncode} exists={cancel_path.exists()} stderr={cancel_stderr}")
+        result["esc_cancel"] = {"exit": cancel.returncode, "file_written": False, "message": "screenshot cancelled"}
+
         # Recording: real encode when ffmpeg is installed; otherwise the binary must refuse clearly.
         if shutil.which("ffmpeg") and shutil.which("ffprobe"):
             recording = evidence / "recording.mp4"
@@ -350,6 +410,34 @@ def main():
             if probe.stdout.strip() != "h264,2560,1440":
                 raise AssertionError(f"recording stream mismatch: {probe.stdout!r} {probe.stderr!r}")
             result["recording"] = {"codec": "h264", "size": [2560, 1440], "fps": 30, "seconds": 2}
+            # Stop action: a long recording ends when the indicator's Stop action is invoked.
+            stop_path = evidence / "stop.mp4"
+            baseline = max(indicator_ids(notification_log_path), default=0)
+            stopper = subprocess.Popen(
+                [str(binary), "--full", "--record", "60", "--fps", "10", "--output", str(stop_path)],
+                env=env, cwd=evidence / "cwd", stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            started = time.monotonic()
+            indicator = wait_for_indicator(notification_log_path, 10, baseline)
+            # A click can race the listener's subscription, so the click is re-sent until the
+            # recording acknowledges it by exiting; a lost signal is not a stop request.
+            emit_deadline = time.monotonic() + 20
+            while stopper.poll() is None and time.monotonic() < emit_deadline:
+                subprocess.run(
+                    ["gdbus", "emit", "--session", "--object-path", "/org/freedesktop/Notifications",
+                     "--signal", "org.freedesktop.Notifications.ActionInvoked", f"uint32 {indicator}", "'stop'"],
+                    env=env, check=True, capture_output=True, text=True, timeout=10,
+                )
+                try:
+                    stopper.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+            stop_stdout, stop_stderr = stopper.communicate(timeout=30)
+            elapsed = time.monotonic() - started
+            if stopper.returncode != 0 or not stop_path.exists() or elapsed >= 30 or "frames written" not in stop_stderr:
+                raise AssertionError(f"stop action failed: exit={stopper.returncode} elapsed={elapsed:.1f} stderr={stop_stderr}")
+            result["stop_action"] = {"indicator_id": indicator, "elapsed_s": round(elapsed, 2), "exit": stopper.returncode}
         else:
             result["recording"] = "skipped: ffmpeg or ffprobe not installed"
         bare_path = evidence / "no-ffmpeg-bin"
@@ -391,7 +479,7 @@ def main():
             "latency_median_s": statistics.median(s["elapsed_s"] for s in performance),
             "latency_max_s": max(s["elapsed_s"] for s in performance),
             "peak_rss_max_kb": max(s["maxrss_kb"] for s in performance),
-            "scope": "whole process: XGetImage, RGBA conversion, PNG encode/save, notification client",
+            "scope": "whole process: MIT-SHM capture (GetImage fallback), RGBA conversion, PNG encode/save, notification client",
         }
         deadline = time.monotonic() + 3
         notifications = []
