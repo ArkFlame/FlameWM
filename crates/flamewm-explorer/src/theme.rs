@@ -113,7 +113,7 @@ const fn white(alpha: u8) -> UiColor {
 impl ExplorerTheme {
     pub fn from_snapshot(snapshot: &SettingsSnapshot) -> Self {
         let mut theme = Self {
-            accent: rgb(flamewm_api::settings::accent_rgb(snapshot)),
+            accent: rgb(flamewm_ui_core::accent::accent(snapshot).0),
             surface: rgb(0),
             surface_alpha: 0,
             stroke: white(63),

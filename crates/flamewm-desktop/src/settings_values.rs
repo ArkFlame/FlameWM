@@ -132,7 +132,7 @@ pub(crate) const ACCENT_TOKEN_ALPHAS: [(&str, u8); 8] = [
 ];
 
 pub(crate) fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
-    let rgb = flamewm_api::settings::accent_rgb(snapshot);
+    let rgb = flamewm_ui_core::accent::accent(snapshot).0;
     UiColor {
         r: (rgb >> 16) as u8,
         g: (rgb >> 8) as u8,

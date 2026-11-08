@@ -800,22 +800,7 @@ fn fraction_width(used: u64, total: u64, width: u32) -> f32 {
     }
 }
 fn accent_color(snapshot: &SettingsSnapshot) -> u32 {
-    let name = match snapshot.values.get("accent") {
-        Some(SettingValue::Text(text)) => text.as_str(),
-        _ => "#3daee9",
-    };
-    match name {
-        "red" => 0x00ef_4048,
-        "blue" => 0x003d_aee9,
-        "purple" => 0x009b_59b6,
-        "teal" => 0x001a_bc9c,
-        "green" => 0x0027_ae60,
-        "amber" => 0x00f3_9c12,
-        _ => u32::from_str_radix(name.strip_prefix('#').unwrap_or(name), 16)
-            .ok()
-            .filter(|_| name.trim_start_matches('#').len() == 6)
-            .unwrap_or(0x003d_aee9),
-    }
+    flamewm_ui_core::accent::accent(snapshot).0
 }
 
 fn initial_settings() -> SettingsSnapshot {

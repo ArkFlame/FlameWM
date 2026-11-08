@@ -68,7 +68,7 @@ pub(super) fn project_accent_tokens(
 }
 
 pub(super) fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
-    let accent = rgb(flamewm_api::settings::accent_rgb(snapshot), 255);
+    let accent = rgb(flamewm_ui_core::accent::accent(snapshot).0, 255);
     let opacity = percent_setting(snapshot, "accentOpacity", DEFAULT_ACCENT_OPACITY);
     UiColor {
         a: opacity_alpha(opacity),
