@@ -117,3 +117,15 @@
 - Commit messages for finder, imageviewer, task-manager are short summaries written without per-hunk review; the diffs were not re-read for behavior beyond passing tests.
 - Explorer test depends on the uncommitted `flamewm-platform`/`flamewm-api` display work of another worker; that tree compiled at run time (one `unused variable: product_generation` warning in `flamewm-platform`, not owned here).
 - Not done: G12 Archiver goals (progress+cancel, format coverage), G11, G7, G8, G10 features; no Xvfb UI checks run.
+
+## G3/G9 Screenshot and recording — PASS for scoped Xvfb evidence (not verified: Wayland, real notification daemon, SHM)
+
+- Clipboard: `flamewm-clipboard` owns `image/png` (TARGETS, INCR, signature check); screenshot delegates to it. Fault tests: non-PNG rejected before connect, unreachable display errors, missing display errors.
+- Pixel proof: `scripts/screenshot-acceptance` (release binary, isolated Xvfb) checks the region crop against the painted red/blue fixture: 9600/9600 pixels match.
+- Fault paths in `flamewm-screenshot`: bad region (offscreen) is an error, not a blank image; missing save directories are created and existing files are never overwritten; a parent that is a file is reported.
+- G9 recording: ffmpeg is optional and detected; without it, recording exits nonzero with "screen recording needs ffmpeg on PATH" and writes no output (checked by acceptance). Frames flow through a fixed-rate worker with `sync_channel(1)`; missed ticks are dropped, not queued. Stop indicator is a `notify-send --wait` action; runtime click was not verified.
+- G9 measurements, 1920x1080 Xvfb, 30 fps, 5 s: exit 0, output h264 1920x1080 at 30/1, 68 frames written. Effective capture ~14 fps (69 captured, 83 ticks dropped), limited by XGetImage. Whole process tree 4.08 s CPU over 6.00 s elapsed (about 68% of one core including ffmpeg); ffmpeg alone on the same frames 2.25 s CPU, so the screenshot side is about 30% of one core. Max RSS 320504 KB including the ffmpeg child. Machine: 12 CPUs.
+- Acceptance (final, release): `scripts/screenshot-acceptance` exit 0, owned display cleaned up, notifications 9, recording h264 2560x1440 verified by ffprobe, degrade check passed. One earlier run in the same final code failed at the region step (exit 0 but no `region.png`, cause not found); an identical rerun passed. Treat as intermittent until root-caused. Evidence: `.agents/runtime/terra-g3-screenshot/acceptance-final2-1794099522/result.json`.
+- Commits: 993a6ee9 (clipboard), pixel proof, fault-path tests, 2f48e017 (G9 recording), 51705bc7 (guard fix: x11rb kept in `capture.rs`; stale `main.rs` env exception removed from `docs/ARCHITECTURE_EXCEPTIONS.toml`).
+- Gates: `cargo test -p flamewm-screenshot` exit 0, 34 passed, zero warnings; `python3 tools/architecture_guard.py` exit 0; release build exit 0, zero warnings.
+- Not done: MIT-SHM capture (current path is XGetImage); Esc cancellation at runtime; stop-indicator click at runtime; Wayland backend. Haiku vs Sonnet trailer conflict on earlier commits: 993a6ee9, pixel and fault commits use Haiku 5.5 (not rewritten), later commits use Sonnet 5.5.
