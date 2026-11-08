@@ -12,11 +12,13 @@
 use std::io::IoSlice;
 
 use super::*;
+use crate::live_settings;
 use flamewm_api::shortcuts::{
     ACTION_FULLSCREEN_ESCAPE, ACTION_SHOW_DESKTOP, ACTION_SHOW_DESKTOP_CTRL_ALT,
     ACTION_TOGGLE_START_MENU, ACTION_WINDOW_SWITCH, ACTION_WINDOW_SWITCH_PREV,
 };
-use flamewm_x11_desktop::shortcuts::MOD_ALT;
+use flamewm_platform::sticky_keys::{self, Key, KeyEvent, Modifier, StickyKeys};
+use flamewm_x11_desktop::shortcuts::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_SUPER};
 
 const GE_GENERIC_EVENT: u8 = 35;
 const XI_RAW_KEY_PRESS: u16 = 13;
@@ -103,6 +105,11 @@ impl ModifierState {
         self.held
     }
 
+    /// Modifier bits a keycode contributes (zero for a plain key).
+    pub(crate) fn bits_for(&self, keycode: u8) -> u16 {
+        self.bits_for_keycode[usize::from(keycode)]
+    }
+
     /// Applies one raw record and returns the modifier state after it.
     pub(crate) fn apply(&mut self, key: RawKey) -> u16 {
         let bit = self.bits_for_keycode[usize::from(key.keycode)];
@@ -173,6 +180,95 @@ pub(crate) struct RawKeys {
     pub opcode: u8,
     pub modifiers: ModifierState,
     pub claim: KeyClaim,
+    /// `stickyKeys` latch. Only touched while the setting is on.
+    sticky: StickyKeys,
+    /// Press `(time, keycode)` whose sticky result is already decided, so the raw feed and the
+    /// passive path consume a latch once per press.
+    sticky_seen: Option<(u32, u8)>,
+    /// Latched modifier bits (X mask) decided for `sticky_seen`.
+    sticky_extra: u16,
+}
+
+/// X modifier bit and its sticky-keys bit, for the four modifiers sticky keys latches.
+const STICKY_BITS: [(u16, u8); 4] = [
+    (MOD_SHIFT, sticky_keys::SHIFT),
+    (MOD_CONTROL, sticky_keys::CTRL),
+    (MOD_ALT, sticky_keys::ALT),
+    (MOD_SUPER, sticky_keys::SUPER),
+];
+
+/// How a key takes part in sticky keys. Lock keys and keys bound to several modifiers are ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StickyRole {
+    Modifier(Modifier),
+    Other,
+    Ignored,
+}
+
+pub(crate) fn sticky_role(bits: u16) -> StickyRole {
+    match bits {
+        0 => StickyRole::Other,
+        MOD_SHIFT => StickyRole::Modifier(Modifier::Shift),
+        MOD_CONTROL => StickyRole::Modifier(Modifier::Ctrl),
+        MOD_ALT => StickyRole::Modifier(Modifier::Alt),
+        MOD_SUPER => StickyRole::Modifier(Modifier::Super),
+        _ => StickyRole::Ignored,
+    }
+}
+
+/// X modifier state to the sticky-keys modifier bits.
+pub(crate) fn sticky_mods_from_x(state: u16) -> u8 {
+    STICKY_BITS
+        .iter()
+        .filter(|(x, _)| state & x != 0)
+        .fold(0, |mods, (_, sticky)| mods | sticky)
+}
+
+/// Sticky-keys modifier bits to the X modifier mask.
+pub(crate) fn x_mods_from_sticky(mods: u8) -> u16 {
+    STICKY_BITS
+        .iter()
+        .filter(|(_, sticky)| mods & sticky != 0)
+        .fold(0, |state, (x, _)| state | x)
+}
+
+/// A modifier press arms or locks its latch. Passive and raw feeds both see modifiers only here,
+/// so this runs from the raw feed alone.
+pub(crate) fn sticky_modifier_press(raw: &mut RawKeys, enabled: bool, keycode: u8, held: u16) {
+    raw.sticky.set_enabled(enabled);
+    if let StickyRole::Modifier(modifier) = sticky_role(raw.modifiers.bits_for(keycode)) {
+        raw.sticky.on_key(KeyEvent {
+            key: Key::Modifier(modifier),
+            pressed: true,
+            mods: sticky_mods_from_x(held),
+        });
+    }
+}
+
+/// Latched X modifier bits for one plain key press, consumed once per `(time, keycode)`. Returns
+/// zero for modifiers, lock keys and while sticky keys is off.
+pub(crate) fn sticky_other_press(
+    raw: &mut RawKeys,
+    enabled: bool,
+    time: u32,
+    keycode: u8,
+    held: u16,
+) -> u16 {
+    raw.sticky.set_enabled(enabled);
+    if !enabled || sticky_role(raw.modifiers.bits_for(keycode)) != StickyRole::Other {
+        return 0;
+    }
+    if raw.sticky_seen == Some((time, keycode)) {
+        return raw.sticky_extra;
+    }
+    let out = raw.sticky.on_key(KeyEvent {
+        key: Key::Other,
+        pressed: true,
+        mods: sticky_mods_from_x(held),
+    });
+    raw.sticky_seen = Some((time, keycode));
+    raw.sticky_extra = x_mods_from_sticky(out.mods) & !held;
+    raw.sticky_extra
 }
 
 fn request(opcode: u8, minor: u8, units: u16, body: &[u8]) -> Vec<u8> {
@@ -211,6 +307,9 @@ impl<C: Connection> Wm<'_, C> {
             opcode,
             modifiers,
             claim: KeyClaim::default(),
+            sticky: StickyKeys::default(),
+            sticky_seen: None,
+            sticky_extra: 0,
         });
         Ok(())
     }
@@ -255,6 +354,10 @@ impl<C: Connection> Wm<'_, C> {
         };
         let before = raw.modifiers.held();
         let state = raw.modifiers.apply(key);
+        let sticky_on = live_settings::sticky_keys_enabled();
+        if key.press {
+            sticky_modifier_press(raw, sticky_on, key.keycode, state);
+        }
         if key.press {
             // Raw key records reach the root whatever client holds focus: typing counts as input.
             self.focus_guard
@@ -289,6 +392,7 @@ impl<C: Connection> Wm<'_, C> {
             raw.claim.claim(key.time, key.keycode);
             return self.switcher_key(key.keycode, state);
         }
+        let state = state | sticky_other_press(raw, sticky_on, key.time, key.keycode, state);
         let action = crate::shortcut_action_for_key(key.keycode, state);
         if super::key_diag_enabled() {
             eprintln!(
@@ -499,5 +603,180 @@ mod tests {
         assert!(is_escape_chord(ACTION_FULLSCREEN_ESCAPE));
         assert!(!is_escape_chord("Launcher"));
         assert!(!is_escape_chord("VolumeUp"));
+    }
+}
+
+#[cfg(test)]
+mod sticky_tests {
+    use super::*;
+
+    const SHIFT_KEY: u8 = 50;
+    const CTRL_KEY: u8 = 37;
+    const ALT_KEY: u8 = 64;
+    const SUPER_KEY: u8 = 133;
+    const LOCK_KEY: u8 = 66;
+    const KEY_A: u8 = 38;
+
+    fn new_raw() -> RawKeys {
+        // One keycode per modifier, in X order: Shift, Lock, Control, Mod1, Mod2, Mod3, Mod4, Mod5.
+        let keycodes = [SHIFT_KEY, LOCK_KEY, CTRL_KEY, ALT_KEY, 77, 0, SUPER_KEY, 0];
+        RawKeys {
+            opcode: 0,
+            modifiers: ModifierState::from_mapping(1, &keycodes),
+            claim: KeyClaim::default(),
+            sticky: StickyKeys::default(),
+            sticky_seen: None,
+            sticky_extra: 0,
+        }
+    }
+
+    /// Feeds a press through the same calls the raw feed makes, returning the latched extra. The
+    /// modifier stays down, as with a real hold.
+    fn hold(raw: &mut RawKeys, enabled: bool, time: u32, keycode: u8) -> u16 {
+        raw.modifiers.apply(RawKey {
+            press: true,
+            keycode,
+            time,
+        });
+        let held = raw.modifiers.held();
+        sticky_modifier_press(raw, enabled, keycode, held);
+        sticky_other_press(raw, enabled, time, keycode, held)
+    }
+
+    /// A press followed by its release, as a tap. Plain keys have no modifier bit to release.
+    fn press(raw: &mut RawKeys, enabled: bool, time: u32, keycode: u8) -> u16 {
+        let extra = hold(raw, enabled, time, keycode);
+        raw.modifiers.apply(RawKey {
+            press: false,
+            keycode,
+            time,
+        });
+        extra
+    }
+
+    #[test]
+    fn sticky_role_maps_modifier_bits_and_ignores_locks() {
+        assert_eq!(sticky_role(0), StickyRole::Other);
+        assert_eq!(
+            sticky_role(MOD_SHIFT),
+            StickyRole::Modifier(Modifier::Shift)
+        );
+        assert_eq!(
+            sticky_role(MOD_CONTROL),
+            StickyRole::Modifier(Modifier::Ctrl)
+        );
+        assert_eq!(sticky_role(MOD_ALT), StickyRole::Modifier(Modifier::Alt));
+        assert_eq!(
+            sticky_role(MOD_SUPER),
+            StickyRole::Modifier(Modifier::Super)
+        );
+        assert_eq!(sticky_role(0x02), StickyRole::Ignored, "CapsLock");
+        assert_eq!(sticky_role(MOD_SHIFT | MOD_CONTROL), StickyRole::Ignored);
+    }
+
+    #[test]
+    fn sticky_mask_conversion_round_trips_latchable_modifiers() {
+        let x = MOD_ALT | MOD_SUPER | 0x02;
+        let sticky = sticky_mods_from_x(x);
+        assert_eq!(sticky, sticky_keys::ALT | sticky_keys::SUPER);
+        assert_eq!(x_mods_from_sticky(sticky), MOD_ALT | MOD_SUPER);
+        assert_eq!(x_mods_from_sticky(0), 0);
+    }
+
+    #[test]
+    fn lone_shift_latches_for_exactly_one_following_key() {
+        let mut raw = new_raw();
+        assert_eq!(
+            press(&mut raw, true, 1, SHIFT_KEY),
+            0,
+            "modifier itself adds nothing"
+        );
+        assert_eq!(
+            press(&mut raw, true, 2, KEY_A),
+            MOD_SHIFT,
+            "next key carries Shift"
+        );
+        assert_eq!(press(&mut raw, true, 3, KEY_A), 0, "latch is consumed");
+    }
+
+    #[test]
+    fn double_tap_ctrl_locks_until_tapped_again() {
+        let mut raw = new_raw();
+        press(&mut raw, true, 1, CTRL_KEY);
+        press(&mut raw, true, 2, CTRL_KEY);
+        assert_eq!(press(&mut raw, true, 3, KEY_A), MOD_CONTROL);
+        assert_eq!(
+            press(&mut raw, true, 4, KEY_A),
+            MOD_CONTROL,
+            "lock persists"
+        );
+        press(&mut raw, true, 5, CTRL_KEY);
+        assert_eq!(press(&mut raw, true, 6, KEY_A), 0, "third tap releases");
+    }
+
+    #[test]
+    fn disabled_setting_never_latches_and_clears_a_stale_latch() {
+        let mut raw = new_raw();
+        press(&mut raw, true, 1, ALT_KEY);
+        assert_eq!(press(&mut raw, false, 2, KEY_A), 0, "off: no extra");
+        assert_eq!(press(&mut raw, true, 3, KEY_A), 0, "off cleared the latch");
+    }
+
+    #[test]
+    fn lock_key_does_not_latch() {
+        let mut raw = new_raw();
+        press(&mut raw, true, 1, LOCK_KEY);
+        assert_eq!(
+            press(&mut raw, true, 2, KEY_A),
+            0,
+            "CapsLock is not latchable"
+        );
+    }
+
+    #[test]
+    fn released_super_tap_latches_and_held_super_is_not_doubled() {
+        let mut raw = new_raw();
+        press(&mut raw, true, 1, SUPER_KEY);
+        raw.modifiers.apply(RawKey {
+            press: false,
+            keycode: SUPER_KEY,
+            time: 1,
+        });
+        assert_eq!(
+            press(&mut raw, true, 2, KEY_A),
+            MOD_SUPER,
+            "lone Super tap latches"
+        );
+
+        let mut raw = new_raw();
+        hold(&mut raw, true, 1, SUPER_KEY);
+        assert_eq!(
+            press(&mut raw, true, 2, KEY_A),
+            0,
+            "Super still held adds nothing: the real modifier already counts"
+        );
+    }
+
+    #[test]
+    fn repeated_decision_for_one_press_consumes_latch_once() {
+        let mut raw = new_raw();
+        press(&mut raw, true, 1, SHIFT_KEY);
+        let first = sticky_other_press(&mut raw, true, 2, KEY_A, 0);
+        let again = sticky_other_press(&mut raw, true, 2, KEY_A, 0);
+        assert_eq!(first, MOD_SHIFT);
+        assert_eq!(again, MOD_SHIFT, "passive path reuses the raw decision");
+        assert_eq!(
+            press(&mut raw, true, 3, KEY_A),
+            0,
+            "latch consumed exactly once"
+        );
+    }
+
+    #[test]
+    fn modifier_keycodes_are_never_treated_as_plain_keys_on_passive_path() {
+        let mut raw = new_raw();
+        press(&mut raw, true, 1, SHIFT_KEY);
+        assert_eq!(sticky_other_press(&mut raw, true, 2, SHIFT_KEY, 0), 0);
+        assert_eq!(sticky_other_press(&mut raw, true, 3, KEY_A, 0), MOD_SHIFT);
     }
 }

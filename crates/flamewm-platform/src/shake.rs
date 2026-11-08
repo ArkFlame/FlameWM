@@ -8,9 +8,9 @@
 /// Direction reversals needed for a shake.
 pub const SHAKE_REVERSALS: u8 = 4;
 /// Minimum accumulated horizontal travel in one direction for that swing to count.
-pub const MIN_SWING_PX: u32 = 60;
+pub const MIN_SWING_PX: u32 = 40;
 /// Window, in milliseconds, from the first counted swing to the last reversal.
-pub const WINDOW_MS: u32 = 300;
+pub const WINDOW_MS: u32 = 500;
 
 /// Horizontal shake detector. Default is empty.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -95,11 +95,28 @@ mod tests {
     }
 
     #[test]
-    fn shake_four_reversals_of_60px_within_300ms_fires_once() {
-        let samples = [(0, 60), (75, -60), (150, 60), (225, -60), (300, 60)];
+    fn shake_four_reversals_of_40px_within_500ms_fires_once() {
+        let samples = [(0, 40), (75, -40), (150, 40), (225, -40), (300, 40)];
         let fired = run(&samples);
         assert_eq!(fired.iter().filter(|&&hit| hit).count(), 1, "{fired:?}");
         assert_eq!(fired, [false, false, false, false, true]);
+    }
+
+    #[test]
+    fn shake_swings_of_39px_do_not_fire() {
+        let samples = [(0, 39), (120, -39), (240, 39), (360, -39), (480, 39)];
+        assert!(run(&samples).iter().all(|&hit| !hit));
+    }
+
+    #[test]
+    fn shake_window_boundary_is_500ms_inclusive() {
+        let inside = [(0, 40), (125, -40), (250, 40), (375, -40), (500, 40)];
+        assert!(run(&inside)[4], "span of exactly 500 ms fires");
+        let outside = [(0, 40), (125, -40), (250, 40), (375, -40), (501, 40)];
+        assert!(
+            run(&outside).iter().all(|&hit| !hit),
+            "501 ms does not fire"
+        );
     }
 
     #[test]
@@ -128,7 +145,7 @@ mod tests {
     #[test]
     fn shake_resets_after_firing_so_next_shake_needs_fresh_reversals() {
         let mut detector = ShakeDetector::new();
-        for (t, dx) in [(0, 60), (75, -60), (150, 60), (225, -60), (300, 60)] {
+        for (t, dx) in [(0, 40), (75, -40), (150, 40), (225, -40), (300, 40)] {
             detector.feed(t, dx);
         }
         assert!(
@@ -139,8 +156,8 @@ mod tests {
 
     #[test]
     fn shake_window_expires_across_slow_reversals() {
-        // Four fast reversals, but the first lies outside the window of the last: no fire.
-        let samples = [(0, 60), (200, -60), (400, 60), (600, -60), (800, 60)];
+        // Four reversals spanning 800 ms: the first lies outside the 500 ms window of the last.
+        let samples = [(0, 40), (200, -40), (400, 40), (600, -40), (800, 40)];
         assert!(run(&samples).iter().all(|&hit| !hit));
     }
 }

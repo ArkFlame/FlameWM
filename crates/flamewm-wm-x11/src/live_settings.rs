@@ -50,6 +50,13 @@ static ACCENT_RGB: AtomicU32 = AtomicU32::new(flamewm_api::settings::DEFAULT_ACC
 static WINDOW_MARGIN: AtomicU32 = AtomicU32::new(DEFAULT_WINDOW_MARGIN);
 /// Shared `audioRaiseMaximum`: false until a snapshot says otherwise, matching the shell default.
 static AUDIO_RAISE_MAXIMUM: AtomicBool = AtomicBool::new(false);
+/// `stickyKeys`: modifier latch for shortcut matching. Off by default, so the key path is unchanged.
+static STICKY_KEYS: AtomicBool = AtomicBool::new(false);
+
+/// Live `stickyKeys` switch read on every key record.
+pub(crate) fn sticky_keys_enabled() -> bool {
+    STICKY_KEYS.load(Ordering::Relaxed)
+}
 
 /// Live volume cap for the media keys, from the shared "raise maximum volume" value.
 pub(crate) fn volume_cap_percent() -> u8 {
@@ -213,6 +220,10 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
             flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY,
             false,
         ),
+        Ordering::Relaxed,
+    );
+    STICKY_KEYS.store(
+        boolean_setting(snapshot, "stickyKeys", false),
         Ordering::Relaxed,
     );
     flamewm_render_x11::apply_render_backend_setting(snapshot);

@@ -101,7 +101,19 @@ impl<C: Connection> Wm<'_, C> {
         if let Some(active) = self.active {
             self.cancel_open_for(active)?;
         }
-        let matched = crate::shortcut_action_for_key(event.detail, state);
+        // Sticky keys: a latched modifier joins the match. The raw feed normally consumed the latch
+        // for this press already; `sticky_other_press` reuses that result.
+        let sticky = match self.raw_keys.as_mut() {
+            Some(raw) => super::raw_keys::sticky_other_press(
+                raw,
+                crate::live_settings::sticky_keys_enabled(),
+                event.time,
+                event.detail,
+                state,
+            ),
+            None => 0,
+        };
+        let matched = crate::shortcut_action_for_key(event.detail, state | sticky);
         if key_diag_enabled() {
             eprintln!(
                 "flamewm: keypress detail={} state={:04x} action={}",
