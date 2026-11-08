@@ -689,3 +689,31 @@ fn workspace_snapshot_fills_occupancy_from_cached_windows() {
     let snapshot = host.workspace_snapshot().expect("snapshot");
     assert_eq!(snapshot.occupancy, vec![1, 0, 2]);
 }
+
+#[test]
+fn dock_auto_hide_toggle_flips_the_setting_against_the_current_revision() {
+    let with_value = |value: Option<bool>, revision: u64| {
+        let mut snapshot = SettingsSnapshot::new(revision);
+        if let Some(value) = value {
+            snapshot
+                .values
+                .insert("dock.autoHide".to_owned(), SettingValue::Boolean(value));
+        }
+        snapshot
+    };
+
+    // A missing key counts as the default (on), so the toggle turns it off.
+    let from_default = dock_auto_hide_transaction(&with_value(None, 7));
+    assert_eq!(from_default.expected_revision, 7);
+    assert_eq!(from_default.changes[0].key, "dock.autoHide");
+    assert_eq!(
+        from_default.changes[0].value,
+        Some(SettingValue::Boolean(false))
+    );
+
+    let turned_on = dock_auto_hide_transaction(&with_value(Some(false), 8));
+    assert_eq!(
+        turned_on.changes[0].value,
+        Some(SettingValue::Boolean(true))
+    );
+}

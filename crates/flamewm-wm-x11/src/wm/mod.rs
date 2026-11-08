@@ -119,9 +119,9 @@ impl<C: Connection> Wm<'_, C> {
 }
 
 use flamewm_api::shortcuts::{
-    ACTION_FOCUS_DOWN, ACTION_FOCUS_LEFT, ACTION_FOCUS_RIGHT, ACTION_FOCUS_UP,
-    ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
-    ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
+    ACTION_DOCK_AUTO_HIDE_TOGGLE, ACTION_FOCUS_DOWN, ACTION_FOCUS_LEFT, ACTION_FOCUS_RIGHT,
+    ACTION_FOCUS_UP, ACTION_FULLSCREEN_ESCAPE, ACTION_LAUNCHER, ACTION_SCREENSHOT_FULL,
+    ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW, ACTION_SESSION_LOCK, ACTION_SHOW_DESKTOP,
     ACTION_SHOW_DESKTOP_CTRL_ALT, ACTION_TILE_DOWN, ACTION_TILE_LEFT, ACTION_TILE_RIGHT,
     ACTION_TILE_UP, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_CYCLE_NEXT,
     ACTION_WINDOW_CYCLE_PREV, ACTION_WINDOW_FLOAT, ACTION_WINDOW_FULLSCREEN,
@@ -245,6 +245,8 @@ pub struct WmChangeSet {
     pub start_menu_toggle: bool,
     /// One-shot request from the Launcher shortcut; the flush emits it once.
     pub launcher_toggle: bool,
+    /// One-shot request from the Alt+Super+D shortcut; the flush flips `dock.autoHide`.
+    pub dock_auto_hide_toggle: bool,
     /// One-shot media-key request; the flush dispatches it through the platform host.
     pub media_audio_key: Option<MediaAudioKey>,
     /// One-shot brightness-key request; the flush dispatches it through the platform host.
@@ -266,6 +268,7 @@ impl WmChangeSet {
             || self.work_area
             || self.start_menu_toggle
             || self.launcher_toggle
+            || self.dock_auto_hide_toggle
             || self.media_audio_key.is_some()
             || self.media_brightness_key.is_some()
     }
@@ -670,9 +673,33 @@ const fn docks_may_rise(frame_fullscreen: bool, fullscreen_elsewhere: bool) -> b
     !frame_fullscreen && !fullscreen_elsewhere
 }
 
+/// Narrow exception to `docks_may_rise`: a dock that reserves no space (auto-hide dock or its
+/// reveal strip) may always rise, so an auto-hidden dock stays reachable over fullscreen. A
+/// space-reserving dock keeps the fullscreen rule.
+const fn dock_may_rise(
+    reserves_space: bool,
+    frame_fullscreen: bool,
+    fullscreen_elsewhere: bool,
+) -> bool {
+    !reserves_space || docks_may_rise(frame_fullscreen, fullscreen_elsewhere)
+}
+
 #[cfg(test)]
 mod dock_stacking_tests {
-    use super::docks_may_rise;
+    use super::{dock_may_rise, docks_may_rise};
+
+    #[test]
+    fn auto_hide_dock_rises_over_fullscreen() {
+        assert!(dock_may_rise(false, true, false));
+        assert!(dock_may_rise(false, false, true));
+    }
+
+    #[test]
+    fn reserved_dock_keeps_fullscreen_rule() {
+        assert!(!dock_may_rise(true, true, false));
+        assert!(!dock_may_rise(true, false, true));
+        assert!(dock_may_rise(true, false, false));
+    }
 
     #[test]
     fn normal_frame_without_fullscreen_lets_docks_rise() {

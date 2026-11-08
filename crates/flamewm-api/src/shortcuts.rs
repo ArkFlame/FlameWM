@@ -14,6 +14,7 @@ pub const ACTION_WINDOW_SWITCH: &str = "WindowSwitch";
 pub const ACTION_WINDOW_SWITCH_PREV: &str = "WindowSwitchPrev";
 pub const ACTION_SHOW_DESKTOP: &str = "ShowDesktop";
 pub const ACTION_SHOW_DESKTOP_CTRL_ALT: &str = "ShowDesktopCtrlAlt";
+pub const ACTION_DOCK_AUTO_HIDE_TOGGLE: &str = "DockAutoHideToggle";
 pub const ACTION_FULLSCREEN_ESCAPE: &str = "FullscreenEscape";
 pub const ACTION_SESSION_LOCK: &str = "SessionLock";
 pub const ACTION_SCREENSHOT_FULL: &str = "ScreenshotFull";

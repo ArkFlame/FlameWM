@@ -23,6 +23,13 @@ pub(super) fn mark_audio_unavailable(host: &mut PlatformHost<WaylandDesktop>) {
 }
 
 impl Service {
+    /// Alt+Super+D: flips `dock.autoHide` through the same settings path as the X11 flush.
+    pub fn toggle_dock_auto_hide(&self) {
+        if let Err(error) = self.host.borrow_mut().toggle_dock_auto_hide() {
+            eprintln!("flamewm-wayland: dock auto-hide toggle was not applied: {error:?}");
+        }
+    }
+
     /// One panel-brightness media key: align the host fence with the device, step the backlight,
     /// then publish the observed level so the shell OSD shows the new card in the same turn.
     pub fn media_brightness_key(&self, up: bool) {

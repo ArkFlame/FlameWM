@@ -156,6 +156,12 @@ impl State {
             ACTION_LAUNCHER => self.emit_control_signal("LauncherToggleRequested"),
             ACTION_TOGGLE_START_MENU => self.emit_control_signal("StartMenuToggleRequested"),
             ACTION_SESSION_LOCK => eprintln!("flamewm-wayland: session lock is a later phase"),
+            ACTION_DOCK_AUTO_HIDE_TOGGLE => match self.control.clone() {
+                Some(service) => service.toggle_dock_auto_hide(),
+                None => {
+                    eprintln!("flamewm-wayland: dock auto-hide toggle needs the control service");
+                }
+            },
             other => eprintln!("flamewm-wayland: unhandled shortcut action {other}"),
         }
     }

@@ -191,6 +191,7 @@ impl<C: Connection> Wm<'_, C> {
             // and toggles through the SuperTap commit at the end of the batch.
             ACTION_TOGGLE_START_MENU => self.changes.start_menu_toggle = true,
             ACTION_LAUNCHER => self.changes.launcher_toggle = true,
+            ACTION_DOCK_AUTO_HIDE_TOGGLE => self.changes.dock_auto_hide_toggle = true,
             ACTION_VOLUME_UP => self.changes.media_audio_key = Some(MediaAudioKey::VolumeUp),
             ACTION_VOLUME_DOWN => self.changes.media_audio_key = Some(MediaAudioKey::VolumeDown),
             ACTION_VOLUME_MUTE => self.changes.media_audio_key = Some(MediaAudioKey::VolumeMute),

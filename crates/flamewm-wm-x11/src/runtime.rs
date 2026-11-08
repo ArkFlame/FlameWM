@@ -698,6 +698,7 @@ where
     // exactly once for this turn and never carried into a later flush.
     let start_menu_toggle = std::mem::take(&mut changes.start_menu_toggle);
     let launcher_toggle = std::mem::take(&mut changes.launcher_toggle);
+    let dock_auto_hide_toggle = std::mem::take(&mut changes.dock_auto_hide_toggle);
     let media_audio_key = changes.media_audio_key.take();
     let media_brightness_key = changes.media_brightness_key.take();
     for signal in collect_wm_signals(host, changes).map_err(any_from_flame)? {
@@ -708,6 +709,9 @@ where
     }
     if launcher_toggle {
         emit_control(control, &ControlSignal::LauncherToggleRequested);
+    }
+    if dock_auto_hide_toggle && let Err(error) = host.toggle_dock_auto_hide() {
+        eprintln!("flamewm: dock auto-hide toggle was not applied: {error:?}");
     }
     if let Some(key) = media_audio_key {
         // A rejected write (stale generation, no sink, Pulse down) must not stop the WM.
@@ -1421,6 +1425,7 @@ mod tests {
             work_area: false,
             start_menu_toggle: false,
             launcher_toggle: false,
+            dock_auto_hide_toggle: false,
             media_audio_key: None,
             media_brightness_key: None,
         }

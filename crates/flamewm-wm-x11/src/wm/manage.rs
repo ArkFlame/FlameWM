@@ -72,10 +72,13 @@ impl<C: Connection> Wm<'_, C> {
                 && other_state.is_fullscreen()
                 && other_state.visible_on(self.current_workspace)
         });
-        if !docks_may_rise(state.is_fullscreen(), fullscreen_elsewhere) {
-            return Ok(());
-        }
-        for dock in self.dock_struts.keys() {
+        for (dock, strut) in &self.dock_struts {
+            // A dock that reserves no space is an auto-hide dock or its reveal strip: it only
+            // maps while revealed, so it may rise over a fullscreen client to stay reachable.
+            let reserves_space = strut.iter().any(|&value| value != 0);
+            if !dock_may_rise(reserves_space, state.is_fullscreen(), fullscreen_elsewhere) {
+                continue;
+            }
             self.conn
                 .configure_window(*dock, &dock_above_frame_aux(frame))?;
         }

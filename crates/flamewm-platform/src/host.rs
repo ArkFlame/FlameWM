@@ -6,7 +6,9 @@ use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::ports::EnginePorts;
 use flamewm_api::session::{SessionAction, SessionCapabilities};
-use flamewm_api::settings::{SettingsSnapshot, SettingsTransaction};
+use flamewm_api::settings::{
+    SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction, setting_bool,
+};
 use flamewm_api::shortcuts::{KeyBinding, ShortcutSnapshot};
 use flamewm_api::system::{SystemAction, SystemSnapshot};
 use flamewm_api::wm_features::{FullscreenMonitorSpan, InteractiveMoveResize};
@@ -331,6 +333,12 @@ impl<E: EnginePorts> PlatformHost<E> {
             .cancel_interactive_move_resize(&mut self.engine, window)
     }
 
+    /// Flips `dock.autoHide` (Alt+Super+D). A missing key counts as the default, which is on.
+    pub fn toggle_dock_auto_hide(&mut self) -> FlameResult<SettingsSnapshot> {
+        let transaction = dock_auto_hide_transaction(&self.settings_snapshot());
+        self.apply_settings(&transaction)
+    }
+
     #[must_use]
     pub fn settings_snapshot(&self) -> SettingsSnapshot {
         self.settings.snapshot()
@@ -524,6 +532,19 @@ fn validate_requested_scales(transaction: &SettingsTransaction) -> FlameResult<(
 mod displays;
 mod shortcuts;
 mod system;
+
+/// The transaction that flips `dock.autoHide` against the current revision.
+fn dock_auto_hide_transaction(snapshot: &SettingsSnapshot) -> SettingsTransaction {
+    let auto_hide = setting_bool(snapshot, "dock.autoHide", true);
+    SettingsTransaction {
+        expected_revision: snapshot.revision,
+        changes: vec![SettingsChange {
+            key: "dock.autoHide".to_owned(),
+            value: Some(SettingValue::Boolean(!auto_hide)),
+        }],
+        reset_section: None,
+    }
+}
 
 #[cfg(test)]
 mod tests;
