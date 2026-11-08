@@ -2923,6 +2923,14 @@ def ss06_selection_red(base: Path | None, selected: Path | None) -> int | None:
     return reds[len(reds) // 2] if len(reds) >= 200 else None
 
 
+def ss06_fill_red(accent: str | None, percent: int | None) -> int | None:
+    """Expected red of the selection fill: the active accent at the fill opacity over black (rubber.rs)."""
+    rgb = accent_rgb(accent or "")
+    if rgb is None or percent is None:
+        return None
+    return round(rgb[0] * percent / 100)
+
+
 def ss06_select_and_capture(ctx: Ctx, name: str, settle: float, base: Path | None) -> tuple[Path | None, int | None]:
     send_input(ctx, SS06_ICON_CLICK, None)
     send_input(ctx, None, None, move="700,600")
@@ -3084,6 +3092,7 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     sticky = gvariant_field_bool(initial or "", "stickyNotesEnabled")
     selection = gvariant_field_uint(initial or "", "DesktopSelectionFillOpacity")
     snap = gvariant_field_uint(initial or "", "WindowSnapPreviewFillOpacity")
+    accent = gvariant_field_string(initial or "", "accent")
     details["before"] = {"revision": revision, "stickyNotesEnabled": sticky,
                          "selectionOpacity": selection, "snapOpacity": snap}
     if initial is None or revision is None or sticky is None or selection is None or snap is None:
@@ -3113,7 +3122,7 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
         again = ss06_capture(ctx, "ss06-selected-unchanged")
         visual["selection_red_before"] = red0
         visual["selection_red_unchanged_capture"] = ss06_selection_red(base_path, again)
-        visual["expected_red_before"] = round(239 * selection / 100)
+        visual["expected_red_before"] = ss06_fill_red(accent, selection)
         unrelated = apply_and_read_settings(ctx, revision, {
             "surfaceOpacity": "uint32 " + str(67 if gvariant_field_uint(initial, "surfaceOpacity") != 67 else 68)}, details)
         time.sleep(settle)
@@ -3149,7 +3158,7 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
             shot, red_apply = ss06_select_and_capture(ctx, "ss06-after-apply-reselect", settle, base_path)
         visual["note_visible_after_apply"] = ss06_note_visible(shot)
         visual["selection_red_after_apply"] = red_apply
-        visual["expected_red_after_apply"] = round(239 * next_selection / 100)
+        visual["expected_red_after_apply"] = ss06_fill_red(accent, next_selection)
         # Distinguishable fill: 21% vs 20% differs by ~2 red levels, so also drive a 50% fill.
         high = apply_and_read_settings(ctx, new_revision, {"DesktopSelectionFillOpacity": "uint32 50"}, details)
         time.sleep(settle)
@@ -3158,7 +3167,7 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
         if red_high is None:
             high_shot, red_high = ss06_select_and_capture(ctx, "ss06-selection-50-reselect", settle, base_path)
         visual["selection_red_at_50"] = red_high
-        visual["expected_red_at_50"] = round(239 * 50 / 100)
+        visual["expected_red_at_50"] = ss06_fill_red(accent, 50)
         restore_revision = (high or {}).get("revision")
         restored = apply_and_read_settings(
             ctx, restore_revision if isinstance(restore_revision, int) else new_revision,
@@ -3166,13 +3175,14 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
         visual["selection_restored"] = restored is not None
         controls = (
             visual.get("wallpaper_black_applied") is True
+            and visual.get("expected_red_before") is not None
             and visual.get("alive") is True and clients_alive(clients)
             and visual.get("note_visible_base") is True
             and visual.get("selection_red_unchanged_capture") == visual["selection_red_before"]
             and visual.get("note_visible_after_unrelated") is True
             and visual.get("selection_red_after_unrelated") is not None
             and abs(visual["selection_red_after_unrelated"] - visual["selection_red_before"]) <= 2
-            and abs(visual["selection_red_before"] - round(239 * selection / 100)) <= 12)
+            and abs(visual["selection_red_before"] - visual["expected_red_before"]) <= 12)
         visual["controls_ok"] = controls
         if controls and red_apply is not None and red_high is not None and high is not None:
             observations["desktop_visual_consumer"] = bool(
