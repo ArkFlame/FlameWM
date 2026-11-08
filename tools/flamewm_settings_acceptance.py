@@ -2903,6 +2903,16 @@ def ss06_snap_preview_observed(preview_before: bool | None, preview_during: bool
                 and committed_narrower and not preview_after)
 
 
+def ss06_is_snap_rect(rect: dict | None, window: dict | None) -> bool:
+    """A snap-preview rect is a zone (half/corner), not the moved window. In outline move mode the same
+    window shows its own outline at the window size, so a mapped preview of that size is not a snap."""
+    if rect is None:
+        return False
+    if window is None:
+        return True
+    return (rect["width"], rect["height"]) != (window["width"], window["height"])
+
+
 def ss06_preview_rect(ctx: Ctx) -> dict | None:
     """Geometry of the mapped (IsViewable) snap-preview surface; the WM keeps it created but unmapped when idle."""
     tree = subprocess.run(["xwininfo", "-display", ctx.display, "-root", "-children"], env=ctx.host_env,
@@ -2950,7 +2960,7 @@ def ss06_snap_preview(ctx: Ctx, args: argparse.Namespace, details: dict, observa
         time.sleep(settle)
         control = ss06_capture(ctx, "ss06-snap-control")
         control2 = ss06_capture(ctx, "ss06-snap-control2")
-        preview_before = ss06_preview_rect(ctx) is not None
+        preview_before = ss06_is_snap_rect(ss06_preview_rect(ctx), geometry)
         code2, command = send_input(ctx, None, None, drag=f"{mid[0]},{mid[1]},{edge[0]},{edge[1]}:15:300",
                                     drag_keep=True)
         details["commands"].append(command)
