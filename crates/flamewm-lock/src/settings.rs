@@ -102,8 +102,8 @@ impl LockSettings {
     pub fn from_lookup<'a>(lookup: impl Fn(&str) -> Option<&'a str>) -> Self {
         let defaults = Self::default();
         let background_color = lookup("lockBackgroundColor")
-            .and_then(parse_hex_color)
-            .unwrap_or(defaults.background_color);
+            .and_then(flamewm_api::color::parse_hex_rgb)
+            .map_or(defaults.background_color, |(r, g, b)| [r, g, b]);
         let background_image = absolute_path(&lookup, "lockBackgroundImage");
         // Files written before `lockBackgroundMode` existed derive the mode from the saved values.
         let background_mode = lookup("lockBackgroundMode")
@@ -132,7 +132,7 @@ impl LockSettings {
                 .and_then(parse_bool)
                 .unwrap_or(defaults.show_username),
             accent: lookup("accent")
-                .filter(|value| parse_hex_color(value).is_some())
+                .filter(|value| flamewm_api::color::parse_hex_rgb(value).is_some())
                 .map_or(defaults.accent, str::to_string),
             font_family: lookup("fontFamily")
                 .map(str::trim)
@@ -230,17 +230,6 @@ fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConf
         display_off_minutes: number("screensaverDisplayOffMinutes")
             .unwrap_or(defaults.display_off_minutes),
     }
-}
-
-/// Parses `#RRGGBB` (case-insensitive) into RGB bytes.
-#[must_use]
-pub fn parse_hex_color(text: &str) -> Option<[u8; 3]> {
-    let hex = text.strip_prefix('#')?;
-    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let value = |index: usize| u8::from_str_radix(&hex[index..index + 2], 16).ok();
-    Some([value(0)?, value(2)?, value(4)?])
 }
 
 fn parse_bool(text: &str) -> Option<bool> {
@@ -411,9 +400,12 @@ mod tests {
 
     #[test]
     fn hex_color_requires_hash_and_six_digits() {
-        assert_eq!(parse_hex_color("#00ff7F"), Some([0, 255, 127]));
-        assert_eq!(parse_hex_color("#fff"), None);
-        assert_eq!(parse_hex_color("#gg0000"), None);
-        assert_eq!(parse_hex_color("#1234567"), None);
+        assert_eq!(
+            flamewm_api::color::parse_hex_rgb("#00ff7F"),
+            Some((0, 255, 127))
+        );
+        assert_eq!(flamewm_api::color::parse_hex_rgb("#fff"), None);
+        assert_eq!(flamewm_api::color::parse_hex_rgb("#gg0000"), None);
+        assert_eq!(flamewm_api::color::parse_hex_rgb("#1234567"), None);
     }
 }

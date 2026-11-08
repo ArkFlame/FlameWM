@@ -280,12 +280,9 @@ pub(crate) fn color_target_key(target: &str) -> Result<&'static str, String> {
 
 /// Parses `#RRGGBB` (the leading `#` is optional) and returns it uppercase with `#`.
 pub(crate) fn parse_hex_color(text: &str) -> Result<String, String> {
-    let digits = text.strip_prefix('#').unwrap_or(text);
-    if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(format!("#{}", digits.to_ascii_uppercase()))
-    } else {
-        Err(format!("'{text}' is not a #RRGGBB colour"))
-    }
+    flamewm_api::color::parse_hex_u32(text)
+        .map(|rgb| format!("#{rgb:06X}"))
+        .ok_or_else(|| format!("'{text}' is not a #RRGGBB colour"))
 }
 
 /// Palette cell at `hue` (`0..PICKER_HUES`) and `shade` (`0..PICKER_SHADES)`: HSL with
