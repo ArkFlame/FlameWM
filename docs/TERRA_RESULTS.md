@@ -251,3 +251,15 @@
 - Churn CPU cause (corrected): live-backdrop composes ran only about 4 times per churn run (about 45–50 ms each), so they are not the main cost. The dominant cost was Settings `reproject(Panels)` running `settle` (about 100–120 ms, about 70 calls per churn) on every Panels wake, even when the refreshed panels snapshot was unchanged. Fix: `reproject` skips `settle` when the Panels snapshot is equal (`runtime.rs`, `panels_refresh_changed`, 3 unit tests). Measured 10 s flood window, median of 2: HEAD 719/930 ticks (median 825), fixed 456/453 (median 455). Idle 0 ticks, post-flood 0 ticks. Live-backdrop ≤20 Hz throttle not implemented pending coordinator decision.
 - Not verified: the full acceptance runner run for SS14/SS19 (only the probe). The runner's `external_update_responsive` and `settings_visible_without_input` need a full run.
 - Open: SS03, SS05, SS06, SS07, SS10, SS11, SS12, SS15, SS17 not triaged in this entry.
+
+## G12 Archiver — PARTIAL
+- Changed: crates/flamewm-archiver/{Cargo.toml,src/format.rs,src/visit.rs,src/writer.rs,src/create.rs,src/extract.rs,src/error.rs,src/lib.rs,src/sevenz.rs,src/tests/*}, crates/flamewm-archiver-app/src/{main.rs,lib.rs,window.rs}, Cargo.lock
+- Commands: `cargo test -p flamewm-archiver -p flamewm-archiver-app` → exit 0 (45 + 10 passed, 0 warnings); `python3 tools/architecture_guard.py` → exit 0; `cargo clippy` → not installed (no lint run)
+- Evidence: tar.zst/tzst read+write (commit fc639f0b, system `tar --zstd` interop test); AES-256 zip create + unlock (commit b018f9a9; wrong-password, no-password, zip-slip-in-encrypted tests); 7z read/write via system 7z 26.00 (commit e1cac9ac; real round trip ran, not skipped; fake-tool tests for traversal-before-run, symlink removal, selection, clash, cancel-kill)
+- Not verified: app UI has no password prompt and no 7z/zstd-specific UI test; 7z selection extracts everything to a staging dir then moves (no per-file filter); 7z create stores symlinks as links (`-snl`) while zip/tar skip them; no progress granularity for 7z beyond start/finish; no runtime (visual) check on Xvfb
+- Risk: 7z staging dir `.flamewm-7z-stage-<pid>` lives inside destination during extraction; multi-item move can fail midway after some items moved (only a created destination is removed)
+- Commit: fc639f0b, b018f9a9, e1cac9ac; pushed: yes
+
+## G8 Terminal — NOT STARTED (inventory only)
+- Existing in source (grep): NewTab shortcut (crates/flamewm-terminal/src/keys.rs), scrollback limit (screen.rs `scrollback_limit`), tab/split/rename identifiers in app.rs; not verified against the spec items individually
+- Not done: find-in-scrollback, URL Ctrl+click verification, bracketed paste safety audit, scrollback throughput and RSS measurement
