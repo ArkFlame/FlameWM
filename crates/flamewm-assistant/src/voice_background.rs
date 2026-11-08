@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use flamewm_assistant_core::{AssistantError, SETUP_BUSY, default_voice_dir, setup_default};
 
+/// Command-line flag that starts the background setup. Settings passes the same literal.
+pub const ARG: &str = "--voice-setup";
 const ATTEMPTS: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(60);
 const STATUS: &str = "status";

@@ -3,6 +3,8 @@ fn main() {
     let result = if args.first().map(String::as_str) == Some(flamewm_assistant::osd_host::HOST_ARG)
     {
         flamewm_assistant::osd_host::run_host()
+    } else if args.first().map(String::as_str) == Some(flamewm_assistant::voice_background::ARG) {
+        flamewm_assistant::voice_background::run()
     } else if args.first().map(String::as_str) == Some("--popover") {
         match flamewm_assistant::popover_anchor(&args[1..]) {
             Some(anchor) => flamewm_assistant::run_popover(anchor),
