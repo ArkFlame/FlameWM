@@ -1,5 +1,6 @@
 ## Unreleased — configurable titlebar double-click
 
+- Feature: `FLAMEWM_DRAG_MODIFIER=alt` moves windows with Alt+drag and resizes with Ctrl+Alt+right-drag; default `super` is unchanged. Settings: `docs/WM_POINTER_SETTINGS.md`.
 - Feature: `FLAMEWM_TITLE_DOUBLE_CLICK=off` makes a titlebar double-click do nothing. The default `maximize` keeps the existing behaviour. Settings: `docs/WM_POINTER_SETTINGS.md`.
 
 ## Unreleased — session keyring for Chromium-family browsers

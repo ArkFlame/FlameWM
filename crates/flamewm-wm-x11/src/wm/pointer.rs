@@ -116,21 +116,6 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// Meta (X11 Mod4) + primary button begins the canonical titlebar move
-    /// regardless of client-area coordinates. Other buttons/modifiers replay
-    /// unchanged, preserving Dolphin selection and context menus.
-    fn is_meta_move_press(detail: u8, state: u16) -> bool {
-        detail == BUTTON_PRIMARY && state & 0x0040 != 0
-    }
-
-    /// Ctrl + Super (Mod4) + right button (3) starts a resize, the GNOME/KDE convention for
-    /// modifier-drag resize. Left stays Meta-move. Right is the chosen button because
-    /// Ctrl+Super+left is still matched by the move rule above.
-    fn is_meta_resize_press(detail: u8, state: u16) -> bool {
-        const BUTTON_RIGHT: u8 = 3;
-        detail == BUTTON_RIGHT && state & 0x0004 != 0 && state & 0x0040 != 0
-    }
-
     /// Corner for a modifier-drag resize: the pointer's quadrant inside `outer` picks the
     /// corner, so the edge that moves is the one nearest the grab point. Directions match
     /// `resize_edges_for_direction` (0 top-left, 2 top-right, 4 bottom-right, 6 bottom-left).
@@ -152,8 +137,11 @@ impl<C: Connection> Wm<'_, C> {
         event: ButtonPressEvent,
     ) -> Result<(), ReplyError> {
         let client = event.event;
-        if Self::is_meta_resize_press(event.detail, u16::from(event.state))
-            && let Some(outer) = self.clients.get(&client).map(|state| state.outer)
+        if drag_modifier::is_meta_resize_press(
+            event.detail,
+            u16::from(event.state),
+            self.config.drag_modifier.mask(),
+        ) && let Some(outer) = self.clients.get(&client).map(|state| state.outer)
         {
             let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
             let direction = Self::meta_resize_direction(outer, pointer);
@@ -163,8 +151,11 @@ impl<C: Connection> Wm<'_, C> {
             self.begin_client_moveresize(client, pointer, direction)?;
             return Ok(());
         }
-        if Self::is_meta_move_press(event.detail, u16::from(event.state))
-            && let Some(resources) = self.registry.lookup_by_client(client)
+        if drag_modifier::is_meta_move_press(
+            event.detail,
+            u16::from(event.state),
+            self.config.drag_modifier.mask(),
+        ) && let Some(resources) = self.registry.lookup_by_client(client)
         {
             self.super_tap.press_other();
             // The sync passive grab froze this physical click. Consume it

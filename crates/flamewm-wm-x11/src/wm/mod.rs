@@ -189,6 +189,7 @@ use flamewm_api::workspace::GridDirection;
 
 pub mod chrome_runtime;
 pub mod configure;
+pub mod drag_modifier;
 pub mod interaction;
 pub mod lifecycle;
 
@@ -278,6 +279,7 @@ pub struct WmConfig {
     pub snap_zone: i32,
     pub workspaces: usize,
     pub title_double_click: crate::frame::title_action::TitleDoubleClick,
+    pub drag_modifier: drag_modifier::DragModifier,
 }
 
 impl Default for WmConfig {
@@ -289,6 +291,7 @@ impl Default for WmConfig {
             snap_zone: 24,
             workspaces: 4,
             title_double_click: crate::frame::title_action::TitleDoubleClick::from_env(),
+            drag_modifier: drag_modifier::DragModifier::from_env(),
         }
     }
 }
