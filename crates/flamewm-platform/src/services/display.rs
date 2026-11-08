@@ -1647,6 +1647,18 @@ mod topology_tests {
     }
 
     #[test]
+    fn set_primary_revert_restores_the_prior_primary() {
+        let mut port = TopologyPort::new();
+        let mut service = DisplayService::default();
+        let transaction = begin(&mut port, &mut service, &primary_b()).expect("begin primary");
+        assert!(service.cached().is_some_and(|s| s.outputs[1].primary));
+        service.revert(&mut port, transaction).expect("revert");
+        let outputs = &service.cached().expect("snapshot").outputs;
+        assert!(outputs[0].primary, "DP-A must be primary again");
+        assert!(!outputs[1].primary);
+    }
+
+    #[test]
     fn set_primary_on_current_primary_is_conflict_and_applies_nothing() {
         let mut port = TopologyPort::new();
         let mut service = DisplayService::default();

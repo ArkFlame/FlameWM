@@ -18,6 +18,7 @@ struct FakeEngine {
     reverted: Vec<TransactionId>,
     windows: Vec<WindowSnapshot>,
     workspace_count: Option<usize>,
+    wayland_keys: bool,
 }
 
 impl WindowPort for FakeEngine {
@@ -87,6 +88,13 @@ impl WorkspacePort for FakeEngine {
 }
 
 impl DisplayPort for FakeEngine {
+    fn scale_keys(&self, output: &OutputId, index: usize) -> Vec<String> {
+        if self.wayland_keys {
+            flamewm_api::ports::wayland_scale_keys(index)
+        } else {
+            vec![output.as_str().to_owned()]
+        }
+    }
     fn display_snapshot(&self) -> FlameResult<DisplaySnapshot> {
         Ok(self.display.clone())
     }
@@ -353,6 +361,32 @@ fn set_shell_scale_persists_scale_across_restart() {
 }
 
 #[test]
+fn wayland_scale_persists_both_keys_through_host_path() {
+    // Index 1 output: the Wayland backend writes its own `wayland-1` key, then `wayland-0` last.
+    let path = fixture_path("wayland-scale-both-keys");
+    std::fs::write(&path, "").expect("write settings fixture");
+    let mut display = fake_display(100);
+    let mut second = display.outputs[0].clone();
+    second.id = OutputId::new("DP-B");
+    second.connector = "DP-B".to_owned();
+    second.primary = false;
+    display.outputs.push(second);
+    let mut host = host_wayland(&path, display);
+    host.start().expect("host starts");
+    let generation = display_generation(&mut host);
+    let changed = host
+        .set_shell_scale(&OutputId::new("DP-B"), 150, generation)
+        .expect("shell scale applies");
+    let persisted = std::fs::read_to_string(&path);
+    let _ = std::fs::remove_file(&path);
+    assert!(changed);
+    let persisted = persisted.expect("settings file is written");
+    assert!(persisted.contains("scale.wayland-1=150\n"), "{persisted}");
+    assert!(persisted.contains("scale.wayland-0=150\n"), "{persisted}");
+    assert!(!persisted.contains("scale.DP-B="), "{persisted}");
+}
+
+#[test]
 fn arbitrary_five_percent_scales_survive_restart() {
     for scale in [105_u16, 135, 195, 200] {
         let path = fixture_path(&format!("scale-restart-{scale}"));
@@ -405,9 +439,16 @@ fn host_with_display(path: &std::path::Path, display: DisplaySnapshot) -> Platfo
             reverted: Vec::new(),
             windows: Vec::new(),
             workspace_count: None,
+            wayland_keys: false,
         },
         path.to_path_buf(),
     )
+}
+
+fn host_wayland(path: &std::path::Path, display: DisplaySnapshot) -> PlatformHost<FakeEngine> {
+    let mut host = host_with_display(path, display);
+    host.engine.wayland_keys = true;
+    host
 }
 
 fn host_at(path: &std::path::Path, scale: u16) -> PlatformHost<FakeEngine> {
