@@ -396,6 +396,7 @@ pub struct ProductSettings {
     pub accent_opacity: u8,
     pub decoration: String,
     pub render_acceleration: String,
+    pub render_backend: String,
     pub titlebar_button_style: String,
     pub cursor_theme: String,
     /// Cursor pixel size; one of 24, 32, 48, 64.
@@ -571,6 +572,7 @@ impl Default for ProductSettings {
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
             render_acceleration: "cpu".to_owned(),
+            render_backend: "cpu".to_owned(),
             titlebar_button_style: "circle".to_owned(),
             cursor_theme: String::new(),
             cursor_size: 24,
@@ -1117,6 +1119,7 @@ stable_settings! {
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
     (false, appearance, "renderAcceleration", render_acceleration),
+    (false, appearance, "renderBackend", render_backend),
     (false, windows, "titlebarButtonStyle", titlebar_button_style),
     (false, appearance, "cursorTheme", cursor_theme),
     (false, windows, "animationsEnabled", animations_enabled),

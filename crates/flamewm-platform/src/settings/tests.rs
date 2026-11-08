@@ -790,6 +790,20 @@ fn render_acceleration_defaults_to_cpu_and_accepts_only_cpu_or_gpu() {
 }
 
 #[test]
+fn render_backend_defaults_to_cpu_and_accepts_only_its_four_values() {
+    assert_eq!(load("revision=2\n").expect("unset").render_backend, "cpu");
+    for value in ["auto", "cpu", "opengl", "vulkan"] {
+        assert_eq!(
+            load(&format!("revision=2\nrenderBackend={value}\n"))
+                .expect(value)
+                .render_backend,
+            value
+        );
+    }
+    assert!(load("revision=2\nrenderBackend=metal\n").is_err());
+}
+
+#[test]
 fn window_margin_defaults_to_two_and_rejects_values_past_thirty_two() {
     assert_eq!(load("revision=2\n").expect("unset").window_margin, 2);
     assert_eq!(

@@ -48,17 +48,7 @@ pub use flamewm_render_x11::{
 };
 
 pub fn apply_render_acceleration(snapshot: &flamewm_api::settings::SettingsSnapshot) {
-    let mode = match snapshot
-        .values
-        .get(flamewm_render_x11::RENDER_ACCELERATION_SETTING)
-    {
-        Some(flamewm_api::settings::SettingValue::Text(value)) => {
-            RenderAcceleration::from_setting(value)
-        }
-        // Missing key: the product default (`renderAcceleration` defaults to `cpu`).
-        _ => RenderAcceleration::Cpu,
-    };
-    flamewm_render_x11::set_render_acceleration(mode);
+    flamewm_render_x11::apply_render_backend_setting(snapshot);
 }
 
 use calloop::Interest;

@@ -1,4 +1,7 @@
+mod backend;
 mod gles;
+
+pub use backend::apply_render_backend_setting;
 
 use std::cell::RefCell;
 use std::sync::Mutex;

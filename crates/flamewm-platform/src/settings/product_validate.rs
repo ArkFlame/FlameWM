@@ -123,6 +123,12 @@ impl ProductSettings {
         if !matches!(self.render_acceleration.as_str(), "cpu" | "gpu") {
             return invalid("renderAcceleration must be cpu or gpu");
         }
+        if !matches!(
+            self.render_backend.as_str(),
+            "auto" | "cpu" | "opengl" | "vulkan"
+        ) {
+            return invalid("renderBackend must be auto, cpu, opengl or vulkan");
+        }
         if !matches!(self.decoration.as_str(), "rounded" | "squared") {
             return invalid("decoration must be rounded or squared");
         }
