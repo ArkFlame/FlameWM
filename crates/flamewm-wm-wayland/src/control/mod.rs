@@ -36,6 +36,7 @@ use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Rect, Size, TransactionId,
     WindowRef, WorkspaceRef,
 };
+use flamewm_api::panels::PanelsSnapshot;
 use flamewm_control_dbus::{ControlServer, ControlSignal};
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_integrations_linux::NetworkManagerSlot;
@@ -153,6 +154,8 @@ pub struct Service {
     published_workspaces: RefCell<Option<WorkspaceSnapshot>>,
     /// Last system snapshot announced, so a quiet turn cannot spam the OSD signal.
     published_system: RefCell<Option<SystemSnapshot>>,
+    /// Last panels snapshot announced, so an edge or size change is signalled once.
+    published_panels: RefCell<Option<PanelsSnapshot>>,
     /// Audio snapshots queued by the helper's reader thread; drained by its calloop wake source.
     audio_updates: Arc<Mutex<Vec<flamewm_api::system::AudioSnapshot>>>,
     /// Keeps the audio helper's wake eventfd open for the lifetime of the service.

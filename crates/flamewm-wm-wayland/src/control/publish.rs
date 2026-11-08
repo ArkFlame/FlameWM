@@ -17,6 +17,21 @@ pub(super) fn system_change(
     Some(snapshot)
 }
 
+/// Returns the panels snapshot to announce when it differs from the last one published.
+///
+/// Panel edge, size and pins live in the same snapshot as the task strip, so an edge change must
+/// reach the shell even when no window or workspace moved.
+pub(super) fn panels_change(
+    published: &mut Option<PanelsSnapshot>,
+    snapshot: PanelsSnapshot,
+) -> Option<PanelsSnapshot> {
+    if published.as_ref() == Some(&snapshot) {
+        return None;
+    }
+    *published = Some(snapshot.clone());
+    Some(snapshot)
+}
+
 impl Service {
     /// Emits `SystemSnapshotChanged` when the host's system state moved since the last signal.
     ///
@@ -61,6 +76,9 @@ impl Service {
             self.publish_panels();
         }
         self.publish_workspaces();
+        // Cheap per-turn check: a Panels.SetEdge/SetSize/Pin changes only the panels snapshot.
+        let panels = self.host.borrow().panels_snapshot();
+        self.emit_panels_if_changed(panels);
     }
 
     /// Announces the workspace topology/active pair the way the X11 runtime does.
@@ -108,23 +126,29 @@ impl Service {
     /// that cache every loop turn; here it is refreshed only when the windows change, and the panels
     /// snapshot is published when the strip moved (otherwise windows opened later have no task button).
     pub(super) fn publish_panels(&self) {
-        let panels = {
+        let snapshot = {
             let mut host = self.host.borrow_mut();
-            let before = host.panels_snapshot();
             if let Err(error) = host.refresh_windows() {
                 eprintln!("flamewm-wayland: window refresh failed: {error}");
                 return;
             }
-            let after = host.panels_snapshot();
-            (before != after).then_some(after)
+            host.panels_snapshot()
         };
-        if let Some(snapshot) = panels {
-            if let Err(error) = self
-                .server
-                .emit_signal(&ControlSignal::PanelsSnapshotChanged { snapshot })
-            {
-                eprintln!("flamewm-wayland: panels signal failed: {error}");
-            }
+        self.emit_panels_if_changed(snapshot);
+    }
+
+    /// Emits `PanelsSnapshotChanged` once per distinct snapshot, so the shell re-projects panel
+    /// edge placement and the Dock follows without a restart.
+    fn emit_panels_if_changed(&self, snapshot: PanelsSnapshot) {
+        let Some(snapshot) = panels_change(&mut self.published_panels.borrow_mut(), snapshot)
+        else {
+            return;
+        };
+        if let Err(error) = self
+            .server
+            .emit_signal(&ControlSignal::PanelsSnapshotChanged { snapshot })
+        {
+            eprintln!("flamewm-wayland: panels signal failed: {error}");
         }
     }
 }

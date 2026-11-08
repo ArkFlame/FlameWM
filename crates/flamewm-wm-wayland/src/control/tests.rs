@@ -69,6 +69,38 @@ fn brightness_updates_are_announced_only_when_the_level_moves() {
 }
 
 /// The media-key volume cap follows the same `audioRaiseMaximum` key the mixer reads.
+/// A Panels.SetEdge changes only the panels snapshot; it must be announced even when no window or
+/// workspace moved, or the shell keeps the old edge until restart.
+#[test]
+fn panel_edge_change_is_announced_without_window_changes() {
+    use flamewm_api::panels::PanelSnapshot;
+    use flamewm_api::{PanelEdge, Rect};
+    let panels = |edge| PanelsSnapshot {
+        revision: 1,
+        panels: vec![PanelSnapshot {
+            output: OutputId::new("DP-1"),
+            edge,
+            logical_size: 44,
+            visible: true,
+            geometry: Rect::new(0, 0, 1350, 44),
+        }],
+        tasks: Vec::new(),
+        pinned_apps: Vec::new(),
+    };
+    let mut published = None;
+    assert!(
+        panels_change(&mut published, panels(PanelEdge::Bottom)).is_some(),
+        "the first observed panels snapshot is announced once"
+    );
+    assert!(
+        panels_change(&mut published, panels(PanelEdge::Bottom)).is_none(),
+        "an unchanged panels snapshot is not announced again"
+    );
+    let moved = panels_change(&mut published, panels(PanelEdge::Left))
+        .expect("an edge change is announced");
+    assert_eq!(moved.panels[0].edge, PanelEdge::Left);
+}
+
 #[test]
 fn raise_maximum_sets_the_media_volume_cap() {
     let mut snapshot = SettingsSnapshot::new(1);

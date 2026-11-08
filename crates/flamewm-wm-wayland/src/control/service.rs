@@ -140,6 +140,7 @@ impl Service {
             published: RefCell::new(Vec::new()),
             published_workspaces: RefCell::new(None),
             published_system: RefCell::new(None),
+            published_panels: RefCell::new(None),
             audio_updates,
             _audio_ping: audio_ping,
             backlight,
