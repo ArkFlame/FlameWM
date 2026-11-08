@@ -95,12 +95,11 @@ pub fn desktop_file_display_name(path: &Path) -> Option<String> {
         if !in_entry || line.starts_with('#') {
             continue;
         }
-        if let Some((key, value)) = line.split_once('=') {
-            if (key == "Name" || key.starts_with("Name[") && key.ends_with(']'))
-                && !value.trim().is_empty()
-            {
-                labels.insert(key.to_owned(), value.trim().to_owned());
-            }
+        if let Some((key, value)) = line.split_once('=')
+            && (key == "Name" || key.starts_with("Name[") && key.ends_with(']'))
+            && !value.trim().is_empty()
+        {
+            labels.insert(key.to_owned(), value.trim().to_owned());
         }
     }
     // XDG locale selection: LC_MESSAGES, then LANG; @modifier and territory
@@ -617,18 +616,17 @@ fn spawn_reaped_with_id(command: &mut Command, startup_id: Option<String>) -> Fl
     let _ = std::thread::Builder::new()
         .name(format!("flamewm-reap-{pid}"))
         .spawn(move || {
-            if let Ok(status) = child.wait() {
-                if !status.success() {
-                    if let Some(id) = startup_id {
-                        let _ = launch_feedback::broadcast(
-                            launch_feedback::MessageKind::Remove,
-                            &id,
-                            "",
-                            "",
-                            "",
-                        );
-                    }
-                }
+            if let Ok(status) = child.wait()
+                && !status.success()
+                && let Some(id) = startup_id
+            {
+                let _ = launch_feedback::broadcast(
+                    launch_feedback::MessageKind::Remove,
+                    &id,
+                    "",
+                    "",
+                    "",
+                );
             }
         });
     Ok(pid)
@@ -741,10 +739,10 @@ fn parse_desktop_entry(
 fn id_stems(id: &DesktopAppId) -> Vec<String> {
     let full = id.as_str().strip_suffix(".desktop").unwrap_or(id.as_str());
     let mut stems = vec![full.to_owned()];
-    if let Some(last) = full.rsplit('.').next() {
-        if last != full {
-            stems.push(last.to_owned());
-        }
+    if let Some(last) = full.rsplit('.').next()
+        && last != full
+    {
+        stems.push(last.to_owned());
     }
     stems
 }

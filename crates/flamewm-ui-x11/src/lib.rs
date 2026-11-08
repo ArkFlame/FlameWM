@@ -224,35 +224,35 @@ fn controller_event(event: &flamewm_render_core::ActionEvent) -> UiControllerEve
             obscured: event.x > 0.5,
         };
     }
-    if event.action == TYPED_KEY_ACTION {
-        if let Some(payload) = event.text.as_deref() {
-            let mut fields = payload.splitn(3, KEY_PAYLOAD_SEPARATOR);
-            let modifiers = fields
-                .next()
-                .unwrap_or_default()
-                .split('+')
-                .filter(|modifier| !modifier.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            let Some(key) = fields.next().filter(|key| !key.is_empty()) else {
-                return UiControllerEvent::Action(action_event(event));
-            };
-            let text = fields
-                .next()
-                .filter(|text| !text.is_empty())
-                .map(str::to_owned);
-            let phase = match event.phase {
-                flamewm_render_core::ActionPhase::Press => UiKeyPhase::Press,
-                flamewm_render_core::ActionPhase::Release => UiKeyPhase::Release,
-                _ => return UiControllerEvent::Action(action_event(event)),
-            };
-            return UiControllerEvent::Key(UiKeyEvent {
-                phase,
-                modifiers,
-                key: key.to_owned(),
-                text,
-            });
-        }
+    if event.action == TYPED_KEY_ACTION
+        && let Some(payload) = event.text.as_deref()
+    {
+        let mut fields = payload.splitn(3, KEY_PAYLOAD_SEPARATOR);
+        let modifiers = fields
+            .next()
+            .unwrap_or_default()
+            .split('+')
+            .filter(|modifier| !modifier.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let Some(key) = fields.next().filter(|key| !key.is_empty()) else {
+            return UiControllerEvent::Action(action_event(event));
+        };
+        let text = fields
+            .next()
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned);
+        let phase = match event.phase {
+            flamewm_render_core::ActionPhase::Press => UiKeyPhase::Press,
+            flamewm_render_core::ActionPhase::Release => UiKeyPhase::Release,
+            _ => return UiControllerEvent::Action(action_event(event)),
+        };
+        return UiControllerEvent::Key(UiKeyEvent {
+            phase,
+            modifiers,
+            key: key.to_owned(),
+            text,
+        });
     }
     UiControllerEvent::Action(action_event(event))
 }

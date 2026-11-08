@@ -112,20 +112,17 @@ where
             f(entry, &mut Locked)?;
             continue;
         }
-        match password {
-            Some(password) => {
-                let mut file = zip
-                    .by_index_decrypt(index, password.as_bytes())
+        if let Some(password) = password {
+            let mut file =
+                zip.by_index_decrypt(index, password.as_bytes())
                     .map_err(|err| match err {
                         zip::result::ZipError::InvalidPassword => ArchiveError::WrongPassword,
                         other => other.into(),
                     })?;
-                f(entry, &mut file)?;
-            }
-            None => {
-                let mut file = zip.by_index(index)?;
-                f(entry, &mut file)?;
-            }
+            f(entry, &mut file)?;
+        } else {
+            let mut file = zip.by_index(index)?;
+            f(entry, &mut file)?;
         }
     }
     Ok(())

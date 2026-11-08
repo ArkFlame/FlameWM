@@ -73,11 +73,10 @@ pub fn desktop_supports_mime(source: &str, mime: &str) -> bool {
     for line in source.lines().map(str::trim) {
         if line.starts_with('[') && line.ends_with(']') {
             in_desktop_entry = line == "[Desktop Entry]";
-        } else if in_desktop_entry && !line.starts_with('#') {
-            if let Some(types) = line.strip_prefix("MimeType=") {
+        } else if in_desktop_entry && !line.starts_with('#')
+            && let Some(types) = line.strip_prefix("MimeType=") {
                 return types.split(';').any(|value| value.trim() == mime);
             }
-        }
     }
     false
 }

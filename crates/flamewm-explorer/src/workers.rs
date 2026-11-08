@@ -18,9 +18,8 @@ pub(crate) fn send_wake(wake:&mut UnixStream, result:&Sender<WorkerResult>, mess
 pub(crate) fn snapshot_sink(result:&Sender<WorkerResult>, wake:&UnixStream)->impl FnMut(Snapshot)+Send+'static {
     let (result,wake)=(result.clone(),wake.try_clone().ok());
     move |snapshot:Snapshot|{
-        if result.send(WorkerResult::Progress(Box::new(snapshot))).is_ok() {
-            if let Some(mut wake)=wake.as_ref() {let _=wake.write_all(&[1]);}
-        }
+        if result.send(WorkerResult::Progress(Box::new(snapshot))).is_ok()
+            && let Some(mut wake)=wake.as_ref() {let _=wake.write_all(&[1]);}
     }
 }
 

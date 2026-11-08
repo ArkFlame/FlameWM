@@ -244,10 +244,10 @@ impl<C: Connection> Wm<'_, C> {
     /// unmap. A running open ends without completing and never delays anything.
     pub(super) fn cancel_open_for(&mut self, client: Window) -> Result<(), ReplyError> {
         self.open_gate.clear(client);
-        if self.animator.running(client) == Some(Effect::Open) {
-            if let Some(effect) = self.animator.cancel(client) {
-                self.finish_transition(client, effect)?;
-            }
+        if self.animator.running(client) == Some(Effect::Open)
+            && let Some(effect) = self.animator.cancel(client)
+        {
+            self.finish_transition(client, effect)?;
         }
         Ok(())
     }

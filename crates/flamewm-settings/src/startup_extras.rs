@@ -46,11 +46,11 @@ pub(crate) fn type_command(
                 }
             }
             ch if !ch.is_control() => {
-                if let Some(current) = draft.as_mut() {
-                    if current.buffer.chars().count() < COMMAND_MAX_CHARS {
-                        current.buffer.push(ch);
-                        current.error = None;
-                    }
+                if let Some(current) = draft.as_mut()
+                    && current.buffer.chars().count() < COMMAND_MAX_CHARS
+                {
+                    current.buffer.push(ch);
+                    current.error = None;
                 }
             }
             _ => {}

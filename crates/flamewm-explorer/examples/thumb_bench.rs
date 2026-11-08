@@ -58,10 +58,10 @@ fn run(files: &[PathBuf], new_policy: bool, passes: usize, step: usize) -> Run {
             cache.start_pass(&queue);
         }
         for key in &window {
-            if let Lookup::Missing = cache.lookup(key) {
-                if cache.begin(key) {
-                    queue.push(key.clone());
-                }
+            if let Lookup::Missing = cache.lookup(key)
+                && cache.begin(key)
+            {
+                queue.push(key.clone());
             }
         }
         last_window = window;

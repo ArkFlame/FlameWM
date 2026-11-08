@@ -353,6 +353,10 @@ impl Decorations {
         self.desktop = None;
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "per-frame element inputs passed positionally by the single caller"
+    )]
     pub(super) fn element(
         &mut self,
         renderer: &mut GlowRenderer,

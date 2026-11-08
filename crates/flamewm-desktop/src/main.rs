@@ -383,10 +383,8 @@ pub fn main() -> Result<(), String> {
                     event,
                     UiControllerEvent::Action(action) if action.phase == UiActionPhase::Hover
                 );
-                if !hover {
-                    if let Err(error) = refresh_all(document, &mut state) {
-                        eprintln!("desktop: refresh failed (continuing): {error}");
-                    }
+                if !hover && let Err(error) = refresh_all(document, &mut state) {
+                    eprintln!("desktop: refresh failed (continuing): {error}");
                 }
                 let result = match event {
                     UiControllerEvent::Action(action) => {

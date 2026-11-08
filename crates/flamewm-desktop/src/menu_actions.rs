@@ -101,58 +101,51 @@ pub(crate) fn handle_menu_action(
                 .and_then(|id| state.model.items().find(|item| &item.id == id))
                 .filter(|item| item.kind == DesktopItemKind::File)
                 .map(|item| item.path.clone());
-            if let Some(path) = path {
-                if let Some(format) = offered_formats(&path).get(slot).copied() {
-                    // At most one visible prediction. The worker is independent;
-                    // previous conversions keep running without a synthetic tile.
-                    let predicted =
-                        flamewm_conversion_core::conversion::predicted_destination(&path, format);
-                    let source = state
+            if let Some(path) = path
+                && let Some(format) = offered_formats(&path).get(slot).copied()
+            {
+                // At most one visible prediction. The worker is independent;
+                // previous conversions keep running without a synthetic tile.
+                let predicted =
+                    flamewm_conversion_core::conversion::predicted_destination(&path, format);
+                let source = state
+                    .model
+                    .items()
+                    .find(|item| item.path == path)
+                    .map(|item| (item.output.clone(), item.cell));
+                if let (Ok(destination), Some((output, source_cell))) = (predicted, source) {
+                    let grid = grid_for_output(state, &output);
+                    let occupied = state
                         .model
                         .items()
-                        .find(|item| item.path == path)
-                        .map(|item| (item.output.clone(), item.cell));
-                    if let (Ok(destination), Some((output, source_cell))) = (predicted, source) {
-                        let grid = grid_for_output(state, &output);
-                        let occupied = state
-                            .model
-                            .items()
-                            .filter(|item| item.output == output)
-                            .map(|item| item.cell)
-                            .collect::<BTreeSet<_>>();
-                        let cell = preview_cell_for(source_cell, grid, &occupied);
-                        let result = Arc::new(Mutex::new(None));
-                        let worker_result = Arc::clone(&result);
-                        let worker_dirty = Arc::clone(&state.dirty);
-                        let format = format.to_owned();
-                        match std::thread::Builder::new()
-                            .name("flamewm-convert".to_owned())
-                            .spawn(move || {
-                                let outcome = convert_file(&path, &format);
-                                *worker_result
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                                    Some(outcome);
-                                worker_dirty.store(true, Ordering::Release);
-                            }) {
-                            Ok(_) => {
-                                state.conversion_preview = Some(ConversionPreview {
-                                    output: output.clone(),
-                                    cell,
-                                    destination: destination.clone(),
-                                    result,
-                                });
-                                show_conversion_preview(
-                                    document,
-                                    state,
-                                    &destination,
-                                    &output,
-                                    cell,
-                                )?;
-                            }
-                            Err(error) => {
-                                report_action_failure("start conversion", error.to_string());
-                            }
+                        .filter(|item| item.output == output)
+                        .map(|item| item.cell)
+                        .collect::<BTreeSet<_>>();
+                    let cell = preview_cell_for(source_cell, grid, &occupied);
+                    let result = Arc::new(Mutex::new(None));
+                    let worker_result = Arc::clone(&result);
+                    let worker_dirty = Arc::clone(&state.dirty);
+                    let format = format.to_owned();
+                    match std::thread::Builder::new()
+                        .name("flamewm-convert".to_owned())
+                        .spawn(move || {
+                            let outcome = convert_file(&path, &format);
+                            *worker_result
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+                            worker_dirty.store(true, Ordering::Release);
+                        }) {
+                        Ok(_) => {
+                            state.conversion_preview = Some(ConversionPreview {
+                                output: output.clone(),
+                                cell,
+                                destination: destination.clone(),
+                                result,
+                            });
+                            show_conversion_preview(document, state, &destination, &output, cell)?;
+                        }
+                        Err(error) => {
+                            report_action_failure("start conversion", error.to_string());
                         }
                     }
                 }

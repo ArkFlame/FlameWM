@@ -41,10 +41,9 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
             interface,
             version,
         } = event
+            && interface == "wl_compositor"
         {
-            if interface == "wl_compositor" {
-                state.compositor = Some(registry.bind::<WlCompositor, _, _>(name, version, qh, ()));
-            }
+            state.compositor = Some(registry.bind::<WlCompositor, _, _>(name, version, qh, ()));
         }
     }
 }

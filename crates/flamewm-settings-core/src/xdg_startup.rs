@@ -9,7 +9,7 @@ use crate::xdg_applications::{ApplicationSettings, atomic_write, invalid, set_va
 
 /// Start delay in seconds, as GNOME-style autostart launchers read it.
 pub const DELAY_KEY: &str = "X-GNOME-Autostart-Delay";
-/// Read-only fallback for entries that declare the FlameWM spelling.
+/// Read-only fallback for entries that declare the `FlameWM` spelling.
 const FALLBACK_DELAY_KEY: &str = "X-FlameWM-Delay";
 
 /// An installed application that has no autostart entry yet.

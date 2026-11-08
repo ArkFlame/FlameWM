@@ -364,10 +364,10 @@ fn wallpaper_worker(
             state.completion = Some(WallpaperCompletion { request, result });
         }
         drop(state);
-        if let Err(error) = wake_write.write(&[1]) {
-            if error.kind() != ErrorKind::WouldBlock {
-                eprintln!("desktop: wallpaper wake failed: {error}");
-            }
+        if let Err(error) = wake_write.write(&[1])
+            && error.kind() != ErrorKind::WouldBlock
+        {
+            eprintln!("desktop: wallpaper wake failed: {error}");
         }
     }
 }

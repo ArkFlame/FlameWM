@@ -649,11 +649,11 @@ impl WindowModel {
     /// Commits one snapped layout while retaining its floating restore geometry.
     /// Leaves a snapped layout for the floating rect it was snapped from (keyboard tiling Down).
     pub fn restore_floating(&mut self, id: WindowId) {
-        if let Some(window) = self.get_mut(id) {
-            if let Mode::Snapped(_) = window.mode {
-                window.mode = Mode::Normal;
-                window.rect = window.restore;
-            }
+        if let Some(window) = self.get_mut(id)
+            && let Mode::Snapped(_) = window.mode
+        {
+            window.mode = Mode::Normal;
+            window.rect = window.restore;
         }
     }
 

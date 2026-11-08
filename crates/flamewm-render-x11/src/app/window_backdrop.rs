@@ -295,8 +295,8 @@ impl X11App {
                 canvas_epoch,
             });
         }
-        if let Some(pixmap) = upload? {
-            if let Some(old) =
+        if let Some(pixmap) = upload?
+            && let Some(old) =
                 self.window_backdrop_pixmap
                     .replace(super::surface_backdrop::SurfaceBackdrop {
                         pixmap,
@@ -304,9 +304,8 @@ impl X11App {
                         height,
                         rgba: None,
                     })
-            {
-                unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
-            }
+        {
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
         }
         Ok(())
     }

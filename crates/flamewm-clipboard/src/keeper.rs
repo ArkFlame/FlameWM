@@ -1,11 +1,11 @@
 //! Clipboard keeper: keeps the last CLIPBOARD text after its owner goes away.
 //!
-//! A background thread watches CLIPBOARD owner changes through XFixes. For each new owner it
+//! A background thread watches CLIPBOARD owner changes through `XFixes`. For each new owner it
 //! reads text targets (`UTF8_STRING`, then `STRING`) and keeps them when they fit in
 //! [`MAX_KEPT_BYTES`]. Owners that advertise `x-kde-passwordManagerHint` in TARGETS, or that do
 //! not answer TARGETS, are never kept. When the owner window or client closes, it serves the
 //! kept text again through [`Clipboard::set_text`]. An explicit clear (`SetSelectionOwner` with
-//! no owner) drops the kept text. Without XFixes the keeper reports once and ends.
+//! no owner) drops the kept text. Without `XFixes` the keeper reports once and ends.
 
 use std::time::Instant;
 

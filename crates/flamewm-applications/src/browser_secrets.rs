@@ -32,12 +32,10 @@ pub(super) fn default_wallet_name() -> String {
             in_wallet = line.eq_ignore_ascii_case("[Wallet]");
             continue;
         }
-        if in_wallet {
-            if let Some(name) = line.strip_prefix("Default Wallet=") {
-                let name = name.trim();
-                if !name.is_empty() {
-                    return name.to_owned();
-                }
+        if in_wallet && let Some(name) = line.strip_prefix("Default Wallet=") {
+            let name = name.trim();
+            if !name.is_empty() {
+                return name.to_owned();
             }
         }
     }

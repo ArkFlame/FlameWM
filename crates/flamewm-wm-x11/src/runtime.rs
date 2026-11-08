@@ -539,19 +539,19 @@ fn run_session(
                 eprintln!("flamewm: display mode transaction: {error}");
             }
             let display_after = host.cached_display_snapshot();
-            if display_after != display_before {
-                if let Some(snapshot) = display_after {
-                    // A timeout-driven mode revert can change geometry without an
-                    // already-consumed RandR dirty event. Reconcile panels before
-                    // publishing either snapshot and before recomputing WM struts.
-                    if let Err(error) = host.resync_panels_for_displays(&snapshot) {
-                        eprintln!("flamewm: panel resync after mode transaction failed: {error}");
-                    }
-                    emit_control(
-                        &control_for_hook,
-                        &ControlSignal::DisplaysSnapshotChanged { snapshot },
-                    );
+            if display_after != display_before
+                && let Some(snapshot) = display_after
+            {
+                // A timeout-driven mode revert can change geometry without an
+                // already-consumed RandR dirty event. Reconcile panels before
+                // publishing either snapshot and before recomputing WM struts.
+                if let Err(error) = host.resync_panels_for_displays(&snapshot) {
+                    eprintln!("flamewm: panel resync after mode transaction failed: {error}");
                 }
+                emit_control(
+                    &control_for_hook,
+                    &ControlSignal::DisplaysSnapshotChanged { snapshot },
+                );
             }
             // The panel service is changed by resync_panels_for_displays(), not
             // by WmChangeSet. Emit its authoritative snapshot explicitly, including
@@ -912,10 +912,10 @@ fn register_control(
                 // Displays first so the shell's display snapshot is current before panel geometry lands.
                 let mut signals = Vec::new();
                 let displays = host.cached_display_snapshot();
-                if displays != displays_before {
-                    if let Some(snapshot) = displays {
-                        signals.push(ControlSignal::DisplaysSnapshotChanged { snapshot });
-                    }
+                if displays != displays_before
+                    && let Some(snapshot) = displays
+                {
+                    signals.push(ControlSignal::DisplaysSnapshotChanged { snapshot });
                 }
                 let panels = host.panels_snapshot();
                 if panels != panels_before {
@@ -958,7 +958,7 @@ fn refresh_control(
         if server.is_some() {
             eprintln!("flamewm: control D-Bus connected");
         }
-        *link.slot.borrow_mut() = server.clone();
+        (*link.slot.borrow_mut()).clone_from(&server);
     }
     let Some(server) = server else {
         return Ok(());

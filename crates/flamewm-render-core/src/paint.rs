@@ -128,16 +128,16 @@ pub fn build_paint_commands_with_scroll(
         if node.kind == NodeKind::Element || node.kind == NodeKind::Image {
             let background = apply_opacity(document.resolve_color(style.background), style.opacity);
             if background.a != 0 {
-                if let Some(blur_percent) = document.node_backdrop_blur(index as u32) {
-                    if background.a < 255 {
-                        commands.push(PaintCommand::NodeBackdrop {
-                            rect,
-                            radius: style.border_radius.max(0.0),
-                            blur_percent,
-                            opacity: background.a,
-                            node: index as u32,
-                        });
-                    }
+                if let Some(blur_percent) = document.node_backdrop_blur(index as u32)
+                    && background.a < 255
+                {
+                    commands.push(PaintCommand::NodeBackdrop {
+                        rect,
+                        radius: style.border_radius.max(0.0),
+                        blur_percent,
+                        opacity: background.a,
+                        node: index as u32,
+                    });
                 }
                 commands.push(PaintCommand::FillRect {
                     rect,

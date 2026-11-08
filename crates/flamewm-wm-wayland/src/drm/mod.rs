@@ -762,7 +762,6 @@ impl Drm {
 ///
 /// `already_waited` is the cumulative time this output has spent on fences since it last queued a
 /// frame; it is what makes repeated passes end in `SyncWait::Fail` instead of waiting forever.
-
 #[cfg(test)]
 mod tests {
     use super::pauses_scanout;

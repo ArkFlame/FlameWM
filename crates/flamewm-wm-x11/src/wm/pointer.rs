@@ -152,36 +152,36 @@ impl<C: Connection> Wm<'_, C> {
         event: ButtonPressEvent,
     ) -> Result<(), ReplyError> {
         let client = event.event;
-        if Self::is_meta_resize_press(event.detail, u16::from(event.state)) {
-            if let Some(outer) = self.clients.get(&client).map(|state| state.outer) {
-                let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
-                let direction = Self::meta_resize_direction(outer, pointer);
-                // Consume the frozen press as the Meta-move path does, then reuse the
-                // edge-handle resize reducer; the handles are mapped for client-drawn frames too.
-                self.conn.allow_events(Allow::ASYNC_POINTER, event.time)?;
-                self.begin_client_moveresize(client, pointer, direction)?;
-                return Ok(());
-            }
+        if Self::is_meta_resize_press(event.detail, u16::from(event.state))
+            && let Some(outer) = self.clients.get(&client).map(|state| state.outer)
+        {
+            let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
+            let direction = Self::meta_resize_direction(outer, pointer);
+            // Consume the frozen press as the Meta-move path does, then reuse the
+            // edge-handle resize reducer; the handles are mapped for client-drawn frames too.
+            self.conn.allow_events(Allow::ASYNC_POINTER, event.time)?;
+            self.begin_client_moveresize(client, pointer, direction)?;
+            return Ok(());
         }
-        if Self::is_meta_move_press(event.detail, u16::from(event.state)) {
-            if let Some(resources) = self.registry.lookup_by_client(client) {
-                self.super_tap.press_other();
-                // The sync passive grab froze this physical click. Consume it
-                // before any fallible focus request: an early `?` must never
-                // leave the pointer frozen. Then use the exact same move
-                // controller and pointer capture as title dragging.
-                self.conn.allow_events(Allow::ASYNC_POINTER, event.time)?;
-                self.focus(client)?;
-                let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
-                self.reduce_and_execute(
-                    client,
-                    FrameEvent::Press {
-                        source: resources.title_drag,
-                        pointer,
-                    },
-                )?;
-                return Ok(());
-            }
+        if Self::is_meta_move_press(event.detail, u16::from(event.state))
+            && let Some(resources) = self.registry.lookup_by_client(client)
+        {
+            self.super_tap.press_other();
+            // The sync passive grab froze this physical click. Consume it
+            // before any fallible focus request: an early `?` must never
+            // leave the pointer frozen. Then use the exact same move
+            // controller and pointer capture as title dragging.
+            self.conn.allow_events(Allow::ASYNC_POINTER, event.time)?;
+            self.focus(client)?;
+            let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
+            self.reduce_and_execute(
+                client,
+                FrameEvent::Press {
+                    source: resources.title_drag,
+                    pointer,
+                },
+            )?;
+            return Ok(());
         }
         if let Some(session) = self.sessions.get_mut(&client) {
             session.last_title_click = None;
@@ -390,18 +390,18 @@ impl<C: Connection> Wm<'_, C> {
             );
             // Layout wins over the free move: inside a snap zone the frame stays where the
             // drag started and only the zone preview shows; release applies the layout.
-            if let Some((target, work)) = motion_snap {
-                if zone_preview_holds(
+            if let Some((target, work)) = motion_snap
+                && zone_preview_holds(
                     activated_move(move_session).is_some(),
                     target,
                     crate::live_settings::snap_preview_enabled(),
-                ) {
-                    self.update_snap_preview(target, work, client_id);
-                    // A held snap zone owns the edge: a dwell here would switch workspace and hide
-                    // the zone preview the user is aiming at, so the edge dwell does not arm.
-                    self.edge_drag = None;
-                    return Ok(());
-                }
+                )
+            {
+                self.update_snap_preview(target, work, client_id);
+                // A held snap zone owns the edge: a dwell here would switch workspace and hide
+                // the zone preview the user is aiming at, so the edge dwell does not arm.
+                self.edge_drag = None;
+                return Ok(());
             }
             {
                 let _guard = if move_active {
@@ -421,10 +421,10 @@ impl<C: Connection> Wm<'_, C> {
                     .is_some_and(|state| state.placement.mode == PlacementMode::Floating);
             if preview_allowed {
                 // XP outline mode owns the drag feedback: a snap-zone update would hide it.
-                if let Some((target, work)) = motion_snap {
-                    if crate::live_settings::show_content_while_dragging() {
-                        self.update_snap_preview(target, work, client_id);
-                    }
+                if let Some((target, work)) = motion_snap
+                    && crate::live_settings::show_content_while_dragging()
+                {
+                    self.update_snap_preview(target, work, client_id);
                 }
             } else if move_active {
                 self.snap_preview.hide(self.conn);
@@ -479,25 +479,23 @@ impl<C: Connection> Wm<'_, C> {
                     .mouse_workspace_cooldowns
                     .remaining(side.axis(), now)
                     .is_zero()
-            {
-                if let Some(target) =
+                && let Some(target) =
                     drag_edge_target(self.current_workspace, self.workspace_count, side)
-                {
-                    let frame_height = self
-                        .clients
-                        .get(&client_id)
-                        .map_or(1, |state| state.placement.current.h);
-                    let destination =
-                        drag_edge_destination(pointer, self.screen_rect, side, frame_height);
-                    let previous = self.current_workspace;
-                    self.switch_workspace_dragging(client_id, target, destination, side)?;
-                    if self.current_workspace != previous {
-                        // Start cooldown after the real native transfer has completed.
-                        self.mouse_workspace_cooldowns
-                            .record(side.axis(), std::time::Instant::now());
-                    }
-                    self.edge_drag = None;
+            {
+                let frame_height = self
+                    .clients
+                    .get(&client_id)
+                    .map_or(1, |state| state.placement.current.h);
+                let destination =
+                    drag_edge_destination(pointer, self.screen_rect, side, frame_height);
+                let previous = self.current_workspace;
+                self.switch_workspace_dragging(client_id, target, destination, side)?;
+                if self.current_workspace != previous {
+                    // Start cooldown after the real native transfer has completed.
+                    self.mouse_workspace_cooldowns
+                        .record(side.axis(), std::time::Instant::now());
                 }
+                self.edge_drag = None;
             }
         } else {
             self.edge_drag = None;

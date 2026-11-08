@@ -605,17 +605,16 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some((key, value)) = action
         .strip_prefix("settings.")
         .and_then(|rest| rest.split_once('.'))
+        && let Some((row, values)) = ANIMATION_STYLE_ROWS.iter().find(|(row, _)| *row == key)
     {
-        if let Some((row, values)) = ANIMATION_STYLE_ROWS.iter().find(|(row, _)| *row == key) {
-            return values
-                .iter()
-                .find(|allowed| **allowed == value)
-                .map(|allowed| SettingsAction::TextSelect {
-                    key: row,
-                    value: allowed,
-                })
-                .ok_or_else(|| format!("unknown animation style '{value}' for {key}"));
-        }
+        return values
+            .iter()
+            .find(|allowed| **allowed == value)
+            .map(|allowed| SettingsAction::TextSelect {
+                key: row,
+                value: allowed,
+            })
+            .ok_or_else(|| format!("unknown animation style '{value}' for {key}"));
     }
     if let Some(size) = action.strip_prefix("settings.cursor.size.") {
         return integer_choice_action("cursorSize", &CURSOR_SIZE_CHOICES, size, "cursor size");

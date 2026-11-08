@@ -58,12 +58,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _fractional = manager.get_fractional_scale(&surface, &qh, ());
     let mut state = State::default();
     queue.roundtrip(&mut state)?;
-    match state.preferred {
-        Some(numerator) => println!("preferred_scale numerator={numerator} denominator=120"),
-        None => {
-            eprintln!("no preferred_scale event received");
-            std::process::exit(1);
-        }
+    if let Some(numerator) = state.preferred {
+        println!("preferred_scale numerator={numerator} denominator=120");
+    } else {
+        eprintln!("no preferred_scale event received");
+        std::process::exit(1);
     }
     Ok(())
 }

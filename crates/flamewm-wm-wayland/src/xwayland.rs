@@ -826,7 +826,7 @@ impl XwmHandler for State {
                 set_data_device_selection(&self.display, &self.seat, mime_types, ());
             }
             SelectionTarget::Primary => {
-                set_primary_selection(&self.display, &self.seat, mime_types, ())
+                set_primary_selection(&self.display, &self.seat, mime_types, ());
             }
         }
     }

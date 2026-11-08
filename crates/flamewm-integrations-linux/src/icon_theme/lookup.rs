@@ -359,10 +359,10 @@ impl IconLookupIndex {
     /// `(base, Option<explicit ext>)`. Explicit ext pins the filename.
     #[must_use]
     pub fn normalize_name(name: &str) -> (String, Option<String>) {
-        if let Some((base, ext)) = split_icon_filename(name) {
-            if Self::EXTENSIONS.contains(&ext.as_str()) {
-                return (base, Some(ext));
-            }
+        if let Some((base, ext)) = split_icon_filename(name)
+            && Self::EXTENSIONS.contains(&ext.as_str())
+        {
+            return (base, Some(ext));
         }
         (name.to_owned(), None)
     }
@@ -425,10 +425,10 @@ impl IconLookupIndex {
             }
         }
         let mut out = ordered;
-        if out.is_empty() {
-            if let Some(found) = self.pixmaps().get(&base) {
-                out.extend(child_filter(found, explicit.as_deref()));
-            }
+        if out.is_empty()
+            && let Some(found) = self.pixmaps().get(&base)
+        {
+            out.extend(child_filter(found, explicit.as_deref()));
         }
         let hit = !out.is_empty();
         (out, hit)
@@ -443,10 +443,10 @@ impl IconLookupIndex {
     pub fn needs_rebuild(&self) -> Option<IconLookupIndex> {
         let mut guard = self.last_mtime_check.lock().ok()?;
         let now = std::time::Instant::now();
-        if let Some(last) = *guard {
-            if now.duration_since(last).as_secs() < 5 {
-                return None;
-            }
+        if let Some(last) = *guard
+            && now.duration_since(last).as_secs() < 5
+        {
+            return None;
         }
         *guard = Some(now);
         let current = current_watch_mtime(&self.roots, &self.data_dirs, None);

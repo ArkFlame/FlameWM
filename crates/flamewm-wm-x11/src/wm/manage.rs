@@ -613,12 +613,12 @@ impl<C: Connection> Wm<'_, C> {
         // Abort any in-progress interaction through the reducer so session
         // teardown, ungrab, and snap-preview hide stay in one owner. Runs
         // before `clients.remove` because `controller_for` reads it.
-        if let Some(controller) = self.controller_for(window) {
-            if !controller.session.is_idle() {
-                let (next, commit) = interaction::step(&controller, FrameEvent::Cancel);
-                self.store_controller(window, &next);
-                self.execute_effects(window, &commit)?;
-            }
+        if let Some(controller) = self.controller_for(window)
+            && !controller.session.is_idle()
+        {
+            let (next, commit) = interaction::step(&controller, FrameEvent::Cancel);
+            self.store_controller(window, &next);
+            self.execute_effects(window, &commit)?;
         }
         let Some(client) = self.clients.remove(&window) else {
             return Ok(());

@@ -121,12 +121,12 @@ pub fn await_ready(
         }
         let status = read_status(dir);
         if status != last {
-            if let Some((percent, label)) = status.split_once("% ") {
-                if let Ok(percent) = percent.parse::<u8>() {
-                    progress(percent, label);
-                }
+            if let Some((percent, label)) = status.split_once("% ")
+                && let Ok(percent) = percent.parse::<u8>()
+            {
+                progress(percent, label);
             }
-            last = status.clone();
+            last.clone_from(&status);
         }
         if status.starts_with("failed") && !status.contains("retrying") {
             return Err(AssistantError::Io(status));

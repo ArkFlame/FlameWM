@@ -152,10 +152,8 @@ impl<C: Connection> Wm<'_, C> {
                             .paint(animation::overlay_t(progress, flight.mirrored))
                             .is_err()
                     });
-                    if failed {
-                        if let Some(effect) = self.animator.cancel(client) {
-                            self.finish_transition(client, effect)?;
-                        }
+                    if failed && let Some(effect) = self.animator.cancel(client) {
+                        self.finish_transition(client, effect)?;
                     }
                 }
                 Tick::Complete { client, effect } => {

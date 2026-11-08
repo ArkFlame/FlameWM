@@ -92,12 +92,11 @@ impl DeviceWatch {
                     if fds[1].revents().intersects(PollFlags::PRI | PollFlags::ERR) {
                         pending.get_or_insert_with(Instant::now);
                     }
-                    if let (Some(socket), Some(ready)) = (&uevents, fds.get(2)) {
-                        if ready.revents().intersects(PollFlags::IN)
-                            && drain_uevents(socket, &mut buffer)
-                        {
-                            pending.get_or_insert_with(Instant::now);
-                        }
+                    if let (Some(socket), Some(ready)) = (&uevents, fds.get(2))
+                        && ready.revents().intersects(PollFlags::IN)
+                        && drain_uevents(socket, &mut buffer)
+                    {
+                        pending.get_or_insert_with(Instant::now);
                     }
                     if pending.is_some_and(|since| since.elapsed() >= QUIET) {
                         pending = None;

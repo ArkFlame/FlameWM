@@ -1,5 +1,5 @@
 //! `hotCorner.*` dispatch. Pointer position feeds the pure dwell state from `flamewm-shell-core`.
-//! The pointer is sampled on XInput2 raw motion selected on the root, because core pointer motion
+//! The pointer is sampled on `XInput2` raw motion selected on the root, because core pointer motion
 //! is not delivered to the root while a client window covers the corner. The only timer is the one
 //! pending dwell deadline, which the event loop folds into its wait. Raw motion is selected only
 //! while a corner has an action, and no polling runs while idle.

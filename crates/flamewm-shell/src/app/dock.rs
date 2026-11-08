@@ -511,7 +511,7 @@ impl ShellLoop {
                     .windows
                     .iter()
                     .filter(|w| !w.skip_taskbar && w.app_id.as_str() == entry.app_id)
-                    .map(|w| w.reference.clone())
+                    .map(|w| w.reference)
                     .collect();
                 for window in windows {
                     self.submit(ControlRequest::CloseWindow(window));

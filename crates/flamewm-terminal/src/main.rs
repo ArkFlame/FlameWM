@@ -41,11 +41,11 @@ pub fn main() {
         let shell = arguments.next().unwrap_or_else(|| "/bin/sh".into());
         flamewm_terminal::fetch::exec_shell(&shell, &arguments.collect::<Vec<_>>());
     }
-    if let Err(error) = run() {
-        if error != ALL_TABS_CLOSED {
-            eprintln!("flamewm-terminal: {error}");
-            std::process::exit(1);
-        }
+    if let Err(error) = run()
+        && error != ALL_TABS_CLOSED
+    {
+        eprintln!("flamewm-terminal: {error}");
+        std::process::exit(1);
     }
 }
 

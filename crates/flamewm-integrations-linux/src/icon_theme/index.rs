@@ -91,10 +91,10 @@ impl IconThemeIndex {
             if section != "Icon Theme" {
                 continue;
             }
-            if let Some((key, value)) = text.split_once('=') {
-                if key.trim() == "Inherits" {
-                    inherits = Some(value.trim().to_owned());
-                }
+            if let Some((key, value)) = text.split_once('=')
+                && key.trim() == "Inherits"
+            {
+                inherits = Some(value.trim().to_owned());
             }
         }
         Some(Self {

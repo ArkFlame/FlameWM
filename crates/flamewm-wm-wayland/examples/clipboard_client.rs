@@ -101,10 +101,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for App {
         if let wl_seat::Event::Capabilities {
             capabilities: WEnum::Value(caps),
         } = event
+            && caps.contains(wl_seat::Capability::Keyboard)
         {
-            if caps.contains(wl_seat::Capability::Keyboard) {
-                seat.get_keyboard(qh, ());
-            }
+            seat.get_keyboard(qh, ());
         }
     }
 }

@@ -90,10 +90,10 @@ pub(super) fn walk_theme_dir(
                 if depth + 1 > THEME_WALK_MAX_DEPTH {
                     continue;
                 }
-                if let Ok(canonical) = fs::canonicalize(&path) {
-                    if visited.insert(canonical) {
-                        stack.push((path, depth + 1));
-                    }
+                if let Ok(canonical) = fs::canonicalize(&path)
+                    && visited.insert(canonical)
+                {
+                    stack.push((path, depth + 1));
                 }
                 continue;
             }

@@ -447,24 +447,21 @@ impl NotificationHost {
                 arrived = Some(result.raster);
             }
         }
-        match arrived {
-            Some(raster) => {
-                self.icon_wait = false;
-                let icon = raster.map(|raster| RuntimeImage {
-                    source: raster.source,
-                    width: raster.width,
-                    height: raster.height,
-                    pixels: raster.pixels,
-                });
-                self.set_icon(runtime, icon)
+        if let Some(raster) = arrived {
+            self.icon_wait = false;
+            let icon = raster.map(|raster| RuntimeImage {
+                source: raster.source,
+                width: raster.width,
+                height: raster.height,
+                pixels: raster.pixels,
+            });
+            self.set_icon(runtime, icon)
+        } else {
+            if let Some(wake) = wake {
+                let deadline = Instant::now() + Duration::from_millis(15);
+                wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
             }
-            None => {
-                if let Some(wake) = wake {
-                    let deadline = Instant::now() + Duration::from_millis(15);
-                    wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
-                }
-                Ok(())
-            }
+            Ok(())
         }
     }
 
@@ -722,7 +719,7 @@ fn execute() -> Result<(), String> {
     // StatusNotifier host: shares this reactor's bus source, no thread or timer.
     let tray_host =
         flamewm_shell::tray_host::TrayHost::connect().map(|host| Rc::new(RefCell::new(host)));
-    state.borrow_mut().tray = tray_host.clone();
+    state.borrow_mut().tray.clone_from(&tray_host);
     if let Some(snapshot) = startup_settings {
         // Same entry point as the live SettingsSnapshotChanged path.
         state.borrow_mut().apply_settings_snapshot(snapshot);

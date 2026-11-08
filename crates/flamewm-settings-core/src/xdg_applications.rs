@@ -175,7 +175,7 @@ impl ApplicationSettings {
 
     /// Visible desktop entries that handle `mime`, in ID order.
     ///
-    /// The first root that defines an ID decides it, so a hidden or NoDisplay user entry masks
+    /// The first root that defines an ID decides it, so a hidden or `NoDisplay` user entry masks
     /// a visible system entry with the same ID.
     pub fn installed_handlers(&self, mime: &str) -> io::Result<Vec<InstalledHandler>> {
         if !mime.contains('/') || mime.contains(['\n', '\r', ';']) {
@@ -368,12 +368,12 @@ pub fn value<'a>(text: &'a str, group: &str, key: &str) -> Option<&'a str> {
         let line = line.trim();
         if line.starts_with('[') && line.ends_with(']') {
             current = &line[1..line.len() - 1] == group;
-        } else if current && !line.starts_with('#') {
-            if let Some((name, value)) = line.split_once('=') {
-                if name.trim() == key {
-                    found = Some(value.trim());
-                }
-            }
+        } else if current
+            && !line.starts_with('#')
+            && let Some((name, value)) = line.split_once('=')
+            && name.trim() == key
+        {
+            found = Some(value.trim());
         }
     }
     found

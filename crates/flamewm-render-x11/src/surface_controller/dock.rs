@@ -70,10 +70,10 @@ pub(super) fn apply_dock_mask(instance: &SurfaceInstance, w: u32, h: u32, mask: 
         DockMask::Reset => 0,
     };
     let spans = crate::xshape::rounded_mask_spans(w, h, radius);
-    if let Some(bridge) = instance.app.xshape.as_ref() {
-        if let Err(error) = unsafe { bridge.apply_rounded_mask(instance.app.window, &spans) } {
-            eprintln!("FLAMEWM_DOCK_SHAPE degraded reason={error}");
-        }
+    if let Some(bridge) = instance.app.xshape.as_ref()
+        && let Err(error) = unsafe { bridge.apply_rounded_mask(instance.app.window, &spans) }
+    {
+        eprintln!("FLAMEWM_DOCK_SHAPE degraded reason={error}");
     }
 }
 

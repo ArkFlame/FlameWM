@@ -233,14 +233,13 @@ impl<C: Connection> Wm<'_, C> {
         // Keep its length in sync when a workspace is inserted or removed;
         // otherwise newly added workspaces have no focus-restoration slot.
         self.workspace_focus.resize(requested, None);
-        if let Some(active) = self.active {
-            if self
+        if let Some(active) = self.active
+            && self
                 .clients
                 .get(&active)
                 .is_some_and(|state| state.visible_on(self.current_workspace))
-            {
-                self.workspace_focus[self.current_workspace] = Some(active);
-            }
+        {
+            self.workspace_focus[self.current_workspace] = Some(active);
         }
         self.mark_workspaces();
         self.mark_windows();
@@ -290,10 +289,10 @@ impl<C: Connection> Wm<'_, C> {
         // switching back can try to refocus a window that now lives elsewhere.
         if !visible && self.active == Some(client) {
             self.active = None;
-            if let Some(slot) = self.workspace_focus.get_mut(self.current_workspace) {
-                if *slot == Some(client) {
-                    *slot = None;
-                }
+            if let Some(slot) = self.workspace_focus.get_mut(self.current_workspace)
+                && *slot == Some(client)
+            {
+                *slot = None;
             }
             self.publish_active()?;
         }

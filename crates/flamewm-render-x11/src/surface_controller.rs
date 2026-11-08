@@ -471,10 +471,10 @@ impl SurfaceController {
                 eprintln!("flamewm-render-x11: popup backdrop skipped (nonfatal): {error}");
             }
         }
-        if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide) {
-            if self.begin_overlay_show(id, config, shown, now)? {
-                return Ok(());
-            }
+        if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide)
+            && self.begin_overlay_show(id, config, shown, now)?
+        {
+            return Ok(());
         }
         let mut emerging: Option<SlideEdge> = None;
         if let Some(config) = slide.filter(|config| config.transition == PopupTransition::Slide) {
@@ -597,11 +597,11 @@ impl SurfaceController {
         if !slide_out_keeps_grab(slide, shown) {
             self.release_grab(id)?;
         }
-        if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide) {
-            if self.begin_overlay_hide(id, config, shown, now)? {
-                unsafe { XFlush(display) };
-                return Ok(());
-            }
+        if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide)
+            && self.begin_overlay_hide(id, config, shown, now)?
+        {
+            unsafe { XFlush(display) };
+            return Ok(());
         }
         let slide = slide.filter(|config| config.transition == PopupTransition::Slide);
         if let (Some(config), true) = (slide, shown) {

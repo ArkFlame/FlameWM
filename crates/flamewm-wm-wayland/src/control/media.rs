@@ -1,4 +1,4 @@
-//! Media keys, audio and network drains, and the NetworkManager action router.
+//! Media keys, audio and network drains, and the `NetworkManager` action router.
 
 use super::*;
 

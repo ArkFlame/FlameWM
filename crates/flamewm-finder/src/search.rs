@@ -84,10 +84,10 @@ pub fn term_score(lower: &str, name_at: usize, term: &str) -> Option<i64> {
     if lower.contains(term) {
         return Some(300);
     }
-    if term.chars().count() >= FUZZY_MIN_CHARS {
-        if let Some(gap) = subsequence_gap(name, term) {
-            return Some(100 - i64::try_from(gap.min(90)).unwrap_or(90));
-        }
+    if term.chars().count() >= FUZZY_MIN_CHARS
+        && let Some(gap) = subsequence_gap(name, term)
+    {
+        return Some(100 - i64::try_from(gap.min(90)).unwrap_or(90));
     }
     None
 }

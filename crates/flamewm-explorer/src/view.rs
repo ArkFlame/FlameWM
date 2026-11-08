@@ -168,10 +168,11 @@ fn cached_space(
     now: Instant,
     read: impl FnOnce(&Path) -> Option<(u64, u64)>,
 ) -> Option<(u64, u64)> {
-    if let Some((cached, taken, value)) = slot.as_ref() {
-        if cached.as_path() == path && now.duration_since(*taken) < SPACE_TTL {
-            return *value;
-        }
+    if let Some((cached, taken, value)) = slot.as_ref()
+        && cached.as_path() == path
+        && now.duration_since(*taken) < SPACE_TTL
+    {
+        return *value;
     }
     let value = read(path);
     *slot = Some((path.to_path_buf(), now, value));

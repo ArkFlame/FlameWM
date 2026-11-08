@@ -1,4 +1,4 @@
-//! StatusNotifier tray host for the panel `#tray-group`.
+//! `StatusNotifier` tray host for the panel `#tray-group`.
 //!
 //! Owns one `flamewm_tray::TrayWatcher` on the shell reactor (no thread, no timer). Items
 //! project into `SLOT_COUNT` fixed template buttons (`tray-sni-1..N`). When more items than
@@ -176,7 +176,7 @@ pub struct TrayHost {
 }
 
 impl TrayHost {
-    /// Claims the StatusNotifier watcher name. `None` when another watcher already owns it;
+    /// Claims the `StatusNotifier` watcher name. `None` when another watcher already owns it;
     /// the shell then runs without a tray.
     #[must_use]
     pub fn connect() -> Option<Self> {
@@ -405,7 +405,7 @@ impl TrayHost {
     }
 }
 
-/// Whether any StatusNotifier item is projected; keeps the tray capsule painted.
+/// Whether any `StatusNotifier` item is projected; keeps the tray capsule painted.
 static SNI_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn sni_shown() -> bool {

@@ -351,14 +351,14 @@ impl Sampler {
         self.tick += 1;
         let tick = self.tick;
         let mut pids: Vec<u32> = self.tasks.keys().copied().collect();
-        if discovery_due(tick) {
-            if let Ok(entries) = fs::read_dir("/proc") {
-                pids.extend(
-                    entries
-                        .flatten()
-                        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
-                );
-            }
+        if discovery_due(tick)
+            && let Ok(entries) = fs::read_dir("/proc")
+        {
+            pids.extend(
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
+            );
         }
         pids.sort_unstable();
         pids.dedup();

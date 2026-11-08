@@ -12,10 +12,10 @@ impl State {
             return;
         }
         if let Some(direction) = workspace_direction(action) {
-            if let Some(target) = self.model.workspace_step(direction) {
-                if self.model.switch_workspace(target) {
-                    self.refocus();
-                }
+            if let Some(target) = self.model.workspace_step(direction)
+                && self.model.switch_workspace(target)
+            {
+                self.refocus();
             }
             return;
         }
@@ -30,12 +30,12 @@ impl State {
         }
         if let Some(index) = workspace_move_index(action) {
             // Out of range is a no-op, as in the X11 engine: nothing moves and focus stays put.
-            if index < self.model.workspace_count() {
-                if let Some(id) = self.focused {
-                    self.model.move_to_workspace(id, index);
-                    self.apply_geometry(id);
-                    self.refocus();
-                }
+            if index < self.model.workspace_count()
+                && let Some(id) = self.focused
+            {
+                self.model.move_to_workspace(id, index);
+                self.apply_geometry(id);
+                self.refocus();
             }
             return;
         }

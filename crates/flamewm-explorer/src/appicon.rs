@@ -292,9 +292,9 @@ Icon=should-not-be-used
         let root = temp_root("bounds");
         let desktop = root.join("big.desktop");
         fs::write(&desktop, vec![b'x'; MAX_DESKTOP_BYTES as usize + 1]).unwrap();
-        assert_eq!(icon_file_in(&desktop, &[root.clone()]), None);
+        assert_eq!(icon_file_in(&desktop, std::slice::from_ref(&root)), None);
         assert_eq!(
-            icon_file_in(&root.join("missing.desktop"), &[root.clone()]),
+            icon_file_in(&root.join("missing.desktop"), std::slice::from_ref(&root)),
             None
         );
         let _ = fs::remove_dir_all(&root);

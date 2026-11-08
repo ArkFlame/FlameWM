@@ -280,7 +280,7 @@ const UNITS: &[Unit] = &[
         label: "gal",
         aliases: &["gallon", "gallons"],
         kind: Kind::Volume,
-        scale: 3785.411_784,
+        scale: 3_785.411_784,
     },
     Unit {
         label: "s",

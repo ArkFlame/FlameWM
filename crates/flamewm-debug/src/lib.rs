@@ -206,10 +206,10 @@ pub fn emit(id: DebugEventId, cooldown: Duration, message: impl FnOnce() -> Stri
         if guard.file.is_none() {
             return;
         }
-        if let Some(last) = guard.last_emit.get(id.0) {
-            if now.duration_since(*last) < cooldown {
-                return;
-            }
+        if let Some(last) = guard.last_emit.get(id.0)
+            && now.duration_since(*last) < cooldown
+        {
+            return;
         }
     }
     // Cooldown passed: build the message exactly once.

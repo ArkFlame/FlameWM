@@ -201,10 +201,11 @@ impl State {
         }
         // `focusFollowsMouse` is off by default: without it, entry only updates hover and the
         // click path still owns focus. A drag never steals focus from the window it is carrying.
-        if self.focus_follows_mouse && self.grab.is_none() {
-            if let Some(Hit::Client(id) | Hit::Titlebar(id)) = target.managed_hit {
-                self.focus_hover(id);
-            }
+        if self.focus_follows_mouse
+            && self.grab.is_none()
+            && let Some(Hit::Client(id) | Hit::Titlebar(id)) = target.managed_hit
+        {
+            self.focus_hover(id);
         }
         self.update_pointer_focus(location, target.focus, time);
     }
@@ -426,10 +427,10 @@ impl State {
             if let Some(amount) = event.amount(axis) {
                 frame = frame.value(axis, amount);
             }
-            if event.source() == AxisSource::Wheel {
-                if let Some(steps) = event.amount_v120(axis) {
-                    frame = frame.v120(axis, steps as i32);
-                }
+            if event.source() == AxisSource::Wheel
+                && let Some(steps) = event.amount_v120(axis)
+            {
+                frame = frame.v120(axis, steps as i32);
             }
         }
         let location = self.pointer;

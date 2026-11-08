@@ -85,6 +85,7 @@ fn remove_tree(source: &Path) -> Result<(), String> {
 /// Pastes each source into `directory`. A move renames when possible and falls back to copy then
 /// remove across devices. Copying a folder into itself is refused. Returns one outcome per source,
 /// holding the new path or the reason it failed.
+#[must_use]
 pub fn paste_into(
     directory: &Path,
     sources: &[PathBuf],
@@ -108,10 +109,9 @@ fn paste_one(directory: &Path, source: &Path, move_it: bool) -> Result<PathBuf, 
     }
     let destination = paste_destination(directory, name);
     if move_it {
-        match fs::rename(source, &destination) {
-            Ok(()) => return Ok(destination),
-            // Cross-device or otherwise refused: copy first, delete the source only after success.
-            Err(_) => {}
+        // Cross-device or otherwise refused: copy first, delete the source only after success.
+        if let Ok(()) = fs::rename(source, &destination) {
+            return Ok(destination);
         }
     }
     copy_tree(source, &destination)?;
@@ -197,7 +197,7 @@ mod tests {
         let root = temp_dir("self");
         let folder = root.join("folder");
         fs::create_dir_all(folder.join("child")).unwrap();
-        let outcome = paste_into(&folder.join("child"), &[folder.clone()], false);
+        let outcome = paste_into(&folder.join("child"), std::slice::from_ref(&folder), false);
         assert!(outcome[0].is_err());
         fs::remove_dir_all(&root).unwrap();
     }

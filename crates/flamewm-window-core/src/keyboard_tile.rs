@@ -18,7 +18,10 @@ pub enum Direction {
 /// maximized or untiled window returns `None`, meaning restore.
 #[must_use]
 pub fn next_tile(current: SnapTarget, direction: Direction) -> Option<SnapTarget> {
-    use SnapTarget::*;
+    use SnapTarget::{
+        BottomHalf, BottomLeftQuarter, BottomRightQuarter, LeftHalf, Maximize, None, RightHalf,
+        TopHalf, TopLeftQuarter, TopRightQuarter,
+    };
     Some(match direction {
         Direction::Left => match current {
             TopRightQuarter => TopLeftQuarter,

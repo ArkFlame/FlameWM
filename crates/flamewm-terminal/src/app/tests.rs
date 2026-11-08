@@ -1070,11 +1070,12 @@ fn paste_strips_escape_introducers_and_brackets_only_when_enabled() {
         1,
         "one end marker only"
     );
-    assert_eq!(
-        bracketed.iter().filter(|&&b| b == 0x1b).count(),
-        2,
-        "only our own two ESC bytes"
-    );
+    #[allow(
+        clippy::naive_bytecount,
+        reason = "two-byte assertion on a short test buffer"
+    )]
+    let esc_count = bracketed.iter().filter(|&&b| b == 0x1b).count();
+    assert_eq!(esc_count, 2, "only our own two ESC bytes");
     let plain = paste_bytes(hostile, false);
     assert!(
         !plain.contains(&0x1b),

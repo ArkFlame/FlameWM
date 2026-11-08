@@ -732,27 +732,27 @@ impl X11App {
                         );
                         fire_static(on_action, document, &mut buffers, action, &mut event)?;
                         self.mark_input_repaint();
-                    } else if inserts_text(key.state) {
-                        if let Some(text) = keyboard_text(typed_symbol) {
-                            let mut event = action_event(
-                                document.ui_scale(),
-                                ActionPhase::Release,
-                                0,
-                                (key.x, key.y),
-                                true,
-                                key.time as u64,
-                                Some(text),
-                                key.state,
-                            );
-                            fire_static(
-                                on_action,
-                                document,
-                                &mut buffers,
-                                "keyboard.input",
-                                &mut event,
-                            )?;
-                            self.mark_input_repaint();
-                        }
+                    } else if inserts_text(key.state)
+                        && let Some(text) = keyboard_text(typed_symbol)
+                    {
+                        let mut event = action_event(
+                            document.ui_scale(),
+                            ActionPhase::Release,
+                            0,
+                            (key.x, key.y),
+                            true,
+                            key.time as u64,
+                            Some(text),
+                            key.state,
+                        );
+                        fire_static(
+                            on_action,
+                            document,
+                            &mut buffers,
+                            "keyboard.input",
+                            &mut event,
+                        )?;
+                        self.mark_input_repaint();
                     }
                 }
                 KEY_RELEASE => {
@@ -920,18 +920,17 @@ impl X11App {
                         if let Some(index) = hit {
                             let press_action: &str =
                                 &document.document.nodes[index as usize].action;
-                            if press_action.starts_with("range.")
-                                || press_action.starts_with("slider.")
+                            if (press_action.starts_with("range.")
+                                || press_action.starts_with("slider."))
+                                && let Some(rect) = self.node_global_rect(document, index)
                             {
-                                if let Some(rect) = self.node_global_rect(document, index) {
-                                    self.range_drag = Some((
-                                        index,
-                                        rect.x / document.ui_scale(),
-                                        rect.width / document.ui_scale(),
-                                        0.0,
-                                        100.0,
-                                    ));
-                                }
+                                self.range_drag = Some((
+                                    index,
+                                    rect.x / document.ui_scale(),
+                                    rect.width / document.ui_scale(),
+                                    0.0,
+                                    100.0,
+                                ));
                             }
                         }
                         self.mark_input_repaint();
@@ -941,29 +940,28 @@ impl X11App {
                     // SAFETY: The discriminator identifies XButtonEvent in this match arm.
                     let button = unsafe { event.xbutton };
                     // End any active range drag; emit final value via Release.
-                    if button.button == 1 {
-                        if let Some((drag_index, track_x, track_w, min, max)) =
+                    if button.button == 1
+                        && let Some((drag_index, track_x, track_w, min, max)) =
                             self.range_drag.take()
-                        {
-                            let text = range_drag_text(
-                                track_x,
-                                track_w,
-                                min,
-                                max,
-                                button.x as f32 / document.ui_scale(),
-                            );
-                            let mut event = action_event(
-                                document.ui_scale(),
-                                ActionPhase::Release,
-                                button.button,
-                                (button.x, button.y),
-                                true,
-                                button.time as u64,
-                                Some(text),
-                                button.state,
-                            );
-                            fire_node(on_action, document, &mut buffers, drag_index, &mut event)?;
-                        }
+                    {
+                        let text = range_drag_text(
+                            track_x,
+                            track_w,
+                            min,
+                            max,
+                            button.x as f32 / document.ui_scale(),
+                        );
+                        let mut event = action_event(
+                            document.ui_scale(),
+                            ActionPhase::Release,
+                            button.button,
+                            (button.x, button.y),
+                            true,
+                            button.time as u64,
+                            Some(text),
+                            button.state,
+                        );
+                        fire_node(on_action, document, &mut buffers, drag_index, &mut event)?;
                     }
                     let hit = self.hit_test(document, button.x as f32, button.y as f32);
                     let dispatch = if button.button == 1 {

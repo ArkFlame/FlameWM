@@ -331,7 +331,7 @@ impl Grabber {
     }
 }
 
-/// Bytes per row the server uses for a 32-bpp ZPixmap with the given scanline pad.
+/// Bytes per row the server uses for a 32-bpp `ZPixmap` with the given scanline pad.
 pub fn image_stride(width: u32, scanline_pad: u8) -> usize {
     let pad = usize::from(scanline_pad).max(8);
     (width as usize * 32).div_ceil(pad) * pad / 8
@@ -339,7 +339,7 @@ pub fn image_stride(width: u32, scanline_pad: u8) -> usize {
 
 /// MIT-SHM state for one capture owner. The segment is a file descriptor passed to the
 /// server (SHM 1.2), so no System V IPC or raw FFI is needed. A failed setup disables SHM
-/// for this owner and every capture falls back to GetImage.
+/// for this owner and every capture falls back to `GetImage`.
 #[derive(Default)]
 pub struct ShmState {
     segment: Option<ShmSegment>,
@@ -353,7 +353,7 @@ struct ShmSegment {
     len: usize,
 }
 
-/// Captures through MIT-SHM when available and falls back to GetImage otherwise.
+/// Captures through MIT-SHM when available and falls back to `GetImage` otherwise.
 pub fn grab_or_shm<C: Connection>(
     conn: &C,
     screen: usize,
@@ -365,13 +365,11 @@ pub fn grab_or_shm<C: Connection>(
         .intersect(root_bounds(conn, screen))
         .ok_or("capture rectangle offscreen")?;
     if !state.disabled {
-        match grab_shm(conn, screen, rect, state) {
-            Ok(image) => return Ok(image),
-            Err(_) => {
-                state.disabled = true;
-                state.segment = None;
-            }
+        if let Ok(image) = grab_shm(conn, screen, rect, state) {
+            return Ok(image);
         }
+        state.disabled = true;
+        state.segment = None;
     }
     grab(conn, screen, rect)
 }
@@ -597,28 +595,28 @@ pub fn current_screen<C: Connection>(conn: &C, root: Window, full: Rect) -> Resu
         .map_err(|e| e.to_string())?
         .reply()
         .map_err(|e| e.to_string())?;
-    if let Ok(cookie) = conn.randr_get_screen_resources_current(root) {
-        if let Ok(res) = cookie.reply() {
-            for crtc in res.crtcs {
-                if let Ok(cookie) = conn.randr_get_crtc_info(crtc, x11rb::CURRENT_TIME) {
-                    if let Ok(info) = cookie.reply() {
-                        if info.width == 0 || info.height == 0 {
-                            continue;
-                        }
-                        let rect = Rect {
-                            x: i32::from(info.x),
-                            y: i32::from(info.y),
-                            w: u32::from(info.width),
-                            h: u32::from(info.height),
-                        };
-                        if i32::from(pointer.root_x) >= rect.x
-                            && i32::from(pointer.root_y) >= rect.y
-                            && i32::from(pointer.root_x) < rect.x + rect.w as i32
-                            && i32::from(pointer.root_y) < rect.y + rect.h as i32
-                        {
-                            return Ok(rect.intersect(full).unwrap_or(full));
-                        }
-                    }
+    if let Ok(cookie) = conn.randr_get_screen_resources_current(root)
+        && let Ok(res) = cookie.reply()
+    {
+        for crtc in res.crtcs {
+            if let Ok(cookie) = conn.randr_get_crtc_info(crtc, x11rb::CURRENT_TIME)
+                && let Ok(info) = cookie.reply()
+            {
+                if info.width == 0 || info.height == 0 {
+                    continue;
+                }
+                let rect = Rect {
+                    x: i32::from(info.x),
+                    y: i32::from(info.y),
+                    w: u32::from(info.width),
+                    h: u32::from(info.height),
+                };
+                if i32::from(pointer.root_x) >= rect.x
+                    && i32::from(pointer.root_y) >= rect.y
+                    && i32::from(pointer.root_x) < rect.x + rect.w as i32
+                    && i32::from(pointer.root_y) < rect.y + rect.h as i32
+                {
+                    return Ok(rect.intersect(full).unwrap_or(full));
                 }
             }
         }

@@ -442,13 +442,13 @@ fn validate_session(
     }
     // The seat is checked before the activation wait: a foreign seat must not cost three seconds.
     let (seat_name, seat_path) = bus.session_seat(session_path)?;
-    if let Some(expected) = expected_seat.map(str::trim).filter(|seat| !seat.is_empty()) {
-        if expected != seat_name {
-            return Err(LogindError::rejected(
-                "wrong-seat",
-                format!("XDG_SEAT={expected} but session {session_path} is on seat {seat_name}"),
-            ));
-        }
+    if let Some(expected) = expected_seat.map(str::trim).filter(|seat| !seat.is_empty())
+        && expected != seat_name
+    {
+        return Err(LogindError::rejected(
+            "wrong-seat",
+            format!("XDG_SEAT={expected} but session {session_path} is on seat {seat_name}"),
+        ));
     }
     let mut active = bus.session_active(session_path)?;
     let mut note = None;

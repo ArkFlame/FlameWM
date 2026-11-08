@@ -55,13 +55,12 @@ impl WallpaperChooserWake {
 
 impl Drop for WallpaperChooserWake {
     fn drop(&mut self) {
-        if let Some(mut slot) = COMPLETION_WAKE.get().and_then(|slot| slot.lock().ok()) {
-            if slot
+        if let Some(mut slot) = COMPLETION_WAKE.get().and_then(|slot| slot.lock().ok())
+            && slot
                 .as_ref()
                 .is_some_and(|registered| registered.id == self.id)
-            {
-                slot.take();
-            }
+        {
+            slot.take();
         }
     }
 }
@@ -113,10 +112,9 @@ pub(crate) fn notify_background_completion() {
             .ok()?
             .as_ref()
             .map(|registered| Arc::clone(&registered.writer))
-    }) {
-        if let Ok(mut writer) = writer.lock() {
-            let _ = writer.write_all(&[1]);
-        }
+    }) && let Ok(mut writer) = writer.lock()
+    {
+        let _ = writer.write_all(&[1]);
     }
 }
 

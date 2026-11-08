@@ -160,10 +160,10 @@ pub(super) fn spawn_preview_once(
     program: &Path,
     args: &[&str],
 ) -> std::io::Result<()> {
-    if let Some(child) = slot.as_mut() {
-        if matches!(child.try_wait(), Ok(None)) {
-            return Ok(());
-        }
+    if let Some(child) = slot.as_mut()
+        && matches!(child.try_wait(), Ok(None))
+    {
+        return Ok(());
     }
     *slot = Some(spawn_lock_process(program, args)?);
     Ok(())

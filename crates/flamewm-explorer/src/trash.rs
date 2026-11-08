@@ -175,10 +175,10 @@ pub fn restore(entry: &TrashEntry) -> io::Result<PathBuf> {
     }
     let destination = unique_destination(&entry.original);
     fs::rename(&entry.stored, &destination)?;
-    if let Err(error) = fs::remove_file(&entry.info) {
-        if error.kind() != io::ErrorKind::NotFound {
-            return Err(error);
-        }
+    if let Err(error) = fs::remove_file(&entry.info)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(error);
     }
     Ok(destination)
 }

@@ -78,16 +78,15 @@ pub(crate) fn handle_desktop_drag(drag: &UiDragEvent, state: &DesktopState) -> R
         payload: DropPayload::Uris,
         ..
     } = drag
+        && !paths.is_empty()
     {
-        if !paths.is_empty() {
-            let directory = state.directory.clone();
-            let paths = paths.clone();
-            let spawned = std::thread::Builder::new()
-                .name("flamewm-drop".to_owned())
-                .spawn(move || paste_paths_now(&directory, &paths, false));
-            if let Err(error) = spawned {
-                report_action_failure("start drop", error.to_string());
-            }
+        let directory = state.directory.clone();
+        let paths = paths.clone();
+        let spawned = std::thread::Builder::new()
+            .name("flamewm-drop".to_owned())
+            .spawn(move || paste_paths_now(&directory, &paths, false));
+        if let Err(error) = spawned {
+            report_action_failure("start drop", error.to_string());
         }
     }
     Ok(())
@@ -235,10 +234,10 @@ pub(crate) fn run_wheel_slot(
                     let parent = path.parent().map(Path::to_path_buf);
                     state.menu = None;
                     sync_menu(document, state)?;
-                    if let Some(parent) = parent {
-                        if let Err(error) = flamewm_applications::open_directory(&parent) {
-                            report_action_failure("reveal item", format!("{error:?}"));
-                        }
+                    if let Some(parent) = parent
+                        && let Err(error) = flamewm_applications::open_directory(&parent)
+                    {
+                        report_action_failure("reveal item", format!("{error:?}"));
                     }
                     Ok(())
                 }

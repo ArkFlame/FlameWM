@@ -68,8 +68,10 @@ fn invalid_dock_values_are_rejected() {
 
 #[test]
 fn icon_size_out_of_range_fails_validation() {
-    let mut d = ProductSettings::default();
-    d.dock_icon_size = 16;
+    let mut d = ProductSettings {
+        dock_icon_size: 16,
+        ..ProductSettings::default()
+    };
     assert!(d.validate().is_err());
     d.dock_icon_size = 96;
     assert!(d.validate().is_ok());

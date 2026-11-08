@@ -82,7 +82,7 @@ impl Finder {
 
     /// Quick rows above the file results: calculator answer, applications, then system actions.
     pub(super) fn quick_count(&self) -> usize {
-        self.answer.is_some() as usize + self.app_hits.len() + self.actions.len()
+        usize::from(self.answer.is_some()) + self.app_hits.len() + self.actions.len()
     }
 
     pub(super) fn accept_session(&mut self, logout: bool) {
@@ -111,10 +111,10 @@ impl Finder {
             return;
         }
         self.frecency.record(app.id.as_str(), now_secs());
-        if let Some(path) = &self.frecency_file {
-            if let Err(error) = self.frecency.save(path) {
-                eprintln!("flamewm-finder: frecency save failed: {error}");
-            }
+        if let Some(path) = &self.frecency_file
+            && let Err(error) = self.frecency.save(path)
+        {
+            eprintln!("flamewm-finder: frecency save failed: {error}");
         }
     }
 

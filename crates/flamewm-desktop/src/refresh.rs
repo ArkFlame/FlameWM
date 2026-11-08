@@ -361,78 +361,6 @@ fn sync_cursor_theme_at(state: &mut DesktopState, now: std::time::Instant) {
     });
 }
 
-#[cfg(test)]
-mod cursor_retry_tests {
-    use super::*;
-
-    fn failure(theme: &str, message: &str, now: std::time::Instant) -> CursorThemeFailure {
-        CursorThemeFailure {
-            theme: theme.to_owned(),
-            message: message.to_owned(),
-            retry_at: now + CURSOR_RETRY_INITIAL,
-            delay: CURSOR_RETRY_INITIAL,
-        }
-    }
-
-    #[test]
-    fn failed_theme_is_not_retried_inside_its_backoff_window() {
-        let now = std::time::Instant::now();
-        let f = failure("broken", "x", now);
-        assert_eq!(cursor_retry_delay(Some(&f), "broken", now), None);
-        assert_eq!(
-            cursor_retry_delay(Some(&f), "broken", f.retry_at),
-            Some(CURSOR_RETRY_INITIAL * 2)
-        );
-    }
-
-    #[test]
-    fn a_different_theme_is_attempted_immediately() {
-        let now = std::time::Instant::now();
-        let f = failure("broken", "x", now);
-        assert_eq!(
-            cursor_retry_delay(Some(&f), "other", now),
-            Some(CURSOR_RETRY_INITIAL)
-        );
-        assert_eq!(
-            cursor_retry_delay(None, "broken", now),
-            Some(CURSOR_RETRY_INITIAL)
-        );
-    }
-
-    #[test]
-    fn backoff_doubles_and_is_capped() {
-        let now = std::time::Instant::now();
-        let mut f = failure("broken", "x", now);
-        f.delay = CURSOR_RETRY_MAX;
-        assert_eq!(
-            cursor_retry_delay(Some(&f), "broken", now + CURSOR_RETRY_MAX),
-            Some(CURSOR_RETRY_MAX)
-        );
-    }
-
-    #[test]
-    fn same_failure_logs_once_and_new_failure_logs_again() {
-        let now = std::time::Instant::now();
-        let f = failure("broken", "reload broken failed", now);
-        assert!(!cursor_failure_is_new(
-            Some(&f),
-            "broken",
-            "reload broken failed"
-        ));
-        assert!(cursor_failure_is_new(Some(&f), "broken", "other error"));
-        assert!(cursor_failure_is_new(
-            Some(&f),
-            "other",
-            "reload broken failed"
-        ));
-        assert!(cursor_failure_is_new(
-            None,
-            "broken",
-            "reload broken failed"
-        ));
-    }
-}
-
 /// Paths of the selected items that deletion may remove (the trash pseudo-item never is).
 pub(crate) fn selected_deletable_paths(state: &DesktopState) -> Vec<PathBuf> {
     state
@@ -539,15 +467,14 @@ pub(crate) fn desktop_item_label<'a>(
     state: &'a DesktopState,
     item: &'a flamewm_desktop_core::model::DesktopItem,
 ) -> &'a str {
-    if item.kind == DesktopItemKind::DesktopLauncher {
-        if let Some(label) = state
+    if item.kind == DesktopItemKind::DesktopLauncher
+        && let Some(label) = state
             .launchers
             .get(&item.path)
             .filter(|entry| !entry.name.trim().is_empty())
             .map(|entry| entry.name.as_str())
-        {
-            return label;
-        }
+    {
+        return label;
     }
     &item.display_name
 }
@@ -590,4 +517,76 @@ pub(crate) fn sync_document(
     widgets::sync_widgets(document, state)?;
     update_gauges(state);
     Ok(())
+}
+
+#[cfg(test)]
+mod cursor_retry_tests {
+    use super::*;
+
+    fn failure(theme: &str, message: &str, now: std::time::Instant) -> CursorThemeFailure {
+        CursorThemeFailure {
+            theme: theme.to_owned(),
+            message: message.to_owned(),
+            retry_at: now + CURSOR_RETRY_INITIAL,
+            delay: CURSOR_RETRY_INITIAL,
+        }
+    }
+
+    #[test]
+    fn failed_theme_is_not_retried_inside_its_backoff_window() {
+        let now = std::time::Instant::now();
+        let f = failure("broken", "x", now);
+        assert_eq!(cursor_retry_delay(Some(&f), "broken", now), None);
+        assert_eq!(
+            cursor_retry_delay(Some(&f), "broken", f.retry_at),
+            Some(CURSOR_RETRY_INITIAL * 2)
+        );
+    }
+
+    #[test]
+    fn a_different_theme_is_attempted_immediately() {
+        let now = std::time::Instant::now();
+        let f = failure("broken", "x", now);
+        assert_eq!(
+            cursor_retry_delay(Some(&f), "other", now),
+            Some(CURSOR_RETRY_INITIAL)
+        );
+        assert_eq!(
+            cursor_retry_delay(None, "broken", now),
+            Some(CURSOR_RETRY_INITIAL)
+        );
+    }
+
+    #[test]
+    fn backoff_doubles_and_is_capped() {
+        let now = std::time::Instant::now();
+        let mut f = failure("broken", "x", now);
+        f.delay = CURSOR_RETRY_MAX;
+        assert_eq!(
+            cursor_retry_delay(Some(&f), "broken", now + CURSOR_RETRY_MAX),
+            Some(CURSOR_RETRY_MAX)
+        );
+    }
+
+    #[test]
+    fn same_failure_logs_once_and_new_failure_logs_again() {
+        let now = std::time::Instant::now();
+        let f = failure("broken", "reload broken failed", now);
+        assert!(!cursor_failure_is_new(
+            Some(&f),
+            "broken",
+            "reload broken failed"
+        ));
+        assert!(cursor_failure_is_new(Some(&f), "broken", "other error"));
+        assert!(cursor_failure_is_new(
+            Some(&f),
+            "other",
+            "reload broken failed"
+        ));
+        assert!(cursor_failure_is_new(
+            None,
+            "broken",
+            "reload broken failed"
+        ));
+    }
 }

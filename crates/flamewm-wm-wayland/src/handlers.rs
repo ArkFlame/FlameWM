@@ -113,10 +113,10 @@ impl CompositorHandler for State {
         }
         self.popups.commit(surface);
 
-        if let Some(PopupKind::Xdg(xdg)) = self.popups.find_popup(surface) {
-            if !xdg.is_initial_configure_sent() {
-                let _ = xdg.send_configure();
-            }
+        if let Some(PopupKind::Xdg(xdg)) = self.popups.find_popup(surface)
+            && !xdg.is_initial_configure_sent()
+        {
+            let _ = xdg.send_configure();
         }
 
         // Layer surfaces: re-arrange exclusive zones and send the first configure once.
@@ -165,7 +165,7 @@ fn buffer_geometry(surface: &WlSurface) -> Option<(i32, i32, i32)> {
 
 /// True when a commit changed an existing buffer's geometry. Smithay's damage bag keeps damage
 /// from commits since the last import, clipped to each commit's own buffer; a resize between
-/// imports would leave wider damage that the old texture cannot take (GL_INVALID_VALUE in
+/// imports would leave wider damage that the old texture cannot take (`GL_INVALID_VALUE` in
 /// glTexSubImage2D). Importing at the resize commit drops that stale damage.
 pub(crate) fn reimports_on_resize(
     before: Option<(i32, i32, i32)>,
@@ -533,10 +533,10 @@ impl SelectionHandler for State {
         _user_data: &(),
     ) {
         // An X11 client pastes from a Wayland owner: stream the data into the X11 side.
-        if let Some(xwm) = self.xwm.as_mut() {
-            if let Err(error) = xwm.send_selection(ty, mime_type, fd, self.loop_handle.clone()) {
-                eprintln!("flamewm-wayland: clipboard transfer to X11 failed: {error}");
-            }
+        if let Some(xwm) = self.xwm.as_mut()
+            && let Err(error) = xwm.send_selection(ty, mime_type, fd, self.loop_handle.clone())
+        {
+            eprintln!("flamewm-wayland: clipboard transfer to X11 failed: {error}");
         }
     }
 }

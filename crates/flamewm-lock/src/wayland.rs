@@ -560,10 +560,8 @@ where
             .map_err(|error| LockError::Protocol(error.to_string()))?;
         if let Some(guard) = connection.prepare_read() {
             let readable = wait_readable(&connection);
-            if readable {
-                if let Err(error) = guard.read() {
-                    return Err(LockError::Protocol(error.to_string()));
-                }
+            if readable && let Err(error) = guard.read() {
+                return Err(LockError::Protocol(error.to_string()));
             }
             // Dropping the guard cancels the read; the loop re-dispatches next turn.
         }

@@ -99,6 +99,7 @@ fn list_with(tool: &Path, archive: &Path, cancel: &CancelToken) -> Result<Vec<En
 }
 
 /// Parses `7z l -slt` output. Only the blocks after the separator line are entries.
+#[must_use]
 pub fn parse_listing(text: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
     let mut in_entries = false;
@@ -381,7 +382,7 @@ fn create_with(
         .map(|input| {
             input
                 .file_name()
-                .map(|name| name.to_owned())
+                .map(std::borrow::ToOwned::to_owned)
                 .ok_or_else(|| ArchiveError::Unsupported(input.display().to_string()))
         })
         .collect::<Result<Vec<_>>>()?;

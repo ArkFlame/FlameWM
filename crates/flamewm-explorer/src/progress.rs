@@ -228,10 +228,10 @@ impl Reporter {
 
     /// Throttled publish of the current counters to the connected sink.
     fn publish(&mut self, now: Instant) {
-        if let Some(snapshot) = self.emit(now) {
-            if let Some(out) = self.out.as_mut() {
-                out(snapshot);
-            }
+        if let Some(snapshot) = self.emit(now)
+            && let Some(out) = self.out.as_mut()
+        {
+            out(snapshot);
         }
     }
 

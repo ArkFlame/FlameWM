@@ -239,10 +239,10 @@ impl Assistant {
                 self.speaking = false;
                 self.set_osd(OsdState::Hidden);
                 self.speech_stop = None;
-                if let Err(error) = result {
-                    if error != AssistantError::Cancelled {
-                        self.notice = error.to_string();
-                    }
+                if let Err(error) = result
+                    && error != AssistantError::Cancelled
+                {
+                    self.notice = error.to_string();
                 }
             }
         }
@@ -1060,10 +1060,10 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
     if let Some(dir) = default_voice_dir() {
         let speech_on =
             flag(&theme, "assistant.speechToText") || flag(&theme, "assistant.textToSpeech");
-        if voice_background::startup_setup_needed(speech_on, &dir) {
-            if let Err(error) = voice_background::spawn_detached() {
-                eprintln!("flamewm-assistant: {error}");
-            }
+        if voice_background::startup_setup_needed(speech_on, &dir)
+            && let Err(error) = voice_background::spawn_detached()
+        {
+            eprintln!("flamewm-assistant: {error}");
         }
     }
     let backdrop = window_backdrop(&theme);

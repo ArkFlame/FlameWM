@@ -61,10 +61,10 @@ impl SeatInput {
     pub fn handle(&mut self, event: KeyboardEvent, mut on_key: impl FnMut(Key)) {
         match event {
             KeyboardEvent::Keymap { format, fd, size } => {
-                if matches!(format, WEnum::Value(KeymapFormat::XkbV1)) {
-                    if let Some(text) = read_keymap(fd, size) {
-                        self.set_keymap(&text);
-                    }
+                if matches!(format, WEnum::Value(KeymapFormat::XkbV1))
+                    && let Some(text) = read_keymap(fd, size)
+                {
+                    self.set_keymap(&text);
                 }
             }
             KeyboardEvent::Modifiers {

@@ -76,10 +76,10 @@ pub fn mode(query: &str) -> Mode {
     if let Some(rest) = query.strip_prefix('>') {
         return Mode::Commands(filter_text(rest));
     }
-    if let Some(rest) = query.strip_prefix('/') {
-        if rest.is_empty() || !command_matches(&filter_text(rest)).is_empty() {
-            return Mode::Commands(filter_text(rest));
-        }
+    if let Some(rest) = query.strip_prefix('/')
+        && (rest.is_empty() || !command_matches(&filter_text(rest)).is_empty())
+    {
+        return Mode::Commands(filter_text(rest));
     }
     if let Some(rest) = query.strip_prefix('@') {
         return Mode::Scopes(filter_text(rest));

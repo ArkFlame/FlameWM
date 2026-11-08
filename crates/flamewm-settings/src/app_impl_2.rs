@@ -215,13 +215,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     }
                 }
                 ch if !ch.is_control() => {
-                    if let Some(draft) = self.api_key_draft.as_mut() {
-                        if draft.buffer.chars().count()
+                    if let Some(draft) = self.api_key_draft.as_mut()
+                        && draft.buffer.chars().count()
                             < flamewm_api::settings::ASSISTANT_API_KEY_MAX_CHARS
-                        {
-                            draft.buffer.push(ch);
-                            draft.error = None;
-                        }
+                    {
+                        draft.buffer.push(ch);
+                        draft.error = None;
                     }
                 }
                 _ => {}

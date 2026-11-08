@@ -12,12 +12,14 @@ pub enum Edge {
 }
 
 impl Edge {
+    #[must_use]
     pub fn is_vertical(self) -> bool {
         matches!(self, Edge::Left | Edge::Right)
     }
 
     /// CSS `linear-gradient` direction that starts opaque at this screen edge
     /// and ends transparent toward the screen interior.
+    #[must_use]
     pub fn gradient_direction(self) -> &'static str {
         match self {
             Edge::Top => "to bottom",
@@ -82,6 +84,7 @@ pub struct DockLayout {
 /// Builds the dock layout. Running apps that are also pinned are shown once,
 /// in their pinned position. Duplicate running ids are ignored. Unpinned
 /// running apps are omitted entirely when `show_running` is false.
+#[must_use]
 pub fn merge_dock(pinned: &[String], running: &[String], show_running: bool) -> DockLayout {
     let mut entries: Vec<DockEntry> = Vec::with_capacity(pinned.len() + running.len());
     for id in pinned {
@@ -118,6 +121,7 @@ pub fn merge_dock(pinned: &[String], running: &[String], show_running: bool) -> 
 /// Slot index under a pointer position along the dock strip. `along` is the
 /// pointer offset from the strip start in device px, `slot_extent` one slot
 /// (icon plus gap). Clamped to `0..count`; `count == 0` yields 0.
+#[must_use]
 pub fn slot_at(along: f32, slot_extent: f32, count: usize) -> usize {
     if count == 0 || slot_extent <= 0.0 || along.is_nan() || along < 0.0 {
         return 0;
@@ -128,6 +132,7 @@ pub fn slot_at(along: f32, slot_extent: f32, count: usize) -> usize {
 /// Whether a pinned icon released at `cross` px from the dock's inner edge
 /// should be unpinned (dragged off the bar). The bar is removed when the
 /// pointer leaves it by more than `threshold` px on the cross axis.
+#[must_use]
 pub fn drag_off_removes(cross: f32, bar_extent: f32, threshold: f32) -> bool {
     cross < -threshold || cross > bar_extent + threshold
 }
@@ -143,6 +148,7 @@ pub enum DockMenuAction {
 
 /// Menu entries for a slot. Pinned slots offer Remove, unpinned offer Keep.
 /// Open always shows; Close windows only when the app has a running window.
+#[must_use]
 pub fn menu_items(pinned: bool, running: bool) -> Vec<DockMenuAction> {
     let mut items = Vec::with_capacity(3);
     items.push(if pinned {
@@ -161,6 +167,7 @@ pub fn menu_items(pinned: bool, running: bool) -> Vec<DockMenuAction> {
 /// style. `surface` must be a `var(--token)` reference, never a raw colour, so
 /// the fill keeps following the surface colour token. The gradient is opaque at
 /// `edge` and fades to transparent toward the interior.
+#[must_use]
 pub fn gradient_background(edge: Edge, surface: &str) -> String {
     format!(
         "linear-gradient({}, {surface} 0%, transparent 100%)",
@@ -234,7 +241,7 @@ mod tests {
         assert_eq!(ids, ["term", "web", "mail"]);
         assert!(layout.entries[1].running && layout.entries[1].pinned);
         assert!(!layout.entries[0].running);
-        assert_eq!(layout.entries[2].pinned, false);
+        assert!(!layout.entries[2].pinned);
         assert_eq!(layout.separator_after, Some(1));
     }
 

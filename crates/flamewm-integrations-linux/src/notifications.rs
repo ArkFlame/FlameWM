@@ -211,7 +211,7 @@ impl NotificationProvider {
         match self.history.save_file(path) {
             Ok(()) => self.persisted_revision = revision,
             Err(error) => {
-                eprintln!("flamewm-notifications: saving notification history failed: {error}")
+                eprintln!("flamewm-notifications: saving notification history failed: {error}");
             }
         }
     }
@@ -754,15 +754,12 @@ fn push_decoded(out: &mut String, text: &str) {
                 .and_then(char::from_u32)
                 .filter(|c| !c.is_control() || *c == '\n' || *c == '\t'),
         };
-        match decoded {
-            Some(c) => {
-                out.push(c);
-                rest = &after[semi + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &after[1..];
-            }
+        if let Some(c) = decoded {
+            out.push(c);
+            rest = &after[semi + 1..];
+        } else {
+            out.push('&');
+            rest = &after[1..];
         }
     }
     out.push_str(rest);
@@ -1140,7 +1137,7 @@ mod tests {
             }
             !crc
         }
-        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        fn chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
             out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
             let mut body = kind.to_vec();
             body.extend_from_slice(data);
@@ -1160,9 +1157,9 @@ mod tests {
         ihdr.extend_from_slice(&height.to_be_bytes());
         ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
         let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
-        chunk(&mut out, b"IHDR", &ihdr);
-        chunk(&mut out, b"IDAT", &idat);
-        chunk(&mut out, b"IEND", &[]);
+        chunk(&mut out, *b"IHDR", &ihdr);
+        chunk(&mut out, *b"IDAT", &idat);
+        chunk(&mut out, *b"IEND", &[]);
         out
     }
 

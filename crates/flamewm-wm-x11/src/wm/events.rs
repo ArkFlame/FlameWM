@@ -39,11 +39,11 @@ impl<C: Connection> Wm<'_, C> {
             Event::ConfigureNotify(event) => self.handle_configure_notify(event)?,
             Event::DamageNotify(event) => self.handle_damage_notify(event.damage),
             Event::Expose(event) => {
-                if event.count == 0 {
-                    if let Some(client) = self.client_for(event.window) {
-                        self.paint_chrome(client)?;
-                        self.try_start_open(client)?;
-                    }
+                if event.count == 0
+                    && let Some(client) = self.client_for(event.window)
+                {
+                    self.paint_chrome(client)?;
+                    self.try_start_open(client)?;
                 }
             }
             Event::EnterNotify(event) => self.handle_enter(event)?,
@@ -234,10 +234,10 @@ impl<C: Connection> Wm<'_, C> {
             return Ok(true);
         }
         if let Some(index) = workspace_move_index(action) {
-            if index < self.workspace_count {
-                if let Some(client) = self.active {
-                    self.move_to_workspace(client, index)?;
-                }
+            if index < self.workspace_count
+                && let Some(client) = self.active
+            {
+                self.move_to_workspace(client, index)?;
             }
             return Ok(true);
         }
@@ -283,14 +283,13 @@ impl<C: Connection> Wm<'_, C> {
     /// Ctrl+Alt+Escape. The first press breaks the fullscreen client out and asks it to close.
     /// A second press within the window kills it when it still owns the keyboard.
     fn fullscreen_escape(&mut self) -> Result<(), ReplyError> {
-        if let Some((client, since)) = self.escape_pending.take() {
-            if since.elapsed() < ESCAPE_KILL_WINDOW
-                && self.clients.contains_key(&client)
-                && self.keyboard_grabbed_by_other()?
-            {
-                self.conn.kill_client(client)?;
-                return Ok(());
-            }
+        if let Some((client, since)) = self.escape_pending.take()
+            && since.elapsed() < ESCAPE_KILL_WINDOW
+            && self.clients.contains_key(&client)
+            && self.keyboard_grabbed_by_other()?
+        {
+            self.conn.kill_client(client)?;
+            return Ok(());
         }
         let Some(&client) = self.fullscreen_clients().first() else {
             return Ok(());
@@ -439,10 +438,10 @@ impl<C: Connection> Wm<'_, C> {
             return Ok(());
         };
         // An unmap the WM expects (the transition's own backdrop hide) must not cancel the flight.
-        if let Some(client) = self.clients.get_mut(&client_id) {
-            if consume_expected_unmap(&mut client.ignore_unmap) {
-                return Ok(());
-            }
+        if let Some(client) = self.clients.get_mut(&client_id)
+            && consume_expected_unmap(&mut client.ignore_unmap)
+        {
+            return Ok(());
         }
         self.cancel_open_for(client_id)?;
         if window == client_id {
@@ -520,10 +519,10 @@ impl<C: Connection> Wm<'_, C> {
                             // metadata publish does not revert an external switch.
                             let current =
                                 self.read_first_cardinal(window, self.atoms.net_current_desktop);
-                            if let Some(value) = current.map(|v| v as usize) {
-                                if value < external {
-                                    self.current_workspace = value;
-                                }
+                            if let Some(value) = current.map(|v| v as usize)
+                                && value < external
+                            {
+                                self.current_workspace = value;
                             }
                             // set_workspace_count bumps the workspace generation once.
                             self.set_workspace_count(external)?;
@@ -542,14 +541,13 @@ impl<C: Connection> Wm<'_, C> {
             let value = self.read_first_cardinal(window, atom);
             // Not filtered by the old count: the root count may still be pending. The
             // count adoption (shrink) moves clients beyond the new count.
-            if let Some(target) = external_desktop_target(value) {
-                if let Some(state) = self.clients.get_mut(&window) {
-                    if state.workspace != target {
-                        state.workspace = target;
-                        self.mark_windows();
-                        self.reconcile_workspace_visibility()?;
-                    }
-                }
+            if let Some(target) = external_desktop_target(value)
+                && let Some(state) = self.clients.get_mut(&window)
+                && state.workspace != target
+            {
+                state.workspace = target;
+                self.mark_windows();
+                self.reconcile_workspace_visibility()?;
             }
             return Ok(());
         }

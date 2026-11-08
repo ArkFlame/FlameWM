@@ -47,6 +47,7 @@ pub struct Memory {
 }
 
 /// `$XDG_STATE_HOME/flamewm/removable-mounts`, else `~/.local/state/flamewm/removable-mounts`.
+#[must_use]
 pub fn state_path() -> PathBuf {
     let base = flamewm_api::paths::xdg_dir("XDG_STATE_HOME", ".local/state")
         .unwrap_or_else(|| PathBuf::from(".local/state"));

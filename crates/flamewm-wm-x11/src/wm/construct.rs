@@ -11,10 +11,10 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
             | randr::NotifyMask::CRTC_CHANGE,
     )?
     .check()?;
-    if let Err(ReplyError::X11Error(ref error)) = result {
-        if error.error_kind == ErrorKind::Access {
-            eprintln!("flamewm: another window manager is already running on this display");
-        }
+    if let Err(ReplyError::X11Error(ref error)) = result
+        && error.error_kind == ErrorKind::Access
+    {
+        eprintln!("flamewm: another window manager is already running on this display");
     }
     result
 }

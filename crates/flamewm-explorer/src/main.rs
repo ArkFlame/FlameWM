@@ -446,9 +446,8 @@ fn run()->Result<(),String>{
                     let rubber_before=app.rubber;
                     app.event(action);
                     // Before the early returns below: the drag must start while the button is still down.
-                    if let Some(paths)=app.file_drag_out.take() {
-                        if let Err(error)=document.begin_file_drag(paths) {app.model.status=error;}
-                    }
+                    if let Some(paths)=app.file_drag_out.take()
+                        && let Err(error)=document.begin_file_drag(paths) {app.model.status=error;}
                     app.sync_scroll();
                     // A wheel notch during a glide only moves the target: the next frame tick projects the burst, so
                     // N notches cost one relayout per frame instead of N.
@@ -477,9 +476,8 @@ fn run()->Result<(),String>{
                 UiControllerEvent::Visibility{..}=>{},
             }
             // A row dragged out of the window starts the XDND drag here, once the event is handled.
-            if let Some(paths)=app.file_drag_out.take() {
-                if let Err(error)=document.begin_file_drag(paths) {app.model.status=error;}
-            }
+            if let Some(paths)=app.file_drag_out.take()
+                && let Err(error)=document.begin_file_drag(paths) {app.model.status=error;}
             app.list_dirty=false;
             app.project(document)
         },

@@ -168,10 +168,10 @@ impl ThemeRegistry {
         if let Some(item) = self.items(kind).iter().find(|item| item.id == value) {
             return item.name.clone();
         }
-        if kind == PickerKind::Icon {
-            if let Some((_, label)) = LEGACY_ICON_THEMES.iter().find(|(id, _)| *id == value) {
-                return (*label).to_owned();
-            }
+        if kind == PickerKind::Icon
+            && let Some((_, label)) = LEGACY_ICON_THEMES.iter().find(|(id, _)| *id == value)
+        {
+            return (*label).to_owned();
         }
         value.to_owned()
     }

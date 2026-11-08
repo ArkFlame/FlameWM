@@ -25,11 +25,13 @@ pub const DEFAULT_ICON_SIZE: i32 = 48;
 
 /// Thickness of the Dock bar on its edge: icon plus gap and padding on both sides. The hover label
 /// room is an overlay and is not reserved.
+#[must_use]
 pub fn dock_extent(icon_size: i32) -> i32 {
     icon_size + 2 * (DOCK_PADDING + DOCK_GAP)
 }
 
 /// Cuts `extent` px off `work` along `edge`. Sizes never go negative.
+#[must_use]
 pub fn reserve_edge(work: Rect, edge: ReserveEdge, extent: i32) -> Rect {
     let extent = extent.max(0);
     match edge {
@@ -55,6 +57,7 @@ pub fn reserve_edge(work: Rect, edge: ReserveEdge, extent: i32) -> Rect {
 /// Missing or ill-typed values keep the settings defaults. An unknown `dock.position` falls back to
 /// bottom, and an out-of-range `dock.iconSize` falls back to the default, so a hand-edited file
 /// cannot move the reserve off the screen.
+#[must_use]
 pub fn dock_reserve_from_snapshot(snapshot: &SettingsSnapshot) -> Option<(ReserveEdge, i32)> {
     if !matches!(
         snapshot.values.get("dock.enabled"),

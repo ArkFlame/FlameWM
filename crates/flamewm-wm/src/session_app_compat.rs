@@ -43,8 +43,8 @@ fn defaults_from_kde(text: &str) -> BTreeMap<String, String> {
     for line in text.lines().map(str::trim) {
         if line.starts_with('[') && line.ends_with(']') {
             in_defaults = line == "[Default Applications]";
-        } else if in_defaults && !line.starts_with('#') && !line.starts_with(';') {
-            if let Some((mime, apps)) = line.split_once('=') {
+        } else if in_defaults && !line.starts_with('#') && !line.starts_with(';')
+            && let Some((mime, apps)) = line.split_once('=') {
                 let (mime, apps) = (mime.trim(), apps.trim());
                 if mime.contains('/') && !mime.contains(char::is_whitespace) && !apps.is_empty() {
                     defaults
@@ -52,7 +52,6 @@ fn defaults_from_kde(text: &str) -> BTreeMap<String, String> {
                         .or_insert_with(|| apps.to_owned());
                 }
             }
-        }
     }
     defaults
 }
@@ -115,13 +114,12 @@ fn kde_mime_defaults(
         );
     let mut merged = BTreeMap::new();
     for path in paths {
-        if let Ok(contents) = fs::read_to_string(path) {
-            if contents.len() <= 1_048_576 {
+        if let Ok(contents) = fs::read_to_string(path)
+            && contents.len() <= 1_048_576 {
                 for (mime, apps) in defaults_from_kde(&contents) {
                     merged.entry(mime).or_insert(apps);
                 }
             }
-        }
     }
     merged
 }
@@ -144,8 +142,8 @@ fn kde_mime_associations(
         );
     let mut merged = BTreeMap::<(String, String), Vec<String>>::new();
     for path in paths {
-        if let Ok(contents) = fs::read_to_string(path) {
-            if contents.len() <= 1_048_576 {
+        if let Ok(contents) = fs::read_to_string(path)
+            && contents.len() <= 1_048_576 {
                 for (key, ids) in associations_from_kde(&contents) {
                     let existing = merged.entry(key).or_default();
                     for id in ids {
@@ -158,7 +156,6 @@ fn kde_mime_associations(
                     }
                 }
             }
-        }
     }
     merged
 }
@@ -181,8 +178,8 @@ fn user_removed_associations(
         );
     let mut removed = BTreeMap::<String, Vec<String>>::new();
     for path in paths {
-        if let Ok(contents) = fs::read_to_string(path) {
-            if contents.len() <= 1_048_576 {
+        if let Ok(contents) = fs::read_to_string(path)
+            && contents.len() <= 1_048_576 {
                 for ((section, mime), ids) in associations_from_kde(&contents) {
                     if section != "[Removed Associations]" {
                         continue;
@@ -195,7 +192,6 @@ fn user_removed_associations(
                     }
                 }
             }
-        }
     }
     removed
 }
@@ -359,11 +355,10 @@ fn brave_desktop_entry(original: &str, version: &str) -> String {
 /// Remove stale Pass 28-30 entries only within our dedicated XDG overlay.
 /// Existing user/system Brave launchers and unrelated overlay files are never touched.
 fn remove_owned_brave_override(path: &Path) -> Result<(), String> {
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if !metadata.file_type().is_file() {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && !metadata.file_type().is_file() {
             return Err("Brave overlay is not a regular file; preserving it".to_owned());
         }
-    }
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -474,22 +469,18 @@ pub fn configure(
             eprintln!("flamewm-session: old Brave overlay {id} cleanup unavailable: {error}");
             continue;
         }
-        if let Some(version @ ("5" | "6")) = wallet {
-            if let Some(contents) = data_dirs
+        if let Some(version @ ("5" | "6")) = wallet
+            && let Some(contents) = data_dirs
                 .iter()
                 .filter(|dir| *dir != &data_dir)
                 .map(|dir| dir.join("applications").join(id))
                 .find_map(|path| fs::read_to_string(path).ok())
-            {
-                if contents.len() <= 1_048_576 && contents.contains("[Desktop Entry]") {
-                    if let Err(error) =
+                && contents.len() <= 1_048_576 && contents.contains("[Desktop Entry]")
+                    && let Err(error) =
                         atomic_owned_file(&destination, &brave_desktop_entry(&contents, version))
                     {
                         eprintln!("flamewm-session: Brave overlay {id} unavailable: {error}");
                     }
-                }
-            }
-        }
     }
     for plan in processes {
         let config = plan
@@ -618,13 +609,13 @@ mod tests {
         let associations = associations_from_kde(
             "[Added Associations]\ntext/plain=stale.desktop;kate.desktop;\n[Removed Associations]\ntext/plain=user-hidden.desktop;\n",
         );
-        let generated = mime_associations(associations.clone(), &[root.clone()], &BTreeMap::new());
+        let generated = mime_associations(associations.clone(), std::slice::from_ref(&root), &BTreeMap::new());
         assert!(generated.contains("[Added Associations]\ntext/plain=kate.desktop;\n"));
         assert!(generated.contains("[Removed Associations]\ntext/plain=user-hidden.desktop;\n"));
         assert!(!generated.contains("stale.desktop"));
         let protected =
             BTreeMap::from([("text/plain".to_owned(), vec!["kate.desktop".to_owned()])]);
-        let generated = mime_associations(associations, &[root.clone()], &protected);
+        let generated = mime_associations(associations, std::slice::from_ref(&root), &protected);
         assert!(!generated.contains("text/plain=kate.desktop;"));
         assert!(generated.contains("[Removed Associations]\ntext/plain=user-hidden.desktop;\n"));
         assert!(!generated.contains("stale.desktop"));

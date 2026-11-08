@@ -213,10 +213,10 @@ pub(super) fn wait_backoff(
 pub(super) fn stop_dependents(children: &mut Vec<Running>) -> Result<(), String> {
     let mut failures = Vec::new();
     while children.len() > 1 {
-        if let Some(mut child) = children.pop() {
-            if let Err(error) = stop_role(&mut child) {
-                failures.push(error);
-            }
+        if let Some(mut child) = children.pop()
+            && let Err(error) = stop_role(&mut child)
+        {
+            failures.push(error);
         }
     }
     if failures.is_empty() {
@@ -252,14 +252,12 @@ pub(super) fn stop_role(child: &mut Running) -> Result<(), String> {
             true
         }
     };
-    if !exited {
-        if let Some(pid) = Pid::from_raw(child.child.id() as i32) {
-            if let Err(error) = kill_process(pid, Signal::TERM) {
-                if error != rustix::io::Errno::SRCH {
-                    failures.push(format!("terminate {:?}: {error}", child.plan.role));
-                }
-            }
-        }
+    if !exited
+        && let Some(pid) = Pid::from_raw(child.child.id() as i32)
+        && let Err(error) = kill_process(pid, Signal::TERM)
+        && error != rustix::io::Errno::SRCH
+    {
+        failures.push(format!("terminate {:?}: {error}", child.plan.role));
     }
     let deadline = Instant::now() + Duration::from_millis(child.supervisor.graceful_stop_ms());
     loop {
@@ -286,12 +284,11 @@ pub(super) fn stop_role(child: &mut Running) -> Result<(), String> {
             }
         }
     }
-    if !exited {
-        if let Err(error) = child.child.kill() {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                failures.push(format!("force-kill {:?}: {error}", child.plan.role));
-            }
-        }
+    if !exited
+        && let Err(error) = child.child.kill()
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        failures.push(format!("force-kill {:?}: {error}", child.plan.role));
     }
     match child.child.wait() {
         Ok(_) => {}

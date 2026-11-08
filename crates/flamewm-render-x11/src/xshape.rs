@@ -167,15 +167,14 @@ fn spans_to_rects(spans: impl IntoIterator<Item = (u32, u32, u32)>) -> Vec<XRect
         let x = start.min(i16::MAX as u32) as i16;
         let yy = y.min(i16::MAX as u32) as i16;
         let width = end.saturating_sub(start).min(u16::MAX as u32) as u16;
-        if let Some(last) = rects.last_mut() {
-            if last.x == x
-                && last.width == width
-                && i32::from(last.y) + i32::from(last.height) == i32::from(yy)
-                && last.height < u16::MAX
-            {
-                last.height += 1;
-                continue;
-            }
+        if let Some(last) = rects.last_mut()
+            && last.x == x
+            && last.width == width
+            && i32::from(last.y) + i32::from(last.height) == i32::from(yy)
+            && last.height < u16::MAX
+        {
+            last.height += 1;
+            continue;
         }
         rects.push(XRectangle {
             x,

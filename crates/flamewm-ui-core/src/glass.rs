@@ -551,10 +551,10 @@ pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
 #[must_use]
 pub fn palette_from_settings(snapshot: &SettingsSnapshot) -> Palette {
     let appearance = appearance_from_settings(snapshot);
-    if !appearance.reduce_transparency {
-        if let Some(palette) = ink_for(appearance) {
-            return palette;
-        }
+    if !appearance.reduce_transparency
+        && let Some(palette) = ink_for(appearance)
+    {
+        return palette;
     }
     if appearance.light {
         Palette::LIGHT

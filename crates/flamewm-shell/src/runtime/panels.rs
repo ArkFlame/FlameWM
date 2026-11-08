@@ -8,6 +8,7 @@ impl ShellSurfaces {
         runtime: &mut SurfaceRuntime,
         settings: &flamewm_api::settings::SettingsSnapshot,
     ) -> Result<(), String> {
+        const STEPS: u32 = 32;
         let text = |key: &str| match settings.values.get(key) {
             Some(flamewm_api::settings::SettingValue::Text(value)) => Some(value.as_str()),
             _ => None,
@@ -15,7 +16,6 @@ impl ShellSurfaces {
         if text("taskbar.fill") != Some("gradient") {
             return Ok(());
         }
-        const STEPS: u32 = 32;
         for record in &self.panels {
             let origin = match text("taskbar.gradientEdge") {
                 Some("top") => flamewm_api::PanelEdge::Top,

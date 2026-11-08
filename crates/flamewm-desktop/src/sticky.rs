@@ -193,10 +193,10 @@ fn schedule_persist(state: &mut DesktopState) {
 }
 
 pub(crate) fn flush_now(state: &DesktopState) {
-    if state.sticky.persist_pending {
-        if let Err(error) = sticky_persistence::persist(&state.sticky.path, &state.sticky.store) {
-            eprintln!("desktop: sticky notes flush failed: {error:?}; pending save kept");
-        }
+    if state.sticky.persist_pending
+        && let Err(error) = sticky_persistence::persist(&state.sticky.path, &state.sticky.store)
+    {
+        eprintln!("desktop: sticky notes flush failed: {error:?}; pending save kept");
     }
 }
 

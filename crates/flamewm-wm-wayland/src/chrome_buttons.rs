@@ -57,38 +57,35 @@ pub(crate) fn paint_control(
     let (rest_rgb, rest_alpha) = rest_plate(ink);
     let half = edge as i32 / 2;
     let h = height as i32;
-    match (shape, state) {
-        (ButtonShape::Square, _) => {
-            let fill = match state {
-                ControlState::Rest => Some((rest_rgb.0, rest_alpha)),
-                _ => colors.background.map(|fill| (fill.0, 255)),
-            };
-            if let Some((rgb, alpha)) = fill {
-                let inset = (h / 8).max(1);
-                let (x0, x1) = (cell.0 + inset, cell.1 - inset);
-                let (y0, y1) = (inset, h - inset);
-                let radius = ((y1 - y0) as f32 / 4.0)
-                    .max(1.0)
-                    .min((x1 - x0) as f32 / 2.0);
-                paint_rounded_rect(
-                    pixels,
-                    width,
-                    height,
-                    (x0, y0, x1, y1),
-                    [radius; 4],
-                    rgb,
-                    alpha,
-                );
-            }
+    if let (ButtonShape::Square, _) = (shape, state) {
+        let fill = match state {
+            ControlState::Rest => Some((rest_rgb.0, rest_alpha)),
+            _ => colors.background.map(|fill| (fill.0, 255)),
+        };
+        if let Some((rgb, alpha)) = fill {
+            let inset = (h / 8).max(1);
+            let (x0, x1) = (cell.0 + inset, cell.1 - inset);
+            let (y0, y1) = (inset, h - inset);
+            let radius = ((y1 - y0) as f32 / 4.0)
+                .max(1.0)
+                .min((x1 - x0) as f32 / 2.0);
+            paint_rounded_rect(
+                pixels,
+                width,
+                height,
+                (x0, y0, x1, y1),
+                [radius; 4],
+                rgb,
+                alpha,
+            );
         }
-        _ => {
-            let disk = match (shape, state) {
-                (ButtonShape::Circle, ControlState::Rest) => Some((rest_rgb.0, rest_alpha)),
-                _ => colors.background.map(|fill| (fill.0, 255)),
-            };
-            if let Some((rgb, alpha)) = disk {
-                paint_disk(pixels, width, height, center, cy, edge, rgb, alpha);
-            }
+    } else {
+        let disk = match (shape, state) {
+            (ButtonShape::Circle, ControlState::Rest) => Some((rest_rgb.0, rest_alpha)),
+            _ => colors.background.map(|fill| (fill.0, 255)),
+        };
+        if let Some((rgb, alpha)) = disk {
+            paint_disk(pixels, width, height, center, cy, edge, rgb, alpha);
         }
     }
     if let Some(glyph) = glyph_pixels(role, edge, colors.glyph.0) {

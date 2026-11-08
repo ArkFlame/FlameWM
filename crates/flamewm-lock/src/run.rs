@@ -640,16 +640,16 @@ impl LockLoop {
         if let Some(size) = runtime.take_root_geometry_changed() {
             self.pending_root_geometry = Some(size);
         }
-        if let Some((width, height)) = self.pending_root_geometry {
-            if self.refresh_root_geometry(runtime, width, height) {
-                self.pending_root_geometry = None;
-            }
+        if let Some((width, height)) = self.pending_root_geometry
+            && self.refresh_root_geometry(runtime, width, height)
+        {
+            self.pending_root_geometry = None;
         }
         self.apply_control_signals();
-        if self.pending_root_geometry.is_none() {
-            if let Some(snapshot) = self.pending_display_snapshot.take() {
-                self.apply_display_snapshot(runtime, &snapshot);
-            }
+        if self.pending_root_geometry.is_none()
+            && let Some(snapshot) = self.pending_display_snapshot.take()
+        {
+            self.apply_display_snapshot(runtime, &snapshot);
         }
         self.sync_live_settings(runtime);
         let now = Instant::now();
@@ -1240,10 +1240,10 @@ impl FramePacer {
                     drop(on);
                     thread::sleep(FRAME_INTERVAL);
                     // A full socket means a wake is already pending; a closed one means the loop is gone.
-                    if let Err(error) = (&writer).write(&[1]) {
-                        if error.kind() == ErrorKind::BrokenPipe {
-                            return;
-                        }
+                    if let Err(error) = (&writer).write(&[1])
+                        && error.kind() == ErrorKind::BrokenPipe
+                    {
+                        return;
                     }
                 }
             })

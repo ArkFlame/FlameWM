@@ -116,11 +116,11 @@ fn spawn_canvas_build(
                 .unwrap_or(false);
             if stored {
                 CANVAS_READY.store(true, Ordering::Release);
-                if let Ok(guard) = CANVAS_WAKE.lock() {
-                    if let Some(writer) = guard.as_ref() {
-                        // A full wake buffer already holds a pending wake; the drop is harmless.
-                        let _ = (&*writer).write(&[1]);
-                    }
+                if let Ok(guard) = CANVAS_WAKE.lock()
+                    && let Some(writer) = guard.as_ref()
+                {
+                    // A full wake buffer already holds a pending wake; the drop is harmless.
+                    let _ = (&*writer).write(&[1]);
                 }
             }
         })
@@ -163,12 +163,11 @@ pub fn set_wallpaper_outputs(outputs: &[(i32, i32, u32, u32)]) {
     if let Some(WallpaperSource::Image {
         outputs: current, ..
     }) = state.source.as_mut()
+        && *current != layout
     {
-        if *current != layout {
-            *current = layout;
-            state.generation = state.generation.wrapping_add(1);
-            state.canvas = None;
-        }
+        *current = layout;
+        state.generation = state.generation.wrapping_add(1);
+        state.canvas = None;
     }
 }
 

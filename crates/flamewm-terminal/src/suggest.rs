@@ -199,15 +199,16 @@ pub fn secret_bearing(command: &str) -> bool {
     for word in lower.split_whitespace() {
         let word = word.trim_matches(|c| c == '"' || c == '\'');
         let secret_name = |name: &str| SECRET_WORDS.iter().any(|secret| name.contains(secret));
-        if let Some((name, _)) = word.split_once('=') {
-            if !name.is_empty() && secret_name(name.trim_start_matches("--")) {
-                return true;
-            }
+        if let Some((name, _)) = word.split_once('=')
+            && !name.is_empty()
+            && secret_name(name.trim_start_matches("--"))
+        {
+            return true;
         }
-        if let Some(long) = word.strip_prefix("--") {
-            if secret_name(long.split('=').next().unwrap_or_default()) {
-                return true;
-            }
+        if let Some(long) = word.strip_prefix("--")
+            && secret_name(long.split('=').next().unwrap_or_default())
+        {
+            return true;
         }
         if word.len() > 2 && word.starts_with("-p") && !word.starts_with("--") {
             return true;

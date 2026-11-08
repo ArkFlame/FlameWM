@@ -140,16 +140,16 @@ pub fn background_for_output(
 ) -> RuntimeImage {
     let width = output.width.max(1) as u32;
     let height = output.height.max(1) as u32;
-    if let Some(canvas) = canvas.filter(|_| output.is_valid()) {
-        if let Some(crop) = crop_runtime_image(
+    if let Some(canvas) = canvas.filter(|_| output.is_valid())
+        && let Some(crop) = crop_runtime_image(
             canvas,
             (output.x - root.x).max(0) as u32,
             (output.y - root.y).max(0) as u32,
             width,
             height,
-        ) {
-            return crop;
-        }
+        )
+    {
+        return crop;
     }
     background_image(settings, width, height)
 }

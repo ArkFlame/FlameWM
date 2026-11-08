@@ -100,10 +100,10 @@ pub(super) fn on_logind_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: 
                     // logind also sends `gone` for every `ReleaseDevice`, e.g. each node libinput
                     // opens and closes again while probing the seat, so this must never touch
                     // scanout (wlroots and libseat filter on the DRM device the same way).
-                    if kind.needs_ack() {
-                        if let Err(error) = d.session.ack_pause(major, minor) {
-                            eprintln!("flamewm-wayland: pause ack {major}:{minor} failed: {error}");
-                        }
+                    if kind.needs_ack()
+                        && let Err(error) = d.session.ack_pause(major, minor)
+                    {
+                        eprintln!("flamewm-wayland: pause ack {major}:{minor} failed: {error}");
                     }
                     return;
                 }
@@ -111,10 +111,10 @@ pub(super) fn on_logind_event(state: &mut State, drm: &Rc<RefCell<Drm>>, event: 
                 // The reply is owed only for `pause`: logind waits for it to finish a VT switch,
                 // so it has to leave this callback after scanout stopped. `force` and `gone` are
                 // already revoked by logind and must not be answered.
-                if kind.needs_ack() {
-                    if let Err(error) = d.session.ack_pause(major, minor) {
-                        eprintln!("flamewm-wayland: pause ack {major}:{minor} failed: {error}");
-                    }
+                if kind.needs_ack()
+                    && let Err(error) = d.session.ack_pause(major, minor)
+                {
+                    eprintln!("flamewm-wayland: pause ack {major}:{minor} failed: {error}");
                 }
                 if kind == PauseKind::Gone {
                     drop_outputs(&mut d, state);

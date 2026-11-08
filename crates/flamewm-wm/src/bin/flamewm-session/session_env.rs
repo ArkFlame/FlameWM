@@ -165,10 +165,10 @@ impl ActivationEnvironmentSnapshot {
     pub(super) fn from_show_environment(keys: Vec<String>, output: &str) -> Self {
         let mut values = BTreeMap::new();
         for line in output.lines() {
-            if let Some((key, value)) = line.split_once('=') {
-                if keys.iter().any(|requested| requested.as_str() == key) {
-                    values.insert(key.to_owned(), value.to_owned());
-                }
+            if let Some((key, value)) = line.split_once('=')
+                && keys.iter().any(|requested| requested.as_str() == key)
+            {
+                values.insert(key.to_owned(), value.to_owned());
             }
         }
         let previous = keys
@@ -326,13 +326,12 @@ pub(super) fn combine_activation_restore_result(
 pub(super) fn activation_assignment_keys(assignments: &[String]) -> Vec<String> {
     let mut keys = Vec::new();
     for assignment in assignments {
-        if let Some((key, _)) = assignment.split_once('=') {
-            if !keys
+        if let Some((key, _)) = assignment.split_once('=')
+            && !keys
                 .iter()
                 .any(|existing: &String| existing.as_str() == key)
-            {
-                keys.push(key.to_owned());
-            }
+        {
+            keys.push(key.to_owned());
         }
     }
     keys

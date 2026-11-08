@@ -195,10 +195,10 @@ pub fn control_glyph_raster_shared(
         material,
         look,
     };
-    if let Ok(cache) = control_glyph_cache().lock() {
-        if let Some(cached) = cache.get(&key) {
-            return Some(Arc::clone(cached));
-        }
+    if let Ok(cache) = control_glyph_cache().lock()
+        && let Some(cached) = cache.get(&key)
+    {
+        return Some(Arc::clone(cached));
     }
     let scheme = control_glyph_scheme(role, material, look);
     // WM titlebar controls must resolve from the installed package on a second
@@ -606,10 +606,10 @@ fn inside_control_mask(x: f32, y: f32, w: f32, h: f32, corners: ControlCorners) 
 
 fn control_mask(key: ControlMaskKey) -> Arc<Vec<u8>> {
     const SAMPLES: u32 = 4;
-    if let Ok(cache) = control_mask_cache().lock() {
-        if let Some(mask) = cache.get(&key) {
-            return Arc::clone(mask);
-        }
+    if let Ok(cache) = control_mask_cache().lock()
+        && let Some(mask) = cache.get(&key)
+    {
+        return Arc::clone(mask);
     }
     // A 4x4 analytic coverage mask is generated ONLY on a cache miss, never
     // by supersampling a full RGBA button every time its hover state changes.

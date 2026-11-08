@@ -145,10 +145,10 @@ impl<C: Connection> Wm<'_, C> {
             .entry(key)
             .or_default()
             .push((client_id, token));
-        if self.submit_catalog_icon(client_id, token, job) {
-            if let Some(client) = self.clients.get_mut(&client_id) {
-                client.icon_fallback = Some("catalog-icon-service-stopped".to_owned());
-            }
+        if self.submit_catalog_icon(client_id, token, job)
+            && let Some(client) = self.clients.get_mut(&client_id)
+        {
+            client.icon_fallback = Some("catalog-icon-service-stopped".to_owned());
         }
     }
 }

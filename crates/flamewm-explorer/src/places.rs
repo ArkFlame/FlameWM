@@ -501,10 +501,10 @@ fn is_system_partition(node: &Json) -> bool {
     {
         return true;
     }
-    if let Some(bits) = part_flags_bits(node_text(node, "partflags")) {
-        if bits & GPT_BIOS_BOOT_FLAG != 0 || bits == MBR_BOOT_FLAG {
-            return true;
-        }
+    if let Some(bits) = part_flags_bits(node_text(node, "partflags"))
+        && (bits & GPT_BIOS_BOOT_FLAG != 0 || bits == MBR_BOOT_FLAG)
+    {
+        return true;
     }
     let label = node_text(node, "label").to_ascii_lowercase();
     SYSTEM_PART_LABELS.contains(&label.as_str())
@@ -649,10 +649,10 @@ fn eject_filesystem_then_drive(
             error
         }
     };
-    if let Err(error) = run("unmount", device) {
-        if !error.to_lowercase().contains("not mounted") {
-            return Err(explain(error));
-        }
+    if let Err(error) = run("unmount", device)
+        && !error.to_lowercase().contains("not mounted")
+    {
+        return Err(explain(error));
     }
     run("eject", drive).map_err(explain)
 }

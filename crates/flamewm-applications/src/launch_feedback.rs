@@ -165,13 +165,12 @@ impl Sequences {
             }
             return;
         }
-        if message.kind == MessageKind::New {
-            if let Some((at, pending)) = self.pending_changes.remove(&id) {
-                if now.saturating_duration_since(at) <= Duration::from_secs(60) {
-                    for (key, value) in pending {
-                        message.values.entry(key).or_insert(value);
-                    }
-                }
+        if message.kind == MessageKind::New
+            && let Some((at, pending)) = self.pending_changes.remove(&id)
+            && now.saturating_duration_since(at) <= Duration::from_secs(60)
+        {
+            for (key, value) in pending {
+                message.values.entry(key).or_insert(value);
             }
         }
         if self.active.len() >= MAX_SEQUENCES && !self.active.contains_key(&id) {

@@ -41,9 +41,9 @@ mod tests {
 
     #[test]
     fn luminance_weights_channels() {
-        assert_eq!(luminance(0xffffff), 255);
-        assert_eq!(luminance(0x000000), 0);
-        assert_eq!(luminance(0x00ff00), 587 * 255 / 1000);
+        assert_eq!(luminance(0x00ff_ffff), 255);
+        assert_eq!(luminance(0x0000_0000), 0);
+        assert_eq!(luminance(0x0000_ff00), 587 * 255 / 1000);
     }
 
     #[test]

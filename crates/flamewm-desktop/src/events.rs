@@ -59,10 +59,9 @@ pub(crate) fn handle_event(
             let alt = action.modifiers & (1 << 3) != 0;
             if let Some(mode) =
                 WheelMode::from_modifiers(action.shift_down(), action.ctrl_down(), alt)
+                && mode != state.wheel_mode
             {
-                if mode != state.wheel_mode {
-                    set_wheel_mode(document, state, mode)?;
-                }
+                set_wheel_mode(document, state, mode)?;
             }
             let sector = wheel_hit_at(state, action.x, action.y);
             update_wheel_hover(document, state, sector)?;
@@ -84,11 +83,11 @@ pub(crate) fn handle_event(
                     mutation_dispatcher,
                 );
             }
-            if let Some(bounds) = wheel_bounds(state) {
-                if convert_wheel::in_hub(action.x - bounds.x as f32, action.y - bounds.y as f32) {
-                    let next = state.wheel_mode.next();
-                    return set_wheel_mode(document, state, next);
-                }
+            if let Some(bounds) = wheel_bounds(state)
+                && convert_wheel::in_hub(action.x - bounds.x as f32, action.y - bounds.y as f32)
+            {
+                let next = state.wheel_mode.next();
+                return set_wheel_mode(document, state, next);
             }
             return Ok(());
         }
@@ -164,10 +163,10 @@ pub(crate) fn handle_event(
     if action.action.starts_with("sticky.") {
         return sticky::handle_action(action, document, state);
     }
-    if let Some(raw) = action.action.strip_prefix("desktop.item.") {
-        if let Ok(index) = raw.parse::<usize>() {
-            return handle_item(action, document, state, index);
-        }
+    if let Some(raw) = action.action.strip_prefix("desktop.item.")
+        && let Ok(index) = raw.parse::<usize>()
+    {
+        return handle_item(action, document, state, index);
     }
     Ok(())
 }

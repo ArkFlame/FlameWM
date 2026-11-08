@@ -268,10 +268,10 @@ impl<C: Connection> Wm<'_, C> {
                 None
             }
         });
-        if let Some(effect) = effect {
-            if self.begin_transition(client, effect)? {
-                return Ok(());
-            }
+        if let Some(effect) = effect
+            && self.begin_transition(client, effect)?
+        {
+            return Ok(());
         }
         self.commit_maximize(client)
     }
@@ -388,10 +388,10 @@ impl<C: Connection> Wm<'_, C> {
                 continue;
             }
             let score = directional_score(origin_centre, rect_centre(state.outer), direction);
-            if let Some(score) = score {
-                if best.is_none_or(|(best_score, _)| score < best_score) {
-                    best = Some((score, client));
-                }
+            if let Some(score) = score
+                && best.is_none_or(|(best_score, _)| score < best_score)
+            {
+                best = Some((score, client));
             }
         }
         best.map(|(_, client)| client)

@@ -74,51 +74,51 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(slider) = glass_slider(&event.action) {
             return self.handle_glass_slider_drag(slider, event, document);
         }
-        if let Some(raw_slot) = event.action.strip_prefix("settings.display.select.") {
-            if let Ok(slot) = raw_slot.parse::<usize>() {
-                if event.phase == UiActionPhase::Press {
-                    self.monitor_drag = self.output_page_slot(slot).and_then(|output| {
-                        self.client
-                            .displays()
-                            .map(|snapshot| (slot, event.x, snapshot.generation, output.id.clone()))
-                    });
-                    return Ok(());
+        if let Some(raw_slot) = event.action.strip_prefix("settings.display.select.")
+            && let Ok(slot) = raw_slot.parse::<usize>()
+        {
+            if event.phase == UiActionPhase::Press {
+                self.monitor_drag = self.output_page_slot(slot).and_then(|output| {
+                    self.client
+                        .displays()
+                        .map(|snapshot| (slot, event.x, snapshot.generation, output.id.clone()))
+                });
+                return Ok(());
+            }
+            if event.phase == UiActionPhase::Motion {
+                if let Some((pressed_slot, origin_x, _, _)) = &self.monitor_drag
+                    && *pressed_slot == slot
+                    && (event.x - origin_x).abs() >= 40.0
+                {
+                    // Only visual feedback while dragging, never native RandR state.
+                    let accent = self.accent()?;
+                    document.border(&format!("display-output-{slot}"), accent)?;
                 }
-                if event.phase == UiActionPhase::Motion {
-                    if let Some((pressed_slot, origin_x, _, _)) = &self.monitor_drag {
-                        if *pressed_slot == slot && (event.x - origin_x).abs() >= 40.0 {
-                            // Only visual feedback while dragging, never native RandR state.
-                            let accent = self.accent()?;
-                            document.border(&format!("display-output-{slot}"), accent)?;
+                return Ok(());
+            }
+            if event.phase == UiActionPhase::Release {
+                let origin = self.monitor_drag.take();
+                if let Some((_pressed_slot, initial_x, generation, pressed_id)) =
+                    origin.filter(|(pressed_slot, _, _, _)| *pressed_slot == slot)
+                {
+                    let distance = event.x - initial_x;
+                    if distance.abs() >= 40.0 {
+                        let current_generation = self.client.displays().map_or(0, |s| s.generation);
+                        if generation != current_generation
+                            || self
+                                .output_page_slot(slot)
+                                .is_none_or(|o| o.id != pressed_id)
+                        {
+                            return Err("display topology changed during monitor drag".into());
                         }
-                    }
-                    return Ok(());
-                }
-                if event.phase == UiActionPhase::Release {
-                    let origin = self.monitor_drag.take();
-                    if let Some((_pressed_slot, initial_x, generation, pressed_id)) =
-                        origin.filter(|(pressed_slot, _, _, _)| *pressed_slot == slot)
-                    {
-                        let distance = event.x - initial_x;
-                        if distance.abs() >= 40.0 {
-                            let current_generation =
-                                self.client.displays().map_or(0, |s| s.generation);
-                            if generation != current_generation
-                                || self
-                                    .output_page_slot(slot)
-                                    .is_none_or(|o| o.id != pressed_id)
-                            {
-                                return Err("display topology changed during monitor drag".into());
-                            }
-                            self.client.select_output(&pressed_id);
-                            let side = if distance < 0.0 {
-                                display_layout::Side::Left
-                            } else {
-                                display_layout::Side::Right
-                            };
-                            self.arrange_display(side)?;
-                            return self.settle(document);
-                        }
+                        self.client.select_output(&pressed_id);
+                        let side = if distance < 0.0 {
+                            display_layout::Side::Left
+                        } else {
+                            display_layout::Side::Right
+                        };
+                        self.arrange_display(side)?;
+                        return self.settle(document);
                     }
                 }
             }
@@ -336,10 +336,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     pub fn poll_background(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let mut completion_errors: Vec<String> = self.poll_open_uri().err().into_iter().collect();
-        if self.poll_theme_jobs() {
-            if let Err(error) = self.sync(document) {
-                completion_errors.push(error);
-            }
+        if self.poll_theme_jobs()
+            && let Err(error) = self.sync(document)
+        {
+            completion_errors.push(error);
         }
         let result = self
             .wallpaper_chooser
@@ -501,13 +501,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.client.cancel_hotkey_capture().map_err(control_error)?;
             self.hotkey_armed = false;
         }
-        if let Some(picker) = self.color_picker.as_mut() {
-            if !matches!(
+        if let Some(picker) = self.color_picker.as_mut()
+            && !matches!(
                 action,
                 SettingsAction::ColorPickerFocus | SettingsAction::NativeKeyEvent
-            ) {
-                picker.focused = false;
-            }
+            )
+        {
+            picker.focused = false;
         }
         // Any other control leaves the API key field without saving its draft.
         if !matches!(

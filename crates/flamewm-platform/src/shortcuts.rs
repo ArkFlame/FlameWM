@@ -511,10 +511,10 @@ const LEGACY_FOCUS_DEFAULTS: [(&str, &str, &str); 4] = [
 /// new `Super+Alt+arrow` default. Any other stored value is a deliberate choice and is kept.
 pub fn migrate_legacy_focus_hotkeys(persisted: &mut BTreeMap<String, String>) {
     for (action, old, new) in LEGACY_FOCUS_DEFAULTS {
-        if let Some(value) = persisted.get_mut(action) {
-            if normalize(value).eq_ignore_ascii_case(old) {
-                *value = new.to_owned();
-            }
+        if let Some(value) = persisted.get_mut(action)
+            && normalize(value).eq_ignore_ascii_case(old)
+        {
+            new.clone_into(value);
         }
     }
 }

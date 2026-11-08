@@ -1162,10 +1162,10 @@ pub fn theme_chain(preferred: Option<&str>) -> Vec<String> {
     if let Some(value) = preferred.filter(|value| !value.is_empty()) {
         theme_names.push(value.to_owned());
     }
-    if let Some(config_home) = xdg_config_home() {
-        if let Some(configured) = configured_icon_theme(&config_home) {
-            theme_names.push(configured);
-        }
+    if let Some(config_home) = xdg_config_home()
+        && let Some(configured) = configured_icon_theme(&config_home)
+    {
+        theme_names.push(configured);
     }
     theme_names.push(DEFAULT_ICON_THEME.to_owned());
     theme_names.push("Breeze".to_owned());

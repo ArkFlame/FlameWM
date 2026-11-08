@@ -131,11 +131,11 @@ pub fn terminal_command(terminal: &str, command: &[String], cwd: Option<&Path>) 
         .and_then(|name| name.to_str())
         .unwrap_or(terminal);
     let mut argv = vec![terminal.to_owned()];
-    if base == FLAMEWM_TERMINAL {
-        if let Some(dir) = cwd {
-            argv.push("--working-directory".to_owned());
-            argv.push(dir.to_string_lossy().into_owned());
-        }
+    if base == FLAMEWM_TERMINAL
+        && let Some(dir) = cwd
+    {
+        argv.push("--working-directory".to_owned());
+        argv.push(dir.to_string_lossy().into_owned());
     }
     match base {
         "kitty" | "xdg-terminal-exec" => {}

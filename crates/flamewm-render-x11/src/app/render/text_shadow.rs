@@ -124,10 +124,11 @@ impl X11App {
         width: u32,
         height: u32,
     ) -> Result<Pixmap, String> {
-        if let Some((pixmap, cap_w, cap_h, _)) = self.shadow_pixmap {
-            if cap_w >= width && cap_h >= height {
-                return Ok(pixmap);
-            }
+        if let Some((pixmap, cap_w, cap_h, _)) = self.shadow_pixmap
+            && cap_w >= width
+            && cap_h >= height
+        {
+            return Ok(pixmap);
         }
         let (prev_w, prev_h) = self.shadow_pixmap.map_or((0, 0), |(_, cw, ch, _)| (cw, ch));
         let (cap_w, cap_h) = (width.max(prev_w), height.max(prev_h));

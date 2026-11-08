@@ -370,11 +370,10 @@ mod tests {
         ) -> Result<Vec<u8>, AssistantError> {
             let line = argv.join(" ");
             self.calls.push(line.clone());
-            if argv.first().map(String::as_str) == Some("curl") {
-                if let (Some(bytes), Some(i)) = (&self.payload, argv.iter().position(|a| a == "-o"))
-                {
-                    fs::write(&argv[i + 1], bytes).expect("payload");
-                }
+            if argv.first().map(String::as_str) == Some("curl")
+                && let (Some(bytes), Some(i)) = (&self.payload, argv.iter().position(|a| a == "-o"))
+            {
+                fs::write(&argv[i + 1], bytes).expect("payload");
             }
             match self.fail_on {
                 Some(needle) if line.contains(needle) => {
@@ -668,7 +667,6 @@ mod tests {
 
     /// Real install, real model downloads and real synthesis and transcription through the wrappers.
     /// Run with `FLAMEWM_VOICE_LIVE_DIR=<scratch dir without spaces>` and `--ignored`.
-
     fn sha_hex(bytes: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(bytes);

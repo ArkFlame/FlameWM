@@ -1,4 +1,4 @@
-//! RandR topology transactions: primary output, panel rotation and output placement.
+//! `RandR` topology transactions: primary output, panel rotation and output placement.
 //!
 //! The baseline records every active CRTC and the primary output, so keep/revert can restore the
 //! whole layout rather than one CRTC like a mode change.
@@ -162,7 +162,7 @@ fn arrange(
     Ok(())
 }
 
-/// Maps the typed quarter-turn to the RandR rotation bit (clockwise from native orientation).
+/// Maps the typed quarter-turn to the `RandR` rotation bit (clockwise from native orientation).
 #[must_use]
 pub fn rotation_bit(rotation: Rotation) -> randr::Rotation {
     match rotation {

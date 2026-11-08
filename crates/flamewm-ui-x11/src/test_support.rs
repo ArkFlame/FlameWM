@@ -149,6 +149,10 @@ pub fn paint_popup_software(
     viewport: (f32, f32),
     backdrop: [u8; 4],
 ) -> Vec<u8> {
+    enum Pending {
+        Mask(TextMask, [u8; 4]),
+        Image,
+    }
     let (width, height) = (viewport.0 as u32, viewport.1 as u32);
     let runtime = UiTemplate::new(document).into_runtime_document();
     let layout = LayoutEngine::compute(
@@ -169,10 +173,6 @@ pub fn paint_popup_software(
     // One source per Text, TextShadow and Image command, in command order. Text without a
     // usable font gets an empty mask, so the label is simply not drawn; slider geometry is
     // unaffected. The popup carries no bitmap images, so Image sources are empty.
-    enum Pending {
-        Mask(TextMask, [u8; 4]),
-        Image,
-    }
     let pending: Vec<Pending> = commands
         .iter()
         .filter_map(|command| match command {

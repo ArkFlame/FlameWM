@@ -279,7 +279,7 @@
         fs::create_dir_all(source.join("child")).unwrap();
         fs::write(source.join("item"), b"original").unwrap();
         symlink(source.join("child"),base.join("alias")).unwrap();
-        let outcome=transfer_batch(&[source.clone()],&base.join("alias"),true,&crate::jobs::CancellationToken::new(),&mut |_| {});
+        let outcome=transfer_batch(std::slice::from_ref(&source),&base.join("alias"),true,&crate::jobs::CancellationToken::new(),&mut |_| {});
         assert_eq!((outcome.completed,outcome.failed),(0,1));
         assert!(source.join("item").exists());
         assert!(fs::read_dir(source.join("child")).unwrap().next().is_none());

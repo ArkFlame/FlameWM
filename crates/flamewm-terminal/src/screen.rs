@@ -275,13 +275,12 @@ impl Screen {
                     if !self.alt_active
                         && self.scrollback.back().is_some()
                         && self.primary.len() < rows
+                        && let Some(history) = self.scrollback.pop_back()
                     {
-                        if let Some(history) = self.scrollback.pop_back() {
-                            let mut line = history.cells().into_owned();
-                            line.resize(cols, Cell::blank(Color::Default));
-                            self.primary.insert(0, line);
-                            self.row += 1;
-                        }
+                        let mut line = history.cells().into_owned();
+                        line.resize(cols, Cell::blank(Color::Default));
+                        self.primary.insert(0, line);
+                        self.row += 1;
                     }
                 }
                 while self.primary.len() < rows {
@@ -545,10 +544,8 @@ impl Screen {
             self.alt = vec![blank_line(self.cols, Color::Default); self.rows];
         } else {
             self.alt_active = false;
-            if save_cursor {
-                if let Some(saved) = self.alt_saved.take() {
-                    self.restore_state(saved);
-                }
+            if save_cursor && let Some(saved) = self.alt_saved.take() {
+                self.restore_state(saved);
             }
         }
         self.wrap_next = false;
@@ -861,15 +858,15 @@ impl Perform for Screen {
 
     fn osc(&mut self, segments: &[Vec<u8>]) {
         let Some(code) = segments.first() else { return };
-        if matches!(code.as_slice(), b"0" | b"2") {
-            if let Some(title) = segments.get(1) {
-                self.title = Some(
-                    String::from_utf8_lossy(title)
-                        .chars()
-                        .filter(|c| !c.is_control())
-                        .collect(),
-                );
-            }
+        if matches!(code.as_slice(), b"0" | b"2")
+            && let Some(title) = segments.get(1)
+        {
+            self.title = Some(
+                String::from_utf8_lossy(title)
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect(),
+            );
         }
     }
 }

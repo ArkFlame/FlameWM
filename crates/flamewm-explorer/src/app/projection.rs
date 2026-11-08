@@ -255,9 +255,8 @@ impl ExplorerApp {
         let bottom=self.window.1-STATUS_STRIP_HEIGHT;
         let glide=self.glide.offset(Instant::now());
         // A full pass replaces the thumbnail requests: stale jobs leave the queue before any visible row asks again.
-        if full {
-            if let Some(queue)=self.thumb_queue.as_ref() {self.thumbs.borrow_mut().start_pass(queue);}
-        }
+        if full
+            && let Some(queue)=self.thumb_queue.as_ref() {self.thumbs.borrow_mut().start_pass(queue);}
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
@@ -365,9 +364,8 @@ impl ExplorerApp {
             Lookup::Ready(id,pixels)=>Some((id,pixels)),
             Lookup::Failed=>None,
             Lookup::Missing=>{
-                if in_view && cache.begin(&key) {
-                    if let Some(queue)=&self.thumb_queue {queue.push(key);}
-                }
+                if in_view && cache.begin(&key)
+                    && let Some(queue)=&self.thumb_queue {queue.push(key);}
                 None
             }
         }

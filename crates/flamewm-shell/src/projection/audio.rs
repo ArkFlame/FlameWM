@@ -732,7 +732,7 @@ mod audio_render_tests {
             );
             let expected_x = track.0
                 + AUDIO_THUMB_SIZE / 2.0
-                + (track.2 - AUDIO_THUMB_SIZE) * percent as f32 / 100.0;
+                + (track.2 - AUDIO_THUMB_SIZE) * f32::from(percent) / 100.0;
             assert!(
                 (knob_centre.0 - expected_x).abs() <= 1.0,
                 "{percent}%: knob centre {} != inset expectation {expected_x}",

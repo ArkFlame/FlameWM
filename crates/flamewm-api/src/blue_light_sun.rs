@@ -108,7 +108,7 @@ mod tests {
     fn longitude_and_utc_offset_shift_local_noon_to_the_same_place() {
         // 15 degrees east is one hour ahead of UTC; UTC+1 puts solar noon at local 12:00.
         let times = sun_times(0.0, 15.0, EQUINOX, 60).expect("valid");
-        let midday = (times.sunrise_minutes + times.sunset_minutes) / 2;
+        let midday = u32::midpoint(times.sunrise_minutes, times.sunset_minutes);
         assert!(near(midday, 12 * 60, 15), "midday {midday}");
     }
 

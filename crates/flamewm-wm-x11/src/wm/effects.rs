@@ -60,19 +60,19 @@ impl<C: Connection> Wm<'_, C> {
                                 .width(w.max(1) as u32)
                                 .height(h.max(1) as u32),
                         );
-                        if let Some(probe) = self.resize_probe.as_mut() {
-                            if probe.client == client {
-                                let outcome = match &result {
-                                    Ok(_) => String::from("ok"),
-                                    Err(error) => format!("error={error:?}"),
-                                };
-                                let detail =
-                                    format!("xid={frame} rect=({x},{y},{w},{h}) result={outcome}");
-                                if probe.native_first.is_none() {
-                                    probe.native_first = Some(detail.clone());
-                                }
-                                probe.native_last = Some(detail);
+                        if let Some(probe) = self.resize_probe.as_mut()
+                            && probe.client == client
+                        {
+                            let outcome = match &result {
+                                Ok(_) => String::from("ok"),
+                                Err(error) => format!("error={error:?}"),
+                            };
+                            let detail =
+                                format!("xid={frame} rect=({x},{y},{w},{h}) result={outcome}");
+                            if probe.native_first.is_none() {
+                                probe.native_first = Some(detail.clone());
                             }
+                            probe.native_last = Some(detail);
                         }
                         emit_native_configure(
                             flamewm_debug::WM_FRAME_GEOMETRY_RESIZE_NATIVE,
@@ -409,10 +409,10 @@ impl<C: Connection> Wm<'_, C> {
             }
             _ => None,
         });
-        if let Some((boundary, session)) = resize_boundary {
-            if let Some(probe) = self.resize_probe.as_ref() {
-                emit_resize_probe("reduce", boundary, probe, pointer, session, Some(&commit));
-            }
+        if let Some((boundary, session)) = resize_boundary
+            && let Some(probe) = self.resize_probe.as_ref()
+        {
+            emit_resize_probe("reduce", boundary, probe, pointer, session, Some(&commit));
         }
         if matches!(event, FrameEvent::ToggleMax) {
             move_counters().record_toggle_max();

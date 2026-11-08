@@ -415,11 +415,11 @@ fn xsettings_owner(
             }
             outcome
         };
-        if let Err(error) = outcome {
-            if !reported {
-                reported = true;
-                eprintln!("flamewm: XSettings republish failed (later errors suppressed): {error}");
-            }
+        if let Err(error) = outcome
+            && !reported
+        {
+            reported = true;
+            eprintln!("flamewm: XSettings republish failed (later errors suppressed): {error}");
         }
     });
     let wake = wake_fd.map(|fd| SettingsWake {

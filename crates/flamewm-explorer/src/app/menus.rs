@@ -97,9 +97,8 @@ impl ExplorerApp {
             "all"=>if let Some(chooser)=self.chooser.as_mut(){chooser.show_every_app();},
             "prev"=>if let Some(chooser)=self.chooser.as_mut(){chooser.page=chooser.page.saturating_sub(1);},
             "next"=>if let Some(chooser)=self.chooser.as_mut(){chooser.page=(chooser.page+1).min(chooser.page_count()-1);},
-            _=>if let Some(slot)=action.strip_prefix("choice.").and_then(|id|id.parse::<usize>().ok()) {
-                if let Some(chooser)=self.chooser.as_mut(){chooser.select_visible(slot);}
-            }
+            _=>if let Some(slot)=action.strip_prefix("choice.").and_then(|id|id.parse::<usize>().ok())
+                && let Some(chooser)=self.chooser.as_mut(){chooser.select_visible(slot);}
         }
     }
 
@@ -196,11 +195,10 @@ impl ExplorerApp {
             "bookmark"=>{let path=self.target_directory();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
             "properties"=>if let Some(path)=self.context_place_path().or(selected) {self.open_properties(path)},
             "opencontaining"=>if let Some(path)=selected {self.open_containing(path)},
-            "restore"=>if let Some(path)=selected {
-                if self.tx.send(WorkerJob::Restore{base:self.trash_base.clone(),stored:path}).is_ok() {
+            "restore"=>if let Some(path)=selected
+                && self.tx.send(WorkerJob::Restore{base:self.trash_base.clone(),stored:path}).is_ok() {
                     self.busy=true;self.model.status="Restoring…".into();
-                }
-            },
+                },
             "emptytrash"=>self.dialog=Some(Dialog::Confirm{
                 title:"Empty Trash?".into(),
                 lines:vec!["Permanently empty the Trash? This cannot be undone.".into()],
@@ -215,9 +213,8 @@ impl ExplorerApp {
             "connect"=>{self.begin_edit(EditMode::Path,"sftp://".into(),None);self.model.status="Type sftp://user@host/path, fish://user@host/path or ssh://user@host and press Enter".into();},
             "hidden"=>self.toggle_hidden(),
             "showtype"=>self.toggle_show_type(),
-                "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
-                if let Some(device)=place.device {self.device_action(if cmd=="eject"{"eject"}else{"unmount"},device,place.name);}
-            },
+                "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned()
+                && let Some(device)=place.device {self.device_action(if cmd=="eject"{"eject"}else{"unmount"},device,place.name);},
             _=>{}
         }
         self.context=None;
@@ -254,9 +251,8 @@ impl ExplorerApp {
         let result=properties::parse_mode(text).and_then(|mode|properties::set_mode(&path,mode).map_err(|e|e.to_string()));
         match result {
             Ok(())=>{
-                if let Some(Dialog::Properties{props,..})=self.dialog.as_mut() {
-                    if let Ok(fresh)=properties::read(&path) {*props=fresh;}
-                }
+                if let Some(Dialog::Properties{props,..})=self.dialog.as_mut()
+                    && let Ok(fresh)=properties::read(&path) {*props=fresh;}
                 self.model.status="Permissions changed".into();
                 self.scan();
             },

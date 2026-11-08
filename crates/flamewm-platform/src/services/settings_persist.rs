@@ -137,10 +137,10 @@ fn run(rx: &Receiver<Command>, idle: Duration, max_defer: Duration, mut sink: Si
             match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                 Ok(command) => command,
                 Err(RecvTimeoutError::Timeout) => {
-                    if let Some(text) = pending.take() {
-                        if let Err(error) = sink(&text) {
-                            background_error = Some(error.message);
-                        }
+                    if let Some(text) = pending.take()
+                        && let Err(error) = sink(&text)
+                    {
+                        background_error = Some(error.message);
                     }
                     continue;
                 }

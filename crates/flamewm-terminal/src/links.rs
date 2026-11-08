@@ -49,7 +49,7 @@ fn trim_end(chars: &[char], start: usize, mut end: usize) -> usize {
 /// Every link on one row, in order. A scheme must not follow a letter, digit or `_`.
 #[must_use]
 pub fn links_in(row: &[char]) -> Vec<Link> {
-    let lower: Vec<char> = row.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let lower: Vec<char> = row.iter().map(char::to_ascii_lowercase).collect();
     let mut links = Vec::new();
     let mut col = 0;
     while col < row.len() {

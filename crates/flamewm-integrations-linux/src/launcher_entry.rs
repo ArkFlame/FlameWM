@@ -264,12 +264,12 @@ fn handle_message(
             MessageItem::Str(old_owner),
             MessageItem::Str(new_owner),
         ] = message.get_items().as_slice()
+            && new_owner.is_empty()
+            && !old_owner.is_empty()
         {
-            if new_owner.is_empty() && !old_owner.is_empty() {
-                let before = entries.len();
-                entries.retain(|(owner, _), _| owner != old_owner);
-                *changed |= entries.len() != before;
-            }
+            let before = entries.len();
+            entries.retain(|(owner, _), _| owner != old_owner);
+            *changed |= entries.len() != before;
         }
         return MessageDisposition::Handled;
     }

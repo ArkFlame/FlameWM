@@ -523,10 +523,10 @@ impl NetworkManagerProvider {
                 {
                     let generation = self.controller.generation();
                     let refresh = device_signal_refresh(self.wifi_devices.get(&path), &properties);
-                    if let Some(device) = self.wifi_devices.get_mut(&path) {
-                        if let Some(scan) = properties.last_scan {
-                            device.last_scan = Some(scan);
-                        }
+                    if let Some(device) = self.wifi_devices.get_mut(&path)
+                        && let Some(scan) = properties.last_scan
+                    {
+                        device.last_scan = Some(scan);
                     }
                     if properties.last_scan.is_some() {
                         let _ = self.controller.complete_scan(generation);

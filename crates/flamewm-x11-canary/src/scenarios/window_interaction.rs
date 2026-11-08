@@ -315,10 +315,10 @@ const T07_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 /// Drains queued events, keeping the newest `ConfigureNotify` size reported for `client`.
 fn drain_client_configure(canary: &crate::Canary, client: u32, last: &mut Option<(u16, u16)>) {
     while let Ok(Some(event)) = canary.conn.poll_for_event() {
-        if let x11rb::protocol::Event::ConfigureNotify(e) = event {
-            if e.window == client {
-                *last = Some((e.width, e.height));
-            }
+        if let x11rb::protocol::Event::ConfigureNotify(e) = event
+            && e.window == client
+        {
+            *last = Some((e.width, e.height));
         }
     }
 }
@@ -589,24 +589,17 @@ pub fn run_t07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             drags += 1;
         }
         std::thread::sleep(std::time::Duration::from_millis(120));
-        if let Some(w) = canary.by_id(target.id) {
-            if w.width != cur.width || w.height != cur.height {
-                let prev = (cur.width, cur.height);
-                changed += 1;
-                cur = w;
-                content.push(if subscribed {
-                    t07_content_after_resize(
-                        canary,
-                        target.id,
-                        surface.id,
-                        insets,
-                        &mut offsets,
-                        prev,
-                    )
-                } else {
-                    Err("could not subscribe to client StructureNotify".to_owned())
-                });
-            }
+        if let Some(w) = canary.by_id(target.id)
+            && (w.width != cur.width || w.height != cur.height)
+        {
+            let prev = (cur.width, cur.height);
+            changed += 1;
+            cur = w;
+            content.push(if subscribed {
+                t07_content_after_resize(canary, target.id, surface.id, insets, &mut offsets, prev)
+            } else {
+                Err("could not subscribe to client StructureNotify".to_owned())
+            });
         }
     }
     let content_pass = changed >= 1 && content.iter().all(Result::is_ok);

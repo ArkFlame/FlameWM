@@ -307,29 +307,30 @@ pub(crate) fn cmd_interaction_perf(canary: &Canary, args: &[String]) {
             wins[2] = nwid;
         }
         // Workspace activation when EWMH supported.
-        if ewmh_ws && cycle == 75 {
-            if let Some(atom) = cur_desktop_atom {
-                let target: u32 = 0;
-                let ev = ClientMessageEvent {
-                    response_type: 33,
-                    format: 32,
-                    sequence: 0,
-                    window: canary.root,
-                    type_: atom,
-                    data: ClientMessageData::from([target, CURRENT_TIME, 0, 0, 0]),
-                };
-                let s = canary_now_ns();
-                let ok = canary
-                    .conn
-                    .send_event(false, canary.root, EventMask::SUBSTRUCTURE_REDIRECT, ev)
-                    .is_ok_and(|c| c.check().is_ok());
-                let _ = canary.conn.flush();
-                std::thread::sleep(Duration::from_millis(100));
-                let e = canary_now_ns();
-                emit("workspace-activate", canary.root, s, e);
-                if !ok {
-                    failed.push("workspace-activate send failed".to_owned());
-                }
+        if ewmh_ws
+            && cycle == 75
+            && let Some(atom) = cur_desktop_atom
+        {
+            let target: u32 = 0;
+            let ev = ClientMessageEvent {
+                response_type: 33,
+                format: 32,
+                sequence: 0,
+                window: canary.root,
+                type_: atom,
+                data: ClientMessageData::from([target, CURRENT_TIME, 0, 0, 0]),
+            };
+            let s = canary_now_ns();
+            let ok = canary
+                .conn
+                .send_event(false, canary.root, EventMask::SUBSTRUCTURE_REDIRECT, ev)
+                .is_ok_and(|c| c.check().is_ok());
+            let _ = canary.conn.flush();
+            std::thread::sleep(Duration::from_millis(100));
+            let e = canary_now_ns();
+            emit("workspace-activate", canary.root, s, e);
+            if !ok {
+                failed.push("workspace-activate send failed".to_owned());
             }
         }
     }

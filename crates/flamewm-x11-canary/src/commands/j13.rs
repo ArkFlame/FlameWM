@@ -59,14 +59,13 @@ pub(crate) fn cmd_j13(canary: &Canary, args: &[String]) {
         let mut first: Option<WinInfo> = None;
         if let Some(t) = tree {
             for child in t.children {
-                if let Some(info) = canary.info(child, canary.root) {
-                    if info.map_state == u8::from(MapState::VIEWABLE)
-                        && info.width <= 600
-                        && info.height <= 600
-                    {
-                        first = Some(info);
-                        break;
-                    }
+                if let Some(info) = canary.info(child, canary.root)
+                    && info.map_state == u8::from(MapState::VIEWABLE)
+                    && info.width <= 600
+                    && info.height <= 600
+                {
+                    first = Some(info);
+                    break;
                 }
             }
         }

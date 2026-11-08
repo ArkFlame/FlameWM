@@ -100,10 +100,10 @@ pub(super) fn drag_edge_at(pointer: RootPoint, root: Rect) -> Option<DragEdge> {
         } else {
             None
         };
-        if let Some(vertical) = vertical {
-            if candidate.is_none_or(|(distance, _)| vertical.0 < distance) {
-                candidate = Some(vertical);
-            }
+        if let Some(vertical) = vertical
+            && candidate.is_none_or(|(distance, _)| vertical.0 < distance)
+        {
+            candidate = Some(vertical);
         }
     }
     candidate.map(|(_, side)| side)
@@ -171,14 +171,15 @@ pub(super) fn drag_edge_ready(
     side: DragEdge,
     now: std::time::Instant,
 ) -> (Option<EdgeDragPending>, bool) {
-    if let Some(pending) = previous {
-        if pending.client == client && pending.side == side {
-            return (
-                Some(pending),
-                now.saturating_duration_since(pending.since)
-                    >= std::time::Duration::from_millis(u64::from(DRAG_EDGE_DWELL_MS)),
-            );
-        }
+    if let Some(pending) = previous
+        && pending.client == client
+        && pending.side == side
+    {
+        return (
+            Some(pending),
+            now.saturating_duration_since(pending.since)
+                >= std::time::Duration::from_millis(u64::from(DRAG_EDGE_DWELL_MS)),
+        );
     }
     (
         Some(EdgeDragPending {

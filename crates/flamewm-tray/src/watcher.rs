@@ -198,7 +198,7 @@ impl WatcherState {
     }
 
     fn method_call(&mut self, pump: &BusPump, message: &Message) -> MessageDisposition {
-        if !message.path().is_some_and(|path| path == WATCHER_PATH) {
+        if message.path().is_none_or(|path| path != WATCHER_PATH) {
             return MessageDisposition::Unhandled;
         }
         let interface = message

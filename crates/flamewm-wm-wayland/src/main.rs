@@ -585,13 +585,12 @@ fn run() -> Result<i32, Box<dyn Error>> {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        && !matches!(requested, "drm" | "native" | "winit" | "nested")
     {
-        if !matches!(requested, "drm" | "native" | "winit" | "nested") {
-            eprintln!(
-                "flamewm-wayland: unknown FLAMEWM_WAYLAND_BACKEND={requested}, using {}",
-                backend.name()
-            );
-        }
+        eprintln!(
+            "flamewm-wayland: unknown FLAMEWM_WAYLAND_BACKEND={requested}, using {}",
+            backend.name()
+        );
     }
     if backend == Backend::Native && !cfg!(feature = "drm") {
         eprintln!(

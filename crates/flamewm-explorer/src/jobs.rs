@@ -297,12 +297,11 @@ pub fn copy_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "cannot copy a directory into itself"));
         }
         // Reject symlink aliases of descendants before creating output.
-        if let (Ok(source), Some(parent)) = (fs::canonicalize(from), to.parent()) {
-            if fs::canonicalize(parent).is_ok_and(|dp| dp.starts_with(&source)) {
+        if let (Ok(source), Some(parent)) = (fs::canonicalize(from), to.parent())
+            && fs::canonicalize(parent).is_ok_and(|dp| dp.starts_with(&source)) {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput,
                     "cannot copy a directory into itself through a symlink"));
             }
-        }
     }
     let staging = staging_path(to);
     register_staging(&staging);

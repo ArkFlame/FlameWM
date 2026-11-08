@@ -360,14 +360,14 @@ pub fn parse(text: &str) -> FlameResult<WidgetStore> {
     let mut store = WidgetStore::default();
     // Optional grid line written after the header (absent in older files).
     let mut lines = lines.peekable();
-    if let Some(line) = lines.peek().copied() {
-        if let Some(size) = line.strip_prefix("grid\t") {
-            let (cols, rows) = size
-                .split_once('\t')
-                .ok_or_else(|| FlameError::invalid("invalid desktop widget grid size"))?;
-            store.grid_size = Some((number(cols)?, number(rows)?));
-            lines.next();
-        }
+    if let Some(line) = lines.peek().copied()
+        && let Some(size) = line.strip_prefix("grid\t")
+    {
+        let (cols, rows) = size
+            .split_once('\t')
+            .ok_or_else(|| FlameError::invalid("invalid desktop widget grid size"))?;
+        store.grid_size = Some((number(cols)?, number(rows)?));
+        lines.next();
     }
     for line in lines.filter(|line| !line.is_empty()) {
         if store.is_full() {

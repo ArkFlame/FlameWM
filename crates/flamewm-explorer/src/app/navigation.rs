@@ -16,7 +16,7 @@ impl ExplorerApp {
 
     /// Folder that Open Terminal Here and Add Folder to Places act on: a right-clicked folder, else the current folder.
     pub(crate) fn target_directory(&self)->PathBuf {
-        if self.context_on_entry {if let Some(folder)=self.selected_folder() {return folder;}}
+        if self.context_on_entry&& let Some(folder)=self.selected_folder() {return folder;}
         self.model.tab().path().to_path_buf()
     }
 
@@ -179,12 +179,11 @@ impl ExplorerApp {
             return;
         };
         let local=remote::cache_path(&remote::cache_root(),&url,url.file_name());
-        if let Some(parent)=local.parent() {
-            if let Err(error)=fs::create_dir_all(parent) {
+        if let Some(parent)=local.parent()
+            && let Err(error)=fs::create_dir_all(parent) {
                 self.model.status=format!("Cannot create download cache: {error}");
                 return;
             }
-        }
         let transfer=self.remote.download(&url,&local,&RemoteCancel::new());
         self.model.status=format!("Downloading {}…",url.file_name());
         std::thread::spawn(move||forward_download(local,transfer,tx,wake));
@@ -199,12 +198,11 @@ impl ExplorerApp {
             return;
         }
         // Opening Trash creates the XDG layout (files/ and info/) when it is missing; it never errors on a fresh home.
-        if path==self.trash_base.join("files") {
-            if let Err(e)=fs::create_dir_all(&path).and_then(|()|fs::create_dir_all(self.trash_base.join("info"))) {
+        if path==self.trash_base.join("files")
+            && let Err(e)=fs::create_dir_all(&path).and_then(|()|fs::create_dir_all(self.trash_base.join("info"))) {
                 self.model.status=format!("Cannot create Trash: {e}");
                 return;
             }
-        }
         // Let the scan worker validate the path; stat here can block the UI on slow mounts.
         let mut candidate=self.model.tab().clone();
         candidate.visit(path);

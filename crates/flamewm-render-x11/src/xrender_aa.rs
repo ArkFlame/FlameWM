@@ -129,13 +129,13 @@ fn push_run(runs: &mut Vec<Run>, start: u32, len: u32, coverage: f32) {
     if len == 0 || coverage <= 0.0 {
         return;
     }
-    if coverage >= 1.0 {
-        if let Some(last) = runs.last_mut() {
-            if last.2 >= 1.0 && last.0 + last.1 == start {
-                last.1 += len;
-                return;
-            }
-        }
+    if coverage >= 1.0
+        && let Some(last) = runs.last_mut()
+        && last.2 >= 1.0
+        && last.0 + last.1 == start
+    {
+        last.1 += len;
+        return;
     }
     runs.push((start, len, coverage));
 }
@@ -295,10 +295,10 @@ pub(crate) unsafe fn stroke_rounded_rect_clipped(
 
     for row in 0..height {
         let py = y + row as i32;
-        if let Some(clip) = clip {
-            if py < clip.y.ceil() as i32 || py >= (clip.y + clip.height).floor() as i32 {
-                continue;
-            }
+        if let Some(clip) = clip
+            && (py < clip.y.ceil() as i32 || py >= (clip.y + clip.height).floor() as i32)
+        {
+            continue;
         }
         let runs = stroke_row_runs(width, height, radius, thickness, row);
         if let Some(clip) = clip {

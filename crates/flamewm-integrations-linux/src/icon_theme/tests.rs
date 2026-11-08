@@ -311,7 +311,7 @@ fn build_parses_each_chained_index_theme_once() {
     )
     .expect("selected index.theme");
     INDEX_THEME_READS.with(|c| c.set(0));
-    let index = IconLookupIndex::build(&["Mine".to_owned()], &[data.clone()], 1);
+    let index = IconLookupIndex::build(&["Mine".to_owned()], std::slice::from_ref(&data), 1);
     let reads = INDEX_THEME_READS.with(std::cell::Cell::get);
     let (paths, hit) = index.lookup("once-app", 16);
     let _ = fs::remove_dir_all(&data);

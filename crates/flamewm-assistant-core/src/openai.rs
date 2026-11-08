@@ -242,10 +242,10 @@ impl OpenAiClient {
                 }
                 continue;
             }
-            if json_mode.is_none() {
-                if let Some(&first) = part.iter().find(|b| !b.is_ascii_whitespace()) {
-                    json_mode = Some(current.json || first == b'{');
-                }
+            if json_mode.is_none()
+                && let Some(&first) = part.iter().find(|b| !b.is_ascii_whitespace())
+            {
+                json_mode = Some(current.json || first == b'{');
             }
             if json_mode == Some(true) {
                 json_body.extend_from_slice(&part);

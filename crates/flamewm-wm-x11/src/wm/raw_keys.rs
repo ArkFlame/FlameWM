@@ -216,7 +216,7 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     /// Replaces the root's raw selection on all master devices: key press/release always, raw
-    /// motion when `motion`. XISelectEvents replaces the mask per client, so every caller sends
+    /// motion when `motion`. `XISelectEvents` replaces the mask per client, so every caller sends
     /// the full set.
     pub(super) fn send_root_xi_select(&self, opcode: u8, motion: bool) -> Result<(), ReplyError> {
         let mut mask = (1u32 << XI_RAW_KEY_PRESS) | (1u32 << XI_RAW_KEY_RELEASE);

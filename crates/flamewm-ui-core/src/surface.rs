@@ -304,7 +304,7 @@ mod titlebar_fill_tests {
             snapshot.values.insert(key.into(), value);
         }
         let fill = surface_fill(&snapshot);
-        assert_eq!(fill.rgb, 0x284F77);
+        assert_eq!(fill.rgb, 0x0028_4F77);
         assert_eq!(fill.alpha, 171);
     }
 

@@ -129,17 +129,16 @@ impl NameMemo {
             *slot = paths;
             return;
         }
-        if self.len >= cap {
-            if let Some(outer) = self.by_name.keys().next().cloned() {
-                if let Some(inner) = self.by_name.get_mut(&outer) {
-                    if let Some(first) = inner.keys().next().copied() {
-                        inner.remove(&first);
-                        self.len -= 1;
-                    }
-                    if inner.is_empty() {
-                        self.by_name.remove(&outer);
-                    }
-                }
+        if self.len >= cap
+            && let Some(outer) = self.by_name.keys().next().cloned()
+            && let Some(inner) = self.by_name.get_mut(&outer)
+        {
+            if let Some(first) = inner.keys().next().copied() {
+                inner.remove(&first);
+                self.len -= 1;
+            }
+            if inner.is_empty() {
+                self.by_name.remove(&outer);
             }
         }
         self.by_name

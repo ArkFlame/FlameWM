@@ -279,7 +279,7 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     /// EWMH `_NET_MOVERESIZE_WINDOW`: `data[0]` gravity/flags (bits 8-11 select x, y, width,
-    /// height), `data[1..=4]` values. Re-enters the ConfigureRequest owner so geometry policy
+    /// height), `data[1..=4]` values. Re-enters the `ConfigureRequest` owner so geometry policy
     /// stays single. Gravity is ignored (shortcut: static gravity only; revisit when a client needs it).
     pub(super) fn handle_moveresize_window(
         &mut self,

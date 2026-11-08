@@ -213,20 +213,17 @@ impl XcursorBackend {
         });
         if let Some(set_theme) = loaded.as_ref().and_then(|lib| {
             unsafe { lib.symbol::<LibrarySetThemeFn>(XCURSOR_SET_THEME_SYMBOL) }.ok()
-        }) {
-            if let Some(name) = theme.filter(|name| !name.is_empty()) {
-                if let Ok(cname) = CString::new(name) {
-                    unsafe { set_theme(display, cname.as_ptr()) };
-                }
-            }
+        }) && let Some(name) = theme.filter(|name| !name.is_empty())
+            && let Ok(cname) = CString::new(name)
+        {
+            unsafe { set_theme(display, cname.as_ptr()) };
         }
         if let Some(set_size) = loaded
             .as_ref()
             .and_then(|lib| unsafe { lib.symbol::<LibrarySetSizeFn>(XCURSOR_SET_SIZE_SYMBOL) }.ok())
+            && let Some(size) = size.filter(|size| *size > 0)
         {
-            if let Some(size) = size.filter(|size| *size > 0) {
-                unsafe { set_size(display, size) };
-            }
+            unsafe { set_size(display, size) };
         }
         let xcursor = load.is_some();
         log_backend(if xcursor {
@@ -323,10 +320,10 @@ impl XcursorBackend {
             return Err("empty cursor theme".to_owned());
         }
         let previous_size = self.size;
-        if let Some(size) = size.and_then(|size| i32::try_from(size).ok()) {
-            if size > 0 {
-                self.size = size;
-            }
+        if let Some(size) = size.and_then(|size| i32::try_from(size).ok())
+            && size > 0
+        {
+            self.size = size;
         }
         let mut loader = XlibCursorLoader {
             display: self.display,

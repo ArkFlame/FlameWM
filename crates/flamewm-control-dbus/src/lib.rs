@@ -75,14 +75,12 @@ impl ControlServer {
                     Ok(())
                 },
             );
-            if let Err(error) = result {
-                if !message.get_no_reply() {
-                    if let Ok(name) = ErrorName::new(error_name(&error)) {
-                        if let Ok(text) = CString::new(error.to_string()) {
-                            let _ = pump.send(message.error(&name, &text));
-                        }
-                    }
-                }
+            if let Err(error) = result
+                && !message.get_no_reply()
+                && let Ok(name) = ErrorName::new(error_name(&error))
+                && let Ok(text) = CString::new(error.to_string())
+            {
+                let _ = pump.send(message.error(&name, &text));
             }
             MessageDisposition::Handled
         })
@@ -508,10 +506,10 @@ fn control_error(code: ErrorCode, message: impl Into<String>) -> ControlError {
 }
 
 fn control_error_from_transport(error: FlameError) -> ControlError {
-    if error.code == ErrorCode::Unavailable {
-        if let Some((code, message)) = decode_remote_method_error(&error.message) {
-            return control_error(code, message);
-        }
+    if error.code == ErrorCode::Unavailable
+        && let Some((code, message)) = decode_remote_method_error(&error.message)
+    {
+        return control_error(code, message);
     }
     control_error(error.code, error.to_string())
 }

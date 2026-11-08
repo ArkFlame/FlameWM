@@ -85,10 +85,10 @@ impl Parser {
     }
 
     fn finish_value(&mut self) {
-        if !self.in_number {
-            if let Some(group) = self.params.last_mut() {
-                group.push(0);
-            }
+        if !self.in_number
+            && let Some(group) = self.params.last_mut()
+        {
+            group.push(0);
         }
         self.in_number = false;
     }
@@ -132,10 +132,10 @@ impl Parser {
                     if self.osc.is_empty() {
                         self.osc.push(Vec::new());
                     }
-                    if let Some(last) = self.osc.last_mut() {
-                        if last.len() < OSC_LIMIT {
-                            last.push(byte);
-                        }
+                    if let Some(last) = self.osc.last_mut()
+                        && last.len() < OSC_LIMIT
+                    {
+                        last.push(byte);
                     }
                 }
             },

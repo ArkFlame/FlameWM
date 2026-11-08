@@ -71,14 +71,14 @@ pub fn default_in_mimeapps(content: &str, mime: &str) -> Option<String> {
         if !in_defaults {
             continue;
         }
-        if let Some((key, value)) = line.split_once('=') {
-            if key.trim() == mime {
-                return value
-                    .split(';')
-                    .map(str::trim)
-                    .find(|id| !id.is_empty())
-                    .map(str::to_owned);
-            }
+        if let Some((key, value)) = line.split_once('=')
+            && key.trim() == mime
+        {
+            return value
+                .split(';')
+                .map(str::trim)
+                .find(|id| !id.is_empty())
+                .map(str::to_owned);
         }
     }
     None

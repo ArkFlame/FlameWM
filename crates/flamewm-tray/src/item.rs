@@ -1,4 +1,4 @@
-//! StatusNotifierItem identity, registration-string parsing and item properties. Pure: no bus access.
+//! `StatusNotifierItem` identity, registration-string parsing and item properties. Pure: no bus access.
 
 use std::collections::BTreeMap;
 use std::fmt;

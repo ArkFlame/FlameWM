@@ -95,13 +95,14 @@ pub fn build_coverage_scaled(
         if e <= s {
             continue;
         }
-        if let Some(last) = merged.last_mut() {
-            if last.0 == y && s <= last.2 {
-                if e > last.2 {
-                    last.2 = e;
-                }
-                continue;
+        if let Some(last) = merged.last_mut()
+            && last.0 == y
+            && s <= last.2
+        {
+            if e > last.2 {
+                last.2 = e;
             }
+            continue;
         }
         merged.push((y, s, e));
     }

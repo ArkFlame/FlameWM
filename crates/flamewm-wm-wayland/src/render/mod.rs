@@ -408,16 +408,16 @@ fn render_into(
     // A refusal from any other driver is latched on its first answer and repainted in full.
     // The first frame is never queried: before its first submit the nested EGL surface is not
     // yet bound and presented, so the query answers EGL_BAD_SURFACE and latches a full repaint.
-    let age = if !buffer_age_probe_allowed(
+    let age = if buffer_age_probe_allowed(
         FIRST_FRAME_SUBMITTED.load(std::sync::atomic::Ordering::Relaxed),
         BUFFER_AGE_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
     ) {
-        0
-    } else {
         backend.buffer_age().unwrap_or_else(|| {
             BUFFER_AGE_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
             0
         })
+    } else {
+        0
     };
     // A retained texture + full blit was measured slower than direct window damage under llvmpipe
     // (marquee 142% vs 89% CPU, one run each), so the window path stays the only one.
@@ -1144,7 +1144,7 @@ pub fn buffer_age_unsupported(renderer_name: &str) -> bool {
 }
 
 /// Whether the buffer-age probe is skipped from the start on this backend. The nested winit EGL
-/// surface answers EGL_BAD_SURFACE to BUFFER_AGE on real Intel GL too (reproduced on
+/// surface answers `EGL_BAD_SURFACE` to `BUFFER_AGE` on real Intel GL too (reproduced on
 /// `Mesa Intel(R) UHD Graphics (TGL GT1)`, one ERROR per first redraw), so nested sessions always
 /// repaint in full: age 0 is the always-correct fallback.
 pub fn buffer_age_unsupported_on(backend: &str, renderer_name: &str) -> bool {

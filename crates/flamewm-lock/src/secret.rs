@@ -52,7 +52,7 @@ impl Drop for PasswordBuffer {
 fn wipe(text: &mut String) {
     // Overwrite the bytes in place before releasing the allocation.
     let mut bytes = std::mem::take(text).into_bytes();
-    bytes.iter_mut().for_each(|byte| *byte = 0);
+    bytes.fill(0);
     std::hint::black_box(&bytes);
 }
 

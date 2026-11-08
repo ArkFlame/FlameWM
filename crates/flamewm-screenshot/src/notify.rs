@@ -84,11 +84,12 @@ pub fn recording_indicator(
             .lines()
             .map_while(Result::ok)
         {
-            if let Some((invoked, action)) = parser.feed(&line) {
-                if invoked == id && action == "stop" {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    break;
-                }
+            if let Some((invoked, action)) = parser.feed(&line)
+                && invoked == id
+                && action == "stop"
+            {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                break;
             }
         }
     });
@@ -108,7 +109,7 @@ pub fn parse_notify_reply(text: &str) -> Option<u32> {
     rest.split(',').next()?.trim().parse().ok()
 }
 
-/// Reads `dbus-monitor` output one line at a time. An ActionInvoked signal prints a header
+/// Reads `dbus-monitor` output one line at a time. An `ActionInvoked` signal prints a header
 /// line followed by `uint32 <id>` and `string "<action>"` lines.
 #[derive(Default)]
 pub struct ActionParser {

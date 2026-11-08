@@ -274,7 +274,7 @@ impl App {
         let dest = free_destination(&archive);
         self.status = format!("Extracting to {}", dest.display());
         let what = format!("Extracted to {}", dest.display());
-        self.last_selection = selection.clone();
+        self.last_selection.clone_from(&selection);
         self.start_job(
             what,
             Box::new(move |cancel, sink| match password {

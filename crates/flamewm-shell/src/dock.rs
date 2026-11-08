@@ -109,9 +109,9 @@ pub fn click_request(app_id: &str, windows: &[WindowSnapshot]) -> ControlRequest
         .or_else(|| candidates().next());
     match window {
         Some(window) if window.state == WindowState::Minimized => {
-            ControlRequest::RestoreWindow(window.reference.clone())
+            ControlRequest::RestoreWindow(window.reference)
         }
-        Some(window) => ControlRequest::ActivateWindow(window.reference.clone()),
+        Some(window) => ControlRequest::ActivateWindow(window.reference),
         None => ControlRequest::LaunchApplication {
             app: flamewm_api::DesktopAppId::new(app_id),
             options: ApplicationLaunchOptions::default(),
@@ -153,6 +153,7 @@ pub struct DockFrame {
 
 /// Lays out `running.len()` slots (one per dock entry, `running[i]` drives the
 /// dot) on `edge`. `icon` is the icon edge in CSS px.
+#[must_use]
 pub fn dock_frame(
     running: &[bool],
     separator_after: Option<usize>,
@@ -296,6 +297,7 @@ pub fn dock_frame(
 /// Device-px placement of a dock surface on `output` (device px). `inset` is
 /// the reserved strip on the dock's edge (for example the taskbar height when
 /// both sit on the same edge). Centred along the edge.
+#[must_use]
 pub fn place(
     frame: &DockFrame,
     output: (i32, i32, i32, i32),

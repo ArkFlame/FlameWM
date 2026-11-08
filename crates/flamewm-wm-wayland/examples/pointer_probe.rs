@@ -82,12 +82,12 @@ impl Dispatch<wl_seat::WlSeat, ()> for App {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities { capabilities } = event {
-            if let WEnum::Value(caps) = capabilities {
-                if caps.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
-                    state.pointer = Some(seat.get_pointer(qh, ()));
-                }
-            }
+        if let wl_seat::Event::Capabilities { capabilities } = event
+            && let WEnum::Value(caps) = capabilities
+            && caps.contains(wl_seat::Capability::Pointer)
+            && state.pointer.is_none()
+        {
+            state.pointer = Some(seat.get_pointer(qh, ()));
         }
     }
 }
@@ -288,7 +288,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(manager) = app.relative_manager.clone() {
         let _relative = manager.get_relative_pointer(&pointer, &qh, ());
     }
-    let _locked_or_confined = match (constraint.as_str(), app.constraints.clone()) {
+    match (constraint.as_str(), app.constraints.clone()) {
         ("lock", Some(c)) => {
             let _ = c.lock_pointer(
                 &surface,
@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("requested confine");
         }
         _ => {}
-    };
+    }
     println!("probe mapped {WIDTH}x{HEIGHT} constraint={constraint}");
 
     let end = Instant::now() + hold;

@@ -259,17 +259,16 @@ fn field(path: &str, key: &str) -> Option<String> {
 fn mem_values() -> (u64, u64, u64, u64) {
     let mut vals = [0_u64; 4];
     for line in read_small("/proc/meminfo", 8192).lines() {
-        if let Some((key, rest)) = line.split_once(':') {
-            if let Some(i) = ["MemTotal", "MemAvailable", "SwapTotal", "SwapFree"]
+        if let Some((key, rest)) = line.split_once(':')
+            && let Some(i) = ["MemTotal", "MemAvailable", "SwapTotal", "SwapFree"]
                 .iter()
                 .position(|s| *s == key)
-            {
-                vals[i] = rest
-                    .split_whitespace()
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-            }
+        {
+            vals[i] = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
         }
     }
     (
@@ -406,10 +405,11 @@ fn truecolor(s: &str) -> Option<String> {
     ))
 }
 fn terminal_dimensions() -> (usize, usize) {
-    if let Ok(size) = rustix::termios::tcgetwinsize(io::stdout().as_fd()) {
-        if size.ws_col > 0 && size.ws_row > 0 {
-            return (size.ws_col as usize, size.ws_row as usize);
-        }
+    if let Ok(size) = rustix::termios::tcgetwinsize(io::stdout().as_fd())
+        && size.ws_col > 0
+        && size.ws_row > 0
+    {
+        return (size.ws_col as usize, size.ws_row as usize);
     }
     let cols = std::env::var("COLUMNS")
         .ok()

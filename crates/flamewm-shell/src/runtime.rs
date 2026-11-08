@@ -165,7 +165,7 @@ pub enum ContextMenuKind {
     Taskbar,
     /// Start application row (Secondary on `start.app.N`); one favorite toggle row.
     StartApp(flamewm_api::DesktopAppId),
-    /// Flat dbusmenu popup of one StatusNotifier item; row N is action `tray.menu.N`.
+    /// Flat dbusmenu popup of one `StatusNotifier` item; row N is action `tray.menu.N`.
     TrayItem {
         key: flamewm_tray::ItemKey,
         menu_path: String,
@@ -775,6 +775,7 @@ fn checked_size(value: i32) -> Result<u32, String> {
 /// Document UI scale for the panel surface. Must match the physical thickness
 /// rule in `flamewm_platform::panel` (supported scales only; others fall back
 /// to 100%) so the CSS-sized bar fills the whole panel window.
+#[must_use]
 pub fn panel_ui_scale(scale_percent: u16) -> f32 {
     let percent = if (100..=200).contains(&scale_percent) && scale_percent % 5 == 0 {
         scale_percent

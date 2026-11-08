@@ -756,10 +756,10 @@ impl<R: Read> XzReader<R> {
             blk.need_props = false;
         } else if blk.need_props {
             return Err(corrupt("missing LZMA properties"));
-        } else if reset == 1 {
-            if let Some(lzma) = blk.lzma.as_mut() {
-                *lzma = Lzma::new(lzma.lc, lzma.lp, lzma.pb);
-            }
+        } else if reset == 1
+            && let Some(lzma) = blk.lzma.as_mut()
+        {
+            *lzma = Lzma::new(lzma.lc, lzma.lp, lzma.pb);
         }
         let lzma = blk
             .lzma

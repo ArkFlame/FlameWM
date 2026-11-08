@@ -20,24 +20,21 @@ impl ExplorerApp {
             return;
         }
         if self.convert_picker.is_some() {
-            if e.phase==UiActionPhase::Release && e.inside {
-                if let Some(choice)=action.strip_prefix("explorer.convert.") {self.convert_picker_action(choice);}
-            }
+            if e.phase==UiActionPhase::Release && e.inside
+                && let Some(choice)=action.strip_prefix("explorer.convert.") {self.convert_picker_action(choice);}
             return;
         }
         if self.chooser_loading || self.chooser.is_some() {
-            if e.phase==UiActionPhase::Release && e.inside {
-                if let Some(action)=action.strip_prefix("explorer.chooser.") {
+            if e.phase==UiActionPhase::Release && e.inside
+                && let Some(action)=action.strip_prefix("explorer.chooser.") {
                     self.chooser_action(action);
                 }
-            }
             return;
         }
         // Dialogs are modal: only their own buttons and the progress Cancel react.
         if self.dialog.is_some() {
-            if let Some(slot)=action.strip_prefix("explorer.dialog.") {
-                if e.phase==UiActionPhase::Release && e.inside {self.dialog_action(slot);}
-            }
+            if let Some(slot)=action.strip_prefix("explorer.dialog.")
+                && e.phase==UiActionPhase::Release && e.inside {self.dialog_action(slot);}
             return;
         }
         // An open context menu takes the wheel so rows that do not fit the window can be reached.
@@ -132,9 +129,8 @@ impl ExplorerApp {
         }
         if e.phase!=UiActionPhase::Release || !e.inside {return;}
         if let Some(slot)=action.strip_prefix("explorer.breadcrumb.").and_then(|v|v.parse::<usize>().ok()) {
-            if e.button==1 && self.edit.is_none() {
-                if let Some((_,path))=breadcrumbs(self.model.tab().path()).get(slot) {self.navigate(path.clone());}
-            }
+            if e.button==1 && self.edit.is_none()
+                && let Some((_,path))=breadcrumbs(self.model.tab().path()).get(slot) {self.navigate(path.clone());}
             return;
         }
         if let Some(slot)=action.strip_prefix("explorer.row.").and_then(|v|v.parse::<usize>().ok()) {
@@ -279,7 +275,7 @@ impl ExplorerApp {
                 "right"=>{let to=self.field.caret+1;self.field.move_caret(to);},
                 "keysym(0xff50)"=>self.field.move_caret(0),
                 "keysym(0xff57)"=>self.field.move_caret(usize::MAX),
-                _=>if let Some(text)=&key.text {if !ctrl && !text.chars().any(char::is_control) {self.field.insert(text);}},
+                _=>if let Some(text)=&key.text&& !ctrl && !text.chars().any(char::is_control) {self.field.insert(text);},
             }
             return;
         }
@@ -425,9 +421,8 @@ impl ExplorerApp {
                 if self.model.finish_listing(generation,&path) {self.remote_blocked(path,error);}
             },
             WorkerResult::HostKeyProbed{url,result}=>match result {
-                Ok(prompt)=>if let Some(Dialog::HostKey{url:open,prompt:slot})=self.dialog.as_mut() {
-                    if open.to_string()==url.to_string() {*slot=Some(prompt);self.model.status="Host key received: compare the fingerprint before trusting".into();}
-                },
+                Ok(prompt)=>if let Some(Dialog::HostKey{url:open,prompt:slot})=self.dialog.as_mut()
+                    && open.to_string()==url.to_string() {*slot=Some(prompt);self.model.status="Host key received: compare the fingerprint before trusting".into();},
                 Err(message)=>{
                     if matches!(self.dialog,Some(Dialog::HostKey{..})) {self.dialog=None;}
                     self.model.status=message;
@@ -453,9 +448,8 @@ impl ExplorerApp {
             WorkerResult::Thumbnail{key,pixels}=>self.thumbs.borrow_mut().complete(key,pixels),
             WorkerResult::SearchTick=>self.take_search_results(),
             WorkerResult::SizeReady{path,bytes}=>{
-                if let Some(Dialog::Properties{props,size,..})=self.dialog.as_mut() {
-                    if props.path==path {*size=Some(bytes.unwrap_or(0));}
-                }
+                if let Some(Dialog::Properties{props,size,..})=self.dialog.as_mut()
+                    && props.path==path {*size=Some(bytes.unwrap_or(0));}
             },
             WorkerResult::DevicesChanged=>{self.reload_places();self.refresh_devices();},
             WorkerResult::Devices(devices)=>{

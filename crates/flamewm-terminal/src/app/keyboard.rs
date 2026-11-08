@@ -119,22 +119,21 @@ impl App {
             && !mods.shift
             && matches!(name.as_str(), "right" | "tab")
             && self.at_prompt()
+            && let Some(suffix) = self.ghost().map(str::to_owned)
         {
-            if let Some(suffix) = self.ghost().map(str::to_owned) {
-                if let Some(pane) = self.focused_pane_mut() {
-                    pane.input.insert_str(&suffix);
-                }
-                return suffix.into_bytes();
+            if let Some(pane) = self.focused_pane_mut() {
+                pane.input.insert_str(&suffix);
             }
+            return suffix.into_bytes();
         }
         let at_prompt = self.at_prompt();
         let Some(pane) = self.focused_pane_mut() else {
             return bytes;
         };
-        if let Some(line) = pane.input.key(&name, mods, event.text.as_deref()) {
-            if at_prompt {
-                let _ = self.history.record(&line);
-            }
+        if let Some(line) = pane.input.key(&name, mods, event.text.as_deref())
+            && at_prompt
+        {
+            let _ = self.history.record(&line);
         }
         bytes
     }

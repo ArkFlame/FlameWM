@@ -705,10 +705,10 @@ fn rebuild_loop(
             if let Ok(mut slot) = state.ready.lock() {
                 *slot = Some(Arc::new(next));
             }
-            if let Some(wake) = wake {
-                if let Ok(mut stream) = wake.lock() {
-                    let _ = stream.write_all(&[1]);
-                }
+            if let Some(wake) = wake
+                && let Ok(mut stream) = wake.lock()
+            {
+                let _ = stream.write_all(&[1]);
             }
         }
         // Cleared after publishing so `is_idle` implies the result is visible.
@@ -847,10 +847,10 @@ fn worker_loop<R: IconResolve>(
             None => return,
         }
         // Wake FD: one byte per completed result.
-        if let Some(wake) = &wake_tx {
-            if let Ok(mut stream) = wake.lock() {
-                let _ = stream.write_all(&[1]);
-            }
+        if let Some(wake) = &wake_tx
+            && let Ok(mut stream) = wake.lock()
+        {
+            let _ = stream.write_all(&[1]);
         }
     }
 }

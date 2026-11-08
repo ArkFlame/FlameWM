@@ -171,7 +171,7 @@ impl Tab {
         if let Some(url)=remote::url_of(self.path()) {
             return match url.parent() { Some(parent) if remote::to_path(&parent)!=self.path() => { self.visit(remote::to_path(&parent)); true }, _ => false };
         }
-        if let Some(p)=self.path().parent().map(Path::to_path_buf) { if p != self.path() { self.visit(p); return true; } } false }
+        if let Some(p)=self.path().parent().map(Path::to_path_buf) && p != self.path() { self.visit(p); return true; } false }
     pub fn can_back(&self) -> bool { self.cursor > 0 }
     pub fn can_forward(&self) -> bool { self.cursor + 1 < self.history.len() }
     fn reset(&mut self) { self.clear_entries(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; }
@@ -265,9 +265,8 @@ impl Tab {
     }
     pub fn filtered_count(&self) -> usize {
         let query=self.search.to_lowercase();
-        if let Some((revision,cached_query,count))=self.filter_cache.borrow().as_ref() {
-            if *revision==self.revision && *cached_query==query {return *count;}
-        }
+        if let Some((revision,cached_query,count))=self.filter_cache.borrow().as_ref()
+            && *revision==self.revision && *cached_query==query {return *count;}
         let count=self.entries.iter().filter(|entry| entry_matches(entry, &query)).count();
         *self.filter_cache.borrow_mut()=Some((self.revision,query,count));
         count
@@ -384,13 +383,12 @@ pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
     let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
     let content=fs::read_to_string(base.join("user-dirs.dirs")).unwrap_or_default();
     for line in content.lines() {
-        if let Some((key,val))=line.trim().split_once('=') {
-            if key==format!("XDG_{name}_DIR") {
+        if let Some((key,val))=line.trim().split_once('=')
+            && key==format!("XDG_{name}_DIR") {
                 let v=val.trim().trim_matches('"');
                 if v=="$HOME" {return home.to_path_buf();}
-                if let Some(r)=v.strip_prefix("$HOME/") { if !r.split('/').any(|p|p=="..") {return home.join(r);} }
+                if let Some(r)=v.strip_prefix("$HOME/") && !r.split('/').any(|p|p=="..") {return home.join(r);}
             }
-        }
     }
     home.join(fallback)
 }

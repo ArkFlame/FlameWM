@@ -115,16 +115,17 @@ impl App {
         }
         // Closing an open menu changes the projection even when the click then falls through.
         let mut changed = false;
-        if let Some((menu_row, menu_col)) = self.menu {
-            if event.phase == UiActionPhase::Press && event.button == 1 {
-                self.menu = None;
-                changed = true;
-                let inside = (menu_row..menu_row + MENU.len()).contains(&row)
-                    && (menu_col..menu_col + menu_width()).contains(&col);
-                if inside {
-                    self.menu_action(row - menu_row);
-                    return true;
-                }
+        if let Some((menu_row, menu_col)) = self.menu
+            && event.phase == UiActionPhase::Press
+            && event.button == 1
+        {
+            self.menu = None;
+            changed = true;
+            let inside = (menu_row..menu_row + MENU.len()).contains(&row)
+                && (menu_col..menu_col + menu_width()).contains(&col);
+            if inside {
+                self.menu_action(row - menu_row);
+                return true;
             }
         }
         let mouse_captured = !event.shift_down()
@@ -182,11 +183,14 @@ impl App {
             .min(rect.rows.saturating_sub(1));
         let pane_col = col.saturating_sub(rect.x0).min(rect.cols.saturating_sub(1));
         // Ctrl+click on a link opens it and consumes the click, so the pane keeps its selection.
-        if inside && event.phase == UiActionPhase::Press && event.button == 1 && event.ctrl_down() {
-            if let Some(url) = self.link_at(target, pane_row, pane_col) {
-                let _ = crate::links::open(&url);
-                return true;
-            }
+        if inside
+            && event.phase == UiActionPhase::Press
+            && event.button == 1
+            && event.ctrl_down()
+            && let Some(url) = self.link_at(target, pane_row, pane_col)
+        {
+            let _ = crate::links::open(&url);
+            return true;
         }
         if inside && event.phase == UiActionPhase::Press && event.button == 1 {
             // Clicking a pane gives it the keyboard and the cursor.

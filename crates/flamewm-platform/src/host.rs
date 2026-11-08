@@ -108,14 +108,14 @@ impl<E: EnginePorts> PlatformHost<E> {
     /// named `wayland-0`; resolve this alias only when exactly one output is connected.
     /// Never guess an output on multi-monitor systems.
     fn persisted_output_id(&self, name: &str) -> OutputId {
-        if name == "default" {
-            if let Some(snapshot) = self.displays.cached() {
-                let mut connected = snapshot.outputs.iter().filter(|out| out.connected);
-                if let Some(only) = connected.next() {
-                    if connected.next().is_none() {
-                        return only.id.clone();
-                    }
-                }
+        if name == "default"
+            && let Some(snapshot) = self.displays.cached()
+        {
+            let mut connected = snapshot.outputs.iter().filter(|out| out.connected);
+            if let Some(only) = connected.next()
+                && connected.next().is_none()
+            {
+                return only.id.clone();
             }
         }
         OutputId::new(name.to_owned())
@@ -360,15 +360,14 @@ impl<E: EnginePorts> PlatformHost<E> {
                 self.panels.sync_outputs(&displays);
             }
         }
-        if effects.taskbar_height {
-            if let Some(flamewm_api::settings::SettingValue::Integer(logical_size)) =
+        if effects.taskbar_height
+            && let Some(flamewm_api::settings::SettingValue::Integer(logical_size)) =
                 snapshot.values.get("taskbarHeight")
-            {
-                let logical_size = (*logical_size).try_into().map_err(|_| {
-                    FlameError::new(ErrorCode::InvalidArgument, "taskbarHeight is out of range")
-                })?;
-                self.panels.reconcile_taskbar_height(logical_size);
-            }
+        {
+            let logical_size = (*logical_size).try_into().map_err(|_| {
+                FlameError::new(ErrorCode::InvalidArgument, "taskbarHeight is out of range")
+            })?;
+            self.panels.reconcile_taskbar_height(logical_size);
         }
         if effects.taskbar_frame {
             self.panels

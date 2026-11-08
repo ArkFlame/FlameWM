@@ -1180,10 +1180,11 @@ impl Drop for X11App {
                 refresh_backbuffer_gauge(0);
                 self.backbuffer = 0;
             }
-            if let Some((pixmap, bytes)) = self.retired_backbuffer.take() {
-                if pixmap != 0 && pixmap != self.background_bound {
-                    self.allocator.free_pixmap(self.display, pixmap, bytes);
-                }
+            if let Some((pixmap, bytes)) = self.retired_backbuffer.take()
+                && pixmap != 0
+                && pixmap != self.background_bound
+            {
+                self.allocator.free_pixmap(self.display, pixmap, bytes);
             }
             if !self.gc.is_null() {
                 XFreeGC(self.display, self.gc);

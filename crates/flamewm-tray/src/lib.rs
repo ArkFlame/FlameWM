@@ -1,4 +1,4 @@
-//! StatusNotifier tray: pure item registry, registration parsing, dbusmenu layout reduction and
+//! `StatusNotifier` tray: pure item registry, registration parsing, dbusmenu layout reduction and
 //! overflow policy, plus a `StatusNotifierWatcher` service driven by `flamewm-dbus-reactor`.
 //!
 //! Item props include `IconName`, decoded `IconPixmap`, and the `ToolTip` title. `TrayWatcher`

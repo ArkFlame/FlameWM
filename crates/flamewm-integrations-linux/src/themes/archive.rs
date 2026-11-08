@@ -260,10 +260,10 @@ mod tests {
     impl Read for Endless<'_> {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.reads.set(self.reads.get() + 1);
-            if let Some((at, flag)) = self.on_read {
-                if self.reads.get() == at {
-                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
+            if let Some((at, flag)) = self.on_read
+                && self.reads.get() == at
+            {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             buf.fill(0);
             Ok(buf.len())

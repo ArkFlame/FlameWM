@@ -518,7 +518,7 @@ impl X11Desktop {
             state,
             sticky: has("_NET_WM_STATE_STICKY"),
             focused: active == Some(window),
-            workspace: WorkspaceRef::new(signed(desktop) as i32, workspace.revision),
+            workspace: WorkspaceRef::new(signed(desktop), workspace.revision),
             output,
             state_generation: self.generation_of(window),
             unresponsive: self.unresponsive.borrow().contains(&window),

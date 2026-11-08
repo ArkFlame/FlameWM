@@ -210,10 +210,10 @@ pub(super) fn init_backend(
                     Timer::from_duration(hotplug::HOTPLUG_SETTLE),
                     move |_, (), state| {
                         settle_burst.borrow_mut().fire();
-                        if let Ok(mut d) = settle_drm.try_borrow_mut() {
-                            if let Err(error) = scan_connectors(&mut d, state) {
-                                eprintln!("flamewm-wayland: connector rescan failed: {error}");
-                            }
+                        if let Ok(mut d) = settle_drm.try_borrow_mut()
+                            && let Err(error) = scan_connectors(&mut d, state)
+                        {
+                            eprintln!("flamewm-wayland: connector rescan failed: {error}");
                         }
                         // An unplugged or resized output changes the usable area: pull windows that
                         // now sit off-screen back in, the same way a nested host resize does.

@@ -477,11 +477,11 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
                 }
             }
         }
-        if let (Some(d), Some(a)) = (&ref_devices, &ref_apps) {
-            if differing_permille(d, a, content.2) < OTHER_TAB_MIN_PERMILLE {
-                failures.push(format!("#{i} tabs not distinguishable"));
-                continue;
-            }
+        if let (Some(d), Some(a)) = (&ref_devices, &ref_apps)
+            && differing_permille(d, a, content.2) < OTHER_TAB_MIN_PERMILLE
+        {
+            failures.push(format!("#{i} tabs not distinguishable"));
+            continue;
         }
         switches_ok += 1;
     }
@@ -517,10 +517,10 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
     sleep(Duration::from_millis(300));
     let mut enters = 0usize;
     while let Ok(Some(event)) = canary.conn.poll_for_event() {
-        if let Event::EnterNotify(e) = event {
-            if e.event == panel.id {
-                enters += 1;
-            }
+        if let Event::EnterNotify(e) = event
+            && e.event == panel.id
+        {
+            enters += 1;
         }
     }
     let still_open = viewable(canary, AUDIO_POPUP).is_some();
