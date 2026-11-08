@@ -114,6 +114,8 @@ SS10_SCALE_SLIDER_CLIENT = "725,580"
 # With modes listed the page is wheel-scrolled to its bottom; the slider then sits at y=467 (measured on a
 # 1280x800 Xephyr with 16 modes, and the same y with 0 modes). Evidence: runs ss10c shots.
 SS10_SCROLLED_SCALE_CLIENT = "725,467"
+# Selected "Theme" nav row on the 820x540 client: y 109..139 (below the sidebar Search field), solid accent fill.
+SS14_ACCENT_PIXEL_DEFAULT = "170,124"
 SS10_WHEEL_POINTER = (SS10_CLIENT[0] // 2, SS10_CLIENT[1] // 2)
 # SS12 fixture constants measured natively on a private Xephyr (Settings --page hotkeys, default 820x540
 # client at screen origin (0,31)): Toggle Start menu capture field centre and its Reset button centre.
@@ -218,8 +220,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                              "ingests installed-result.json (ignored when --ss18-installed-result is given)")
     parser.add_argument("--canary-bin", default=str(ROOT / ".target/debug/flamewm-x11-canary"),
                         help="flamewm-x11-canary binary used by SS17 j07 rows")
-    parser.add_argument("--ss14-accent-pixel", metavar="X,Y", default="100,92",
-                        help="SS14 client-relative point inside the selected nav-row background (default: 100,92)")
+    parser.add_argument("--ss14-accent-pixel", metavar="X,Y", default=SS14_ACCENT_PIXEL_DEFAULT,
+                        help=f"SS14 client-relative point inside the selected nav-row background (default: {SS14_ACCENT_PIXEL_DEFAULT})")
     parser.add_argument("--ss05-click", metavar="X,Y", default=SS05_CHOOSE_CLIENT_DEFAULT,
                         help="SS05 client-relative wallpaper Choose center at 960x640, left of Clear and Default "
                              f"(default: {SS05_CHOOSE_CLIENT_DEFAULT})")
@@ -662,12 +664,11 @@ def ss14_accent_screen_point(geometry: dict, point: tuple[int, int]) -> tuple[in
     return geometry["x"] + point[0], geometry["y"] + point[1]
 
 
-def expected_selected_row_pixel(accent: str, base: tuple[int, int, int] = (27, 30, 32), alpha: int = 56):
-    """CSS nav-selection is the typed accent at alpha=56 over the #1b1e20 sidebar."""
-    rgb = accent_rgb(accent)
-    if rgb is None:
-        return None
-    return tuple((src * alpha + dst * (255 - alpha) + 127) // 255 for src, dst in zip(rgb, base))
+def expected_selected_row_pixel(accent: str) -> tuple[int, int, int] | None:
+    """The selected nav row is the solid accent fill (app_impl_2 paints nav-selection with the accent).
+
+    The 56-alpha tint applies to unselected rows only; see ss03_selected_row_matches."""
+    return accent_rgb(accent)
 
 
 def wait_for_settings_window(ctx: Ctx, evidence_path: Path, timeout: float = 5.0) -> dict | None:
