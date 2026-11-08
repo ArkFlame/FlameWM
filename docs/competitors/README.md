@@ -12,5 +12,6 @@ Ground rules for every entry:
 | Competitor | Session type | Licence | Snapshot date | Entry |
 | --- | --- | --- | --- | --- |
 | Vela (`vela-desktop/vela`, local copy `.vendor/vela-main`) | Wayland (own compositor, Vulkan, Qt Quick shell) | GPL-3.0-or-later | 2026-11-08 | [FEATURES](vela/FEATURES.md), [DESIGN_COMPARISON](vela/DESIGN_COMPARISON.md) |
+| Xfce xfwm4 + xfdesktop, MATE libmate-desktop (`.vendor/xfwm4-master`, `xfdesktop-master`, `mate-desktop-master`) | X11 window manager, desktop, shared helper library | GPL-2.0-or-later (xfwm4, xfdesktop); GPL-2.0/LGPL (MATE) | 2026-11-08 | [xfce LEARNINGS](xfce/LEARNINGS.md), [mate LEARNINGS](mate/LEARNINGS.md) |
 
 Add a new competitor by creating `docs/competitors/<name>/` with the same two files and one row in the table above.
