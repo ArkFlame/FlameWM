@@ -167,3 +167,23 @@
 - Ruled out: graph image re-rendering (redraw still 110–225 ms with `paint_graphs` disabled), the window backdrop (opacity forced to 100 gave the same redraw time in debug). `perf`, `strace` and `gdb` are blocked by ptrace/perf policy.
 - Reactor: `FLAMEWM_TIMER_TRACE` shows the loop sleeps with `timeout=None` between 1 Hz samples. The per-wake cost is the full retained redraw in `crates/flamewm-render-x11/src/app/render/frame.rs` (Claude-owned). Likely cause: every wake reports damage over the whole table, so the planner repaints the whole window. Not verified.
 - No source changes committed for G11 in this pass. Next step: count `pending_damage` kind per wake and the number of nodes changed, then either skip unchanged table rows in the task manager or make the renderer repaint only the changed rect. Target <1% is not yet met.
+
+## G1 Displays / G2 Night Light + Accessibility / G6b Dock settings — PARTIAL
+
+- Changed: `ui/settings.html` (Dock card, Taskbar surface card, sidebar icons), `crates/flamewm-settings/src/{actions,app_impl_1,app_impl_3,consts,ui_contract}.rs`,
+  `crates/flamewm-settings-core/src/{lib,night_light,xdg_applications,tests}.rs`, `crates/flamewm-platform/src/settings/dock_settings_tests.rs`,
+  `crates/flamewm-api/src/settings_groups.rs` (dock/taskbar keys removed from the `panel` switch group), `assets/web/breeze/universal-access.svg`.
+- Commands:
+  - `cargo test -p flamewm-api -p flamewm-platform -p flamewm-settings -p flamewm-settings-core` → exit 0 (api 60, platform 330, settings 208, settings-core 21).
+  - `cargo build -p flamewm-wm -p flamewm-shell -p flamewm-desktop -p flamewm-settings` → exit 0, zero warnings.
+  - `python3 tools/architecture_guard.py` → exit 0 (77 ratified violations, none new).
+  - `scripts/settings-acceptance --display :97 ...` → exit 1: 3 PASS, 14 FAIL, 2 NOT_RUN, 1 ENVIRONMENT_BLOCKED. Evidence: `/tmp/opencode/terra-acc-1794099029/result.json`. Not triaged yet.
+  - SS16 on clean HEAD worktree: `python3 tools/verify_rwr_promotion.py` → exit 1 (`required present copy anchor missing: crates/flamewm-render-x11/src/app/render.rs`). Pre-existing. Log: `/tmp/opencode/terra-ss16-clean.log`.
+- Live check (isolated Xvfb :97, private HOME/XDG, private dbus, Terra-built WM/shell/settings): Taskbar page shows "Taskbar surface" and "Dock" cards. Toggling Show dock on made the dock appear at bottom centre. Screenshots: `/tmp/opencode/terra-dock-run/shot-dock-on4.png`, `shot-taskbar2.png`.
+- Root cause of "no dock settings" report: dock/taskbar keys were members of the `panel` switch group, so they resolved to defaults when Custom panel was off. Fixed by removing them from the group and moving the controls into always-visible cards. Regression test: `dock_and_taskbar_keys_are_not_reset_by_the_custom_panel_switch`.
+- Cross-ownership note: the group table lives in `flamewm-api` (Claude-owned). That file was edited for this one fix.
+- Sidebar icons: Accessibility → `universal-access.svg` (new, authored), Hotkeys → `input-keyboard.svg` (was identical to `settings-hotkeys.svg`), Assistant → `assistant-brain.svg`, About → `help-about.svg`. Test: `sidebar_nav_rows_have_distinct_existing_icons`.
+- Commits: `8923efdf` (dock/taskbar controls, settings-core modules), `24b740ef` (decoupled cards, icons). Both pushed.
+- Not done: G6 pages (Startup Applications, Default Applications, Keyboard Shortcuts); per-app pin removal (needs dynamic rows; icon size is a stepper, since `sliders.rs` has no integer slider); the 14 acceptance FAILs (SS02-SS07, SS11-SS15, SS17, SS19 and SS00 tree-changed) are not triaged.
+- Not verified: Gradient surface and gradient edge rendering; dock position other than bottom; pinned-app behaviour; the acceptance failures above.
+- Risk: the settings binary must be rebuilt after `ui/settings.html` changes. `crates/flamewm-settings/build.rs` tracks the file, so a normal build picks it up. The stale `flamewm` WM binary caused a false "no authoritative value" error during the live check.
