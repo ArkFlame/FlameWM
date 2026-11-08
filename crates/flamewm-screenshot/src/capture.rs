@@ -290,6 +290,24 @@ pub fn decode_ximage_owned<C: Connection>(
     decode_ximage(conn, screen, depth, width, height, &data)
 }
 
+/// A private root-grab connection owned by a background capture worker.
+pub struct Grabber {
+    conn: x11rb::rust_connection::RustConnection,
+    screen: usize,
+}
+
+/// Opens a connection for capture on a worker thread.
+pub fn connect_grabber() -> Result<Grabber> {
+    let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
+    Ok(Grabber { conn, screen })
+}
+
+impl Grabber {
+    pub fn grab(&self, requested: Rect) -> Result<Image> {
+        grab(&self.conn, self.screen, requested)
+    }
+}
+
 pub fn grab<C: Connection>(conn: &C, screen: usize, requested: Rect) -> Result<Image> {
     let rect = requested
         .intersect(root_bounds(conn, screen))

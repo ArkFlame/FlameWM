@@ -212,13 +212,6 @@ remove_by = "0.3.0"
 
 [[exception]]
 path = "crates/flamewm-screenshot/src/main.rs"
-capability = "j11-g08-prefixed-env"
-reason = "The capture path reads `DISPLAY` to name the display it connects to; that is the X connection name, not a FlameWM setting."
-canonical_target = "crates/flamewm-screenshot/src/main.rs"
-remove_by = "0.2.0"
-
-[[exception]]
-path = "crates/flamewm-screenshot/src/main.rs"
 capability = "x11rb-symbol"
 reason = "`main` opens the display with `x11rb::connect` and hands the connection to the capture and editor modules."
 canonical_target = "crates/flamewm-screenshot/src/ui.rs"

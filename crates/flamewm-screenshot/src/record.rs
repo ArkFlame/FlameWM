@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
-use x11rb::rust_connection::RustConnection;
 
 /// Produces one frame per call. Implemented by X11 capture and by synthetic sources in tests.
 pub trait FrameSource {
@@ -103,22 +102,20 @@ where
 
 /// Grabs `rect` from the X11 root window on the worker's own connection.
 pub struct X11Frames {
-    conn: RustConnection,
-    screen: usize,
+    grabber: capture::Grabber,
     rect: Rect,
 }
 
 impl FrameSource for X11Frames {
     fn next_frame(&mut self) -> Result<Image, String> {
-        capture::grab(&self.conn, self.screen, self.rect)
+        self.grabber.grab(self.rect)
     }
 }
 
 /// Opens the worker's own X connection when the worker starts.
 pub fn x11_frames(rect: Rect) -> impl FnOnce() -> Result<X11Frames, String> + Send {
     move || {
-        let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
-        Ok(X11Frames { conn, screen, rect })
+        Ok(X11Frames { grabber: capture::connect_grabber()?, rect })
     }
 }
 
