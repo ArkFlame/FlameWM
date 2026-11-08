@@ -4,6 +4,7 @@
 mod capture;
 mod clipboard;
 mod notify;
+mod record;
 mod ui;
 
 use capture::{Capture as _, Image, Rect};
@@ -11,6 +12,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use x11rb::connection::Connection;
 
@@ -304,76 +307,61 @@ fn selection<C: Connection>(
 
 fn record_video(
     rect: Rect,
-    display: &str,
     duration: u64,
     fps: u32,
     path: &Path,
     audio_source: Option<&str>,
-) -> Result<(), String> {
+) -> Result<record::Stats, String> {
+    if !record::ffmpeg_available() {
+        return Err("screen recording needs ffmpeg on PATH (not found); screenshots work without it".into());
+    }
     if path.exists() {
         return Err(format!("output already exists: {}", path.display()));
     }
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let input = format!("{display}+{},{}", rect.x, rect.y);
-    // Optional on-demand encoder; no recorder daemon, Qt, or GStreamer dependency.
-    let mut command = std::process::Command::new("ffmpeg");
-    command
-        .args([
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "x11grab",
-            "-framerate",
-        ])
-        .arg(fps.to_string())
-        .arg("-video_size")
-        .arg(format!("{}x{}", rect.w, rect.h))
-        .arg("-i")
-        .arg(input);
-    if let Some(source) = audio_source {
-        command.args(["-f", "pulse", "-i", source]);
-    } else {
-        command.arg("-an");
-    }
-    command.arg("-t").arg(duration.to_string());
-    match path.extension().and_then(|s| s.to_str()) {
-        Some("webm") => {
-            command.args([
-                "-c:v",
-                "libvpx-vp9",
-                "-deadline",
-                "realtime",
-                "-cpu-used",
-                "8",
-            ]);
-        }
-        Some("gif") => {}
-        _ => {
-            command.args([
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-crf",
-                "20",
-                "-pix_fmt",
-                "yuv420p",
-            ]);
-        }
-    }
-    let status = command
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let args = record::encoder_args(extension, fps, (rect.w, rect.h), audio_source)?;
+    let mut child = std::process::Command::new("ffmpeg")
+        .args(args)
         .arg("-n")
         .arg(path)
-        .status()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("ffmpeg unavailable: {e}"))?;
-    if !status.success() {
-        return Err(format!("recording failed: ffmpeg exited {status}"));
+    let mut stdin = child.stdin.take().ok_or("ffmpeg stdin unavailable")?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let indicator = notify::recording_indicator(stop.clone());
+    if indicator.is_none() {
+        eprintln!("FlameWM: stop indicator unavailable; recording ends after {duration} s");
     }
-    Ok(())
+    let recorded = record::run(
+        record::x11_frames(rect),
+        &mut stdin,
+        fps,
+        Duration::from_secs(duration),
+        &stop,
+    );
+    // Closing stdin lets ffmpeg finish the container; a failed run leaves no partial file.
+    drop(stdin);
+    drop(indicator);
+    let mut diagnostics = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut diagnostics);
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let outcome = match recorded {
+        Ok(stats) if status.success() => Ok(stats),
+        Ok(_) => Err(format!("recording failed: ffmpeg exited {status}: {}", diagnostics.trim())),
+        Err(error) => Err(error),
+    };
+    if outcome.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    outcome
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -403,14 +391,11 @@ fn run(args: &[String]) -> Result<(), String> {
         let path = o
             .output
             .map_or_else(|| default_output("mp4", &o.name_template, o.mode, rect), Ok)?;
-        record_video(
-            rect,
-            &std::env::var("DISPLAY").map_err(|_| "DISPLAY must be set")?,
-            duration,
-            o.fps,
-            &path,
-            o.audio_source.as_deref(),
-        )?;
+        let stats = record_video(rect, duration, o.fps, &path, o.audio_source.as_deref())?;
+        eprintln!(
+            "FlameWM: {} frames written, {} captured, {} dropped",
+            stats.written, stats.captured, stats.dropped
+        );
         println!("{}", path.display());
         return Ok(());
     }

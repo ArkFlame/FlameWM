@@ -7,6 +7,7 @@ import ctypes.util
 import json
 import os
 from pathlib import Path
+import shutil
 import statistics
 import struct
 import subprocess
@@ -337,6 +338,33 @@ def main():
         result["region_pixels"] = {"red_columns": 100, "blue_columns": 20, "checked": 120 * 80}
         X11.XDestroyWindow(fixture_display, fixture)
         X11.XCloseDisplay(fixture_display)
+        # Recording: real encode when ffmpeg is installed; otherwise the binary must refuse clearly.
+        if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+            recording = evidence / "recording.mp4"
+            run([binary, "--full", "--record", "2", "--fps", "30", "--output", recording], timeout=60)
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream=codec_name,width,height", "-of", "csv=p=0", str(recording)],
+                env=env, capture_output=True, text=True, timeout=30,
+            )
+            if probe.stdout.strip() != "h264,2560,1440":
+                raise AssertionError(f"recording stream mismatch: {probe.stdout!r} {probe.stderr!r}")
+            result["recording"] = {"codec": "h264", "size": [2560, 1440], "fps": 30, "seconds": 2}
+        else:
+            result["recording"] = "skipped: ffmpeg or ffprobe not installed"
+        bare_path = evidence / "no-ffmpeg-bin"
+        bare_path.mkdir()
+        degraded_env = dict(env, PATH=str(bare_path))
+        degraded_out = evidence / "degraded.mp4"
+        degraded = subprocess.run(
+            [str(binary), "--full", "--record", "1", "--output", str(degraded_out)],
+            env=degraded_env, cwd=evidence / "cwd", stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=30,
+        )
+        if degraded.returncode == 0 or "needs ffmpeg" not in degraded.stderr or degraded_out.exists():
+            raise AssertionError(f"recording without ffmpeg did not degrade cleanly: {degraded}")
+        result["recording_degraded"] = degraded.stderr.strip()
+
         clipboard = clipboard_png(display_name)
         if clipboard != region_path.read_bytes():
             raise AssertionError("clipboard PNG differs from saved region PNG")
@@ -370,9 +398,11 @@ def main():
         while time.monotonic() < deadline:
             if notification_log_path.exists():
                 notifications = [json.loads(line) for line in notification_log_path.read_text().splitlines()]
-            if len(notifications) >= 9:
+            if sum(n.get("summary") == "Screenshot captured" for n in notifications) >= 9:
                 break
             time.sleep(0.02)
+        # The recording indicator is a separate, expected notification from the recording step.
+        notifications = [n for n in notifications if n.get("summary") != "Recording screen"]
         if len(notifications) != 9 or any(n["app"] != "FlameWM" or n["summary"] != "Screenshot captured" or not n["body"].startswith("Saved to ") for n in notifications):
             raise AssertionError(f"unexpected notification deliveries: {notifications}")
         result["notify_method_calls"] = len(notifications)
