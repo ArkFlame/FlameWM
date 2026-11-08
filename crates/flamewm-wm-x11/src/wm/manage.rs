@@ -82,6 +82,22 @@ impl<C: Connection> Wm<'_, C> {
             self.conn
                 .configure_window(*dock, &dock_above_frame_aux(frame))?;
         }
+        self.raise_reveal_strips()
+    }
+
+    /// Restacks every reveal strip to the top, above the taskbar it may share an edge with.
+    /// Strips map only while auto-hidden, so this never lifts a visible dock.
+    pub(super) fn raise_reveal_strips(&self) -> Result<(), ReplyError> {
+        let docks = self
+            .dock_struts
+            .iter()
+            .map(|(dock, strut)| (*dock, strut.iter().any(|&value| value != 0)));
+        for strip in reveal_strip_windows(docks) {
+            self.conn.configure_window(
+                strip,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            )?;
+        }
         Ok(())
     }
 

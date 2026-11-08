@@ -47,7 +47,7 @@ impl<C: Connection> Wm<'_, C> {
     /// lowest normal or above frame (never under the desktop), Above frames go to the top.
     pub(super) fn enforce_stack_layers(&mut self) -> Result<(), ReplyError> {
         if self.stack_layers.is_empty() {
-            return Ok(());
+            return self.raise_reveal_strips();
         }
         let root = self.screen().root;
         let tree = self.conn.query_tree(root)?.reply()?;
@@ -60,7 +60,7 @@ impl<C: Connection> Wm<'_, C> {
             })
             .collect();
         if !layers_misplaced(&ordered) {
-            return Ok(());
+            return self.raise_reveal_strips();
         }
         let anchor = ordered
             .iter()
@@ -87,7 +87,7 @@ impl<C: Connection> Wm<'_, C> {
                 _ => {}
             }
         }
-        Ok(())
+        self.raise_reveal_strips()
     }
 }
 

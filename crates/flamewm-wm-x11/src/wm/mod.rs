@@ -684,9 +684,27 @@ const fn dock_may_rise(
     !reserves_space || docks_may_rise(frame_fullscreen, fullscreen_elsewhere)
 }
 
+/// Zero-strut docks (reveal strips and auto-hidden docks) that must stay topmost. A reserving
+/// dock such as the taskbar shares its edge with a strip, so the strip is restacked above it.
+fn reveal_strip_windows(docks: impl IntoIterator<Item = (Window, bool)>) -> Vec<Window> {
+    docks
+        .into_iter()
+        .filter(|&(_, reserves_space)| !reserves_space)
+        .map(|(dock, _)| dock)
+        .collect()
+}
+
 #[cfg(test)]
 mod dock_stacking_tests {
-    use super::{dock_may_rise, docks_may_rise};
+    use super::{dock_may_rise, docks_may_rise, reveal_strip_windows};
+
+    #[test]
+    fn reveal_strips_are_the_zero_strut_docks() {
+        assert_eq!(
+            reveal_strip_windows(vec![(1, true), (2, false), (3, true), (4, false)]),
+            vec![2, 4]
+        );
+    }
 
     #[test]
     fn auto_hide_dock_rises_over_fullscreen() {
