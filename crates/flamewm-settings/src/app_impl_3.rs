@@ -14,8 +14,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Accessibility => 10,
             SettingsPage::Hotkeys => 11,
             SettingsPage::Startup => 12,
-            SettingsPage::Assistant => 13,
-            SettingsPage::About => 14,
+            SettingsPage::Defaults => 13,
+            SettingsPage::Assistant => 14,
+            SettingsPage::About => 15,
         }
     }
 
@@ -36,6 +37,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     if entry.enabled { "On" } else { "Off" }.to_owned(),
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    /// Projects the current default handler name for each Default Applications row.
+    pub(crate) fn sync_defaults(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        for slot in 0..crate::default_apps_page::GROUPS.len() {
+            let value = crate::default_apps_page::current_label(slot)
+                .unwrap_or_else(|_| "Unavailable".to_owned());
+            document.text(&format!("defaults-value-{slot}"), value)?;
         }
         Ok(())
     }

@@ -715,12 +715,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("accessibility", SettingsPage::Accessibility),
             ("hotkeys", SettingsPage::Hotkeys),
             ("startup", SettingsPage::Startup),
+            ("defaults", SettingsPage::Defaults),
             ("assistant", SettingsPage::Assistant),
             ("about", SettingsPage::About),
         ] {
             document.visible(&format!("page-{name}"), self.client.ui().page == page)?;
         }
         self.sync_startup(document)?;
+        self.sync_defaults(document)?;
         for slot in 0..OUTPUT_PAGE_SLOTS {
             let id = format!("display-output-{slot}");
             let Some(output) = self.output_page_slot(slot) else {

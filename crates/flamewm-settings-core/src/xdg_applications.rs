@@ -21,6 +21,14 @@ pub struct ApplicationSettings {
     pub desktops: Vec<String>,
 }
 
+/// A visible desktop entry that declares a MIME type in `MimeType=`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledHandler {
+    pub id: String,
+    pub name: String,
+    pub mimes: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupEntry {
     pub id: String,
@@ -163,6 +171,59 @@ impl ApplicationSettings {
             return self.set_startup_enabled(id, false);
         }
         fs::remove_file(user_file)
+    }
+
+    /// Visible desktop entries that handle `mime`, in ID order.
+    ///
+    /// The first root that defines an ID decides it, so a hidden or NoDisplay user entry masks
+    /// a visible system entry with the same ID.
+    pub fn installed_handlers(&self, mime: &str) -> io::Result<Vec<InstalledHandler>> {
+        if !mime.contains('/') || mime.contains(['\n', '\r', ';']) {
+            return Err(invalid("invalid MIME type"));
+        }
+        let mut found: BTreeMap<String, Option<InstalledHandler>> = BTreeMap::new();
+        for root in &self.data_dirs {
+            let files = match fs::read_dir(root.join("applications")) {
+                Ok(files) => files,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            for file in files {
+                let file = file?;
+                let Some(id) = file.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if !valid_desktop_id(&id) || found.contains_key(&id) {
+                    continue;
+                }
+                let Ok(text) = fs::read_to_string(file.path()) else {
+                    continue;
+                };
+                let hidden = ["Hidden", "NoDisplay"]
+                    .iter()
+                    .any(|key| value(&text, "Desktop Entry", key) == Some("true"));
+                let handler = if hidden {
+                    None
+                } else {
+                    let mimes: Vec<String> = value(&text, "Desktop Entry", "MimeType")
+                        .unwrap_or("")
+                        .split(';')
+                        .filter(|m| !m.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                    mimes.iter().any(|m| m == mime).then(|| InstalledHandler {
+                        name: value(&text, "Desktop Entry", "Name")
+                            .filter(|n| !n.is_empty())
+                            .unwrap_or(&id)
+                            .to_owned(),
+                        id: id.clone(),
+                        mimes,
+                    })
+                };
+                found.insert(id, handler);
+            }
+        }
+        Ok(found.into_values().flatten().collect())
     }
 
     /// Resolve the first configured default, respecting desktop-specific XDG files.

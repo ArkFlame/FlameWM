@@ -30,6 +30,7 @@ pub enum SettingsPage {
     Accessibility,
     Hotkeys,
     Startup,
+    Defaults,
     Assistant,
     About,
 }

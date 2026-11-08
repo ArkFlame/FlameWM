@@ -517,6 +517,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::StartupToggle(slot) => startup_page::toggle(slot)?,
             SettingsAction::StartupRemove(slot) => startup_page::remove(slot)?,
+            SettingsAction::DefaultCycle(slot) => {
+                default_apps_page::cycle(slot)?;
+            }
             SettingsAction::NativeKeyEvent => {}
             SettingsAction::ApiKeyFocus => {
                 if self.api_key_draft.is_none() {

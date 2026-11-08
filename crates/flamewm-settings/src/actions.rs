@@ -47,6 +47,7 @@ pub(crate) enum SettingsAction {
     FileManagerCycle,
     StartupToggle(usize),
     StartupRemove(usize),
+    DefaultCycle(usize),
     Page(SettingsPage),
     AccentSwatch(&'static str),
     /// Shows one Appearance sub-page from the nav.
@@ -195,6 +196,7 @@ pub(crate) fn page(value: &str) -> Option<SettingsPage> {
         "accessibility" => Some(SettingsPage::Accessibility),
         "hotkeys" => Some(SettingsPage::Hotkeys),
         "startup" => Some(SettingsPage::Startup),
+        "defaults" => Some(SettingsPage::Defaults),
         "assistant" => Some(SettingsPage::Assistant),
         "about" => Some(SettingsPage::About),
         _ => None,
@@ -388,6 +390,13 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "remove" => Ok(SettingsAction::StartupRemove(slot)),
             _ => Err(format!("unknown startup action '{action}'")),
         };
+    }
+    if let Some(slot) = action.strip_prefix("settings.defaults.cycle.") {
+        let slot: usize = slot.parse().map_err(|_| format!("unknown defaults row '{slot}'"))?;
+        if slot >= crate::default_apps_page::GROUPS.len() {
+            return Err(format!("defaults row {slot} is out of range"));
+        }
+        return Ok(SettingsAction::DefaultCycle(slot));
     }
     if action == "settings.default-file-manager.cycle" {
         return Ok(SettingsAction::FileManagerCycle);

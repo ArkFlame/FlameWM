@@ -151,6 +151,7 @@ mod tests {
         "accessibility",
         "hotkeys",
         "startup",
+        "defaults",
         "assistant",
         "about",
     ];
