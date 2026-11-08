@@ -89,3 +89,32 @@ fn text_scale_steps_write_integer_five_percent_steps_within_100_to_200() {
         assert_eq!(document.texts["text-scale-value"], label, "{action} label");
     }
 }
+
+#[test]
+fn night_light_schedule_selects_canonical_mode_and_hides_manual_times_for_sunset() {
+    for (initial, target) in [("manual", "sunset"), ("sunset", "manual")] {
+        let (requests, mut transport) = recording_transport();
+        let snapshot = |revision, mode: &str| {
+            let mut snapshot = accessibility_snapshot(
+                revision, "nightShiftMode", SettingValue::Text(mode.to_owned()),
+            );
+            snapshot.values.insert("nightShift".into(), SettingValue::Boolean(true));
+            snapshot.values.insert("nightShiftSchedule".into(), SettingValue::Boolean(true));
+            snapshot
+        };
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(snapshot(1, initial))),
+            Ok(ControlResponse::Settings(snapshot(2, target))),
+        ]);
+        let mut application = settings_application(transport);
+        let mut document = ProbeDocument::default();
+        application.handle_action(&release(&format!("settings.night-shift.mode.{target}")), &mut document)
+            .expect("select schedule");
+        application.sync(&mut document).expect("sync schedule");
+        assert_eq!(written_values(&requests, "nightShiftMode"), vec![SettingValue::Text(target.to_owned())]);
+        assert!(document.visible["night-shift-mode-row"]);
+        assert_eq!(document.visible["night-shift-start-row"], target == "manual");
+        assert_eq!(document.visible["night-shift-end-row"], target == "manual");
+        assert!(document.highlighted[&format!("night-shift-mode-{target}")]);
+    }
+}

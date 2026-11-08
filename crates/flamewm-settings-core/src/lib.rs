@@ -11,6 +11,10 @@ use flamewm_api::{ModeId, OutputId, PanelEdge, TransactionId};
 use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
 use flamewm_ui_core::IconRole;
 
+mod night_light;
+pub mod xdg_applications;
+pub use night_light::{NightLightMinute, NightLightPreview, NightLightSchedule, NightLightTemperature};
+
 pub trait ControlTransport {
     fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError>;
 }
@@ -112,6 +116,10 @@ impl HotkeyCapture {
 
 /// Number of display-mode slots the Displays page exposes.
 pub const DISPLAY_MODE_SLOTS: usize = 4;
+/// Display scale is limited to 1.0x–2.0x in 0.25x steps.
+pub const DISPLAY_SCALE_MIN: u16 = 100;
+pub const DISPLAY_SCALE_MAX: u16 = 200;
+pub const DISPLAY_SCALE_STEP: u16 = 25;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettingsUiState {
@@ -541,6 +549,17 @@ impl<T: ControlTransport> SettingsClient<T> {
     }
 
     pub fn set_shell_scale(&mut self, percent: u16) -> Result<(), ControlError> {
+        if !(DISPLAY_SCALE_MIN..=DISPLAY_SCALE_MAX).contains(&percent)
+            || (percent - DISPLAY_SCALE_MIN) % DISPLAY_SCALE_STEP != 0
+        {
+            return Err(ControlError {
+                name: "com.arkflame.FlameWM1.Error.InvalidArgument",
+                code: flamewm_api::ErrorCode::InvalidArgument,
+                message: format!(
+                    "display scale must be {DISPLAY_SCALE_MIN}..={DISPLAY_SCALE_MAX} in {DISPLAY_SCALE_STEP}% steps"
+                ),
+            });
+        }
         let snapshot = self
             .displays
             .as_ref()

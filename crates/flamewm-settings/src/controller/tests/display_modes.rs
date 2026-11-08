@@ -143,3 +143,45 @@ fn display_confirmation_keep_revert_and_errors_track_pending_state() {
         );
     }
 }
+
+#[test]
+fn focused_scale_slider_arrow_key_applies_one_quarter_step() {
+    for (initial_scale, expected_scale) in [(100, 125), (110, 125)] {
+        let (requests, mut transport) = recording_transport();
+        let mut initial = display_snapshot();
+        initial.outputs[0].shell_scale_percent = initial_scale;
+        let mut updated = display_snapshot();
+        updated.outputs[0].shell_scale_percent = expected_scale;
+        transport.responses.extend([
+            Ok(ControlResponse::Displays(initial)),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Displays(updated)),
+        ]);
+        let mut application = displays_application(transport);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(
+                &UiActionEvent {
+                    phase: UiActionPhase::Press,
+                    ..release(crate::DISPLAY_SCALE_SLIDER)
+                },
+                &mut document,
+            )
+            .expect("focus scale slider");
+        application
+            .handle_key_event(
+                &flamewm_ui_x11::UiKeyEvent {
+                    phase: flamewm_ui_x11::UiKeyPhase::Release,
+                    key: "Right".to_owned(),
+                    modifiers: Vec::new(),
+                    text: None,
+                },
+                &mut document,
+            )
+            .expect("step display scale");
+        assert!(requests.borrow().iter().any(|request| matches!(
+            request,
+            ControlRequest::SetShellScale { percent, .. } if *percent == expected_scale
+        )));
+    }
+}

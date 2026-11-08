@@ -308,6 +308,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
         let accent = self.accent()?;
+        let night_mode = self.text_setting("nightShiftMode").ok();
+        highlight_options(
+            document,
+            night_mode.as_deref(),
+            &[("manual", "night-shift-mode-manual"), ("sunset", "night-shift-mode-sunset")],
+            accent,
+        )?;
         let style = self.text_setting("taskbarStyle").ok();
         highlight_options(
             document,
@@ -321,6 +328,45 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let floating = style.as_deref() == Some("floating");
         document.visible("taskbar-floating-margin-row", floating)?;
         document.visible("taskbar-floating-radius-row", floating)?;
+        let fill = self.text_setting("taskbar.fill").ok();
+        highlight_options(
+            document,
+            fill.as_deref(),
+            &[("solid", "taskbar-fill-solid"), ("gradient", "taskbar-fill-gradient")],
+            accent,
+        )?;
+        document.visible("taskbar-gradient-edge-row", fill.as_deref() == Some("gradient"))?;
+        let edge = self.text_setting("taskbar.gradientEdge").ok();
+        highlight_options(
+            document,
+            edge.as_deref(),
+            &[
+                ("auto", "taskbar-gradient-edge-auto"),
+                ("top", "taskbar-gradient-edge-top"),
+                ("bottom", "taskbar-gradient-edge-bottom"),
+                ("left", "taskbar-gradient-edge-left"),
+                ("right", "taskbar-gradient-edge-right"),
+            ],
+            accent,
+        )?;
+        let position = self.text_setting("dock.position").ok();
+        highlight_options(
+            document,
+            position.as_deref(),
+            &[
+                ("bottom", "dock-position-bottom"),
+                ("left", "dock-position-left"),
+                ("right", "dock-position-right"),
+                ("top", "dock-position-top"),
+            ],
+            accent,
+        )?;
+        if let Ok(size) = self.integer_setting("dock.iconSize") {
+            document.text("dock-icon-size-value", format!("{size} px"))?;
+        }
+        let pinned = self.text_setting("dock.pinned").unwrap_or_default();
+        let count = pinned.split(',').filter(|id| !id.trim().is_empty()).count();
+        document.text("dock-pinned-value", format!("{count} pinned"))?;
         let clock = self.text_setting("taskbarClockFormat").ok();
         highlight_options(
             document,
@@ -625,8 +671,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let scheduled = self.bool_setting("nightShiftSchedule");
         document.visible("blue-light-row", night_shift)?;
         document.visible("night-shift-schedule-row", night_shift)?;
-        document.visible("night-shift-start-row", night_shift && scheduled)?;
-        document.visible("night-shift-end-row", night_shift && scheduled)?;
+        document.visible("night-shift-mode-row", night_shift && scheduled)?;
+        let manual = self.text_setting("nightShiftMode").ok().as_deref() != Some("sunset");
+        document.visible("night-shift-start-row", night_shift && scheduled && manual)?;
+        document.visible("night-shift-end-row", night_shift && scheduled && manual)?;
         if let Some(value) = text("wallpaperFit") {
             document.text("wallpaper-fit-value", wallpaper_fit_label(&value))?;
         }

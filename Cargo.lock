@@ -967,6 +967,7 @@ name = "flamewm-settings-core"
 version = "0.1.7"
 dependencies = [
  "flamewm-api",
+ "flamewm-applications",
  "flamewm-control-core",
  "flamewm-ui-core",
 ]

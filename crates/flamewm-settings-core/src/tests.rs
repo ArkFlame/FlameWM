@@ -134,6 +134,46 @@ fn set_shell_scale_accepts_unit_after_authoritative_success() {
 }
 
 #[test]
+fn wayland_scale_uses_quarter_steps_and_rejects_off_step_writes() {
+    let mut initial = display_snapshot();
+    initial.outputs[0].id = OutputId::new("wayland-0");
+    initial.outputs[0].connector = "wayland-0".to_owned();
+    let mut responses = vec![Ok(ControlResponse::Displays(initial.clone()))];
+    for percent in (DISPLAY_SCALE_MIN..=DISPLAY_SCALE_MAX).step_by(DISPLAY_SCALE_STEP.into()) {
+        let mut updated = initial.clone();
+        updated.outputs[0].shell_scale_percent = percent;
+        responses.push(Ok(ControlResponse::Unit));
+        responses.push(Ok(ControlResponse::Displays(updated)));
+    }
+    let mut client = fake_client(responses);
+    client.refresh_displays().expect("initial display snapshot");
+    for percent in (DISPLAY_SCALE_MIN..=DISPLAY_SCALE_MAX).step_by(DISPLAY_SCALE_STEP.into()) {
+        client.set_shell_scale(percent).expect("supported scale");
+    }
+    let writes: Vec<u16> = client
+        .transport
+        .requests
+        .iter()
+        .filter_map(|request| match request {
+            ControlRequest::SetShellScale {
+                output, percent, ..
+            } if output == &OutputId::new("wayland-0") => Some(*percent),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(writes, vec![100, 125, 150, 175, 200]);
+
+    let request_count = client.transport.requests.len();
+    for percent in [99, 110, 201] {
+        let error = client
+            .set_shell_scale(percent)
+            .expect_err("unsupported scale");
+        assert_eq!(error.code, flamewm_api::ErrorCode::InvalidArgument);
+    }
+    assert_eq!(client.transport.requests.len(), request_count);
+}
+
+#[test]
 fn escape_capture_commits_clear_binding() {
     let mut client = fake_client([
         Ok(ControlResponse::Shortcuts(ShortcutSnapshot {

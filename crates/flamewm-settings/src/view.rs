@@ -224,6 +224,8 @@ mod tests {
         assert!(HTML.contains("role=\"slider\""));
         assert!(HTML.contains("aria-valuemin=\"100\""));
         assert!(HTML.contains("aria-valuemax=\"200\""));
+        assert!(HTML.contains("100% to 200% in 25% steps (1.0x to 2.0x)"));
+        assert!(HTML.contains("Reverts automatically after 15 seconds unless kept."));
         for old in [100, 125, 150, 175, 200] {
             assert!(!HTML.contains(&format!("id=\"display-scale-{old}\"")));
         }

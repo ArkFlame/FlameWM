@@ -74,7 +74,10 @@ use flamewm_api::settings::SettingValue;
 use flamewm_api::{ModeId, OutputId};
 use flamewm_control_core::{ControlError, ControlRequest};
 use flamewm_integrations_linux::media_store::{MediaKind, MediaStore, import_for_setting};
-use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS, SettingsClient, SettingsPage};
+use flamewm_settings_core::{
+    ControlTransport, DISPLAY_MODE_SLOTS, DISPLAY_SCALE_MAX, DISPLAY_SCALE_MIN, DISPLAY_SCALE_STEP,
+    SettingsClient, SettingsPage,
+};
 use flamewm_ui_core::glass;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess, UiKeyEvent, UiKeyPhase, UiWindowConfig,

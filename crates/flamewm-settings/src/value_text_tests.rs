@@ -562,17 +562,18 @@ fn appearance_actions_reject_unknown_targets_channels_and_steps() {
 }
 
 #[test]
-fn display_scale_slider_maps_all_five_percent_steps() {
-    for percent in (100_u16..=200).step_by(5) {
+fn display_scale_slider_maps_only_quarter_steps_from_1x_to_2x() {
+    for percent in (100_u16..=200).step_by(25) {
         assert_eq!(
             display_scale_from_slider(&(percent - 100).to_string()),
             Ok(percent)
         );
     }
-    assert_eq!(display_scale_from_slider("0"), Ok(100));
+    assert_eq!(display_scale_from_slider("12.4"), Ok(100));
+    assert_eq!(display_scale_from_slider("12.5"), Ok(125));
+    assert_eq!(display_scale_from_slider("37.5"), Ok(150));
+    assert_eq!(display_scale_from_slider("62.5"), Ok(175));
     assert_eq!(display_scale_from_slider("100"), Ok(200));
-    assert_eq!(display_scale_from_slider("35.1"), Ok(135));
-    assert_eq!(display_scale_from_slider("94.9"), Ok(195));
     assert!(display_scale_from_slider("NaN").is_err());
     assert!(display_scale_from_slider("abc").is_err());
 }
@@ -696,4 +697,10 @@ fn integer_stepper_writes_percent_keys_back_as_percent() {
         Ok(SettingValue::Integer(12))
     ));
     assert!(stepped_setting(Some(&SettingValue::Percent(0)), -5).is_err());
+}
+#[test]
+fn dock_and_taskbar_toggles_parse() {
+    for key in ["taskbar.enabled", "dock.enabled", "dock.showRunning"] {
+        assert!(matches!(crate::parse_action(&format!("settings.toggle.{key}")), Ok(crate::SettingsAction::Toggle(actual)) if actual == key));
+    }
 }

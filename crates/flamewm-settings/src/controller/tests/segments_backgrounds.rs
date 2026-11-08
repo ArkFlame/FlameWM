@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn last_taskbar_or_dock_cannot_be_disabled() {
+    for (key, other) in [("taskbar.enabled", "dock.enabled"), ("dock.enabled", "taskbar.enabled")] {
+        let (requests, mut transport) = recording_transport();
+        let mut snapshot = lock_snapshot(1, key, SettingValue::Boolean(true));
+        snapshot.values.insert(other.to_owned(), SettingValue::Boolean(false));
+        transport.responses.push_back(Ok(ControlResponse::Settings(snapshot)));
+        let mut application = settings_application(transport);
+        let error = application
+            .handle_action(&release(&format!("settings.toggle.{key}")), &mut ProbeDocument::default())
+            .expect_err("the last navigation surface must stay enabled");
+        assert!(error.contains("At least one"), "{error}");
+        assert!(written_values(&requests, key).is_empty());
+    }
+}
+
+#[test]
 fn taskbar_style_segment_writes_floating_and_shows_only_its_floating_steppers() {
     let (requests, mut transport) = recording_transport();
     transport.responses.extend([

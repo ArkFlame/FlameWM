@@ -1,5 +1,7 @@
 //! Split from `lib.rs` (`sliders`); see crate docs.
 
+use flamewm_settings_core::{DISPLAY_SCALE_MIN, DISPLAY_SCALE_STEP};
+
 pub(crate) const ANIMATION_SPEED_SLIDER: &str = "slider.animation-speed";
 
 /// One glass slider: its drag action, the integer-valued percent or px key it writes, its
@@ -71,8 +73,8 @@ pub(crate) fn display_scale_from_slider(text: &str) -> Result<u16, String> {
     if !fraction.is_finite() {
         return Err("display scale slider requires a finite number".to_owned());
     }
-    let ticks = (fraction.clamp(0.0, 100.0) / 5.0).round() as u16;
-    Ok(100 + ticks * 5)
+    let ticks = (fraction.clamp(0.0, 100.0) / f64::from(DISPLAY_SCALE_STEP)).round() as u16;
+    Ok(DISPLAY_SCALE_MIN + ticks * DISPLAY_SCALE_STEP)
 }
 
 pub(crate) const ANIMATION_SPEED_MIN: i64 = 25;

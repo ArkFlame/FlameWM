@@ -90,6 +90,7 @@ pub(crate) enum SettingsAction {
     SnapOpacity(i8),
     DesktopEntrySize(i8),
     FontSize(i8),
+    DockIconSize(i8),
     TaskbarEdgeCycle,
     TaskbarEdge(PanelEdge),
     TaskbarSizeCycle,
@@ -280,7 +281,10 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 56] = [
+pub(crate) const TOGGLE_KEYS: [&str; 59] = [
+    "taskbar.enabled",
+    "dock.enabled",
+    "dock.showRunning",
     "highContrast",
     "reducedMotion",
     "stickyKeys",
@@ -499,6 +503,9 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
     {
         return Ok(SettingsAction::DesktopEntrySize(direction));
     }
+    if let Some(direction) = action.strip_prefix("settings.dock.icon-size.").and_then(step) {
+        return Ok(SettingsAction::DockIconSize(direction));
+    }
     if let Some(direction) = action.strip_prefix("settings.font-size.").and_then(step) {
         return Ok(SettingsAction::FontSize(direction));
     }
@@ -602,6 +609,62 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.lock.clock.12h" => Ok(SettingsAction::TextSelect {
             key: "lockClockFormat",
             value: "12h",
+        }),
+        "settings.night-shift.mode.manual" => Ok(SettingsAction::TextSelect {
+            key: "nightShiftMode",
+            value: "manual",
+        }),
+        "settings.night-shift.mode.sunset" => Ok(SettingsAction::TextSelect {
+            key: "nightShiftMode",
+            value: "sunset",
+        }),
+        "settings.taskbar.fill.solid" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.fill",
+            value: "solid",
+        }),
+        "settings.taskbar.fill.gradient" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.fill",
+            value: "gradient",
+        }),
+        "settings.taskbar.gradient-edge.auto" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.gradientEdge",
+            value: "auto",
+        }),
+        "settings.taskbar.gradient-edge.top" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.gradientEdge",
+            value: "top",
+        }),
+        "settings.taskbar.gradient-edge.bottom" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.gradientEdge",
+            value: "bottom",
+        }),
+        "settings.taskbar.gradient-edge.left" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.gradientEdge",
+            value: "left",
+        }),
+        "settings.taskbar.gradient-edge.right" => Ok(SettingsAction::TextSelect {
+            key: "taskbar.gradientEdge",
+            value: "right",
+        }),
+        "settings.dock.position.bottom" => Ok(SettingsAction::TextSelect {
+            key: "dock.position",
+            value: "bottom",
+        }),
+        "settings.dock.position.left" => Ok(SettingsAction::TextSelect {
+            key: "dock.position",
+            value: "left",
+        }),
+        "settings.dock.position.right" => Ok(SettingsAction::TextSelect {
+            key: "dock.position",
+            value: "right",
+        }),
+        "settings.dock.position.top" => Ok(SettingsAction::TextSelect {
+            key: "dock.position",
+            value: "top",
+        }),
+        "settings.dock.pinned.clear" => Ok(SettingsAction::TextSelect {
+            key: "dock.pinned",
+            value: "",
         }),
         "settings.taskbar.style.classic" => Ok(SettingsAction::TextSelect {
             key: "taskbarStyle",

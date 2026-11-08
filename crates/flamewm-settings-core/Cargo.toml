@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
+flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 

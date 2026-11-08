@@ -287,17 +287,26 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.scale_drag = None;
                 return self.settle(document);
             }
-            let delta = match event.key.as_str() {
-                "Left" | "Down" => -5,
-                "Right" | "Up" => 5,
-                "Home" => -100,
-                "End" => 100,
-                _ => 0,
-            };
-            if delta != 0 && event.modifiers.is_empty() {
+            if event.modifiers.is_empty()
+                && matches!(
+                    event.key.as_str(),
+                    "Left" | "Down" | "Right" | "Up" | "Home" | "End"
+                )
+            {
                 let (_, _, current) = self.scale_selection()?;
-                let target = (i32::from(current) + delta).clamp(100, 200) as u16;
-                if current != target {
+                let current = i32::from(current);
+                let minimum = i32::from(DISPLAY_SCALE_MIN);
+                let maximum = i32::from(DISPLAY_SCALE_MAX);
+                let step = i32::from(DISPLAY_SCALE_STEP);
+                let target = match event.key.as_str() {
+                    "Left" | "Down" => minimum + (current - minimum - 1).div_euclid(step) * step,
+                    "Right" | "Up" => minimum + ((current - minimum) / step + 1) * step,
+                    "Home" => minimum,
+                    "End" => maximum,
+                    _ => unreachable!(),
+                }
+                .clamp(minimum, maximum) as u16;
+                if i32::from(target) != current {
                     self.client.set_shell_scale(target).map_err(control_error)?;
                 }
                 return self.settle(document);
@@ -619,6 +628,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
                         _ => None,
                     })
                     .ok_or_else(|| format!("toggle '{key}' has no authoritative boolean value"))?;
+                if !enabled && (key == "taskbar.enabled" || key == "dock.enabled") {
+                    let other = if key == "taskbar.enabled" { "dock.enabled" } else { "taskbar.enabled" };
+                    if !matches!(self.setting_value(other), Some(SettingValue::Boolean(true))) {
+                        return Err("At least one of the taskbar or dock must remain enabled".to_owned());
+                    }
+                }
                 self.client
                     .apply_setting(key, SettingValue::Boolean(enabled))
                     .map_err(control_error)?;
@@ -640,6 +655,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     50,
                     200,
                 )?;
+            }
+            SettingsAction::DockIconSize(direction) => {
+                self.step_integer("dock.iconSize", i64::from(direction) * 4, 24, 96)?;
             }
             SettingsAction::FontSize(direction) => {
                 self.step_integer("fontSizeOffset", i64::from(direction), -2, 4)?;
