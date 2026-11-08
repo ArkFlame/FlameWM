@@ -62,11 +62,17 @@ where
         Format::TarXz => visit_tar(XzDecoder::new(file), &mut f),
         Format::TarBz2 => visit_tar(BzDecoder::new(file), &mut f),
         Format::TarZst => visit_tar(ZstdDecoder::new(file)?, &mut f),
+        Format::SevenZ => Err(ArchiveError::Unsupported(
+            "7z entries are read by the 7z tool, not streamed".to_owned(),
+        )),
     }
 }
 
 /// Entries of `archive` in archive order, without data.
 pub fn list(archive: &Path) -> Result<Vec<Entry>> {
+    if Format::detect(archive)? == Format::SevenZ {
+        return crate::sevenz::list(archive);
+    }
     let mut entries = Vec::new();
     visit(archive, |entry, _| {
         entries.push(entry);

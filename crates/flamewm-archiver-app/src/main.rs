@@ -5,7 +5,7 @@ fn main() {
     let start = match flamewm_archiver_app::parse_args(&args) {
         Command::Usage => {
             eprintln!(
-                "usage: flamewm-archiver <archive.zip|archive.tar|archive.tar.gz|archive.tar.xz|archive.tar.bz2|archive.tar.zst>\n       flamewm-archiver --create <out.zip|out.tar|out.tar.gz|out.tar.xz|out.tar.bz2|out.tar.zst> <path>..."
+                "usage: flamewm-archiver <archive.zip|archive.tar|archive.tar.gz|archive.tar.xz|archive.tar.bz2|archive.tar.zst|archive.7z>\n       flamewm-archiver --create <out.zip|out.tar|out.tar.gz|out.tar.xz|out.tar.bz2|out.tar.zst|out.7z> <path>..."
             );
             std::process::exit(2);
         }

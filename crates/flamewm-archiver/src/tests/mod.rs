@@ -6,6 +6,7 @@ mod encrypted;
 mod interop;
 mod listing_extract;
 mod safety;
+mod sevenz;
 
 use std::fs::{self, File};
 use std::io::Write;

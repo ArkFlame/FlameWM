@@ -106,7 +106,7 @@ impl Sink {
             Format::TarXz => Self::Xz(XzEncoder::new(file, 6)),
             Format::TarBz2 => Self::Bz2(BzEncoder::new(file, BzLevel::default())),
             Format::TarZst => Self::Zst(ZstdEncoder::new(file, ZSTD_LEVEL)?),
-            Format::Zip => {
+            Format::Zip | Format::SevenZ => {
                 return Err(ArchiveError::Unsupported(format!(
                     "{} is not a tar format",
                     format_name(format)
@@ -166,6 +166,7 @@ fn format_name(format: Format) -> &'static str {
         Format::TarXz => "tar.xz",
         Format::TarBz2 => "tar.bz2",
         Format::TarZst => "tar.zst",
+        Format::SevenZ => "7z",
     }
 }
 

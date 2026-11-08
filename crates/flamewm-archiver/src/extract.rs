@@ -6,6 +6,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::error::{ArchiveError, Result};
+use crate::format::Format;
 use crate::progress::{CancelToken, Progress, Reporter, Summary, copy_tracked};
 use crate::safe_path;
 use crate::visit::{Entry, Kind, list, under_any, visit_with_password};
@@ -38,6 +39,12 @@ pub fn extract_with_password(
     cancel: &CancelToken,
     sink: &mut dyn FnMut(Progress),
 ) -> Result<Summary> {
+    if Format::detect(archive)? == Format::SevenZ {
+        if password.is_some() {
+            return Err(ArchiveError::Unsupported("passwords apply to zip only".to_owned()));
+        }
+        return crate::sevenz::extract(archive, dest, selection, cancel, sink);
+    }
     // Selected roots are compared against sanitised entry names, so they are sanitised the same
     // way: `./docs` and `docs` both match an entry stored as `./docs/a.txt`. A non-empty selection
     // that sanitises away entirely selects nothing, never everything.

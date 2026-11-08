@@ -53,6 +53,9 @@ fn create_inner(
     sink: &mut dyn FnMut(Progress),
 ) -> Result<Summary> {
     let format = Format::detect(out)?;
+    if format == Format::SevenZ && password.is_none() {
+        return crate::sevenz::create(out, inputs, cancel, sink);
+    }
     if password.is_some() && format != Format::Zip {
         return Err(ArchiveError::Unsupported(format!(
             "{}: only .zip archives take a password",

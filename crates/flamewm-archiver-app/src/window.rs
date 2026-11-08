@@ -553,6 +553,7 @@ mod tests {
             "photos.tbz",
             "photos.tar.zst",
             "photos.tzst",
+            "photos.7z",
             "photos.zip",
         ] {
             assert_eq!(

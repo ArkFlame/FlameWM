@@ -69,6 +69,7 @@ fn every_accepted_extension_detects() {
         ("A.TZST", Format::TarZst),
         ("A.TAR.XZ", Format::TarXz),
         ("A.TBZ2", Format::TarBz2),
+        ("a.7z", Format::SevenZ),
     ] {
         assert_eq!(
             Format::detect(&PathBuf::from(name)).ok(),
@@ -76,7 +77,7 @@ fn every_accepted_extension_detects() {
             "{name} must detect"
         );
     }
-    for name in ["a.7z", "a.rar", "a.xz", "a.bz2", "a"] {
+    for name in ["a.rar", "a.xz", "a.bz2", "a"] {
         assert!(
             matches!(
                 Format::detect(&PathBuf::from(name)),

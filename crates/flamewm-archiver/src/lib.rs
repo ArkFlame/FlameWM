@@ -12,6 +12,7 @@ mod extract;
 mod format;
 mod progress;
 mod safe_path;
+mod sevenz;
 mod visit;
 mod writer;
 
@@ -25,4 +26,5 @@ pub use extract::{extract, extract_with_password};
 pub use format::Format;
 pub use progress::{CancelToken, Progress, Summary};
 pub use safe_path::sanitize;
+pub use sevenz::parse_listing;
 pub use visit::{Entry, Kind, list, visit, visit_with_password};

@@ -15,6 +15,7 @@ pub enum Format {
     TarXz,
     TarBz2,
     TarZst,
+    SevenZ,
 }
 
 /// Accepted file-name endings with the format each one selects.
@@ -22,7 +23,8 @@ pub enum Format {
 /// A suffix that is itself the tail of a longer one is listed after it (`.tar.gz` before `.tar`,
 /// `.tbz2` before `.tbz` is not needed because neither is a tail of the other), so the first match
 /// is always the most specific one.
-const SUFFIXES: [(&str, Format); 11] = [
+const SUFFIXES: [(&str, Format); 12] = [
+    (".7z", Format::SevenZ),
     (".tar.zst", Format::TarZst),
     (".tzst", Format::TarZst),
     (".tar.gz", Format::TarGz),
