@@ -5,7 +5,14 @@ use crate::{ArchiveError, CancelToken, Format, Progress, add, create, extract, l
 
 /// Every format `create` can write; used by the round-trip and mode tests so a new format cannot
 /// be added to `Format` without being exercised here.
-const CREATE_FORMATS: [&str; 5] = ["rt.zip", "rt.tar", "rt.tar.gz", "rt.tar.xz", "rt.tar.bz2"];
+const CREATE_FORMATS: [&str; 6] = [
+    "rt.zip",
+    "rt.tar",
+    "rt.tar.gz",
+    "rt.tar.xz",
+    "rt.tar.bz2",
+    "rt.tar.zst",
+];
 
 #[test]
 fn create_then_list_and_extract_round_trip_for_each_format() {
@@ -57,6 +64,9 @@ fn every_accepted_extension_detects() {
         ("a.tar.bz2", Format::TarBz2),
         ("a.tbz2", Format::TarBz2),
         ("a.tbz", Format::TarBz2),
+        ("a.tar.zst", Format::TarZst),
+        ("a.tzst", Format::TarZst),
+        ("A.TZST", Format::TarZst),
         ("A.TAR.XZ", Format::TarXz),
         ("A.TBZ2", Format::TarBz2),
     ] {
@@ -66,7 +76,7 @@ fn every_accepted_extension_detects() {
             "{name} must detect"
         );
     }
-    for name in ["a.7z", "a.rar", "a.tar.zst", "a.xz", "a.bz2", "a"] {
+    for name in ["a.7z", "a.rar", "a.xz", "a.bz2", "a"] {
         assert!(
             matches!(
                 Format::detect(&PathBuf::from(name)),
@@ -83,6 +93,7 @@ fn suffix_stripping_prefers_the_longest_extension() {
     assert_eq!(Format::strip_suffix("a.tar.gz"), Some("a"));
     assert_eq!(Format::strip_suffix("a.tar.xz"), Some("a"));
     assert_eq!(Format::strip_suffix("a.tar.bz2"), Some("a"));
+    assert_eq!(Format::strip_suffix("a.tar.zst"), Some("a"));
     assert_eq!(Format::strip_suffix("a.tbz2"), Some("a"));
     assert_eq!(Format::strip_suffix("a.tar"), Some("a"));
     assert_eq!(Format::strip_suffix("a.zip"), Some("a"));
@@ -119,7 +130,7 @@ fn unix_mode_survives_round_trip_for_each_format() {
 /// Selection and progress must behave the same for the newly supported tars as for tar.gz.
 #[test]
 fn select_and_progress_work_for_xz_and_bz2() {
-    for name in ["sel.tar.xz", "sel.tar.bz2"] {
+    for name in ["sel.tar.xz", "sel.tar.bz2", "sel.tar.zst"] {
         let dir = Scratch::new(&format!("select-{name}"));
         make_tree(dir.path());
         let archive = dir.path().join(name);
@@ -151,7 +162,7 @@ fn select_and_progress_work_for_xz_and_bz2() {
 
 #[test]
 fn cancel_mid_create_removes_partial_output() {
-    for name in ["c.tar.xz", "c.tar.bz2"] {
+    for name in ["c.tar.xz", "c.tar.bz2", "c.tar.zst"] {
         let dir = Scratch::new(&format!("cancel-create-{name}"));
         make_tree(dir.path());
         std::fs::write(dir.path().join("tree/big.bin"), vec![1u8; 4 * 1024 * 1024]).unwrap();
@@ -215,7 +226,7 @@ fn remove_and_add_rewrite_archive() {
 /// must be readable after a rewrite, not only straight after create.
 #[test]
 fn remove_and_add_rewrite_compressed_tars() {
-    for name in ["e.tar.xz", "e.tar.bz2"] {
+    for name in ["e.tar.xz", "e.tar.bz2", "e.tar.zst"] {
         let dir = Scratch::new(&format!("edit-{name}"));
         make_tree(dir.path());
         let archive = dir.path().join(name);
@@ -257,7 +268,7 @@ fn remove_and_add_rewrite_compressed_tars() {
 /// `.tar.xz` name must fail to decode rather than silently succeed.
 #[test]
 fn compressed_suffix_with_uncompressed_bytes_is_an_error() {
-    for name in ["fake.tar.xz", "fake.tar.bz2"] {
+    for name in ["fake.tar.xz", "fake.tar.bz2", "fake.tar.zst"] {
         let dir = Scratch::new(&format!("fake-{name}"));
         let archive = dir.path().join(name);
         let file = std::fs::File::create(&archive).unwrap();

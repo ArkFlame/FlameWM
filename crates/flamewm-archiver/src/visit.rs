@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
 use xz2::read::XzDecoder;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 use crate::error::Result;
 use crate::format::Format;
@@ -47,6 +48,7 @@ where
         Format::TarGz => visit_tar(GzDecoder::new(file), &mut f),
         Format::TarXz => visit_tar(XzDecoder::new(file), &mut f),
         Format::TarBz2 => visit_tar(BzDecoder::new(file), &mut f),
+        Format::TarZst => visit_tar(ZstdDecoder::new(file)?, &mut f),
     }
 }
 

@@ -51,7 +51,7 @@ fn zip_slip_is_rejected_before_any_write() {
 #[test]
 fn tar_parent_and_absolute_names_are_rejected() {
     let dir = Scratch::new("tar-traversal");
-    for name in ["evil.tar.gz", "evil.tar.xz", "evil.tar.bz2"] {
+    for name in ["evil.tar.gz", "evil.tar.xz", "evil.tar.bz2", "evil.tar.zst"] {
         let archive = dir.path().join(name);
         make_tar(&archive, &[("../up.txt", b'0', b"x")]);
         let err = extract(
@@ -65,7 +65,7 @@ fn tar_parent_and_absolute_names_are_rejected() {
         assert!(matches!(err, ArchiveError::UnsafePath(_)), "{name}: {err}");
     }
 
-    for name in ["abs.tar.gz", "abs.tar.xz", "abs.tar.bz2"] {
+    for name in ["abs.tar.gz", "abs.tar.xz", "abs.tar.bz2", "abs.tar.zst"] {
         let archive = dir.path().join(name);
         make_tar(&archive, &[("/tmp/flamewm-abs-probe", b'0', b"x")]);
         let err = extract(
@@ -87,7 +87,7 @@ fn symlink_entry_is_skipped_and_never_created() {
     let outside = dir.path().join("outside");
     fs::create_dir_all(&outside).unwrap();
     let target = outside.to_string_lossy().into_owned();
-    for name in ["link.tar.gz", "link.tar.xz", "link.tar.bz2"] {
+    for name in ["link.tar.gz", "link.tar.xz", "link.tar.bz2", "link.tar.zst"] {
         let archive = dir.path().join(name);
         make_tar(
             &archive,

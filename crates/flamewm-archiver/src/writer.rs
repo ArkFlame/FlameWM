@@ -9,6 +9,7 @@ use bzip2::write::BzEncoder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use xz2::write::XzEncoder;
+use zstd::stream::write::Encoder as ZstdEncoder;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
@@ -77,6 +78,9 @@ impl Writer {
     }
 }
 
+/// zstd level 3: the library default, a good ratio at a speed close to gzip.
+const ZSTD_LEVEL: i32 = 3;
+
 /// The byte stream under a tar builder: raw or one of the supported compressors.
 ///
 /// Compressors are finished explicitly so the stream trailer (xz index, bzip2 end marker) is
@@ -86,6 +90,7 @@ pub enum Sink {
     Gz(GzEncoder<File>),
     Xz(XzEncoder<File>),
     Bz2(BzEncoder<File>),
+    Zst(ZstdEncoder<'static, File>),
 }
 
 impl Sink {
@@ -96,6 +101,7 @@ impl Sink {
             Format::TarGz => Self::Gz(GzEncoder::new(file, Compression::default())),
             Format::TarXz => Self::Xz(XzEncoder::new(file, 6)),
             Format::TarBz2 => Self::Bz2(BzEncoder::new(file, BzLevel::default())),
+            Format::TarZst => Self::Zst(ZstdEncoder::new(file, ZSTD_LEVEL)?),
             Format::Zip => {
                 return Err(ArchiveError::Unsupported(format!(
                     "{} is not a tar format",
@@ -118,6 +124,9 @@ impl Sink {
             Self::Bz2(encoder) => {
                 encoder.finish()?;
             }
+            Self::Zst(encoder) => {
+                encoder.finish()?;
+            }
         }
         Ok(())
     }
@@ -130,6 +139,7 @@ impl Write for Sink {
             Self::Gz(w) => w.write(buf),
             Self::Xz(w) => w.write(buf),
             Self::Bz2(w) => w.write(buf),
+            Self::Zst(w) => w.write(buf),
         }
     }
 
@@ -139,6 +149,7 @@ impl Write for Sink {
             Self::Gz(w) => w.flush(),
             Self::Xz(w) => w.flush(),
             Self::Bz2(w) => w.flush(),
+            Self::Zst(w) => w.flush(),
         }
     }
 }
@@ -150,6 +161,7 @@ fn format_name(format: Format) -> &'static str {
         Format::TarGz => "tar.gz",
         Format::TarXz => "tar.xz",
         Format::TarBz2 => "tar.bz2",
+        Format::TarZst => "tar.zst",
     }
 }
 

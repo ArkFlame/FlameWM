@@ -46,6 +46,8 @@ fn lists_entries_of_every_tar_variant() {
         "l.tar.bz2",
         "l.tbz2",
         "l.tbz",
+        "l.tar.zst",
+        "l.tzst",
     ] {
         let dir = Scratch::new(&format!("list-{name}"));
         let archive = dir.path().join(name);
