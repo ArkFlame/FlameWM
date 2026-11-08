@@ -198,3 +198,70 @@ fn cancel_mid_extract_stops_and_removes_partial_file() {
     assert!(matches!(err, ArchiveError::Cancelled), "got {err}");
     assert!(!out.join("big.bin").exists(), "truncated file left behind");
 }
+
+#[test]
+fn zip_symlink_entry_cannot_redirect_a_later_write() {
+    let dir = Scratch::new("zip-symlink-escape");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let archive = dir.path().join("esc.zip");
+    {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.add_symlink("esc", outside.to_string_lossy(), options)
+            .unwrap();
+        zip.start_file("esc/pwned.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"pwned").unwrap();
+        zip.finish().unwrap();
+    }
+    let out = dir.path().join("out");
+    let summary = extract(&archive, &out, &[], &CancelToken::new(), &mut |_| {}).expect("extract");
+    assert_eq!(summary.skipped, 1);
+    assert!(
+        !outside.join("pwned.txt").exists(),
+        "write escaped via zip symlink"
+    );
+    assert!(
+        !fs::symlink_metadata(out.join("esc"))
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+    );
+}
+
+#[test]
+fn cancel_mid_extract_removes_partial_compressed_tar_output() {
+    let dir = Scratch::new("cancel-tar-xz");
+    let archive = dir.path().join("big.tar.xz");
+    let payload = vec![9u8; 4 * 1024 * 1024];
+    make_tar(&archive, &[("big.bin", b'0', &payload)]);
+    let out = dir.path().join("out");
+    let cancel = CancelToken::new();
+    let trigger = cancel.clone();
+    let mut sink = |p: Progress| {
+        if p.bytes_done >= 1024 * 1024 {
+            trigger.cancel();
+        }
+    };
+    let err = extract(&archive, &out, &[], &cancel, &mut sink).unwrap_err();
+    assert!(matches!(err, ArchiveError::Cancelled), "got {err}");
+    assert!(!out.join("big.bin").exists(), "truncated file left behind");
+}
+
+#[test]
+fn cancel_before_create_writes_no_archive() {
+    let dir = Scratch::new("cancel-create");
+    let src = dir.path().join("src.bin");
+    fs::write(&src, vec![3u8; 1024 * 1024]).unwrap();
+    let out = dir.path().join("out.tar.gz");
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let result = crate::create(&out, &[src], &cancel, &mut |_| {});
+    assert!(matches!(result, Err(ArchiveError::Cancelled)), "{result:?}");
+    assert!(!out.exists(), "archive left behind after cancel");
+    assert!(
+        !crate::writer::partial_path(&out).exists(),
+        "partial left behind"
+    );
+}
