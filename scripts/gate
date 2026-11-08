@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Scoped pre-commit gate for one change: guard, fmt, test, clippy -D warnings for the named crates,
+# in ONE acquisition of the shared cargo lock (one queue slot instead of four). For the whole
+# workspace use scripts/lint instead, once, at the end.
+#
+#   scripts/gate flamewm-clipboard [flamewm-api ...]      # blocks until done: run it in the background
+#   Log: $GATE_LOG or /tmp/flamewm-gate-<pid>.log
+# Log lines to wait on:  EXIT_GUARD= EXIT_FMT= EXIT_TEST= EXIT_CLIPPY=  then  GATE_DONE all=<0|1>
+# Wait with one command:  timeout 580 bash -c 'until grep -q GATE_DONE LOG; do sleep 15; done'
+# Env: FLAMEWM_TOOLCHAIN_BIN (dir with cargo 1.89), GATE_TARGET (default target-shared),
+#      GATE_CLIPPY_TARGET (default target-clippy189), GATE_LOCK (default /tmp/opencode/flamewm-terra-cargo.lock).
+set -uo pipefail
+[ "$#" -ge 1 ] || { echo "usage: scripts/gate <crate> [crate...]" >&2; exit 2; }
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+LOG="${GATE_LOG:-/tmp/flamewm-gate-$$.log}"
+LOCK="${GATE_LOCK:-/tmp/opencode/flamewm-terra-cargo.lock}"
+mkdir -p "$(dirname "$LOCK")"
+PKGS=(); for c in "$@"; do PKGS+=(-p "$c"); done
+export GATE_ROOT="$ROOT" GATE_LOG_FILE="$LOG"
+: >"$LOG"
+echo "gate: queued, log $LOG"
+exec flock "$LOCK" bash -c '
+  cd "$GATE_ROOT"; exec >>"$GATE_LOG_FILE" 2>&1
+  [ -n "${FLAMEWM_TOOLCHAIN_BIN:-}" ] && export PATH="$FLAMEWM_TOOLCHAIN_BIN:$PATH"
+  export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" RUST_TEST_THREADS="${RUST_TEST_THREADS:-2}"
+  T="${GATE_TARGET:-/run/media/linsaftw/SDD/target-shared}"; C="${GATE_CLIPPY_TARGET:-/run/media/linsaftw/SDD/target-clippy189}"
+  all=0
+  python3 -I tools/architecture_guard.py; g=$?; echo "EXIT_GUARD=$g"
+  cargo fmt --all -- --check; f=$?; echo "EXIT_FMT=$f"
+  CARGO_TARGET_DIR="$T" cargo test "$@" --all-targets; t=$?; echo "EXIT_TEST=$t"
+  CARGO_TARGET_DIR="$C" cargo clippy "$@" --all-targets -- -D warnings; c=$?; echo "EXIT_CLIPPY=$c"
+  [ $((g+f+t+c)) -eq 0 ] || all=1
+  echo "GATE_DONE all=$all"
+' _ "${PKGS[@]}"
