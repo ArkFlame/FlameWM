@@ -11,8 +11,9 @@ pub struct Group {
     pub mimes: &'static [&'static str],
 }
 
-/// Rows on the page; `ui/settings.html` declares one slot per group.
-pub const GROUPS: [Group; 8] = [
+/// Rows on the page; `ui/settings.html` declares one slot per group. The file manager is not a
+/// row: the Desktop page's "Default file manager" control is its single source of truth.
+pub const GROUPS: [Group; 7] = [
     Group {
         label: "Browser",
         mimes: &[
@@ -24,10 +25,6 @@ pub const GROUPS: [Group; 8] = [
     Group {
         label: "Mail",
         mimes: &["x-scheme-handler/mailto"],
-    },
-    Group {
-        label: "File manager",
-        mimes: &["inode/directory"],
     },
     Group {
         label: "Terminal",
