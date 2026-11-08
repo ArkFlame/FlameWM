@@ -780,12 +780,10 @@ fn render_acceleration_defaults_to_cpu_and_accepts_only_cpu_or_gpu() {
             .render_acceleration,
         "cpu"
     );
-    assert_eq!(
-        load("revision=2\nrenderAcceleration=gpu\n")
-            .expect("gpu")
-            .render_acceleration,
-        "gpu"
-    );
+    // Legacy gpu migrates at load: the legacy field is reset and the backend takes its place.
+    let migrated = load("revision=2\nrenderAcceleration=gpu\n").expect("gpu");
+    assert_eq!(migrated.render_acceleration, "cpu");
+    assert_eq!(migrated.render_backend, "opengl");
     assert!(load("revision=2\nrenderAcceleration=vulkan\n").is_err());
 }
 
@@ -1343,4 +1341,43 @@ fn wallpaper_fit_parse_and_as_str_are_inverse() {
         assert_eq!(WallpaperFit::parse(fit.as_str()), Some(fit));
     }
     assert_eq!(WallpaperFit::parse("Tile"), None);
+}
+
+/// Legacy `renderAcceleration=gpu` migrates once to `renderBackend=opengl` (2.1).
+#[test]
+fn legacy_gpu_migrates_to_opengl() {
+    let settings = load("revision=2\nrenderAcceleration=gpu\n").expect("legacy gpu");
+    assert_eq!(settings.render_backend, "opengl");
+    assert_eq!(settings.render_acceleration, "cpu");
+}
+
+/// Picking CPU after a migrated legacy GPU choice must survive save and reload (2.1).
+#[test]
+fn legacy_gpu_then_cpu_choice_stays_cpu() {
+    let mut settings = load("revision=2\nrenderAcceleration=gpu\n").expect("legacy gpu");
+    settings.render_backend = "cpu".to_owned();
+    let text = ConfigStore::serialize(&settings);
+    assert!(!text.contains("renderAcceleration"), "{text}");
+    assert!(!text.contains("renderBackend"), "{text}");
+    let reloaded = load(&text).expect("reload");
+    assert_eq!(reloaded.render_backend, "cpu");
+    assert_eq!(reloaded.render_acceleration, "cpu");
+}
+
+/// An explicit `renderBackend` wins over a legacy `renderAcceleration=gpu` (2.1).
+#[test]
+fn explicit_backend_wins_over_legacy() {
+    let settings = load("revision=2\nrenderAcceleration=gpu\nrenderBackend=cpu\n").expect("both");
+    assert_eq!(settings.render_backend, "cpu");
+}
+
+/// Non-default backends serialize as `renderBackend=<v>` and reload equal (2.1).
+#[test]
+fn non_default_backend_round_trips() {
+    for value in ["opengl", "vulkan", "auto"] {
+        let settings = load(&format!("revision=2\nrenderBackend={value}\n")).expect(value);
+        let text = ConfigStore::serialize(&settings);
+        assert!(text.contains(&format!("renderBackend={value}")), "{text}");
+        assert_eq!(load(&text).expect("reload"), settings);
+    }
 }

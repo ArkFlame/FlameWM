@@ -8,6 +8,7 @@ impl ConfigStore {
         let mut has_wallpaper_mode = false;
         let mut has_lock_background_mode = false;
         let mut has_button_style = false;
+        let mut has_render_backend = false;
         let mut seen_keys = std::collections::BTreeSet::new();
         // Legacy per-button styles: read only, each reduced to "is square".
         let mut legacy_square_flags = Vec::new();
@@ -32,6 +33,7 @@ impl ConfigStore {
             has_wallpaper_mode |= key == "wallpaperMode";
             has_lock_background_mode |= key == "lockBackgroundMode";
             has_button_style |= key == "titlebarButtonStyle";
+            has_render_backend |= key == "renderBackend";
             seen_keys.insert(key);
             if let Some(row) = stable_setting(key) {
                 (row.parse)(&mut snapshot, value, key)?;
@@ -126,6 +128,7 @@ impl ConfigStore {
         // Files clamp an out-of-range edge-snap distance instead of rejecting the whole file.
         snapshot.edge_snap_threshold_px = snapshot.edge_snap_threshold_px.clamp(4, 64);
         snapshot.validate()?;
+        migrate_legacy_acceleration(&mut snapshot, has_render_backend);
         Ok(snapshot)
     }
 }

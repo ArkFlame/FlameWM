@@ -1235,6 +1235,8 @@ fn invalid_owned<T>(message: String) -> FlameResult<T> {
 }
 
 mod product_validate;
+mod render_backend_migrate;
+use render_backend_migrate::migrate_legacy_acceleration;
 mod snapshot_parse;
 mod snapshot_serialize;
 mod validate;
