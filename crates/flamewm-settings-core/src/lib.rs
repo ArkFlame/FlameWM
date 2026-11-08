@@ -13,6 +13,7 @@ use flamewm_ui_core::IconRole;
 
 mod night_light;
 pub mod xdg_applications;
+pub mod xdg_startup;
 pub use night_light::{NightLightMinute, NightLightPreview, NightLightSchedule, NightLightTemperature};
 
 pub trait ControlTransport {

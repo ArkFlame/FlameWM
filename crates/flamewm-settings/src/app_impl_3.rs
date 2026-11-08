@@ -36,9 +36,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     &format!("startup-toggle-{slot}"),
                     if entry.enabled { "On" } else { "Off" }.to_owned(),
                 )?;
+                document.text(
+                    &format!("startup-delay-{slot}"),
+                    crate::startup_page::delay_text(entry),
+                )?;
             }
         }
-        Ok(())
+        self.sync_startup_extras(document)
     }
 
     /// Projects the current default handler name for each Default Applications row.

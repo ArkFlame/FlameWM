@@ -26,6 +26,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             nav_query: String::new(),
             nav_search_focused: false,
             api_key_draft: None,
+            startup_command: None,
+            startup_pick: 0,
             file_manager_label: "FlameWM Explorer".into(),
         }
     }
@@ -133,6 +135,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if event.action == KEYBOARD_INPUT_ACTION && self.api_key_draft.is_some() {
             self.api_key_text(event.text.as_deref().unwrap_or_default());
+            return self.settle(document);
+        }
+        if event.action == KEYBOARD_INPUT_ACTION && self.startup_command.is_some() {
+            self.startup_command_text(event.text.as_deref().unwrap_or_default());
             return self.settle(document);
         }
         if event.action == KEYBOARD_INPUT_ACTION && self.color_picker.is_some() {
@@ -266,6 +272,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.hotkey_armed
             || self.nav_search_focused
             || self.api_key_draft.is_some()
+            || self.startup_command.is_some()
             || self.color_picker.is_some()
     }
 
@@ -511,12 +518,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
         ) {
             self.api_key_draft = None;
         }
+        if !matches!(
+            action,
+            SettingsAction::StartupCommandFocus | SettingsAction::NativeKeyEvent
+        ) {
+            self.startup_command = None;
+        }
         match action {
             SettingsAction::FileManagerCycle => {
                 self.file_manager_label = file_manager::toggle()?;
             }
             SettingsAction::StartupToggle(slot) => startup_page::toggle(slot)?,
             SettingsAction::StartupRemove(slot) => startup_page::remove(slot)?,
+            SettingsAction::StartupDelay(slot) => startup_page::cycle_delay(slot)?,
+            SettingsAction::StartupPick => self.startup_pick = self.startup_pick.wrapping_add(1),
+            SettingsAction::StartupAddPicked => startup_page::add_candidate(self.startup_pick)?,
+            SettingsAction::StartupCommandFocus => {
+                if self.startup_command.is_none() {
+                    self.startup_command = Some(startup_extras::StartupCommandDraft {
+                        buffer: String::new(),
+                        error: None,
+                    });
+                }
+            }
             SettingsAction::DefaultCycle(slot) => {
                 default_apps_page::cycle(slot)?;
             }

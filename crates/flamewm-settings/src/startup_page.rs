@@ -3,6 +3,7 @@
 //! The page has a fixed number of slots, so the markup stays static. Each slot reads the entry at
 //! its index on every action, so the list is never cached across user changes.
 use flamewm_settings_core::xdg_applications::{ApplicationSettings, StartupEntry, value};
+use flamewm_settings_core::xdg_startup::{StartupCandidate, startup_delay};
 
 /// Visible rows on the Startup page; `ui/settings.html` declares this many slots.
 pub const SLOTS: usize = 8;
@@ -59,10 +60,129 @@ fn remove_with(settings: &ApplicationSettings, slot: usize) -> Result<(), String
         .map_err(|error| error.to_string())
 }
 
+/// Per-entry start delays in seconds, in the order the row button cycles through them.
+pub const DELAYS: [u32; 6] = [0, 5, 10, 15, 30, 60];
+
+/// The next delay after `current`; an off-list value moves to the next larger preset, and the
+/// largest preset wraps to none.
+pub fn next_delay(current: u32) -> u32 {
+    DELAYS
+        .iter()
+        .copied()
+        .find(|delay| *delay > current)
+        .unwrap_or(0)
+}
+
+/// Row-button text for a delay in seconds.
+pub fn delay_label(seconds: u32) -> String {
+    if seconds == 0 {
+        "No delay".to_owned()
+    } else {
+        format!("{seconds} s delay")
+    }
+}
+
+/// Row-button text for an entry's current start delay.
+pub fn delay_text(entry: &StartupEntry) -> String {
+    delay_label(startup_delay(&entry.text))
+}
+
+/// Installed applications that can still be added, in display order.
+pub fn candidates() -> Vec<StartupCandidate> {
+    ApplicationSettings::from_environment()
+        .and_then(|settings| settings.startup_candidates())
+        .unwrap_or_default()
+}
+
+/// Advances the delay of the entry in `slot` to the next preset.
+pub fn cycle_delay(slot: usize) -> Result<(), String> {
+    let settings = ApplicationSettings::from_environment().map_err(|e| e.to_string())?;
+    cycle_delay_with(&settings, slot)
+}
+
+/// Adds the candidate at `index`, wrapping it into the current list.
+pub fn add_candidate(index: usize) -> Result<(), String> {
+    let settings = ApplicationSettings::from_environment().map_err(|e| e.to_string())?;
+    add_candidate_with(&settings, index)
+}
+
+/// Adds a one-line custom command as an autostart entry.
+pub fn add_command(command: &str) -> Result<(), String> {
+    let settings = ApplicationSettings::from_environment().map_err(|e| e.to_string())?;
+    settings
+        .add_command_startup(command)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn cycle_delay_with(settings: &ApplicationSettings, slot: usize) -> Result<(), String> {
+    let entry = entry_at(settings, slot)?;
+    let next = next_delay(startup_delay(&entry.text));
+    settings
+        .set_startup_delay(&entry.id, next)
+        .map_err(|error| error.to_string())
+}
+
+fn add_candidate_with(settings: &ApplicationSettings, index: usize) -> Result<(), String> {
+    let candidates = settings.startup_candidates().map_err(|e| e.to_string())?;
+    if candidates.is_empty() {
+        return Err("every installed application already starts at sign-in".to_owned());
+    }
+    let pick = &candidates[index % candidates.len()];
+    settings
+        .add_installed_startup(&pick.id)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn delay_presets_cycle_and_wrap() {
+        assert_eq!(next_delay(0), 5);
+        assert_eq!(next_delay(5), 10);
+        assert_eq!(next_delay(7), 10, "off-list values move up");
+        assert_eq!(next_delay(60), 0, "the largest preset wraps to none");
+        assert_eq!(delay_label(0), "No delay");
+        assert_eq!(delay_label(15), "15 s delay");
+    }
+
+    #[test]
+    fn cycle_delay_writes_the_next_preset_to_the_user_copy() {
+        let (root, settings) = roots("cycle");
+        std::fs::write(
+            settings.config_dirs[1].join("autostart/alpha.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Alpha\nExec=alpha\n",
+        )
+        .unwrap();
+
+        cycle_delay_with(&settings, 0).unwrap();
+        let user = std::fs::read_to_string(settings.config_dirs[0].join("autostart/alpha.desktop")).unwrap();
+        assert_eq!(startup_delay(&user), 5);
+        cycle_delay_with(&settings, 0).unwrap();
+        let again = settings.startup_entries().unwrap();
+        assert_eq!(startup_delay(&again[0].text), 10);
+        assert!(cycle_delay_with(&settings, 4).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn add_candidate_wraps_the_index_and_reports_when_nothing_is_left() {
+        let (root, settings) = roots("pick");
+        std::fs::create_dir_all(settings.data_dirs[0].join("applications")).unwrap();
+        std::fs::write(
+            settings.data_dirs[0].join("applications/firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox\n",
+        )
+        .unwrap();
+
+        add_candidate_with(&settings, 7).unwrap();
+        assert!(settings.config_dirs[0].join("autostart/firefox.desktop").exists());
+        assert!(add_candidate_with(&settings, 0).is_err(), "nothing left to add");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Isolated XDG roots under a unique temp directory; the caller removes it.
     fn roots(tag: &str) -> (PathBuf, ApplicationSettings) {

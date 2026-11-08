@@ -47,6 +47,10 @@ pub(crate) enum SettingsAction {
     FileManagerCycle,
     StartupToggle(usize),
     StartupRemove(usize),
+    StartupDelay(usize),
+    StartupPick,
+    StartupAddPicked,
+    StartupCommandFocus,
     DefaultCycle(usize),
     Page(SettingsPage),
     AccentSwatch(&'static str),
@@ -380,6 +384,12 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
             .ok_or_else(|| format!("unknown keyboard layout '{layout}'"));
     }
     if let Some(rest) = action.strip_prefix("settings.startup.") {
+        match rest {
+            "pick" => return Ok(SettingsAction::StartupPick),
+            "add" => return Ok(SettingsAction::StartupAddPicked),
+            "command" => return Ok(SettingsAction::StartupCommandFocus),
+            _ => {}
+        }
         let (verb, slot) = rest.split_once('.').ok_or_else(|| format!("unknown startup action '{action}'"))?;
         let slot: usize = slot.parse().map_err(|_| format!("unknown startup row '{slot}'"))?;
         if slot >= crate::startup_page::SLOTS {
@@ -388,6 +398,7 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         return match verb {
             "toggle" => Ok(SettingsAction::StartupToggle(slot)),
             "remove" => Ok(SettingsAction::StartupRemove(slot)),
+            "delay" => Ok(SettingsAction::StartupDelay(slot)),
             _ => Err(format!("unknown startup action '{action}'")),
         };
     }

@@ -48,6 +48,7 @@ mod location;
 mod nav;
 mod default_apps_page;
 mod startup_page;
+mod startup_extras;
 mod nodes;
 mod pager;
 mod sliders;
@@ -118,6 +119,10 @@ pub struct SettingsApplication<T: ControlTransport> {
     nav_search_focused: bool,
     /// Edit buffer for `assistant.apiKey`; `Some` while the field takes typed text.
     api_key_draft: Option<ApiKeyDraft>,
+    /// Custom startup command being typed; `Some` while the field takes typed text.
+    startup_command: Option<startup_extras::StartupCommandDraft>,
+    /// Index of the installed application offered by the Startup picker.
+    startup_pick: usize,
     file_manager_label: String,
 }
 

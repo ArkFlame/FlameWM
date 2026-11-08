@@ -284,7 +284,7 @@ impl ApplicationSettings {
         atomic_write(&path, &text)
     }
 
-    fn config_home(&self) -> io::Result<&Path> {
+    pub(crate) fn config_home(&self) -> io::Result<&Path> {
         self.config_dirs
             .first()
             .filter(|p| p.is_absolute())
@@ -293,7 +293,7 @@ impl ApplicationSettings {
     }
 }
 
-fn invalid(message: &str) -> io::Error {
+pub(crate) fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
@@ -319,7 +319,7 @@ fn validate_key(key: &str) -> io::Result<()> {
     }
 }
 
-fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| invalid("missing parent"))?;
     fs::create_dir_all(parent)?;
     for _ in 0..16 {
