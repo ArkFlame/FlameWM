@@ -109,7 +109,8 @@ impl<C: Connection> Wm<'_, C> {
             )
             .with_outputs(outputs)
             .with_contents_while_dragging(crate::live_settings::show_content_while_dragging())
-            .with_window_margin(crate::live_settings::window_margin()),
+            .with_window_margin(crate::live_settings::window_margin())
+            .with_title_double_click(self.config.title_double_click),
         );
         if let Some(controller) = controller.as_mut() {
             controller.last_title_click = last_title_click;

@@ -277,6 +277,7 @@ pub struct WmConfig {
     pub panel_reserve: u16,
     pub snap_zone: i32,
     pub workspaces: usize,
+    pub title_double_click: crate::frame::title_action::TitleDoubleClick,
 }
 
 impl Default for WmConfig {
@@ -287,6 +288,7 @@ impl Default for WmConfig {
             panel_reserve: 0,
             snap_zone: 24,
             workspaces: 4,
+            title_double_click: crate::frame::title_action::TitleDoubleClick::from_env(),
         }
     }
 }

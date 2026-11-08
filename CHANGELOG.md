@@ -1,3 +1,7 @@
+## Unreleased — configurable titlebar double-click
+
+- Feature: `FLAMEWM_TITLE_DOUBLE_CLICK=off` makes a titlebar double-click do nothing. The default `maximize` keeps the existing behaviour. Settings: `docs/WM_POINTER_SETTINGS.md`.
+
 ## Unreleased — session keyring for Chromium-family browsers
 
 - Fix: browsers lost cookies and logins when switching between Plasma and FlameWM, because Chromium chose a different password store (basic-text under `XDG_CURRENT_DESKTOP=FlameWM`, KWallet under Plasma). Root cause and design in `docs/SESSION_KEYRING.md`.

@@ -8,4 +8,5 @@ pub mod layout;
 pub mod model;
 pub mod resources;
 pub mod session;
+pub mod title_action;
 pub mod titlebar_backdrop;

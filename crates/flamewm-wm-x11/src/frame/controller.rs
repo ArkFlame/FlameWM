@@ -113,6 +113,8 @@ pub struct ControllerState {
     pub window_margin: i32,
     /// Pointer and snap target of the last move motion applied; a repeat is skipped.
     pub last_motion: Option<(RootPoint, flamewm_window_core::SnapTarget)>,
+    /// What a second titlebar click does (see `title_action`).
+    pub title_double_click: super::title_action::TitleDoubleClick,
 }
 
 /// Non-drag title release awaiting a possible second click.
@@ -151,7 +153,17 @@ impl ControllerState {
             contents_while_dragging: true,
             window_margin: 0,
             last_motion: None,
+            title_double_click: super::title_action::TitleDoubleClick::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_title_double_click(
+        mut self,
+        action: super::title_action::TitleDoubleClick,
+    ) -> Self {
+        self.title_double_click = action;
+        self
     }
 
     #[must_use]

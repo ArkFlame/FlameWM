@@ -521,6 +521,7 @@ impl<C: Connection> Wm<'_, C> {
                 hints,
                 extents,
             )
+            .with_title_double_click(self.config.title_double_click)
             .with_screen_rect(crate::client::rect_to_root(Rect::new(
                 self.screen_rect.x,
                 self.screen_rect.y,

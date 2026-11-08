@@ -510,3 +510,14 @@ fn release_after_clamped_motion_configures_client_at_final_size() {
     );
     assert!(release_effects.contains(&FrameEffect::ApplyShape));
 }
+
+#[test]
+fn title_double_click_off_does_not_maximize() {
+    let s0 =
+        floating_state().with_title_double_click(super::super::title_action::TitleDoubleClick::Off);
+    let (s1, _) = title_click(&s0, 150, 120, 1000);
+    let (s2, e2) = title_click(&s1, 150, 120, 1300);
+    assert_eq!(s2.placement.mode, PlacementMode::Floating);
+    assert!(s2.last_title_click.is_none());
+    assert_eq!(e2, vec![FrameEffect::Ungrab]);
+}

@@ -274,7 +274,10 @@ pub(super) fn title_click_release(
         return (state, vec![FrameEffect::Ungrab]);
     }
     state.last_title_click = None;
-    toggle_max(state)
+    match state.title_double_click {
+        super::super::title_action::TitleDoubleClick::Maximize => toggle_max(state),
+        super::super::title_action::TitleDoubleClick::Off => (state, vec![FrameEffect::Ungrab]),
+    }
 }
 
 /// Enter `mode` at `rect`, or return to the resume snapshot when already in it.
