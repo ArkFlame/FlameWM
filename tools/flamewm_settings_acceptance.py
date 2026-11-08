@@ -2870,8 +2870,20 @@ def ss06_select_and_capture(ctx: Ctx, name: str, settle: float, base: Path | Non
 
 
 SNAP_PREVIEW_TITLE = "FlameWM snap preview"
-SS06_SNAP_MIN_CHANGED_FRACTION = 0.05
+# The WM preview is a border-only ring (crates/flamewm-wm-x11/src/snap_preview.rs, 2 px from
+# flamewm-ui-core style PREVIEW_OUTLINE_WIDTH_PX), so the changed pixels are the ring band, not the rect.
+SS06_RING_PX = 2
+SS06_SNAP_MIN_RING_COVERAGE = 0.5
 SS06_SNAP_NOISE_MAX_FRACTION = 0.001
+
+
+def ss06_ring_fraction(rect: tuple[int, int, int, int]) -> float | None:
+    """Share of the preview rect covered by the ring band; a changed ring should cover most of it."""
+    _, _, width, height = rect
+    if width <= 2 * SS06_RING_PX or height <= 2 * SS06_RING_PX:
+        return None
+    interior = (width - 2 * SS06_RING_PX) * (height - 2 * SS06_RING_PX)
+    return (width * height - interior) / (width * height)
 
 
 def ss06_snap_preview_observed(preview_before: bool | None, preview_during: bool | None,
@@ -2883,7 +2895,7 @@ def ss06_snap_preview_observed(preview_before: bool | None, preview_during: bool
     if any(value is None for value in values):
         return None
     return bool(not preview_before and preview_during
-                and changed_fraction >= SS06_SNAP_MIN_CHANGED_FRACTION
+                and changed_fraction >= SS06_SNAP_MIN_RING_COVERAGE
                 and noise_fraction <= SS06_SNAP_NOISE_MAX_FRACTION
                 and committed_narrower and not preview_after)
 
@@ -2947,6 +2959,10 @@ def ss06_snap_preview(ctx: Ctx, args: argparse.Namespace, details: dict, observa
             rect = (preview_rect["x"], preview_rect["y"], preview_rect["width"], preview_rect["height"])
             fraction = pixel_change(str(control), str(shot), rect).get("fraction")
             noise = pixel_change(str(control), str(control2), rect).get("fraction")
+            ring = ss06_ring_fraction(rect)
+            # Coverage: changed share of the ring band the preview can paint (1.0 = whole ring changed).
+            if fraction is not None and ring:
+                fraction = fraction / ring
         code3, command = send_input(ctx, None, None, release=True)
         held = False
         details["commands"].append(command)
