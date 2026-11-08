@@ -36,6 +36,8 @@ options=('!lto')
 # Arch has no Recommends/Suggests: the Debian Recommends and Suggests fields map here.
 # docs/DEPENDENCIES.md is the table of record; tools/test_flamewm_package_dependencies.py checks it.
 optdepends=(
+  'breeze-icons: default icon theme (Breeze, LGPL-3.0+)'
+  'papirus-icon-theme: optional Papirus icons (GPL-3.0, not bundled)'
   'libxcursor: cursor theme loading'
   'libxext: XShape window masks (rectangle fallback without it)'
   'libxrender: core render extension (fallback without it)'

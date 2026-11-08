@@ -54,6 +54,8 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
 | xwayland | xorg-xwayland | Depends | flamewm-wayland spawns Xwayland for X11 clients (probe requires it) | Wayland session fails its probe; X11 session unaffected |
 | xdg-utils | xdg-utils | Depends | xdg-open and xdg-mime (Explorer `mime.rs` shells out to xdg-mime; portal file and URL opening) | Explorer MIME lookup and file/URL opening fail |
 | shared-mime-info | shared-mime-info | Depends | MIME type database read by xdg-mime (Explorer `mime.rs`) | MIME types unknown; default-app lookup fails |
+| breeze-icon-theme | breeze-icons | Recommends | Default icon theme Breeze (LGPL-3.0+); bundled glyphs cover shell only | App icons fall back to hicolor |
+| papirus-icon-theme | papirus-icon-theme | Recommends | Optional Papirus icons (GPL-3.0, selectable, not bundled) | Papirus unavailable; choose another theme |
 | libxcursor1 | libxcursor | Recommends | Cursor theme loading (dlopen, `.ok()` in native/cursor.rs) | Cursor theme loading disabled |
 | libxext6 | libxext | Recommends | XShape window masks (dlopen; rectangle fallback) | Rectangle masks instead of shaped windows |
 | libxrender1 | libxrender | Recommends | Render extension (dlopen; core fallback) | Core rendering path |

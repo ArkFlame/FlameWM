@@ -26,6 +26,9 @@ packaging/pam.d/flamewm-lock             etc/pam.d/flamewm-lock
 assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme
 assets/cursors/cursors                   usr/share/icons/FlameWM-Breeze-Dark/cursors
+# Bundled GPL-3.0 icon and cursor themes (own COPYING in each; Breeze stays the default). See THIRD_PARTY_NOTICES.md.
+assets/themes/icons/MacTahoe             usr/share/icons/MacTahoe/
+assets/themes/cursors/MacTahoe-dark-cursors usr/share/icons/MacTahoe-dark-cursors/
 packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
 packaging/flamewm-screenshot.desktop      usr/share/applications/flamewm-screenshot.desktop
 packaging/flamewm-explorer.desktop        usr/share/applications/flamewm-explorer.desktop

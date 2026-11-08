@@ -38,19 +38,18 @@ class PerOutputOpacity(unittest.TestCase):
         self.assertIn('self.settings_projection_pending = true;', resync)
 
 class OnlyTwoIconThemes(unittest.TestCase):
-    def test_bundled_default_is_mactahoe_and_cursor_registry_intact(self):
+    def test_bundled_default_is_breeze_and_cursor_registry_intact(self):
         picker = src('crates/flamewm-settings/src/theme_picker.rs')
-        self.assertIn('BUNDLED_ICON_THEMES: [&str; 1] = ["MacTahoe"]', picker)
+        self.assertIn('BUNDLED_ICON_THEMES: [&str; 1] = ["breeze"]', picker)
         self.assertIn('registry.cursor.push', picker)
         self.assertNotIn('PlagueSur', picker)
 
     def test_no_old_icon_packs_in_binary_package(self):
         pkg = src('scripts/package')
-        install = pkg.split('# GPL-3.0 themes (MacTahoe, Papirus, Bibata)',1)[1]
+        install = pkg.split('# Bundled GPL-3.0 icon and cursor themes',1)[1]
         self.assertNotIn('candy-icons', install)
         self.assertNotIn('McMojave-circle', install)
-        self.assertNotIn('assets/themes/icons/MacTahoe', pkg)
-        self.assertNotIn('assets/themes/cursors/MacTahoe-dark-cursors', pkg)
+        self.assertIn('assets/themes/icons/MacTahoe"', install)
         manifest = src('packaging/install-manifest.txt')
         self.assertNotIn('assets/themes/icons/candy-icons ',manifest)
         self.assertNotIn('assets/themes/icons/McMojave-circle ',manifest)
