@@ -273,3 +273,18 @@
 - SS05 detail: success and cancel observations now pass in run 2 (only `error_preserved_and_visible` remains). SS06 detail: desktop snapshot passes, the snap-preview consumer is unverified (WM preview is border-only; opacity ignored by design per `snap_preview.rs`).
 - Not verified: root causes for SS03, SS06 (snap preview), SS07, SS10, SS11, SS12, SS14, SS15, SS17, SS19. No product or harness fix beyond the display check was made in this run.
 - Risk: the acceptance matrix is still FAIL; the display fix only unblocks XTEST rows. Each full run takes about 30 minutes.
+
+## G8 Terminal — find, links, paste, scrollback (run 1)
+- Find-in-scrollback (Ctrl+Shift+F, next/prev, highlight): `cf140b6b`. Tests: `cargo test -p flamewm-terminal` exit 0 (search module 9, app test `ctrl_shift_f_finds_text_in_the_focused_pane`). Not verified: visual screenshot of the bar.
+- URL detection (http/https/file) + Ctrl+click via `xdg-open` (detached, no shell): `ad9b1710`. Tests: `links::tests` (7) and `link_under_the_pointer_resolves_from_the_visible_line`. Not verified: a real `xdg-open` launch from a click.
+- Bracketed paste safety: ESC and U+009B stripped from paste payloads in both modes, so a pasted `ESC[201~` cannot end a bracketed paste early: `ccf28193`. Test: `paste_strips_escape_introducers_and_brackets_only_when_enabled`. Multiline-paste confirmation not implemented.
+- Scrollback cap: `Screen` trims `scrollback` on every push (`screen.rs` ~265, ~336). Config default `scrollback = 10_000`, clamp max 1_000_000 (`store.rs` ~145, ~161). Bounded.
+- Measurement: `script -q -c 'yes | head -n 1000000' /dev/null | <bench>` (real PTY producer), release build, bench feeds bytes through `Parser` into `Screen::new(80, 24, limit)`. Input 3,000,000 bytes. Bench temporary, not committed.
+
+| limit | parse_s | wall (user+sys) | VmRSS before → after (KiB) | scrollback_len | total_lines |
+|---|---|---|---|---|---|
+| 10,000 (default) | 0.160 | 0.42 s | 5488 → 6312 | 10000 | 10024 |
+| 1,000,000 (max) | 0.188 | 0.44 s | 5480 → 67980 | 999977 | 1000001 |
+
+- Before/after: no cap code changed in this run, so "before" is the 10,000 default and "after" is the 1,000,000 max. The cap bounds memory at both settings; RSS scales with the configured limit (about 62 MB extra at 1M lines).
+- Not verified: full GUI app run through a PTY (only the parser and screen path was measured); the bench did not include rendering.
