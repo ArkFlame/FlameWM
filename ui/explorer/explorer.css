@@ -125,4 +125,7 @@ button:active { background:var(--pressed-fill); }
 .convert-dialog { position:absolute; left:0; top:0; width:300px; background:var(--menu); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
 .convert-grid { display:flex; flex-direction:column; gap:4px; padding:8px 12px; }
 .convert-choice { width:100%; }
+.drag-ghost { position:absolute; left:0; top:0; height:28px; padding:0 10px 0 6px; display:flex; flex-direction:row; align-items:center; gap:6px; border-radius:6px; background:var(--menu); opacity:0.5; }
+.drag-ghost-icon { width:18px; height:18px; flex-grow:0; }
+.drag-ghost-label { font-size:12px; color:var(--text); white-space:nowrap; }
 .openwith-primary { height:31px; padding:0 12px; border-radius:6px; color:var(--text); background:var(--accent); }

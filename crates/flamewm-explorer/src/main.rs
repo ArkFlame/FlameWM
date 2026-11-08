@@ -123,11 +123,14 @@ const TYPEAHEAD_RESET:Duration=Duration::from_millis(800);
 struct RowDrag {
     source:PathBuf,
     origin:(f32,f32),
+    /// Latest pointer position; the drag ghost follows it.
+    pointer:(f32,f32),
     dragging:bool,
 }
 impl RowDrag {
-    fn new(source:PathBuf,x:f32,y:f32)->Self { Self{source,origin:(x,y),dragging:false} }
+    fn new(source:PathBuf,x:f32,y:f32)->Self { Self{source,origin:(x,y),pointer:(x,y),dragging:false} }
     fn motion(&mut self,x:f32,y:f32)->bool {
+        self.pointer=(x,y);
         if (x-self.origin.0).hypot(y-self.origin.1)>=DRAG_THRESHOLD_PX {self.dragging=true;}
         self.dragging
     }
@@ -544,6 +547,10 @@ mod window_frame_tests;
 #[cfg(test)]
 #[path = "tests/open_status_tests.rs"]
 mod open_status_tests;
+
+#[cfg(test)]
+#[path = "tests/input_focus_tests.rs"]
+mod input_focus_tests;
 
 #[cfg(test)]
 #[path = "tests/navigation_worker_tests.rs"]

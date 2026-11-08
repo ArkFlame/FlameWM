@@ -152,6 +152,16 @@ impl ExplorerApp {
         let surface_bottom=self.window.1-STATUS_STRIP_HEIGHT;
         doc.position("list-surface",SIDEBAR_WIDTH,surface_top)?;
         doc.size("list-surface",(self.window.0-SIDEBAR_WIDTH).max(1.0),(surface_bottom-surface_top).max(1.0))?;
+        // Drag ghost: the dragged file's name and type icon at half opacity, just below the pointer.
+        let ghost=self.row_drag.as_ref().filter(|drag|drag.dragging);
+        doc.visible("drag-ghost",ghost.is_some())?;
+        if let Some(drag)=ghost {
+            let folder=drag.source.is_dir();
+            doc.text("drag-ghost-label",drag.source.file_name().unwrap_or_default().to_string_lossy().into_owned())?;
+            doc.visible("drag-ghost-folder",folder)?;
+            doc.visible("drag-ghost-file",!folder)?;
+            doc.position("drag-ghost",drag.pointer.0-12.0,drag.pointer.1+16.0)?;
+        }
         let status=if self.row_drag.as_ref().is_some_and(|drag|drag.dragging) {
             if let Some(folder)=self.drop_folder.as_deref() {
                 format!("Drop into {} · Move (Ctrl to copy)",folder.file_name().unwrap_or_default().to_string_lossy())
