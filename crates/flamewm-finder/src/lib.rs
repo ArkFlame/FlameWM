@@ -12,6 +12,7 @@ mod kind;
 mod palette;
 mod quick;
 mod preview;
+mod recent_docs;
 mod search;
 mod watch;
 
@@ -1109,6 +1110,10 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let walk_cache = cache_file.map(Path::to_path_buf);
     let roots = index::default_roots(env::var_os("HOME"));
     let worker_index = shared;
+    // Read once per launch: documents opened later show up after the next start.
+    let docs = recent_docs::path(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
+        .map(|path| recent_docs::load(&path))
+        .unwrap_or_default();
     std::thread::spawn(move || {
         // Applications first: the desktop catalog is a few hundred small files, so it lands
         // long before the file walk finishes.
@@ -1120,13 +1125,14 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         }
         // The cached index answers queries while the fresh walk runs; reading it here keeps the
         // window's first paint off the disk.
-        if let Some(cached) = walk_cache.as_deref().and_then(index::load_cache) {
+        if let Some(mut cached) = walk_cache.as_deref().and_then(index::load_cache) {
+            cached.set_docs(docs.clone());
             *worker_index.write() = cached;
             if sender.send(Loaded::Cached).is_ok() {
                 let _ = index_writer.write(&[1]);
             }
         }
-        let fresh = index::walk(
+        let mut fresh = index::walk(
             &roots,
             index::MAX_ENTRIES,
             index::MAX_DEPTH,
@@ -1135,6 +1141,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         if let Some(path) = &walk_cache {
             let _ = index::save_cache(path, &fresh);
         }
+        fresh.set_docs(docs);
         *worker_index.write() = fresh;
         if sender.send(Loaded::Files).is_ok() {
             let _ = index_writer.write(&[1]);

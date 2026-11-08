@@ -165,9 +165,18 @@ pub fn score(entry: &Entry, query: &Query, now: i64) -> Option<i64> {
 #[must_use]
 pub fn rank(index: &Index, query: &Query, now: i64) -> Hits {
     if query.is_empty() {
+        // Recently used documents lead, then the newest files that are not already listed.
+        let mut indices = index.docs.clone();
+        indices.extend(
+            index
+                .recent
+                .iter()
+                .copied()
+                .filter(|i| !index.docs.contains(i)),
+        );
         return Hits {
-            total: index.recent.len(),
-            indices: index.recent.clone(),
+            total: indices.len(),
+            indices,
             recent: true,
         };
     }
@@ -340,6 +349,20 @@ mod tests {
         let hits = rank(&idx, &Query::default(), NOW);
         assert!(hits.recent);
         assert_eq!(idx.entries[hits.indices[0]].name(), "b");
+    }
+
+    #[test]
+    fn recent_documents_lead_the_empty_view_without_repeats() {
+        let mut idx = index(vec![
+            entry("/h/a", false, 5),
+            entry("/h/b", false, 9),
+            entry("/h/doc.odt", false, 1),
+        ]);
+        idx.set_docs(vec!["/h/doc.odt".to_owned(), "/h/missing.txt".to_owned(), "/h/a".to_owned()]);
+        let hits = rank(&idx, &Query::default(), NOW);
+        let names: Vec<&str> = hits.indices.iter().map(|&i| idx.entries[i].name()).collect();
+        assert_eq!(names, ["doc.odt", "a", "b"]);
+        assert_eq!(hits.total, 3);
     }
 
     #[test]
