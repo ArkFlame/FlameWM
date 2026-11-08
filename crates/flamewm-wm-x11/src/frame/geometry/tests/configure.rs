@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn remembered_frame_yields_to_explicit_position_and_rules() {
+    let positioned = ClientSizeHints {
+        position_specified: true,
+        ..ClientSizeHints::default()
+    };
+    // Plain unpositioned first map restores the remembered frame.
+    assert!(may_restore_remembered_frame(false, false, false, free()));
+    // An explicit USPosition (xterm -geometry +X+Y) must not be replaced by memory.
+    assert!(!may_restore_remembered_frame(
+        false, false, false, positioned
+    ));
+    assert!(!may_restore_remembered_frame(true, false, false, free()));
+    assert!(!may_restore_remembered_frame(false, true, false, free()));
+    assert!(!may_restore_remembered_frame(false, false, true, free()));
+}
+
+#[test]
 fn client_rect_frame_roundtrip() {
     let local = frame_to_client_local(START, EXT);
     assert_eq!(local, ClientLocalRect::new(0, 31, 400, 269));

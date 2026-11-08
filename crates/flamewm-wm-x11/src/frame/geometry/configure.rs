@@ -157,6 +157,19 @@ pub fn plan_initial_map(
     GeometryPlan::of(req, RootRect::new(x, y, frame.w, frame.h))
 }
 
+/// Placement memory (last frame rect per `WM_CLASS`) only applies to plain unpositioned first maps.
+/// An explicit ICCCM position (USPosition/PPosition) or a rule size is the client's own request
+/// and must win over a previous window of the same class.
+#[must_use]
+pub fn may_restore_remembered_frame(
+    adopt: bool,
+    is_transient: bool,
+    has_rule_size: bool,
+    hints: ClientSizeHints,
+) -> bool {
+    !adopt && !is_transient && !has_rule_size && !hints.position_specified
+}
+
 /// Only the unpositioned first map of a normal top-level window may follow the mouse.
 /// A non-zero pre-map origin without position flags is ambiguous: it may have
 /// come from an application `ConfigureWindow`, so we conservatively preserve it.

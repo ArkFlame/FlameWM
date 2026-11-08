@@ -284,11 +284,14 @@ impl<C: Connection> Wm<'_, C> {
             ),
             |size| (size.width.unsigned_abs(), size.height.unsigned_abs()),
         );
-        let remembered = self
-            .window_config
-            .borrow()
-            .recall(&wm_class)
-            .filter(|_| rule_size.is_none() && transient_for.is_none() && !adopt);
+        let remembered = self.window_config.borrow().recall(&wm_class).filter(|_| {
+            crate::frame::geometry::may_restore_remembered_frame(
+                adopt,
+                transient_for.is_some(),
+                rule_size.is_some(),
+                hints,
+            )
+        });
         let frame_rect = if let Some(rect) = remembered {
             crate::frame::coords::RootRect::from_legacy(crate::window_config::fit_to(
                 rect,
