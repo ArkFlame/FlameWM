@@ -165,9 +165,9 @@ class InstalledSs17AndSs10ForwardingTests(InstalledNativeCommandTests):
         self.assertEqual(document["ss18_status"], "NOT_RUN")
 
     def test_ss10_flags_are_forwarded_to_native_runner_when_given(self) -> None:
-        seen = self.captured_command_with(["--ss10-wheel-steps", "10", "--ss10-scrolled-click", "751,573"])
+        seen = self.captured_command_with(["--ss10-wheel-steps", "10", "--ss10-scrolled-click", "725,467"])
         self.assertEqual(self.value_of(seen, "--ss10-wheel-steps"), "10")
-        self.assertEqual(self.value_of(seen, "--ss10-scrolled-click"), "751,573")
+        self.assertEqual(self.value_of(seen, "--ss10-scrolled-click"), "725,467")
 
     def test_ss10_flags_are_not_passed_when_absent(self) -> None:
         seen = self.captured_command_with([])

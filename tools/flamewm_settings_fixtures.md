@@ -101,13 +101,13 @@ are relabeled.
   `Super_L` (the platform default). Start behavior is observed by native window title; when no Start-like
   window exists in any observation (WM only, no shell process) those two observations are unobserved (NOT_RUN), not failed.
 - SS10 `--ss10-scale-click X,Y` is a client-relative click on the 125 scale button of the Displays page
-  in a 960x640 client (default `751,553`; at 820x540 the scale row is below the fold). With zero listed
+  in a 960x640 client (default `725,580` on the slider track at 25%, 125%; the old 125 button was replaced by a slider; at 820x540 the scale row is below the fold). With zero listed
   modes it is clicked directly. Each listed mode pushes the scale row below the fold, so when the first
   authoritative output lists modes the runner wheel-scrolls first: `--ss10-wheel-steps N` (1..100, wheel
   down, pointer at the client centre `480,320`, sent as `flamewm_xtest.py --move ... --wheel down:N`), then
   clicks `--ss10-scrolled-click X,Y`. Both are required on that path; without them, or when the wheel
   input exits non-zero, SS10 is NOT_RUN and nothing is clicked. The measured 960x640 pair is
-  `--ss10-wheel-steps 10 --ss10-scrolled-click 751,573` (native verifier N2 evidence:
+  `--ss10-wheel-steps 10 --ss10-scrolled-click 725,467` (native verifier N2 evidence:
   `/tmp/claude-1000/n2-runs/ss10-probe/shots/after-click.png`). `scripts/settings-acceptance` and
   `scripts/settings-installed-acceptance` pass this pair only when the caller gives neither SS10 scroll
   option. Wheel 3 is non-deterministic (scroll animation), so re-measure before trusting another step count.

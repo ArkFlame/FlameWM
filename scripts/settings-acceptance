@@ -15,7 +15,7 @@ Usage: scripts/settings-acceptance --run-dir DIR [--geometry WxH] [--display :N]
 
 SS10 needs --ss10-wheel-steps N and --ss10-scrolled-click X,Y when the first
 authoritative output lists modes. When neither is given, this wrapper passes the
-measured 960x640 defaults `--ss10-wheel-steps 10 --ss10-scrolled-click 751,573`
+measured 960x640 defaults `--ss10-wheel-steps 10 --ss10-scrolled-click 725,467`
 (wheel 3 is non-deterministic; see tools/flamewm_settings_fixtures.md).
 
 Runs the isolated native System Settings acceptance matrix in a private
@@ -58,7 +58,7 @@ for arg in "$@"; do
   esac
 done
 if [[ "$has_ss10_scroll" -eq 0 ]]; then
-  set -- "$@" --ss10-wheel-steps 10 --ss10-scrolled-click 751,573
+  set -- "$@" --ss10-wheel-steps 10 --ss10-scrolled-click 725,467
 fi
 rc=0
 output="$(python3 "$RUNNER" "$@")" || rc=$?

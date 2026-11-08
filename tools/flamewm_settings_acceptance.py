@@ -107,6 +107,13 @@ SS05_CHOOSE_CLIENT_DEFAULT = "681,195"
 # Rightmost client columns hold the scrollbar track; keep it out of OCR crops.
 SCROLLBAR_COLUMN_PX = 8
 SS10_CLIENT = (960, 640)
+# The Displays scale control is a 100..200% slider in 25% steps (crates/flamewm-settings/src/sliders.rs);
+# 125% is track position 25%. Measured on a 960x640 client with one listed mode: the track sits at y=580
+# and a click at (725,580) sets the output to 125 (live Xvfb, run 3 manual check). The old 125 button is gone.
+SS10_SCALE_SLIDER_CLIENT = "725,580"
+# With modes listed the page is wheel-scrolled to its bottom; the slider then sits at y=467 (measured on a
+# 1280x800 Xephyr with 16 modes, and the same y with 0 modes). Evidence: runs ss10c shots.
+SS10_SCROLLED_SCALE_CLIENT = "725,467"
 SS10_WHEEL_POINTER = (SS10_CLIENT[0] // 2, SS10_CLIENT[1] // 2)
 # SS12 fixture constants measured natively on a private Xephyr (Settings --page hotkeys, default 820x540
 # client at screen origin (0,31)): Toggle Start menu capture field centre and its Reset button centre.
@@ -216,11 +223,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ss05-click", metavar="X,Y", default=SS05_CHOOSE_CLIENT_DEFAULT,
                         help="SS05 client-relative wallpaper Choose center at 960x640, left of Clear and Default "
                              f"(default: {SS05_CHOOSE_CLIENT_DEFAULT})")
-    parser.add_argument("--ss10-scale-click", metavar="X,Y", default="751,553",
+    parser.add_argument("--ss10-scale-click", metavar="X,Y", default=SS10_SCALE_SLIDER_CLIENT,
                         help="SS10 client-relative click on the 125 scale button of the Displays page (960x640 client, scale row visible); default measured")
     parser.add_argument("--ss10-wheel-steps", metavar="N", type=int, default=None,
                         help="SS10 wheel-down steps over the Displays page; required when the output lists modes")
-    parser.add_argument("--ss10-scrolled-click", metavar="X,Y", default=None,
+    parser.add_argument("--ss10-scrolled-click", metavar="X,Y", default=SS10_SCROLLED_SCALE_CLIENT,
                         help="SS10 client-relative click on the 125 scale button after the wheel scroll (960x640 client); "
                              "required when the output lists modes")
     parser.add_argument("--only", metavar="SSxx[,SSyy]", default="",
@@ -3257,7 +3264,7 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
 
     def finish() -> dict:
         status, reason = assess_ss10(observations)
-        entry = result_entry("SS10", status, reason, commands=details["commands"])
+        entry = result_entry("SS10", status, reason, details.get("shots", []), details["commands"])
         entry["details"] = details
         return entry
 
@@ -3294,7 +3301,7 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
     # With modes listed, the page is wheel-scrolled first and the caller supplies the scrolled click point.
     mode_count = display_output_mode_count(before_text or "", output_id)
     details["before"]["mode_count"] = mode_count
-    if mode_count is None or (mode_count and not (args.ss10_wheel_steps and args.ss10_scrolled_click)):
+    if mode_count is None or (mode_count > 1 and not (args.ss10_wheel_steps and args.ss10_scrolled_click)):
         ctx.stop(settings)
         if mode_count is None:
             details["reason"] = "output mode list is unparsable; not clicked"
@@ -3303,7 +3310,7 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
                                  "needs --ss10-wheel-steps and --ss10-scrolled-click after scrolling; not clicked")
         return finish()
 
-    if mode_count:
+    if mode_count > 1:
         pointer = settings_relative_point(ctx, geometry, SS10_WHEEL_POINTER)
         scroll_code, scroll_command = send_input(ctx, None, None, move=pointer, wheel=f"down:{args.ss10_wheel_steps}")
         details["commands"].append(scroll_command)
@@ -3317,10 +3324,19 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
         point = tuple(int(part) for part in args.ss10_scrolled_click.split(","))
     else:
         point = tuple(int(part) for part in args.ss10_scale_click.split(","))
+    # Layout evidence: the scale control position depends on the output mode list and scroll, so keep both shots.
+    before_shot = ctx.run / "shots" / "ss10-before-click.png"
+    _, before_shot_command = capture(ctx, before_shot)
+    details["commands"].append(before_shot_command)
+    details.setdefault("shots", []).append(str(before_shot))
     click = settings_relative_point(ctx, geometry, point)
     code, click_command = send_input(ctx, click, None)
     details["commands"].append(click_command)
     time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+    after_shot = ctx.run / "shots" / "ss10-after-click.png"
+    _, after_shot_command = capture(ctx, after_shot)
+    details["commands"].append(after_shot_command)
+    details["shots"].append(str(after_shot))
     after_text, after_command = dbus_displays_snapshot(ctx)
     details["commands"].append(after_command)
     after_scales = display_output_scales(after_text or "")
