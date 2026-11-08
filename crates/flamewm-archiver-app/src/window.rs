@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
+use flamewm_api::format::human_size;
 use flamewm_api::settings::SettingsSnapshot;
 use flamewm_archiver::{ArchiveError, CancelToken, Entry, Format, Kind, Progress, Summary, list};
 use flamewm_ui_core::surface::surface_fill;
@@ -581,21 +582,6 @@ fn entry_meta(entry: &Entry) -> String {
     }
 }
 
-fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
 /// `dir/name.tar.gz` extracts to `dir/name`, or `dir/name-2` and so on when that exists.
 /// The suffix list comes from the archive core so a new format never lands here twice.
 fn free_destination(archive: &Path) -> PathBuf {
@@ -675,12 +661,6 @@ mod tests {
         };
         assert_eq!(progress_fraction(Some(entries)), (0.25, 25));
         assert_eq!(progress_fraction(None), (0.0, 0));
-    }
-
-    #[test]
-    fn sizes_use_binary_units() {
-        assert_eq!(human_size(12), "12 B");
-        assert_eq!(human_size(2048), "2.0 KiB");
     }
 
     /// A window state with no archive open, plus the reply receiver the worker threads feed.

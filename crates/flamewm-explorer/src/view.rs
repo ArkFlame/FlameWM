@@ -117,25 +117,6 @@ fn starts_with_lowercase(name: &str, prefix: &str) -> bool {
         .all(|expected| lowered.next() == Some(expected))
 }
 
-/// Byte count as a short label with binary units (B, KiB, MiB, ...).
-#[must_use]
-pub fn human_size(bytes: u64) -> String {
-    let mut n = bytes as f64;
-    let mut unit = "B";
-    for candidate in ["KiB", "MiB", "GiB", "TiB"] {
-        if n < 1024.0 {
-            break;
-        }
-        n /= 1024.0;
-        unit = candidate;
-    }
-    if unit == "B" {
-        format!("{bytes} B")
-    } else {
-        format!("{n:.1} {unit}")
-    }
-}
-
 /// Status strip count: "12 items", plus the selection count when something is selected.
 #[must_use]
 pub fn items_text(total: usize, selected: usize) -> String {
@@ -437,11 +418,5 @@ mod tests {
             date_label(at(Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap()), now),
             "2026-10-01"
         );
-    }
-
-    #[test]
-    fn human_size_uses_binary_units() {
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(1536), "1.5 KiB");
     }
 }

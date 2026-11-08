@@ -13,6 +13,7 @@ pub mod color;
 pub mod display;
 pub mod error;
 pub mod events;
+pub mod format;
 pub mod geometry;
 pub mod graphics;
 pub mod ids;

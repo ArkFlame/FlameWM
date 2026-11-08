@@ -61,7 +61,7 @@ impl Entry {
     }
     #[must_use] pub fn size_label(&self) -> String {
         if self.directory { return "—".into(); }
-        view::human_size(self.size)
+        flamewm_api::format::human_size(self.size)
     }
     #[must_use] pub fn modified_label(&self) -> String {
         self.modified.map_or_else(|| "—".into(), |m| view::date_label(m, chrono::Local::now()))

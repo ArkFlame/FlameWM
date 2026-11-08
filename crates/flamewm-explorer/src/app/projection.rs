@@ -171,7 +171,7 @@ impl ExplorerApp {
         doc.text("status-count",view::items_text(tab.entries.len(),tab.selected_paths.len()))?;
         // Free space and usage come from statvfs; the bar fills by the share of the filesystem in use.
         let space=view::fs_space(tab.path());
-        doc.text("status-free",space.map_or(String::new(),|(free,_)|format!("{} left",view::human_size(free))))?;
+        doc.text("status-free",space.map_or(String::new(),|(free,_)|format!("{} left",flamewm_api::format::human_size(free))))?;
         let used=space.map_or(0.0,|(free,total)|if total>0 {1.0-free as f32/total as f32} else {0.0});
         doc.size("usage-fill",USAGE_TRACK_WIDTH*used.clamp(0.0,1.0),4.0)?;
         // The progress window and the activity entry render one shared snapshot, so
@@ -387,7 +387,7 @@ impl ExplorerApp {
                 props.path.file_name().unwrap_or(props.path.as_os_str()).to_string_lossy().into_owned(),
                 vec![
                     props.path.display().to_string(),
-                    format!("Size: {}",size.map_or("calculating…".to_owned(),view::human_size)),
+                    format!("Size: {}",size.map_or("calculating…".to_owned(),flamewm_api::format::human_size)),
                     format!("Permissions: {}",properties::mode_string(props.mode)),
                     format!("Owner: uid {} · group {}",props.uid,props.gid),
                 ],

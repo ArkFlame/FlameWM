@@ -84,11 +84,14 @@ impl Snapshot {
         if self.bytes_total > 0 {
             format!(
                 "{} of {}",
-                crate::view::human_size(self.bytes_done),
-                crate::view::human_size(self.bytes_total)
+                flamewm_api::format::human_size(self.bytes_done),
+                flamewm_api::format::human_size(self.bytes_total)
             )
         } else if self.bytes_done > 0 {
-            format!("{} transferred", crate::view::human_size(self.bytes_done))
+            format!(
+                "{} transferred",
+                flamewm_api::format::human_size(self.bytes_done)
+            )
         } else {
             String::new()
         }
