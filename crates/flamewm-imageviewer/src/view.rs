@@ -168,3 +168,59 @@ mod tests {
         assert_eq!(step_index(3, 1, true), 2);
     }
 }
+
+#[cfg(test)]
+mod zoom_step_tests {
+    use super::*;
+
+    #[test]
+    fn every_zoom_step_keeps_the_aspect_ratio_within_one_pixel() {
+        for (w, h) in [(4000_u32, 1000_u32), (1000, 3000), (2400, 1601)] {
+            let mut zoom = MIN_ZOOM;
+            while zoom <= MAX_ZOOM {
+                let (dw, dh) = display_size(w, h, zoom);
+                let expected = f64::from(w) / f64::from(h);
+                let got = f64::from(dw) / f64::from(dh);
+                // Rounding each axis independently can move the ratio by at most one pixel.
+                let slack = 1.0 / f64::from(dh) + 1.0 / f64::from(dw);
+                assert!(
+                    (got - expected).abs() <= expected * slack,
+                    "{w}x{h} at {zoom}: {dw}x{dh}"
+                );
+                zoom *= ZOOM_STEP;
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_is_clamped_to_the_supported_range() {
+        assert_eq!(clamp_zoom(0.0), MIN_ZOOM);
+        assert_eq!(clamp_zoom(1.0e6), MAX_ZOOM);
+        assert_eq!(clamp_zoom(1.0), 1.0);
+    }
+
+    #[test]
+    fn cursor_anchored_zoom_keeps_the_point_fixed_across_steps() {
+        let point = (300.0, 200.0);
+        let mut offset = (-100_i64, -50_i64);
+        let mut zoom = 1.0;
+        for _ in 0..6 {
+            let next = clamp_zoom(zoom * ZOOM_STEP);
+            let before = (point.0 - offset.0 as f64) / zoom;
+            let after_offset = zoom_about(offset, zoom, next, point);
+            let after = (point.0 - after_offset.0 as f64) / next;
+            assert!((before - after).abs() <= 1.0 / next, "anchor drifted");
+            offset = after_offset;
+            zoom = next;
+        }
+    }
+
+    #[test]
+    fn placed_box_matches_the_displayed_size_on_both_axes() {
+        let stage = (800_u32, 600_u32);
+        let displayed = display_size(4000, 1000, 2.0);
+        let placement = place(stage, displayed, (0, 0));
+        assert_eq!(placement.size.0, stage.0.min(displayed.0));
+        assert_eq!(placement.size.1, stage.1.min(displayed.1));
+    }
+}

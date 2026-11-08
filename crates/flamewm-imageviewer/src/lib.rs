@@ -214,9 +214,10 @@ impl App {
         }
     }
 
-    /// Recomputes the placement for the current zoom and offset, places the photo node and asks the
-    /// worker for the visible part. The old frame is stretched into the new box until the new one arrives.
-    fn request_view(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    /// Recomputes the placement for the current zoom and offset and asks the worker for the visible
+    /// part. The photo box is not touched here: the previous frame keeps its own pixels and box until
+    /// the matching frame arrives, so its position and size change together with its pixels.
+    fn request_view(&mut self) -> Result<(), String> {
         let Some((w, h)) = self.size else {
             return Ok(());
         };
@@ -225,9 +226,6 @@ impl App {
         self.offset = placement.offset;
         self.seq += 1;
         self.shown = Some((self.seq, placement.at, placement.size));
-        doc.position(PHOTO, placement.at.0 as f32, placement.at.1 as f32)?;
-        doc.size(PHOTO, placement.size.0 as f32, placement.size.1 as f32)?;
-        doc.visible(PHOTO, self.framed)?;
         let path = self.images[self.index].clone();
         let rect = Rect {
             x: placement.src.0,
@@ -244,12 +242,7 @@ impl App {
         Ok(())
     }
 
-    fn zoom_to(
-        &mut self,
-        zoom: f64,
-        point: (f64, f64),
-        doc: &mut impl UiDocumentAccess,
-    ) -> Result<(), String> {
+    fn zoom_to(&mut self, zoom: f64, point: (f64, f64)) -> Result<(), String> {
         let zoom = view::clamp_zoom(zoom);
         if self.size.is_none() || (zoom - self.zoom).abs() < f64::EPSILON {
             return Ok(());
@@ -257,14 +250,14 @@ impl App {
         self.offset = view::zoom_about(self.offset, self.zoom, zoom, point);
         self.zoom = zoom;
         self.fit = false;
-        self.request_view(doc)
+        self.request_view()
     }
 
-    fn fit_to_window(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    fn fit_to_window(&mut self) -> Result<(), String> {
         self.fit = true;
         self.offset = (0, 0);
         self.refit();
-        self.request_view(doc)
+        self.request_view()
     }
 
     fn resize(
@@ -275,7 +268,7 @@ impl App {
     ) -> Result<(), String> {
         self.stage = (width.max(1), height.max(1));
         self.refit();
-        self.request_view(doc)?;
+        self.request_view()?;
         self.paint(doc)
     }
 
@@ -285,7 +278,7 @@ impl App {
                 self.size = Some(size);
                 self.message.clear();
                 self.refit();
-                self.request_view(doc)?;
+                self.request_view()?;
             }
             Reply::Failed {
                 generation,
@@ -307,6 +300,8 @@ impl App {
                 if shown != seq {
                     return self.paint(doc);
                 }
+                // Pixels, box position and box size go in one step: a frame is never drawn into
+                // another frame's box, so the image cannot show a stretched intermediate.
                 doc.image_rgba8(
                     PHOTO,
                     RuntimeImage {
@@ -317,6 +312,8 @@ impl App {
                     },
                 )?;
                 doc.position(PHOTO, at.0 as f32, at.1 as f32)?;
+                doc.size(PHOTO, size.0 as f32, size.1 as f32)?;
+                doc.visible(PHOTO, true)?;
                 self.framed = true;
                 self.message.clear();
             }
@@ -339,7 +336,7 @@ impl App {
                     if dx != 0.0 || dy != 0.0 {
                         self.offset = (self.offset.0 + dx as i64, self.offset.1 + dy as i64);
                         self.drag = Some((last_x + dx, last_y + dy));
-                        self.request_view(doc)?;
+                        self.request_view()?;
                     }
                 }
             }
@@ -354,9 +351,9 @@ impl App {
                     .unwrap_or(0.0);
                 let point = (f64::from(event.x), f64::from(event.y));
                 if dy < 0.0 {
-                    self.zoom_to(self.zoom * view::ZOOM_STEP, point, doc)?;
+                    self.zoom_to(self.zoom * view::ZOOM_STEP, point)?;
                 } else if dy > 0.0 {
-                    self.zoom_to(self.zoom / view::ZOOM_STEP, point, doc)?;
+                    self.zoom_to(self.zoom / view::ZOOM_STEP, point)?;
                 }
             }
             _ => {}
@@ -374,10 +371,10 @@ impl App {
             "left" | "up" | "pageup" => self.navigate(false, doc)?,
             "right" | "down" | "pagedown" | "space" => self.navigate(true, doc)?,
             _ => match key.text.as_deref() {
-                Some("+" | "=") => self.zoom_to(self.zoom * view::ZOOM_STEP, center, doc)?,
-                Some("-" | "_") => self.zoom_to(self.zoom / view::ZOOM_STEP, center, doc)?,
-                Some("1") => self.zoom_to(1.0, center, doc)?,
-                Some("0" | "f" | "F") => self.fit_to_window(doc)?,
+                Some("+" | "=") => self.zoom_to(self.zoom * view::ZOOM_STEP, center)?,
+                Some("-" | "_") => self.zoom_to(self.zoom / view::ZOOM_STEP, center)?,
+                Some("1") => self.zoom_to(1.0, center)?,
+                Some("0" | "f" | "F") => self.fit_to_window()?,
                 _ => {}
             },
         }
