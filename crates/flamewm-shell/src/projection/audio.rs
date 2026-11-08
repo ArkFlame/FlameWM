@@ -1,6 +1,6 @@
 use super::calendar::ACTIVE_TAB_FILL;
 use super::*;
-use crate::taskbar::status::audio::{AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
+use crate::taskbar::status::audio::{AUDIO_THUMB_SIZE, AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
 
 pub fn project_audio(
     document: &mut impl UiDocumentAccess,
@@ -93,16 +93,17 @@ pub fn project_audio_full(
     Ok(())
 }
 
-/// Thumb top in lane coordinates: centres the 12px thumb on the 16px track (`.audio-thumb` in ui/shell/audio.html).
-const AUDIO_THUMB_TOP: f32 = 2.0;
+/// Lane x of the track's left edge (the `.audio-lane` starts 6px left of the track in audio.html).
+const AUDIO_LANE_TRACK_OFFSET: f32 = 6.0;
 
-/// Thumb left edge in lane coordinates (the `.audio-lane` starts 6px left of the
-/// track so every offset stays non-negative): the 12px thumb is centred on
-/// `fraction * AUDIO_TRACK_WIDTH`, so its centre sits at
+/// Thumb top in lane coordinates: centres the knob on the track height.
+const AUDIO_THUMB_TOP: f32 = (AUDIO_TRACK_HEIGHT - AUDIO_THUMB_SIZE) / 2.0;
+
+/// Thumb left edge in lane coordinates: the knob is centred on the fill end,
 /// `AUDIO_TRACK_X + fraction * AUDIO_TRACK_WIDTH` in popup space, the same
 /// mapping `value_from_pointer` inverts for drag.
 fn audio_thumb_left(shown: f32, max: f32) -> f32 {
-    AUDIO_TRACK_WIDTH * shown / max
+    AUDIO_LANE_TRACK_OFFSET + AUDIO_TRACK_WIDTH * shown / max - AUDIO_THUMB_SIZE / 2.0
 }
 
 #[cfg(test)]
@@ -314,31 +315,33 @@ mod audio_template_tests {
 
     #[test]
     fn thumb_centre_maps_fraction_of_track_at_0_100_and_150_caps() {
-        // 0% sits at the track start (thumb centre x = AUDIO_TRACK_X), 100% and 150%
-        // at the track end; the thumb left edge is the centre minus the radius.
-        assert_eq!(audio_thumb_left(0.0, 100.0), 0.0);
-        assert_eq!(audio_thumb_left(100.0, 100.0), 350.0);
-        assert_eq!(audio_thumb_left(150.0, 150.0), 350.0);
-        assert_eq!(audio_thumb_left(75.0, 150.0), 175.0);
+        // Lane x of the knob centre is track start + fraction * width; the left edge is
+        // that centre minus the half knob (7px), so 0% hangs 1px left of the track start.
+        assert_eq!(audio_thumb_left(0.0, 100.0), -1.0);
+        assert_eq!(audio_thumb_left(100.0, 100.0), 349.0);
+        assert_eq!(audio_thumb_left(150.0, 150.0), 349.0);
+        assert_eq!(audio_thumb_left(75.0, 150.0), 174.0);
+        assert_eq!(AUDIO_THUMB_TOP, 1.0, "knob centre sits on the 16px track centre");
     }
 
     #[test]
     fn thumb_position_follows_snapped_fill_under_cap() {
-        // Cap 100: 120% snaps to the track end, so the thumb matches the fill end minus radius.
+        // Cap 100: 120% snaps to the track end, so the knob centre lands on the fill end
+        // (lane x 6 + 350) and its left edge is 7px earlier at 349.
         let capped = fixture(AudioTab::Devices, false);
         assert_eq!(
             capped.positions.get("audio-slot-1-thumb"),
-            Some(&(350.0, 2.0))
+            Some(&(349.0, 1.0))
         );
         assert_eq!(
             capped.positions.get("audio-slot-2-thumb"),
-            Some(&(140.0, 2.0))
+            Some(&(139.0, 1.0))
         );
-        // Raise maximum: 120% of 150 is 280 px of fill, so the thumb centre is 280.
+        // Raise maximum: 120% of 150 is 280 px of fill, so the knob left edge is 279.
         let raised = fixture(AudioTab::Devices, true);
         assert_eq!(
             raised.positions.get("audio-slot-1-thumb"),
-            Some(&(280.0, 2.0))
+            Some(&(279.0, 1.0))
         );
     }
 
@@ -524,6 +527,16 @@ mod audio_template_tests {
             let group = layout_rect(document, &format!("audio-slot-{n}"));
 
             let expected_x = track.0 + (percent / 150.0) * track.2;
+            let fill = layout_rect(document, &format!("audio-slot-{n}-fill"));
+            assert!(
+                (fill.3 - track.3).abs() <= 1.0 && (fill.1 - track.1).abs() <= 1.0,
+                "slot {n} ({percent}%): fill {fill:?} must share track {track:?} height and top"
+            );
+            assert!(
+                (fill.2 - (percent / 150.0) * track.2).abs() <= 1.0,
+                "slot {n} ({percent}%): fill width {} != value x track width",
+                fill.2
+            );
             let thumb_cx = thumb.0 + thumb.2 / 2.0;
             assert!(
                 (thumb_cx - expected_x).abs() <= 1.0,

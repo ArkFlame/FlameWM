@@ -21,7 +21,11 @@ pub const AUDIO_LIST_VIEWPORT: u32 = AUDIO_ROW_HEIGHT * AUDIO_POPUP_ROWS as u32;
 /// Slider track left edge and width in popup coordinates (see audio.html).
 pub const AUDIO_TRACK_X: f32 = 58.0;
 pub const AUDIO_TRACK_WIDTH: f32 = 350.0;
-pub const AUDIO_TRACK_HEIGHT: f32 = 6.0;
+/// Track and fill height, matching `.audio-track` and `.audio-track-fill` in ui/shell/audio.html.
+/// The fill shares the track's height and radius, so the iOS-style pill reads as one control.
+pub const AUDIO_TRACK_HEIGHT: f32 = 16.0;
+/// Round knob at the fill end, matching `.audio-thumb` in ui/shell/audio.html.
+pub const AUDIO_THUMB_SIZE: f32 = 14.0;
 /// Thumb is 12px (`.audio-thumb`); at 150% it ends at popup x=414, where the percent label starts.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
