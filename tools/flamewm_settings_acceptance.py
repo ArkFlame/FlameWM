@@ -1709,6 +1709,7 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
         entry = result_entry("SS15", STATUS_NOT_RUN, preflight, commands=details["commands"])
         entry["details"] = details
         return entry
+    fresh_wm_for_requested_size(ctx, args)  # SS02 sized launches leave a remembered 960x640 frame
     displays = ctx.spawn("settings-ss15-displays", [args.settings_bin, "--page", "displays"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "displays"]))
     time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
@@ -1755,7 +1756,8 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["mode_note"] = "could not parse authoritative mode list"
     else:
         mode_label_rect = (geometry["x"] + 465, geometry["y"] + 482, 140, 30)
-        mode_pages = (mode_count + 7) // 8
+        # DISPLAY_MODE_SLOTS = 4 (crates/flamewm-settings-core/src/lib.rs): the label reads "5-8 of 16" on page 2.
+        mode_pages = (mode_count + 3) // 4
         label_path = ctx.run / "shots" / "ss15-mode-label-before.png"
         capture(ctx, label_path)
         label_hash = image_region_digest(label_path, mode_label_rect)
