@@ -1,11 +1,11 @@
 //! Clipboard keeper: keeps the last CLIPBOARD text after its owner goes away.
 //!
 //! A background thread watches CLIPBOARD owner changes through `XFixes`. For each new owner it
-//! reads text targets (`UTF8_STRING`, then `STRING`) and keeps them when they fit in
-//! [`MAX_KEPT_BYTES`]. Owners that advertise `x-kde-passwordManagerHint` in TARGETS, or that do
+//! reads text targets (`UTF8_STRING`, then `STRING`) and pushes them into a bounded
+//! [`ClipHistory`]. Owners that advertise `x-kde-passwordManagerHint` in TARGETS, or that do
 //! not answer TARGETS, are never kept. When the owner window or client closes, it serves the
-//! kept text again through [`Clipboard::set_text`]. An explicit clear (`SetSelectionOwner` with
-//! no owner) drops the kept text. Without `XFixes` the keeper reports once and ends.
+//! newest kept text again through [`Clipboard::set_text`]. An explicit clear (`SetSelectionOwner`
+//! with no owner) empties the history. Without `XFixes` the keeper reports once and ends.
 
 use std::time::Instant;
 
@@ -15,10 +15,8 @@ use x11rb::protocol::Event;
 use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEvent, SelectionEventMask};
 use x11rb::protocol::xproto::{Atom, Window};
 
+use crate::history::ClipHistory;
 use crate::{Clipboard, GET_TIMEOUT, err, intern};
-
-/// Largest text the keeper retains. Larger owners are not kept.
-pub const MAX_KEPT_BYTES: usize = 1 << 20;
 
 /// KDE/KeePassXC convention: owners advertising this target hold a password.
 const PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
@@ -55,11 +53,6 @@ fn step(owner: Window, subtype: SelectionEvent) -> Step {
         (true, true) => Step::Forget,
         (true, false) => Step::Reserve,
     }
-}
-
-/// Keeps `text` only when it fits the byte cap.
-fn accept(text: Option<String>) -> Option<String> {
-    text.filter(|text| text.len() <= MAX_KEPT_BYTES)
 }
 
 /// Whether an owner's text may be kept. `targets` is `None` when the owner did not answer
@@ -102,7 +95,9 @@ fn run(display: Option<&str>) -> Result<(), String> {
     conn.flush().map_err(err)?;
     let clipboard = Clipboard::connect_display(display)?;
 
-    let mut kept: Option<String> = None;
+    let mut history = ClipHistory::new();
+    // True when the current owner's text is the newest history item and may be re-served.
+    let mut live = false;
     loop {
         let Event::XfixesSelectionNotify(note) = conn.wait_for_event().map_err(err)? else {
             continue;
@@ -113,15 +108,23 @@ fn run(display: Option<&str>) -> Result<(), String> {
         match step(note.owner, note.subtype) {
             Step::Fetch => {
                 let owner_targets = advertised(&clipboard, targets);
-                kept = if keepable(owner_targets.as_deref(), hint) {
-                    accept(clipboard.get_text().ok().flatten())
+                let text = if keepable(owner_targets.as_deref(), hint) {
+                    clipboard.get_text().ok().flatten()
                 } else {
                     None
                 };
+                // A duplicate of the newest item is still the live text; a rejected item is not.
+                live = text.is_some_and(|text| {
+                    let same_as_newest = history.iter().next() == Some(text.as_str());
+                    history.push(text) || same_as_newest
+                });
             }
-            Step::Forget => kept = None,
+            Step::Forget => {
+                history.clear();
+                live = false;
+            }
             Step::Reserve => {
-                if let Some(text) = &kept
+                if let Some(text) = history.iter().next().filter(|_| live)
                     && let Err(error) = clipboard.set_text(text)
                 {
                     eprintln!("flamewm: clipboard keeper could not re-serve text: {error}");
@@ -163,14 +166,5 @@ mod tests {
         assert!(keepable(Some(&[5, 6]), HINT));
         assert!(!keepable(Some(&[5, HINT]), HINT));
         assert!(!keepable(None, HINT));
-    }
-
-    #[test]
-    fn text_over_cap_is_not_kept_and_text_at_cap_is_kept() {
-        assert_eq!(accept(None), None);
-        assert_eq!(accept(Some("hi".into())), Some("hi".into()));
-        let at_cap = "a".repeat(MAX_KEPT_BYTES);
-        assert_eq!(accept(Some(at_cap.clone())), Some(at_cap));
-        assert_eq!(accept(Some("a".repeat(MAX_KEPT_BYTES + 1))), None);
     }
 }

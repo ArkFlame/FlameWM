@@ -9,11 +9,12 @@
 //! is next touched; this crate does not edit the screenshot binary.
 
 mod codec;
+mod history;
 mod keeper;
 mod owner;
 
 /// Starts the clipboard keeper (see `keeper.rs`): text on CLIPBOARD survives its owner window
-/// closing, up to 1 MiB. Intended to be called once by the window manager.
+/// closing, in a history of up to 20 items and 256 KiB. Intended to be called once by the window manager.
 pub fn spawn_keeper(display: Option<&str>) -> Result<(), String> {
     keeper::spawn(display.map(str::to_owned))
 }
