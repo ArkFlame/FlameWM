@@ -49,6 +49,24 @@ pub struct NotificationHistory {
     dnd: bool,
     muted_apps: BTreeSet<String>,
     revision: u64,
+    /// Sum of [`entry_text_bytes`] over `entries`; kept in step by every mutation.
+    text_bytes: usize,
+}
+
+/// Text budget for all retained history entries. Oldest entries are evicted to stay under it.
+pub const MAX_HISTORY_TEXT_BYTES: usize = 256 * 1024;
+
+/// Retained text of one entry: every string field that history keeps.
+fn entry_text_bytes(view: &NotificationView) -> usize {
+    view.app_name.len()
+        + view.summary.len()
+        + view.body.len()
+        + view.icon_name.as_ref().map_or(0, String::len)
+        + view
+            .actions
+            .iter()
+            .map(|action| action.key.len() + action.label.len())
+            .sum::<usize>()
 }
 
 impl NotificationHistory {
@@ -62,6 +80,7 @@ impl NotificationHistory {
             dnd: false,
             muted_apps: BTreeSet::new(),
             revision: 0,
+            text_bytes: 0,
         }
     }
 
@@ -88,12 +107,20 @@ impl NotificationHistory {
         }
     }
 
-    fn push(&mut self, view: NotificationView, received_at_ms: u64) {
+    fn push(&mut self, mut view: NotificationView, received_at_ms: u64) {
+        // History never renders images. The live toast keeps its own copy, so the decoded RGBA
+        // payload (up to 1 MiB per entry) is dropped here instead of being retained per entry.
+        view.image = None;
+        let bytes = entry_text_bytes(&view);
         let seq = self.next_seq;
         self.next_seq += 1;
-        if self.entries.len() == self.capacity {
-            self.entries.pop_front();
+        while !self.entries.is_empty()
+            && (self.entries.len() == self.capacity
+                || self.text_bytes + bytes > MAX_HISTORY_TEXT_BYTES)
+        {
+            self.evict_oldest();
         }
+        self.text_bytes += bytes;
         self.entries.push_back(HistoryEntry {
             seq,
             received_at_ms,
@@ -102,12 +129,20 @@ impl NotificationHistory {
         self.revision += 1;
     }
 
+    fn evict_oldest(&mut self) {
+        if let Some(evicted) = self.entries.pop_front() {
+            self.text_bytes -= entry_text_bytes(&evicted.view);
+        }
+    }
+
     /// Removes one entry by `seq`. Returns false when it was already evicted or removed.
     pub fn remove(&mut self, seq: u64) -> bool {
         let Some(index) = self.entries.iter().position(|entry| entry.seq == seq) else {
             return false;
         };
-        self.entries.remove(index);
+        if let Some(removed) = self.entries.remove(index) {
+            self.text_bytes -= entry_text_bytes(&removed.view);
+        }
         self.revision += 1;
         true
     }
@@ -115,8 +150,16 @@ impl NotificationHistory {
     pub fn clear(&mut self) {
         if !self.entries.is_empty() {
             self.entries.clear();
+            self.text_bytes = 0;
             self.revision += 1;
         }
+    }
+
+    /// Bytes of retained text across all entries; never exceeds [`MAX_HISTORY_TEXT_BYTES`]
+    /// except for one entry that alone is larger than the budget.
+    #[must_use]
+    pub const fn text_bytes(&self) -> usize {
+        self.text_bytes
     }
 
     pub fn set_dnd(&mut self, enabled: bool) {
@@ -468,6 +511,63 @@ mod tests {
             history.record(view("spam", "z", NotificationUrgency::Normal), 2),
             PopupDecision::Show
         );
+    }
+
+    #[test]
+    fn recorded_entries_drop_decoded_images_but_keep_text() {
+        let mut history = NotificationHistory::new(10);
+        let mut with_image = view("chat", "hi", NotificationUrgency::Normal);
+        with_image.image = Some(crate::notifications::NotificationImage {
+            width: 512,
+            height: 512,
+            rgba: vec![0; 512 * 512 * 4],
+        });
+        history.record(with_image, 1);
+        let kept = history.entries().next().expect("one entry");
+        assert!(kept.view.image.is_none());
+        assert_eq!(kept.view.summary, "hi");
+    }
+
+    #[test]
+    fn text_budget_evicts_oldest_and_counter_tracks_retained_entries() {
+        let mut history = NotificationHistory::new(1000);
+        let summary = "x".repeat(8192);
+        for index in 0..100u64 {
+            let mut big = view("app", &summary, NotificationUrgency::Normal);
+            big.body = format!("{index}");
+            history.record(big, index);
+        }
+        assert!(history.text_bytes() <= MAX_HISTORY_TEXT_BYTES);
+        assert!(history.len() < 100 && history.len() > 0);
+        let retained: usize = history
+            .entries()
+            .map(|entry| entry_text_bytes(&entry.view))
+            .sum();
+        assert_eq!(history.text_bytes(), retained);
+        // Newest survives; eviction removed the oldest first.
+        // `entries()` is newest-first.
+        assert_eq!(
+            history
+                .entries()
+                .next()
+                .map(|entry| entry.view.body.as_str()),
+            Some("99")
+        );
+        let newest_seq = history
+            .entries()
+            .next()
+            .map(|entry| entry.seq)
+            .expect("newest");
+        assert!(history.remove(newest_seq));
+        assert_eq!(
+            history.text_bytes(),
+            history
+                .entries()
+                .map(|entry| entry_text_bytes(&entry.view))
+                .sum::<usize>()
+        );
+        history.clear();
+        assert_eq!(history.text_bytes(), 0);
     }
 
     #[test]
