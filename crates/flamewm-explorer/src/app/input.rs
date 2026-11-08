@@ -19,6 +19,12 @@ impl ExplorerApp {
             self.scrollbar_event(action,e);
             return;
         }
+        if self.convert_picker.is_some() {
+            if e.phase==UiActionPhase::Release && e.inside {
+                if let Some(choice)=action.strip_prefix("explorer.convert.") {self.convert_picker_action(choice);}
+            }
+            return;
+        }
         if self.chooser_loading || self.chooser.is_some() {
             if e.phase==UiActionPhase::Release && e.inside {
                 if let Some(action)=action.strip_prefix("explorer.chooser.") {
@@ -350,6 +356,7 @@ impl ExplorerApp {
                     Err(error)=>self.model.status=format!("Open With: {error}"),
                 }
             },
+            WorkerResult::Converted(outcome)=>self.conversion_finished(outcome),
             WorkerResult::DefaultSaved(outcome)=>{
                 if let Err(error)=outcome {self.model.status=format!("MIME default was not saved: {error}");}
             },

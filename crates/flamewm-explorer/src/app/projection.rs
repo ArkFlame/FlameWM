@@ -176,6 +176,7 @@ impl ExplorerApp {
         doc.size("progress-fill",PROGRESS_TRACK_WIDTH*fraction,8.0)?;
         doc.visible("context-popup",self.context.is_some() && !self.chooser_loading && self.chooser.is_none())?;
         self.project_chooser(doc)?;
+        self.project_convert_picker(doc)?;
         self.project_dialog(doc)?;
         let selected_path=self.selected();
         let mut shown:Vec<&str>=Vec::new();
@@ -202,6 +203,8 @@ impl ExplorerApp {
                 "compress"=>self.ark && self.context_on_entry && selected_path.is_some(),
                 "copy"|"cut"|"trash"|"duplicate"=>self.context_on_entry && selected_path.is_some(),
                 "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected_path.is_some(),
+                // Offered only for a local regular file whose format has at least one conversion target.
+                "convert"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(|p|!remote::is_remote(p) && p.is_file() && !flamewm_conversion_core::conversion::offered_formats(p).is_empty()),
                 "setwallpaper"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(|p|!remote::is_remote(p) && p.is_file() && thumbs::thumb_format(p).is_some_and(crate::thumbs::ThumbFormat::is_image)),
                 "opencontaining"=>searching && self.context_on_entry && !many && selected_path.is_some(),
                 "restore"=>in_trash && self.context_on_entry && selected_path.is_some(),

@@ -122,4 +122,7 @@ button:active { background:var(--pressed-fill); }
 .openwith-pages { height:35px; display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:0 14px; }
 .openwith-actions { height:85px; padding:9px 12px; display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:6px; }
 .openwith-small { height:31px; padding:0 11px; border-radius:6px; }
+.convert-dialog { position:absolute; left:0; top:0; width:300px; background:var(--menu); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
+.convert-grid { display:flex; flex-direction:column; gap:4px; padding:8px 12px; }
+.convert-choice { width:100%; }
 .openwith-primary { height:31px; padding:0 12px; border-radius:6px; color:var(--text); background:var(--accent); }

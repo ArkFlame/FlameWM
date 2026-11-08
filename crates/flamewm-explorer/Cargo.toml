@@ -14,6 +14,7 @@ flamewm-applications = { path = "../flamewm-applications" }
 flamewm-clipboard = { path = "../flamewm-clipboard" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-conversion-core = { path = "../flamewm-conversion-core" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-desktop-core = { path = "../flamewm-desktop-core" }
 flamewm-image-core = { path = "../flamewm-image-core" }

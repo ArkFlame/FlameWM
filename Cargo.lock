@@ -764,6 +764,7 @@ dependencies = [
  "flamewm-clipboard",
  "flamewm-control-core",
  "flamewm-control-dbus",
+ "flamewm-conversion-core",
  "flamewm-dbus-reactor",
  "flamewm-desktop-core",
  "flamewm-image-core",

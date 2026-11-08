@@ -251,6 +251,7 @@
    <button id="menu-open" class="menu-row" data-action="explorer.menu.open"><img class="menu-ico" src="icons/menu-open.svg" alt="">Open</button>
    <button id="menu-openwith" class="menu-row" data-action="explorer.menu.openwith"><img class="menu-ico" src="icons/menu-openwith.svg" alt="">Open With</button>
    <button id="menu-setwallpaper" class="menu-row" data-action="explorer.menu.setwallpaper"><img class="menu-ico" src="icons/menu-open.svg" alt="">Set as wallpaper</button>
+   <button id="menu-convert" class="menu-row" data-action="explorer.menu.convert"><img class="menu-ico" src="icons/menu-openwith.svg" alt="">Convert to…</button>
    <button id="menu-cut" class="menu-row" data-action="explorer.menu.cut"><img class="menu-ico" src="icons/menu-cut.svg" alt="">Cut</button>
    <button id="menu-copy" class="menu-row" data-action="explorer.menu.copy"><img class="menu-ico" src="icons/menu-copy.svg" alt="">Copy</button>
    <button id="menu-paste" class="menu-row" data-action="explorer.menu.paste"><img class="menu-ico" src="icons/menu-paste.svg" alt="">Paste</button>
@@ -272,6 +273,11 @@
    <button id="menu-unmount" class="menu-row" data-action="explorer.menu.unmount"><img class="menu-ico" src="icons/eject.svg" alt="">Unmount</button>
    <button id="menu-eject" class="menu-row" data-action="explorer.menu.eject"><img class="menu-ico" src="icons/eject.svg" alt="">Eject</button>
 <button id="menu-connect" class="menu-row" data-action="explorer.menu.connect"><img class="menu-ico" src="icons/menu-showtype.svg" alt=""><span id="menu-connect-label">Connect to Server…</span></button><button id="menu-hidden" class="menu-row" data-action="explorer.menu.hidden"><img class="menu-ico" src="icons/eye.svg" alt=""><span id="menu-hidden-label">Show Hidden Files: Off</span></button><button id="menu-showtype" class="menu-row" data-action="explorer.menu.showtype"><img class="menu-ico" src="icons/menu-showtype.svg" alt=""><span id="menu-showtype-label">Show Type Column: Off</span></button></div>
+<div id="convert-dialog" class="convert-dialog" hidden>
+  <div class="openwith-header"><div class="openwith-title">Convert to</div><div class="openwith-hint">Choose a format; the result is saved beside the file</div></div>
+  <div class="convert-grid"><button id="convert-choice-0" class="openwith-small convert-choice" data-action="explorer.convert.0">Format</button><button id="convert-choice-1" class="openwith-small convert-choice" data-action="explorer.convert.1">Format</button><button id="convert-choice-2" class="openwith-small convert-choice" data-action="explorer.convert.2">Format</button><button id="convert-choice-3" class="openwith-small convert-choice" data-action="explorer.convert.3">Format</button><button id="convert-choice-4" class="openwith-small convert-choice" data-action="explorer.convert.4">Format</button><button id="convert-choice-5" class="openwith-small convert-choice" data-action="explorer.convert.5">Format</button><button id="convert-choice-6" class="openwith-small convert-choice" data-action="explorer.convert.6">Format</button><button id="convert-choice-7" class="openwith-small convert-choice" data-action="explorer.convert.7">Format</button></div>
+  <div class="openwith-actions"><button class="openwith-small" data-action="explorer.convert.cancel">Cancel</button></div>
+</div>
 <div id="dialog" class="dialog" hidden>
   <div id="dialog-title" class="dialog-title">Confirm</div>
   <div id="dialog-line-0" class="dialog-line">&#8203;</div>

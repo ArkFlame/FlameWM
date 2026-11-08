@@ -40,7 +40,7 @@ use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiControllerEvent,UiDocumentAcc
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
 /// Menu commands that also work in remote folders; every other command is refused there until its remote path exists.
 const REMOTE_ACTIONS: [&str;7]=["open","showtype","hidden","copy","paste","rename","newfolder"];
-const MENU_ITEMS: [&str;26]=["connect","showtype","open","openwith","setwallpaper","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
+const MENU_ITEMS: [&str;27]=["connect","showtype","open","openwith","convert","setwallpaper","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
 /// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
 const SIDEBAR_SLOTS:usize=32;
 const BREADCRUMB_SLOTS:usize=6;
@@ -186,6 +186,8 @@ enum WorkerResult {
     SearchTick,
     /// Directory watcher saw a change in the listed folder.
     DirChanged,
+    /// Outcome of a background "Convert to" run; the listing refreshes on success.
+    Converted(Result<PathBuf,String>),
     ChooserReady { request: u64, chooser: Result<OpenWithChooser, String> },
     DefaultSaved(Result<(), String>),
     BatchCompleted {report:BatchReport,action:&'static str,cut_sources:Option<Vec<PathBuf>>},
@@ -275,6 +277,8 @@ struct ExplorerApp {
     // Row thumbnails: the cache and the image id each row slot currently shows. `project` takes `&self`, hence the cells.
     thumbs:RefCell<Thumbnails>, thumb_queue:Option<Arc<thumbs::ThumbQueue>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
     chooser_loading:bool, chooser_request:u64, places:Vec<Place>,
+    /// Source file of the open "Convert to" picker; `None` when the picker is closed.
+    convert_picker:Option<PathBuf>,
     context:Option<(f32,f32)>, edit:Option<EditMode>, field:flamewm_explorer::TextField, rename_target:Option<PathBuf>, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<progress::Snapshot>,
     /// Set when the user closed the window: the running job is cancelled, and the
@@ -319,6 +323,7 @@ mod app {
     mod transfers;
     mod places;
     mod menus;
+    mod convert;
     mod scroll;
     mod input;
     mod projection;

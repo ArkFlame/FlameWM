@@ -151,6 +151,7 @@ impl ExplorerApp {
         match cmd {
             "open"=>if let Some(index)=self.context_place {self.activate_place(index)} else if let Some(path)=selected {self.open(&path)},
             "openwith"=>if let Some(path)=selected {self.request_open_with(path)},
+            "convert"=>if let Some(path)=selected {self.open_convert_picker(path)},
             "setwallpaper"=>if let Some(path)=selected {self.set_as_wallpaper(path)},
             "copy"|"cut"=>{
                 if !paths.is_empty() {
