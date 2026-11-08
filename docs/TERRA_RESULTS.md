@@ -401,3 +401,31 @@ Isolated-vs-full differences (SS06, SS07, SS10, SS15) indicate order-dependent s
 - `3962a356`: SS07 unrelated-change control compares the taskbar sample within the 16-level tolerance (drift 9,10,10 -> 10,10,12 failed the exact digest). SS07 PASS.
 - PASS: SS00-05, SS07, SS09-13, SS15, SS17. FAIL: SS14, SS16, SS19. NOT_RUN: SS06 (`desktop_visual_consumer`: `selection_red_before` sample is None in the full run), SS18. ENVIRONMENT_BLOCKED: SS08.
 - SS15 `mode_count` was 0 in this run, so the 16-mode paging loop was not exercised here. The earlier 16-mode failure was the wrong-point click (fixed); the 16-mode path still needs a run that lists modes.
+
+## Full matrix run 5 (HEAD fe706557, pointer-move diagnostic reverted)
+
+| Scenario | Status | Note |
+|---|---|---|
+| SS00 | PASS |  |
+| SS01 | PASS |  |
+| SS02 | PASS |  |
+| SS03 | PASS | palette choices, visible selection and persisted value verified |
+| SS04 | PASS | theme cycling, fallback consumer and restart persistence verified |
+| SS05 | PASS | success, cancel and error effects verified without follow-up input |
+| SS06 | PASS | Desktop settings, persistence and visual consumer verified |
+| SS07 | PASS | Taskbar values, panel geometry, visual consumer and persistence verified |
+| SS08 | ENVIRONMENT_BLOCKED | 1-output Displays case PASS with 16 listed modes; connected RandR outputs measured per provider: Xephyr(owned)=1, Xvfb=1, Xvnc=unprobed, Xdummy=unprobed; no pri |
+| SS09 | PASS | SOURCE-TEST evidence (fake-clock cargo tests in flamewm-platform, not a live-session observation): 14999 ms no revert, 15000 ms single revert, Keep prevents rev |
+| SS10 | PASS | Displays click set the output scale to 125 with the mode list unchanged and the value persisted after an owned WM restart |
+| SS11 | PASS | Fonts family and size clicks changed the authoritative snapshot and both persisted after an owned WM restart |
+| SS12 | PASS | capture lease, stored binding, action, grab restoration, owner loss and persistence verified |
+| SS13 | PASS | About rendered non-blank at 760x500, 820x540 and 960x640, the live about-version text was OCR-read as 'Version FLAMEWM_VERSION' at all three sizes (negative con |
+| SS14 | PASS | settings, panels, shortcuts, display rollback and signal-loss paths verified |
+| SS15 | FAIL | measured traversal/disabled-state failure: disabled_mode_ends_inert, settings_survived_keyboard_escape |
+| SS16 | FAIL | static gate failed: verify_rwr_promotion=1 |
+| SS17 | PASS | whole required matrix executed: x11_acceptance_all, j07_popup, j07_chrome, j07_max_snap, j07_move, j07_resize, close_hover_pixel_difference, scale_scroll_ss10 |
+| SS18 | NOT_RUN | no --ss18-installed-result; run scripts/settings-installed-acceptance on a staged prefix |
+| SS19 | PASS | bounded idle use, repeated page lifecycle, external update and owned-process cleanup verified |
+
+SS15 cause: unresolved. Ruled out: 0.4 s gap (626eb291, reverted in fe706557), pointer-move before press (not kept). Remaining: product-side first-next-click drop, unobserved (no product receipt in logs). SS15 escape check also fails in matrix runs.
+SS16: static gate exit 1, needs user acceptance of pins. SS18: NOT_RUN.
