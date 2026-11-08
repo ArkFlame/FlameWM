@@ -47,7 +47,7 @@ impl Entry {
 
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.path[self.name_at.min(self.path.len())..]
+        self.path.rsplit('/').next().unwrap_or(&self.path)
     }
 }
 
@@ -106,6 +106,10 @@ pub fn walk(roots: &[PathBuf], max_entries: usize, max_depth: usize, budget: Dur
             continue;
         };
         for item in read.flatten() {
+            if Instant::now() >= deadline || entries.len() >= max_entries {
+                truncated = true;
+                break 'walk;
+            }
             let name = item.file_name();
             let Some(name) = name.to_str() else {
                 continue;
@@ -211,6 +215,9 @@ pub fn load_cache(path: &Path) -> Option<Index> {
     }
     let mut entries = Vec::new();
     for line in lines {
+        if entries.len() >= MAX_ENTRIES {
+            return None;
+        }
         let line = line.ok()?;
         let mut fields = line.splitn(4, '\t');
         let is_dir = fields.next()? == "d";
@@ -296,6 +303,20 @@ mod tests {
     }
 
     #[test]
+    fn name_handles_case_mapping_that_expands_in_parent_directory() {
+        let item = entry("/home/İ/file.txt", false, 0);
+        assert_eq!(item.name(), "file.txt");
+        assert_eq!(&item.lower[item.name_at..], "file.txt");
+    }
+
+    #[test]
+    fn walk_with_zero_entry_limit_returns_no_entries() {
+        let root = std::env::temp_dir();
+        let index = walk(&[root], 0, 1, Duration::from_secs(5));
+        assert!(index.is_empty());
+    }
+
+    #[test]
     fn recent_lists_newest_files_only() {
         let index = Index::new(
             vec![
@@ -351,6 +372,21 @@ mod tests {
         fs::write(&path, "something else\n").unwrap();
         assert!(load_cache(&path).is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_rejects_more_than_max_entries() {
+        let dir = std::env::temp_dir().join(format!("finder-cache-limit-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.tsv");
+        let mut file = io::BufWriter::new(fs::File::create(&path).unwrap());
+        writeln!(file, "{CACHE_HEADER}").unwrap();
+        for _ in 0..=MAX_ENTRIES {
+            writeln!(file, "f\t0\t0\t/a").unwrap();
+        }
+        drop(file);
+        assert!(load_cache(&path).is_none());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
