@@ -240,3 +240,13 @@
 - Not verified: all live causes above.
 - Commits: cd73bae1 (SS02), d36900ac (SS09), pushed: yes.
 - Risk: runner now restarts the WM before each sized launch (adds about 4 s per launch). SS13 and SS02 PASS are live evidence; SS09 is source-test only.
+
+## SS14/SS19 Settings external update without input — PARTIAL
+
+- Root cause of the failing SS14 probe: the acceptance runner sent `accent` alone. The WM keeps the stored accent while `accentCustom` is off and reports the system accent, so the Settings window correctly showed no change. The Settings client sends `accent` plus `accentCustom: true` in one transaction (`app_impl_2.rs` `apply_text`). `dbus_apply_accent` now sends both.
+- Live check, own Xvfb `:104`, fresh HOME, `Settings.Apply` accent `#2878D7` with `accentCustom` true, no input: root AE 6845, nav highlight `#3DAEE9` to `#2878D7`. The same check on original `events.rs` also repaints (AE 6845), so the paint-gate change is not the SS14 fix.
+- Paint-gate starvation was observed: with root SubstructureNotify foreign events, `XEventsQueued` stayed 8 to 15 for seconds and the wake repaint waited. `events.rs` now drains at most `WAKE_EVENT_BUDGET` (64) events per reactor turn before painting. Pure gate `wake_paint_due` tested in `events/tests/wake_paint_gate_regressions.rs`.
+- Live-backdrop root subscription (`live_backdrop.rs:268`) is already scoped: it is created only with a live scene and cleared by `release`, which `clear_window_backdrop` calls before dropping the state. No edit.
+- Idle CPU: settings idle 0 ticks per 10 s. Under window churn (40 xterm create/destroy in about 4 s) settings used 862 ticks per 10 s on the original build and 989 with the drain fix, which is existing live-backdrop recomposition cost, not a spin. After churn, original 0 ticks, fixed 33 ticks per 10 s. This residual is unexplained and recorded as a risk.
+- Not verified: the full acceptance runner run for SS14/SS19 (only the probe). The runner's `external_update_responsive` and `settings_visible_without_input` need a full run.
+- Open: SS03, SS05, SS06, SS07, SS10, SS11, SS12, SS15, SS17 not triaged in this entry.

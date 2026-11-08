@@ -1052,7 +1052,9 @@ def dbus_settings_snapshot(ctx: Ctx) -> tuple[str | None, str]:
 
 
 def dbus_apply_accent(ctx: Ctx, revision: int, accent: str) -> tuple[str | None, str, int | None]:
-    return dbus_apply_settings(ctx, revision, {"accent": "'" + accent + "'"})
+    # The Settings client applies an accent and its accentCustom switch in one transaction; the
+    # WM ignores a stored accent while the switch is off, so a bare accent change never shows.
+    return dbus_apply_settings(ctx, revision, {"accent": "'" + accent + "'", "accentCustom": "true"})
 
 
 def dbus_apply_settings(ctx: Ctx, revision: int, changes: dict[str, str]) -> tuple[str | None, str, int | None]:
