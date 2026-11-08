@@ -16,7 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
 use flamewm_api::settings::SettingsSnapshot;
-use flamewm_archiver::{CancelToken, Entry, Format, Kind, Progress, Summary, list};
+use flamewm_archiver::{ArchiveError, CancelToken, Entry, Format, Kind, Progress, Summary, list};
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent,
@@ -45,6 +45,13 @@ type Work = Box<
     dyn FnOnce(&CancelToken, &mut dyn FnMut(Progress)) -> flamewm_archiver::Result<Summary> + Send,
 >;
 
+/// An extraction that needs a password. `typed` stays in memory only and is never shown in clear.
+struct PasswordPrompt {
+    typed: String,
+    selection: Vec<PathBuf>,
+    wrong: bool,
+}
+
 /// Messages from the worker thread to the window.
 enum Reply {
     /// Result of the listing started by `App::open`.
@@ -55,7 +62,7 @@ enum Reply {
     Progress(Progress),
     Done {
         what: String,
-        result: Result<Summary, String>,
+        result: flamewm_archiver::Result<Summary>,
         stopped: bool,
     },
 }
@@ -74,6 +81,9 @@ struct App {
     status: String,
     progress: Option<Progress>,
     job: Option<Running>,
+    /// Selection of the last extraction, so a password retry repeats the same request.
+    last_selection: Vec<PathBuf>,
+    password: Option<PasswordPrompt>,
     tx: Sender<Reply>,
     rx: Receiver<Reply>,
     wake: UnixStream,
@@ -101,6 +111,8 @@ pub fn run(start: Start) -> Result<(), String> {
         status: String::from("Ready"),
         progress: None,
         job: None,
+        last_selection: Vec::new(),
+        password: None,
         tx,
         rx,
         wake: writer,
@@ -230,7 +242,7 @@ impl App {
                 if tx
                     .send(Reply::Done {
                         what,
-                        result: result.map_err(|error| error.to_string()),
+                        result,
                         stopped,
                     })
                     .is_ok()
@@ -246,18 +258,62 @@ impl App {
     }
 
     fn extract(&mut self, selection: Vec<PathBuf>) -> Result<(), String> {
+        self.start_extract(selection, None)
+    }
+
+    /// Extracts with an optional password. A missing or wrong password comes back as a reply
+    /// that reopens the prompt, so nothing is written before the password is accepted.
+    fn start_extract(
+        &mut self,
+        selection: Vec<PathBuf>,
+        password: Option<String>,
+    ) -> Result<(), String> {
         let Some(archive) = self.archive.clone() else {
             return Ok(());
         };
         let dest = free_destination(&archive);
         self.status = format!("Extracting to {}", dest.display());
         let what = format!("Extracted to {}", dest.display());
+        self.last_selection = selection.clone();
         self.start_job(
             what,
-            Box::new(move |cancel, sink| {
-                flamewm_archiver::extract(&archive, &dest, &selection, cancel, sink)
+            Box::new(move |cancel, sink| match password {
+                Some(password) => flamewm_archiver::extract_with_password(
+                    &archive,
+                    &dest,
+                    &selection,
+                    Some(&password),
+                    cancel,
+                    sink,
+                ),
+                None => flamewm_archiver::extract(&archive, &dest, &selection, cancel, sink),
             }),
         )
+    }
+
+    /// Handles a key while the password prompt is open. Returns the request to retry when Enter
+    /// submits a non-empty password. Plain text is typed, Backspace edits, and other keys are ignored.
+    fn prompt_key(&mut self, key: &str, text: Option<&str>, ctrl: bool) -> Option<(Vec<PathBuf>, String)> {
+        let prompt = self.password.as_mut()?;
+        match key {
+            "return" | "enter" | "kp_enter" => {
+                if prompt.typed.is_empty() {
+                    return None;
+                }
+                let typed = std::mem::take(&mut prompt.typed);
+                let prompt = self.password.take()?;
+                return Some((prompt.selection, typed));
+            }
+            "backspace" => {
+                prompt.typed.pop();
+            }
+            _ => {
+                if let Some(text) = text.filter(|t| !t.is_empty() && !ctrl && !t.chars().any(char::is_control)) {
+                    prompt.typed.push_str(text);
+                }
+            }
+        }
+        None
     }
 
     fn action(
@@ -305,6 +361,14 @@ impl App {
             "escape" | "esc" => {
                 self.shutdown();
                 std::process::exit(0);
+            }
+            _ if self.password.is_some() => {
+                let ctrl = key.modifiers.iter().any(|m| m == "ctrl");
+                if let Some((selection, password)) =
+                    self.prompt_key(key.key.as_str(), key.text.as_deref(), ctrl)
+                {
+                    self.start_extract(selection, Some(password))?;
+                }
             }
             "up" | "pageup" => self.turn(false),
             "down" | "pagedown" => self.turn(true),
@@ -369,6 +433,15 @@ impl App {
             } => {
                 self.join_job();
                 self.progress = None;
+                if let Err(ArchiveError::PasswordRequired | ArchiveError::WrongPassword) = &result {
+                    let wrong = matches!(result, Err(ArchiveError::WrongPassword));
+                    self.password = Some(PasswordPrompt {
+                        typed: String::new(),
+                        selection: self.last_selection.clone(),
+                        wrong,
+                    });
+                    return;
+                }
                 self.status = match result {
                     Ok(summary) => format!(
                         "{what}: {} files, {} folders, {} skipped",
@@ -456,7 +529,17 @@ impl App {
         doc.visible("progress", busy)?;
         doc.size("progress-fill", TRACK_PX * fraction, 6.0)?;
         doc.text("progress-text", format!("{percent}%"))?;
-        doc.text_ref("status", &self.status)
+        match &self.password {
+            Some(prompt) => {
+                let hint = if prompt.wrong { " (wrong, try again)" } else { "" };
+                let stars = "*".repeat(prompt.typed.chars().count());
+                doc.text_ref(
+                    "status",
+                    &format!("Password{hint}: {stars}  Enter extracts, Backspace edits"),
+                )
+            }
+            None => doc.text_ref("status", &self.status),
+        }
     }
 }
 
@@ -602,6 +685,8 @@ mod tests {
             status: String::from("Ready"),
             progress: None,
             job: None,
+            last_selection: Vec::new(),
+            password: None,
             tx,
             rx: mpsc::channel().1,
             wake,
@@ -667,5 +752,90 @@ mod tests {
         assert_eq!(app.entries.len(), 1);
         assert_eq!(app.status, "1 entries");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Applies replies until the job's `Done` arrives, skipping progress updates.
+    fn finish_job(app: &mut App, rx: &Receiver<Reply>) {
+        loop {
+            let reply = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("job reply");
+            let done = matches!(reply, Reply::Done { .. });
+            app.reply(reply);
+            if done {
+                return;
+            }
+        }
+    }
+
+    /// Encrypted zip: no password opens the prompt, a wrong one reopens it, the right one extracts.
+    #[test]
+    fn encrypted_zip_asks_for_a_password_then_extracts() {
+        let dir = std::env::temp_dir().join(format!("flamewm-archiver-pw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let input = dir.join("secret.txt");
+        std::fs::write(&input, b"classified").expect("input");
+        let archive = dir.join("pw.zip");
+        flamewm_archiver::create_encrypted(
+            &archive,
+            std::slice::from_ref(&input),
+            "open-sesame",
+            &CancelToken::new(),
+            &mut |_| {},
+        )
+        .expect("create encrypted zip");
+
+        let (mut app, rx) = idle_app();
+        app.archive = Some(archive.clone());
+        app.start_extract(Vec::new(), None).expect("start");
+        finish_job(&mut app, &rx);
+        assert!(app.password.is_some(), "no prompt after PasswordRequired");
+        assert!(!app.password.as_ref().unwrap().wrong);
+
+        for ch in "nope".chars() {
+            let text = ch.to_string();
+            assert!(app.prompt_key(&text, Some(&text), false).is_none());
+        }
+        let (selection, typed) = app
+            .prompt_key("return", None, false)
+            .expect("enter submits typed password");
+        assert_eq!(typed, "nope");
+        app.start_extract(selection, Some(typed)).expect("retry");
+        finish_job(&mut app, &rx);
+        assert!(app.password.as_ref().is_some_and(|p| p.wrong), "wrong password not reported: status={} prompt={}", app.status, app.password.is_some());
+
+        app.password.as_mut().unwrap().typed.clear();
+        for ch in "open-sesame".chars() {
+            let text = ch.to_string();
+            app.prompt_key(&text, Some(&text), false);
+        }
+        let (selection, typed) = app.prompt_key("enter", None, false).expect("submit");
+        app.start_extract(selection, Some(typed)).expect("retry");
+        finish_job(&mut app, &rx);
+        assert!(app.password.is_none(), "prompt stays open after success");
+        assert!(app.status.contains("1 files"), "status: {}", app.status);
+        assert_eq!(
+            std::fs::read(dir.join("pw").join("secret.txt")).expect("extracted"),
+            b"classified"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompt_ignores_control_chords_and_edits_with_backspace() {
+        let (mut app, _rx) = idle_app();
+        app.password = Some(PasswordPrompt {
+            typed: String::new(),
+            selection: Vec::new(),
+            wrong: false,
+        });
+        assert!(app.prompt_key("c", Some("c"), true).is_none());
+        app.prompt_key("a", Some("ab"), false);
+        app.prompt_key("backspace", None, false);
+        assert_eq!(app.password.as_ref().unwrap().typed, "a");
+        app.prompt_key("backspace", None, false);
+        assert!(app.prompt_key("return", None, false).is_none(), "empty must not submit");
+        assert!(app.password.is_some());
     }
 }
