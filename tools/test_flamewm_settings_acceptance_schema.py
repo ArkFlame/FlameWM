@@ -809,6 +809,17 @@ class ScaleFontsAboutDecisionTests(unittest.TestCase):
         self.assertEqual(acc.validate(valid), run.resolve())
 
 
+class Ss07ChangeSetTests(unittest.TestCase):
+    def test_ss07_apply_carries_panel_and_surface_switches_with_the_values(self) -> None:
+        # Regression: without panelCustom/surfaceCustom the snapshot reports defaults for these members.
+        changes = acc.ss07_taskbar_surface_changes(52, 61, "#284F77")
+        self.assertEqual(changes["panelCustom"], "true")
+        self.assertEqual(changes["surfaceCustom"], "true")
+        self.assertEqual(changes["taskbarHeight"], "uint32 52")
+        self.assertEqual(changes["surfaceOpacity"], "uint32 61")
+        self.assertEqual(changes["surfaceColor"], "'#284F77'")
+
+
 class FakeNativeRunnerTests(unittest.TestCase):
     """Drive run_ss10/run_ss11/run_ss13 with a faked display, D-Bus and screenshot layer."""
 

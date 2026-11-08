@@ -3115,6 +3115,19 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     return entry
 
 
+def ss07_taskbar_surface_changes(next_height: int, next_opacity: int, color: str) -> dict[str, str]:
+    """One Apply transaction for the SS07 taskbar and surface keys.
+
+    taskbarHeight belongs to the `panel` switch group and surfaceColor/surfaceOpacity to the `surface`
+    group. `effective()` shows a member's default while its switch is off, so the switches go in the
+    same transaction; otherwise Apply stores the values but the snapshot reports the defaults.
+    """
+    return {"panelCustom": "true", "surfaceCustom": "true",
+            "taskbarHeight": f"uint32 {next_height}",
+            "surfaceOpacity": f"uint32 {next_opacity}",
+            "surfaceColor": "'" + color + "'"}
+
+
 def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     observations: dict[str, bool | None] = {
         "settings_snapshot_values": None, "panel_edge_and_size_snapshot": None,
@@ -3179,9 +3192,7 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
             settings_revision = unrelated["revision"]
     else:
         visual["reason"] = "Pillow or flamewm-shell binary unavailable"
-    changes = {"taskbarHeight": f"uint32 {next_height}",
-               "surfaceOpacity": f"uint32 {next_opacity}",
-               "surfaceColor": "'" + color + "'"}
+    changes = ss07_taskbar_surface_changes(next_height, next_opacity, color)
     applied = apply_and_read_settings(ctx, settings_revision, changes, details)
     time.sleep(min(max(args.settle_seconds, 0.25), 1.5))
     settled_text, command = dbus_settings_snapshot(ctx)
