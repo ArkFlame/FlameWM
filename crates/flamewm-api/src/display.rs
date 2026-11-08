@@ -35,3 +35,45 @@ pub struct DisplaySnapshot {
     pub outputs: Vec<OutputSnapshot>,
     pub pending: Option<PendingModeChange>,
 }
+
+/// Panel rotation of one output, in clockwise quarter turns from the native orientation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rotation {
+    #[default]
+    Normal,
+    Left,
+    Right,
+    Inverted,
+}
+
+/// Desired top-left origin of one connected output in the shared desktop coordinate space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputPlacement {
+    pub output: OutputId,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// Topology change that runs through the same keep/revert transaction as a mode change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TopologyChange {
+    SetPrimary(OutputId),
+    SetOrientation {
+        output: OutputId,
+        rotation: Rotation,
+    },
+    SetArrangement(Vec<OutputPlacement>),
+}
+
+impl TopologyChange {
+    /// Output that anchors the pending transaction: the target output, or the first placement.
+    #[must_use]
+    pub fn anchor(&self) -> Option<&OutputId> {
+        match self {
+            Self::SetPrimary(output) | Self::SetOrientation { output, .. } => Some(output),
+            Self::SetArrangement(placements) => {
+                placements.first().map(|placement| &placement.output)
+            }
+        }
+    }
+}

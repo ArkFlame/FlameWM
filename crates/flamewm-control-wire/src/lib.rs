@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
-use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot, PendingModeChange};
+use flamewm_api::display::{
+    DisplayMode, DisplaySnapshot, OutputPlacement, OutputSnapshot, PendingModeChange, Rotation,
+};
 use flamewm_api::panels::{PanelSnapshot, PanelsSnapshot, TaskEntry, TaskEntryKind};
 use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction};
@@ -27,9 +29,9 @@ use flamewm_api::{
     WindowRef,
 };
 use flamewm_control_core::{
-    ControlError, ControlRequest, ControlResponse, IFACE_APPLICATIONS, IFACE_DISPLAYS,
+    ControlError, ControlRequest, ControlResponse, Version, IFACE_APPLICATIONS, IFACE_DISPLAYS,
     IFACE_PANELS, IFACE_ROOT, IFACE_SESSION, IFACE_SETTINGS, IFACE_SHORTCUTS, IFACE_SYSTEM,
-    IFACE_WEATHER, IFACE_WINDOWS, IFACE_WORKSPACES, Version,
+    IFACE_WEATHER, IFACE_WINDOWS, IFACE_WORKSPACES,
 };
 
 mod wire;

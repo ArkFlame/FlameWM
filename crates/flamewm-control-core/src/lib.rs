@@ -8,7 +8,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
-use flamewm_api::display::DisplaySnapshot;
+use flamewm_api::display::{DisplaySnapshot, OutputPlacement, Rotation, TopologyChange};
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::ports::EnginePorts;
 use flamewm_api::session::{SessionAction, SessionCapabilities};
@@ -127,6 +127,22 @@ pub enum ControlRequest {
     },
     RevertDisplayMode {
         transaction: TransactionId,
+    },
+    SetPrimaryDisplay {
+        output: OutputId,
+        expected_generation: u64,
+        now_ms: u64,
+    },
+    SetDisplayRotation {
+        output: OutputId,
+        rotation: Rotation,
+        expected_generation: u64,
+        now_ms: u64,
+    },
+    SetDisplayArrangement {
+        placements: Vec<OutputPlacement>,
+        expected_generation: u64,
+        now_ms: u64,
     },
     SetShellScale {
         output: OutputId,
@@ -355,6 +371,34 @@ impl Dispatcher {
             } => ControlResponse::Transaction(host.begin_display_mode(
                 &output,
                 mode,
+                expected_generation,
+                now_ms,
+            )?),
+            ControlRequest::SetPrimaryDisplay {
+                output,
+                expected_generation,
+                now_ms,
+            } => ControlResponse::Transaction(host.begin_display_topology(
+                &TopologyChange::SetPrimary(output),
+                expected_generation,
+                now_ms,
+            )?),
+            ControlRequest::SetDisplayRotation {
+                output,
+                rotation,
+                expected_generation,
+                now_ms,
+            } => ControlResponse::Transaction(host.begin_display_topology(
+                &TopologyChange::SetOrientation { output, rotation },
+                expected_generation,
+                now_ms,
+            )?),
+            ControlRequest::SetDisplayArrangement {
+                placements,
+                expected_generation,
+                now_ms,
+            } => ControlResponse::Transaction(host.begin_display_topology(
+                &TopologyChange::SetArrangement(placements),
                 expected_generation,
                 now_ms,
             )?),

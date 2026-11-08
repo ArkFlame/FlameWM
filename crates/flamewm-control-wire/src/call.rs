@@ -110,6 +110,35 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
                 transaction: TransactionId(required_u64(&call.args[0], "transaction")?),
             })
         }
+        (IFACE_DISPLAYS, "SetPrimary") => {
+            expect_arity(call, 2)?;
+            Ok(ControlRequest::SetPrimaryDisplay {
+                output: OutputId::new(required_string(&call.args[0], "outputKey")?),
+                expected_generation: required_u64(&call.args[1], "generation")?,
+                now_ms: call.now_ms,
+            })
+        }
+        (IFACE_DISPLAYS, "SetRotation") => {
+            expect_arity(call, 3)?;
+            Ok(ControlRequest::SetDisplayRotation {
+                output: OutputId::new(required_string(&call.args[0], "outputKey")?),
+                rotation: rotation_from_wire(required_u32(&call.args[1], "rotation")?)?,
+                expected_generation: required_u64(&call.args[2], "generation")?,
+                now_ms: call.now_ms,
+            })
+        }
+        (IFACE_DISPLAYS, "SetArrangement") => {
+            expect_arity(call, 2)?;
+            let placements = required_array(&call.args[0], "placements")?
+                .iter()
+                .map(placement_from_wire)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ControlRequest::SetDisplayArrangement {
+                placements,
+                expected_generation: required_u64(&call.args[1], "generation")?,
+                now_ms: call.now_ms,
+            })
+        }
         (IFACE_DISPLAYS, "SetShellScale") => {
             expect_arity(call, 3)?;
             let percent = required_u32(&call.args[1], "percent")?;
@@ -315,6 +344,44 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             "Revert",
             vec![WireValue::U64(transaction.0)],
         ),
+        ControlRequest::SetPrimaryDisplay {
+            output,
+            expected_generation,
+            ..
+        } => WireCall::new(
+            IFACE_DISPLAYS,
+            "SetPrimary",
+            vec![
+                WireValue::String(output.as_str().to_owned()),
+                WireValue::U64(*expected_generation),
+            ],
+        ),
+        ControlRequest::SetDisplayRotation {
+            output,
+            rotation,
+            expected_generation,
+            ..
+        } => WireCall::new(
+            IFACE_DISPLAYS,
+            "SetRotation",
+            vec![
+                WireValue::String(output.as_str().to_owned()),
+                WireValue::U32(rotation_to_wire(*rotation)),
+                WireValue::U64(*expected_generation),
+            ],
+        ),
+        ControlRequest::SetDisplayArrangement {
+            placements,
+            expected_generation,
+            ..
+        } => WireCall::new(
+            IFACE_DISPLAYS,
+            "SetArrangement",
+            vec![
+                WireValue::Array(placements.iter().map(placement_to_wire).collect()),
+                WireValue::U64(*expected_generation),
+            ],
+        ),
         ControlRequest::SetShellScale {
             output,
             percent,
@@ -464,4 +531,43 @@ pub(crate) const fn session_method(action: SessionAction) -> &'static str {
         SessionAction::Shutdown => "Shutdown",
         SessionAction::ScreensaverPreview => "ScreensaverPreview",
     }
+}
+
+fn rotation_to_wire(rotation: Rotation) -> u32 {
+    match rotation {
+        Rotation::Normal => 0,
+        Rotation::Left => 1,
+        Rotation::Inverted => 2,
+        Rotation::Right => 3,
+    }
+}
+
+fn rotation_from_wire(value: u32) -> Result<Rotation, ControlError> {
+    match value {
+        0 => Ok(Rotation::Normal),
+        1 => Ok(Rotation::Left),
+        2 => Ok(Rotation::Inverted),
+        3 => Ok(Rotation::Right),
+        _ => Err(invalid("rotation must be 0..=3")),
+    }
+}
+
+fn placement_to_wire(placement: &OutputPlacement) -> WireValue {
+    WireValue::Dict(dict_of([
+        (
+            "output",
+            WireValue::String(placement.output.as_str().to_owned()),
+        ),
+        ("x", WireValue::I32(placement.x)),
+        ("y", WireValue::I32(placement.y)),
+    ]))
+}
+
+fn placement_from_wire(value: &WireValue) -> Result<OutputPlacement, ControlError> {
+    let dict = required_dict(value, "placement")?;
+    Ok(OutputPlacement {
+        output: OutputId::new(dict_string(dict, "output")?),
+        x: dict_i32(dict, "x")?,
+        y: dict_i32(dict, "y")?,
+    })
 }

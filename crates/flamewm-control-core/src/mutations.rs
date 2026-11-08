@@ -4,8 +4,8 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-use flamewm_api::ErrorCode;
 use flamewm_api::system::SystemAction;
+use flamewm_api::ErrorCode;
 
 use super::{ControlError, ControlRequest, ControlResponse};
 
@@ -38,6 +38,9 @@ impl MutationLane {
             ControlRequest::BeginDisplayMode { .. }
             | ControlRequest::KeepDisplayMode { .. }
             | ControlRequest::RevertDisplayMode { .. }
+            | ControlRequest::SetPrimaryDisplay { .. }
+            | ControlRequest::SetDisplayRotation { .. }
+            | ControlRequest::SetDisplayArrangement { .. }
             | ControlRequest::SetShellScale { .. } => Self::Displays,
             ControlRequest::SetShortcut { .. }
             | ControlRequest::ClearShortcut { .. }

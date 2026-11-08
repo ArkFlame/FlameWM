@@ -1,5 +1,7 @@
 use super::*;
 
+use flamewm_api::display::TopologyChange;
+
 impl<E: EnginePorts> PlatformHost<E> {
     pub fn display_snapshot(&mut self) -> FlameResult<DisplaySnapshot> {
         Ok(self.displays.refresh(&mut self.engine)?.clone())
@@ -17,6 +19,8 @@ impl<E: EnginePorts> PlatformHost<E> {
             .reconcile_taskbar_height(self.settings.current().effective().taskbar_height);
         self.panels
             .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
+        self.panels
+            .reconcile_taskbar_enabled(self.settings.current().effective().taskbar_enabled);
         Ok(self.panels.revision() != previous_revision)
     }
 
@@ -29,6 +33,17 @@ impl<E: EnginePorts> PlatformHost<E> {
     ) -> FlameResult<TransactionId> {
         self.displays
             .begin_mode(&mut self.engine, output, mode, expected_generation, now_ms)
+    }
+
+    /// Primary, rotation or layout change; keep/revert use the mode transaction calls.
+    pub fn begin_display_topology(
+        &mut self,
+        change: &TopologyChange,
+        expected_generation: u64,
+        now_ms: u64,
+    ) -> FlameResult<TransactionId> {
+        self.displays
+            .begin_topology(&mut self.engine, change, expected_generation, now_ms)
     }
 
     pub fn keep_display_mode(
@@ -77,7 +92,17 @@ impl<E: EnginePorts> PlatformHost<E> {
             .set_shell_scale(output, percent, expected_generation)?;
         if changed {
             // Persist before the panel resync so a failed write leaves no runtime-only scale behind.
-            if let Err(error) = self.settings.persist_scale(output.as_str(), percent) {
+            let index = self
+                .displays
+                .cached()
+                .and_then(|snapshot| {
+                    snapshot
+                        .outputs
+                        .iter()
+                        .position(|candidate| candidate.id == *output)
+                })
+                .unwrap_or(0);
+            if let Err(error) = self.persist_output_scale(output, index, percent) {
                 if let Some(previous) = previous {
                     let generation = self.cached_generation();
                     if let Err(restore_error) =
@@ -100,9 +125,119 @@ impl<E: EnginePorts> PlatformHost<E> {
         Ok(changed)
     }
 
+    /// Writes the scale under the keys the display backend reads (`DisplayPort::scale_keys`). A
+    /// failed write restores earlier keys, so the caller can roll back the runtime scale.
+    fn persist_output_scale(
+        &mut self,
+        output: &OutputId,
+        index: usize,
+        percent: u16,
+    ) -> FlameResult<()> {
+        let keys = self.engine.scale_keys(output, index);
+        let prior = self.settings.current().per_output_scale.clone();
+        let settings = &mut self.settings;
+        persist_scale_keys(
+            &keys,
+            percent,
+            |key| prior.get(key).copied(),
+            |key, value| settings.persist_scale(key, value),
+        )
+    }
+
     /// Last display snapshot already cached by the platform, without refreshing from the engine.
     #[must_use]
     pub fn cached_display_snapshot(&self) -> Option<DisplaySnapshot> {
         self.displays.cached().cloned()
+    }
+}
+
+/// Writes `percent` under every key in order. A failed write restores the keys already written
+/// to their `prior` values and returns the error, so a partial persist never survives.
+fn persist_scale_keys(
+    keys: &[String],
+    percent: u16,
+    prior: impl Fn(&str) -> Option<u16>,
+    mut write: impl FnMut(&str, u16) -> FlameResult<()>,
+) -> FlameResult<()> {
+    let mut written: Vec<(&String, Option<u16>)> = Vec::with_capacity(keys.len());
+    for key in keys {
+        if let Err(error) = write(key, percent) {
+            for (done, previous) in written.iter().rev() {
+                if let Some(previous) = previous {
+                    if let Err(restore) = write(done, *previous) {
+                        eprintln!(
+                            "flamewm: scale rollback for {done} failed: {}",
+                            restore.message
+                        );
+                    }
+                }
+            }
+            return Err(error);
+        }
+        written.push((key, prior(key)));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn keys(index: usize) -> Vec<String> {
+        flamewm_api::ports::wayland_scale_keys(index)
+    }
+
+    #[test]
+    fn first_output_persists_only_wayland_zero() {
+        assert_eq!(keys(0), vec!["wayland-0".to_owned()]);
+    }
+
+    #[test]
+    fn other_outputs_persist_their_index_key_and_the_wm_key() {
+        assert_eq!(
+            keys(2),
+            vec!["wayland-2".to_owned(), "wayland-0".to_owned()]
+        );
+    }
+
+    #[test]
+    fn successful_persist_writes_every_key() {
+        let mut store = BTreeMap::new();
+        persist_scale_keys(
+            &keys(2),
+            150,
+            |_| None,
+            |key, value| {
+                store.insert(key.to_owned(), value);
+                Ok(())
+            },
+        )
+        .expect("persist");
+        assert_eq!(store.get("wayland-2"), Some(&150));
+        assert_eq!(store.get("wayland-0"), Some(&150));
+    }
+
+    #[test]
+    fn failed_second_key_restores_first_key_and_fails_the_transaction() {
+        let mut store: BTreeMap<String, u16> = BTreeMap::new();
+        store.insert("wayland-2".to_owned(), 100);
+        store.insert("wayland-0".to_owned(), 100);
+        let prior = store.clone();
+        let result = persist_scale_keys(
+            &keys(2),
+            150,
+            |key| prior.get(key).copied(),
+            |key, value| {
+                if key == "wayland-0" {
+                    return Err(FlameError::new(ErrorCode::Unavailable, "disk full"));
+                }
+                store.insert(key.to_owned(), value);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::Unavailable);
+        assert_eq!(store.get("wayland-2"), Some(&100), "first key rolled back");
+        assert_eq!(store.get("wayland-0"), Some(&100));
     }
 }

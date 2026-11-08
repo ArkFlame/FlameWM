@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::applications::ApplicationLaunchOptions;
 use crate::background::BackgroundState;
-use crate::display::DisplaySnapshot;
+use crate::display::{DisplaySnapshot, TopologyChange};
 use crate::input::PointerPosition;
 use crate::session::{SessionAction, SessionCapabilities};
 use crate::shortcuts::KeyBinding;
@@ -185,6 +185,30 @@ pub trait DisplayPort {
     fn apply_mode(&mut self, output: &OutputId, mode: ModeId) -> FlameResult<TransactionId>;
     fn keep_mode(&mut self, transaction: TransactionId) -> FlameResult<()>;
     fn revert_mode(&mut self, transaction: TransactionId) -> FlameResult<()>;
+    /// Applies a primary, rotation or layout change as a revertible native transaction. Keep and
+    /// revert go through `keep_mode`/`revert_mode`. Backends without topology control keep the refusal.
+    fn apply_topology(&mut self, _change: &TopologyChange) -> FlameResult<TransactionId> {
+        Err(FlameError::new(
+            ErrorCode::Unsupported,
+            "display topology change is not supported by this backend",
+        ))
+    }
+    /// Settings keys a shell scale change persists under for this backend, given the output's
+    /// index in the snapshot. A backend whose WM reads a fixed key overrides this.
+    fn scale_keys(&self, output: &OutputId, _index: usize) -> Vec<String> {
+        vec![output.as_str().to_owned()]
+    }
+}
+
+/// Scale keys for a Wayland backend: the selected output's index key plus `wayland-0`, the single
+/// output key the Wayland WM renders under. Written in this order; `wayland-0` is written last.
+#[must_use]
+pub fn wayland_scale_keys(index: usize) -> Vec<String> {
+    let mut keys = vec![format!("wayland-{index}")];
+    if index != 0 {
+        keys.push("wayland-0".to_owned());
+    }
+    keys
 }
 
 pub trait ShortcutPort {
@@ -234,7 +258,7 @@ pub trait InputPort {
 
 pub trait ApplicationPort {
     fn launch(&mut self, app: &DesktopAppId, options: &ApplicationLaunchOptions)
-    -> FlameResult<()>;
+        -> FlameResult<()>;
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()>;
 }
 

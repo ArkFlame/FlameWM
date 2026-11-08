@@ -32,13 +32,11 @@ fn settings_apply_decodes_typed_variants_without_stringly_typed_core() {
     };
     assert_eq!(transaction.expected_revision, 7);
     assert_eq!(transaction.changes.len(), 3);
-    assert!(
-        transaction
-            .changes
-            .iter()
-            .any(|change| change.key == "surfaceOpacity"
-                && change.value == Some(SettingValue::Percent(83)))
-    );
+    assert!(transaction
+        .changes
+        .iter()
+        .any(|change| change.key == "surfaceOpacity"
+            && change.value == Some(SettingValue::Percent(83))));
 }
 
 #[test]
@@ -89,6 +87,53 @@ fn keep_display_mode_uses_reactor_clock_for_deadline_enforcement() {
             now_ms: 15_001,
         }
     );
+}
+
+#[test]
+fn display_topology_requests_round_trip_through_wire() {
+    use flamewm_api::display::{OutputPlacement, Rotation};
+    assert_request_round_trip(&ControlRequest::SetPrimaryDisplay {
+        output: OutputId::new("DP-1"),
+        expected_generation: 9,
+        now_ms: 0,
+    });
+    assert_request_round_trip(&ControlRequest::SetDisplayRotation {
+        output: OutputId::new("DP-1"),
+        rotation: Rotation::Right,
+        expected_generation: 9,
+        now_ms: 0,
+    });
+    assert_request_round_trip(&ControlRequest::SetDisplayArrangement {
+        placements: vec![
+            OutputPlacement {
+                output: OutputId::new("DP-1"),
+                x: 0,
+                y: 0,
+            },
+            OutputPlacement {
+                output: OutputId::new("HDMI-1"),
+                x: -1920,
+                y: 120,
+            },
+        ],
+        expected_generation: 9,
+        now_ms: 0,
+    });
+}
+
+#[test]
+fn display_rotation_rejects_unknown_quarter_turn() {
+    let call = WireCall::new(
+        IFACE_DISPLAYS,
+        "SetRotation",
+        vec![
+            WireValue::String("DP-1".to_owned()),
+            WireValue::U32(4),
+            WireValue::U64(1),
+        ],
+    )
+    .with_now_ms(10);
+    assert!(decode_call(&call).is_err());
 }
 
 #[test]
