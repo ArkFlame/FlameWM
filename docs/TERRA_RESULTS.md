@@ -288,3 +288,23 @@
 
 - Before/after: no cap code changed in this run, so "before" is the 10,000 default and "after" is the 1,000,000 max. The cap bounds memory at both settings; RSS scales with the configured limit (about 62 MB extra at 1M lines).
 - Not verified: full GUI app run through a PTY (only the parser and screen path was measured); the bench did not include rendering.
+
+## G6 Startup Applications extras (settings)
+- Scope: add an installed app to autostart (Next cycles candidates, Add copies its desktop entry into the user autostart folder), add a custom one-line command (Enter submits, Escape cancels, errors stay inline), per-entry start delay (0/5/10/15/30/60 s, written as `X-GNOME-Autostart-Delay` on the user copy; reads `X-FlameWM-Delay` as fallback). System entries are never edited.
+- Commit: `1ba308d0` (rebased from `f5441a62`). Paths: `crates/flamewm-settings-core/src/xdg_startup.rs` (new), `crates/flamewm-settings-core/src/{lib,xdg_applications}.rs`, `crates/flamewm-settings/src/{startup_page,startup_extras(new),actions,app_impl_1,app_impl_3,lib}.rs`, `ui/settings.html`.
+- Checks (worktree, `CARGO_TARGET_DIR=/run/media/linsaftw/SDD/target-fin`, `flock /tmp/fin-cargo.lock`, jobs 2, test threads 2): `cargo build -p flamewm-settings` exit 0; `cargo test -p flamewm-finder -p flamewm-settings-core -p flamewm-settings` exit 0 after rebase (finder 58 pass, 1 ignored benchmark; settings 222 pass; settings-core 26 pass); zero compiler warnings; `python3 tools/architecture_guard.py` exit 0.
+- Tests added: delay read and fallback, delay write leaves system file alone, candidates skip hidden/NoDisplay/already-autostarted, add-installed copies once, custom command naming and rejection, delay preset cycling, add-candidate wrap and empty case, command field typing/Escape/Enter/cap.
+- Live: own Xvfb `:111` (pid 1697009, left running), isolated HOME with two autostart entries and three desktop entries. Screenshot `scratchpad/shot-startup-g6.png` shows `15 s delay` / `No delay` buttons, the Add group offering Firefox, and the command row, in existing card styling. The settings process was stopped by PID.
+- Not verified: clicks on Next, Add, Command, typing a command and Enter on the live app (only the pure functions are unit-tested). Autostart delay has no consumer in this repo (no autostart runner), so the delay takes effect only in an external launcher.
+- Size: `app_impl_1.rs` 799→823, `app_impl_3.rs` 748→752, `actions.rs` 804→815 (all already over 700 before this change; not split here). New files stay under 700 lines.
+
+## G7 Finder universal search (run 1)
+- Commit: `64bfe545` (rebased from `b16664d8`). Paths: `crates/flamewm-finder/src/{quick,lib,index}.rs`, `crates/flamewm-finder/Cargo.toml`, `Cargo.lock`, `ui/finder/finder.css`.
+- Delivered: app rows from desktop entries (subsequence fuzzy plus frecency in `frecency.tsv`, launch records frecency), calculator (`2+2*3`), unit conversion (`5km in mi`), system actions (`ACTIONS`, `actions_matching`, `run_action`), empty-query Recent view. Keyboard-first Enter path. Application cache is loaded on the worker, not the UI thread.
+- Checks: `cargo test -p flamewm-finder` exit 0 (58 pass). Ignored benchmark `bench_index_walk_and_first_query` run with `--release` on a 200,000-file tree (200,400 entries).
+- Numbers (release): cold walk 457 ms; index RSS delta about 86 MB (about 430 B/entry); cache load 140 ms (off UI thread); first-query rank 16 ms.
+- Live: own Xvfb `:111` screenshots `scratchpad/shot-calc.png`, `shot-apps2.png`, `shot-units.png`. Calculator, unit row, app rows with the Application tag, and highlight rendering verified. Enter on an app launched it and wrote `frecency.tsv`. Finder stopped by PID.
+- Fixed in this run: highlighted name segments wrapped onto separate lines (`ui/finder/finder.css` `.name` flex row).
+- Not done (gaps against G7): no inotify incremental index (the index is rebuilt by walking, cached on disk); no recent-documents source; no logout system action; Tab-to-actions not implemented.
+- Size: `crates/flamewm-finder/src/lib.rs` 1107→1240 lines, already over 700 before this change; not split here.
+- Risk: the benchmark ran on the pre-rebase tree; the finder code is unchanged by the rebase, but it was not re-benchmarked after rebase.
