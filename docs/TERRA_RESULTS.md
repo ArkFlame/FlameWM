@@ -388,3 +388,10 @@ Isolated-vs-full differences (SS06, SS07, SS10, SS15) indicate order-dependent s
 - SS15 `disabled_mode_ends_inert`: passes in isolation, fails in the full run.
 - Full-run NOT_RUN sub-checks (SS06 `desktop_visual_consumer`, SS07 `taskbar_visual_consumer`, SS10) need a root cause, not a harness relaxation.
 - Gates: `tools/architecture_guard.py` exit 0 (76 ratified violations). `cargo check --workspace` exit 0, 0 warnings (last fresh build; cache hit on the final re-check).
+
+### Full matrix after per-scenario isolation (HEAD 78e1092e, `run-full2`): VERDICT FAIL, exit 1
+- Isolation reset (`78e1092e`) before SS03, SS04, SS05, SS06, SS07, SS10, SS11, SS12, SS13, SS15 and the legacy hotkey row. Fixed: SS05 PASS, SS10 PASS, SS12 PASS, SS17 PASS (all rows, including `scale_scroll_ss10`).
+- SS06 now measured FAIL at `snap_preview_consumer` (was NOT_RUN). Open.
+- SS07 `taskbar_visual_consumer` still unmeasured (NOT_RUN). Open.
+- SS15 `disabled_mode_ends_inert` FAIL. The earlier isolated PASS had `mode_count=0`, so the mode-paging loop never ran. The full run lists 16 modes (4 pages); `mode_next` clicks at (760,497) leave the page label unchanged (`label_changed=false` x3) while the snapshot is unchanged. Open: click point versus product; not yet separated.
+- SS14, SS16, SS19 FAIL (previously triaged as harness/pre-existing; unchanged).
