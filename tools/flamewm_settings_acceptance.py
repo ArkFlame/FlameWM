@@ -2419,6 +2419,15 @@ def taskbar_measure_settled(ctx: Ctx, name: str, edge: str, height: int, color: 
         time.sleep(0.5)
 
 
+def taskbar_unrelated_unchanged(before: dict | None, after: dict | None) -> bool:
+    """An unrelated setting must not repaint the taskbar. The compositor's fill can drift by 1-2 levels
+    between captures (measured 9,10,10 -> 10,10,12), so compare the sample within the 16-level tolerance
+    used for every colour check, not the exact digest. Edge and extent must match exactly."""
+    if not before or not after or before.get("edge") != after.get("edge") or before.get("extent") != after.get("extent"):
+        return False
+    return rgb_close(before.get("inside"), after.get("inside"), 16)
+
+
 def taskbar_matches(measure: dict | None, edge: str, height: int, color: str, opacity: int) -> bool:
     rgb = accent_rgb(color)
     if measure is None or rgb is None or measure["edge"] != edge or measure["extent"] != height:
@@ -3259,10 +3268,7 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
         time.sleep(min(args.settle_seconds, 1.5))
         after_unrelated = taskbar_measure(ctx, "ss07-after-unrelated")
         visual["after_unrelated"] = after_unrelated
-        visual["unrelated_leaves_taskbar_unchanged"] = bool(
-            unrelated and first and after_unrelated and first["band_digest"]
-            and first["band_digest"] == after_unrelated["band_digest"]
-            and first["extent"] == after_unrelated["extent"])
+        visual["unrelated_leaves_taskbar_unchanged"] = taskbar_unrelated_unchanged(first, after_unrelated) and bool(unrelated)
         if unrelated and isinstance(unrelated.get("revision"), int):
             settings_revision = unrelated["revision"]
     else:

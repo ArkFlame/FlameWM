@@ -38,3 +38,21 @@ class WaitForSettingsWindow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TaskbarUnrelatedControl(unittest.TestCase):
+    def _measure(self, inside, edge="bottom", extent=44):
+        return {"edge": edge, "extent": extent, "inside": inside, "band_digest": str(inside)}
+
+    def test_compositor_drift_within_tolerance_is_unchanged(self):
+        self.assertTrue(harness.taskbar_unrelated_unchanged(self._measure((9, 10, 10)), self._measure((10, 10, 12))))
+
+    def test_real_repaint_is_changed(self):
+        self.assertFalse(harness.taskbar_unrelated_unchanged(self._measure((9, 10, 10)), self._measure((40, 69, 101))))
+
+    def test_edge_or_extent_change_is_changed(self):
+        self.assertFalse(harness.taskbar_unrelated_unchanged(self._measure((9, 10, 10)), self._measure((9, 10, 10), edge="top")))
+        self.assertFalse(harness.taskbar_unrelated_unchanged(self._measure((9, 10, 10)), self._measure((9, 10, 10), extent=40)))
+
+    def test_missing_measure_is_changed(self):
+        self.assertFalse(harness.taskbar_unrelated_unchanged(None, self._measure((9, 10, 10))))
