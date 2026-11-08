@@ -12,6 +12,7 @@ use rustix::fs::{FlockOperation, flock};
 
 use crate::download::{CurlFetcher, DiskModelStore};
 use crate::process::SystemRunner;
+use crate::sha256::Sha256;
 use crate::speech::{ModelStore, tts_manifest};
 use crate::{AssistantError, CancelToken, ProcessRunner, SpeechConfig, default_models_dir};
 
@@ -19,6 +20,21 @@ const TORCH_INDEX: &str = "https://download.pytorch.org/whl/cpu";
 const TTS_MODEL: &str = "tts-phonon-local";
 const READY: &str = "ready";
 const LOCK: &str = "setup.lock";
+/// One line per state, written by the background setup. Shared with the assistant window.
+pub const STATUS_FILE: &str = "status";
+/// Upstream pip bootstrap, used only when `python3` has no `ensurepip`. Pinned by SHA-256.
+const GET_PIP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
+const GET_PIP_SHA256: &str = "356e0d0de21cdc348c3394084d90939b85e4246c4d14c76aee6ca4f46646ea98";
+const GET_PIP_FILE: &str = "get-pip.py";
+const PYTHON_HINT: &str = "Install Python 3.10 or newer: sudo apt install python3 (Debian or Ubuntu), then turn speech on again.";
+
+/// How the private venv is created. `Stdlib` needs `ensurepip`; `Bootstrap` needs no root and no
+/// distro package: an empty venv, then pip installed from the pinned `get-pip.py`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VenvRoute {
+    Stdlib,
+    Bootstrap,
+}
 /// Message of the `Io` error when another process (Settings or a window) holds the setup lock.
 pub const SETUP_BUSY: &str = "voice setup is already running in another process";
 const VENV_HINT: &str =
@@ -90,17 +106,13 @@ pub fn setup(
 
     let venv = dir.join("venv");
     let pip = path_arg(&venv.join("bin/pip"));
-    progress(5, "Creating the voice environment");
     if !venv.join("bin/pip").is_file() {
+        progress(5, "Checking Python");
+        let route = preflight(runner, cancel)?;
         // A venv without pip is left over from a failed run; rebuild it.
         let _ = fs::remove_dir_all(&venv);
-        let venv_arg = path_arg(&venv);
-        let made = exec(
-            runner,
-            cancel,
-            &["python3", "-m", "venv", venv_arg.as_str()],
-        );
-        step("creating the voice environment", VENV_HINT, made)?;
+        progress(8, "Creating the voice environment");
+        create_venv(runner, cancel, dir, &venv, route, GET_PIP_SHA256)?;
     }
     progress(20, "Installing PyTorch (CPU)");
     let torch = exec(
@@ -163,6 +175,80 @@ pub fn setup(
     fs::write(dir.join(READY), "1\n")?;
     progress(100, "Voice ready");
     Ok(dir.join("models").join(TTS_MODEL))
+}
+
+/// Checks `python3` (3.10 or newer) and picks the venv route. Only a missing or too-old Python
+/// is an error, and it names the one command that fixes it. A missing `ensurepip` is not: the
+/// `Bootstrap` route installs pip without root.
+pub fn preflight(
+    runner: &mut dyn ProcessRunner,
+    cancel: &CancelToken,
+) -> Result<VenvRoute, AssistantError> {
+    let version = exec(
+        runner,
+        cancel,
+        &[
+            "python3",
+            "-c",
+            "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)",
+        ],
+    );
+    step("checking python3", PYTHON_HINT, version)?;
+    match exec(runner, cancel, &["python3", "-c", "import ensurepip, venv"]) {
+        Ok(()) => Ok(VenvRoute::Stdlib),
+        Err(AssistantError::Cancelled) => Err(AssistantError::Cancelled),
+        Err(_) => Ok(VenvRoute::Bootstrap),
+    }
+}
+
+fn create_venv(
+    runner: &mut dyn ProcessRunner,
+    cancel: &CancelToken,
+    dir: &Path,
+    venv: &Path,
+    route: VenvRoute,
+    get_pip_sha256: &str,
+) -> Result<(), AssistantError> {
+    let venv_arg = path_arg(venv);
+    let bootstrap = route == VenvRoute::Bootstrap;
+    let mut argv = vec!["python3", "-m", "venv"];
+    if bootstrap {
+        argv.push("--without-pip");
+    }
+    argv.push(venv_arg.as_str());
+    step("creating the voice environment", VENV_HINT, exec(runner, cancel, &argv))?;
+    if !bootstrap {
+        return Ok(());
+    }
+    let script = dir.join(GET_PIP_FILE);
+    fetch_get_pip(runner, cancel, &script, get_pip_sha256)?;
+    let python = path_arg(&venv.join("bin/python"));
+    let script_arg = path_arg(&script);
+    let installed = exec(runner, cancel, &[python.as_str(), script_arg.as_str(), "--quiet"]);
+    let _ = fs::remove_file(&script);
+    step("installing pip", NET_HINT, installed)
+}
+
+/// Downloads the pinned pip bootstrap and refuses any other bytes before it runs.
+fn fetch_get_pip(
+    runner: &mut dyn ProcessRunner,
+    cancel: &CancelToken,
+    script: &Path,
+    expected_sha256: &str,
+) -> Result<(), AssistantError> {
+    let _ = fs::remove_file(script);
+    let target = path_arg(script);
+    let argv = ["curl", "-fsSL", "--proto", "=https", "-o", target.as_str(), GET_PIP_URL];
+    step("downloading the pip bootstrap", NET_HINT, exec(runner, cancel, &argv))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&fs::read(script)?);
+    if hasher.hex() != expected_sha256 {
+        let _ = fs::remove_file(script);
+        return Err(AssistantError::ChecksumMismatch(format!(
+            "{GET_PIP_FILE} does not match its pinned SHA-256; pip was not installed"
+        )));
+    }
+    Ok(())
 }
 
 /// The TTS model directory once setup has finished, or `None`.
@@ -253,6 +339,8 @@ mod tests {
     struct FakeRunner {
         calls: Vec<String>,
         fail_on: Option<&'static str>,
+        /// Bytes written to the `-o` file of any `curl` call.
+        payload: Option<Vec<u8>>,
     }
 
     impl ProcessRunner for FakeRunner {
@@ -264,6 +352,13 @@ mod tests {
         ) -> Result<Vec<u8>, AssistantError> {
             let line = argv.join(" ");
             self.calls.push(line.clone());
+            if argv.first().map(String::as_str) == Some("curl") {
+                if let (Some(bytes), Some(i)) =
+                    (&self.payload, argv.iter().position(|a| a == "-o"))
+                {
+                    fs::write(&argv[i + 1], bytes).expect("payload");
+                }
+            }
             match self.fail_on {
                 Some(needle) if line.contains(needle) => {
                     Err(AssistantError::Io(format!("{needle} exited 1")))
@@ -320,18 +415,20 @@ mod tests {
         .expect("setup");
 
         assert_eq!(model, dir.join("models/tts-phonon-local"));
-        assert_eq!(runner.calls.len(), 4, "{:?}", runner.calls);
+        assert_eq!(runner.calls.len(), 6, "{:?}", runner.calls);
+        assert!(runner.calls[0].starts_with("python3 -c import sys"), "{:?}", runner.calls);
+        assert!(runner.calls[1].starts_with("python3 -c import ensurepip"), "{:?}", runner.calls);
         assert!(
-            runner.calls[0].starts_with("python3 -m venv "),
+            runner.calls[2].starts_with("python3 -m venv "),
             "{}",
             runner.calls[0]
         );
         assert!(
-            runner.calls[1].ends_with("--index-url https://download.pytorch.org/whl/cpu torch")
+            runner.calls[3].ends_with("--index-url https://download.pytorch.org/whl/cpu torch")
         );
-        assert!(runner.calls[2].ends_with("install --quiet ptts fermion-research"));
-        assert!(runner.calls[3].starts_with("env FERMION_CACHE_DIR="));
-        assert!(runner.calls[3].ends_with("phonon-2 transcribe --download-only phonon-2"));
+        assert!(runner.calls[4].ends_with("install --quiet ptts fermion-research"));
+        assert!(runner.calls[5].starts_with("env FERMION_CACHE_DIR="));
+        assert!(runner.calls[5].ends_with("phonon-2 transcribe --download-only phonon-2"));
         assert_eq!(store.fetches, 1);
         assert!(progress.windows(2).all(|w| w[0] <= w[1]), "{progress:?}");
         assert_eq!(progress.last(), Some(&100));
@@ -546,6 +643,93 @@ mod tests {
 
     /// Real install, real model downloads and real synthesis and transcription through the wrappers.
     /// Run with `FLAMEWM_VOICE_LIVE_DIR=<scratch dir without spaces>` and `--ignored`.
+
+    fn sha_hex(bytes: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher.hex()
+    }
+
+    #[test]
+    fn preflight_uses_the_stdlib_venv_when_ensurepip_is_present() {
+        let mut runner = FakeRunner::default();
+        let route = preflight(&mut runner, &CancelToken::new()).expect("route");
+        assert_eq!(route, VenvRoute::Stdlib);
+        assert_eq!(runner.calls.len(), 2, "{:?}", runner.calls);
+    }
+
+    #[test]
+    fn preflight_without_ensurepip_chooses_the_bootstrap_route_without_root() {
+        let mut runner = FakeRunner {
+            fail_on: Some("import ensurepip"),
+            ..FakeRunner::default()
+        };
+        let route = preflight(&mut runner, &CancelToken::new()).expect("route");
+        assert_eq!(route, VenvRoute::Bootstrap);
+        assert!(runner.calls.iter().all(|c| !c.contains("sudo") && !c.contains("apt")));
+    }
+
+    #[test]
+    fn preflight_names_the_one_fix_when_python3_is_missing_or_too_old() {
+        for needle in ["sys.version_info", "python3"] {
+            let mut runner = FakeRunner {
+                fail_on: Some(needle),
+                ..FakeRunner::default()
+            };
+            let error = preflight(&mut runner, &CancelToken::new()).expect_err("must fail");
+            let text = error.to_string();
+            assert!(text.contains("checking python3 failed"), "{text}");
+            assert!(text.contains("sudo apt install python3"), "{text}");
+            assert_eq!(runner.calls.len(), 1, "stops at the version probe");
+        }
+    }
+
+    #[test]
+    fn bootstrap_route_creates_an_empty_venv_then_installs_pinned_pip() {
+        let dir = scratch("bootstrap-ok");
+        fs::create_dir_all(&dir).expect("dir");
+        let venv = dir.join("venv");
+        let script_bytes = b"pinned get-pip stand-in".to_vec();
+        let sha = sha_hex(&script_bytes);
+        let mut runner = FakeRunner {
+            payload: Some(script_bytes),
+            ..FakeRunner::default()
+        };
+        create_venv(&mut runner, &CancelToken::new(), &dir, &venv, VenvRoute::Bootstrap, &sha)
+            .expect("bootstrap");
+        assert_eq!(runner.calls.len(), 3, "{:?}", runner.calls);
+        assert!(runner.calls[0].starts_with("python3 -m venv --without-pip "), "{:?}", runner.calls);
+        assert!(runner.calls[1].starts_with("curl -fsSL --proto =https "), "{:?}", runner.calls);
+        assert!(runner.calls[1].ends_with(GET_PIP_URL), "{:?}", runner.calls);
+        assert!(runner.calls[2].ends_with("get-pip.py --quiet"), "{:?}", runner.calls);
+        assert!(!dir.join(GET_PIP_FILE).exists(), "the bootstrap script is removed after use");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bootstrap_refuses_a_script_that_does_not_match_the_pin() {
+        let dir = scratch("bootstrap-bad");
+        fs::create_dir_all(&dir).expect("dir");
+        let venv = dir.join("venv");
+        let mut runner = FakeRunner {
+            payload: Some(b"tampered".to_vec()),
+            ..FakeRunner::default()
+        };
+        let error = create_venv(
+            &mut runner,
+            &CancelToken::new(),
+            &dir,
+            &venv,
+            VenvRoute::Bootstrap,
+            GET_PIP_SHA256,
+        )
+        .expect_err("checksum must fail");
+        assert!(matches!(error, AssistantError::ChecksumMismatch(_)), "{error:?}");
+        assert_eq!(runner.calls.len(), 2, "pip is never run from an unverified script");
+        assert!(!dir.join(GET_PIP_FILE).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     #[ignore = "live: installs runtimes and downloads models; set FLAMEWM_VOICE_LIVE_DIR"]
     fn live_setup_round_trips_a_phrase_through_the_wrappers() {

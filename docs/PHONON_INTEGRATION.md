@@ -41,6 +41,7 @@ FlameWM's TTS files go through its own `DiskModelStore`: `.part` resume, size an
 
 ## Flow (zero-step)
 
+0. Startup: `show()` starts `--voice-setup` when speech is on and voice is not ready (first run, restart, or after a failure).
 1. Settings: turning on `assistant.speechToText` or `assistant.textToSpeech` runs
    `flamewm-assistant --voice-setup` (`crates/flamewm-settings/src/actions.rs` `start_voice_setup`).
 2. Before this change the flag fell through to the GUI and never reached setup. It now dispatches to
@@ -57,15 +58,17 @@ Progress: `voice/status` lines, and a notice in the assistant window (`voice_set
 | Failure | Detection | User-visible result | Retry |
 |---|---|---|---|
 | Data dir path contains a space | `Config` error before network | `failed (attempt 1 of 3): configuration error: ...` | no (configuration) |
-| `python3` lacks `venv` (Debian/Ubuntu without `python3-venv`) | step `creating the voice environment` fails | status names the step and `sudo apt install python3-venv` | yes, 3 attempts |
+| `python3` lacks `ensurepip` (Debian/Ubuntu without `python3-venv`) | preflight picks the `Bootstrap` route: `venv --without-pip`, then pinned `get-pip.py` (SHA-256 checked) | none needed; no root | yes, 3 attempts |
+| `python3` missing or older than 3.10 | preflight step `checking python3` | one notice: `sudo apt install python3` | no (configuration) |
+| `get-pip.py` does not match its pin | `ChecksumMismatch` before anything runs | pip is not installed; status names the file | yes |
 | Network to pypi.org, files.pythonhosted.org, download.pytorch.org, huggingface.co down | a step fails | status names the step and the host list | yes, 60 s apart |
 | TTS checksum mismatch | `ChecksumMismatch` in `DiskModelStore` | file discarded, retried | yes |
 | Setup already running in another process | `flock` on `voice/setup.lock` | left to the first process | n/a |
 | Process killed mid-setup | kernel releases `flock`; `ready` absent | next run repeats the unfinished steps | yes |
 | `flamewm-assistant` not on `PATH` (dev build) | spawn error | Settings reports `Could not start the voice setup` | manual |
 
-No root is needed. Nothing is installed system-wide. `python3-venv` is the one system package; it is detected and reported,
-not installed.
+No root is needed on the normal path. Nothing is installed system-wide. Only a missing or too-old `python3` needs a
+system package, and that case shows one notice with the command.
 
 ## Privacy
 
@@ -99,4 +102,5 @@ not installed.
 
 - FlameWM does not pin the Phonon-2 archive in `speech.rs`; the pin lives in `fermion-research`. If the runtime version
   changes, the pin is wherever that wheel says.
-- `python3-venv` is not auto-installed (no root).
+- A missing `python3` cannot be replaced without root (a `uv`-managed Python would need its own pinned download). It is reported, not worked around.
+- `get-pip.py` is pinned by SHA-256. When upstream changes the file, the Bootstrap route fails closed until the pin is updated.

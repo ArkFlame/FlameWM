@@ -1052,6 +1052,17 @@ pub fn run_popover(anchor: popover::Anchor) -> Result<(), String> {
 
 fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), String> {
     let theme = initial_settings();
+    // Speech on but voice not set up (first run, a restart, or an earlier failure): resume the
+    // background setup now. The setup lock makes a second start harmless.
+    if let Some(dir) = default_voice_dir() {
+        let speech_on =
+            flag(&theme, "assistant.speechToText") || flag(&theme, "assistant.textToSpeech");
+        if voice_background::startup_setup_needed(speech_on, &dir) {
+            if let Err(error) = voice_background::spawn_detached() {
+                eprintln!("flamewm-assistant: {error}");
+            }
+        }
+    }
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
     let store = ChatStore::open(&state_dir).map_err(|error| error.to_string())?;
