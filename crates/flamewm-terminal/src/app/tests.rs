@@ -1026,3 +1026,20 @@ fn link_under_the_pointer_resolves_from_the_visible_line() {
     assert_eq!(app.link_at(id, 0, 0), None, "plain text is not a link");
     assert_eq!(app.link_at(id, 0, 20), None, "past the link");
 }
+
+/// Paste payloads cannot carry escape sequences. A pasted end marker is neutralised in bracketed mode, and
+/// the plain path sends no ESC either.
+#[test]
+fn paste_strips_escape_introducers_and_brackets_only_when_enabled() {
+    use super::selection::{paste_bytes, sanitize_paste};
+    let hostile = "ls\x1b[201~; rm -rf ~\n\x1b]0;x\x07\u{9b}31m";
+    assert_eq!(sanitize_paste(hostile), "ls[201~; rm -rf ~\n]0;x\x0731m");
+    let bracketed = paste_bytes(hostile, true);
+    assert!(bracketed.starts_with(b"\x1b[200~"));
+    assert!(bracketed.ends_with(b"\x1b[201~"));
+    assert_eq!(bracketed.windows(6).filter(|w| *w == b"\x1b[201~").count(), 1, "one end marker only");
+    assert_eq!(bracketed.iter().filter(|&&b| b == 0x1b).count(), 2, "only our own two ESC bytes");
+    let plain = paste_bytes(hostile, false);
+    assert!(!plain.contains(&0x1b), "no ESC reaches a shell that did not ask for bracketed paste");
+    assert_eq!(plain, b"ls[201~; rm -rf ~\r]0;x\x0731m".to_vec());
+}

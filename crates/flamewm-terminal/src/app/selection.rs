@@ -181,6 +181,7 @@ impl App {
             return;
         }
         let Some(id) = self.focused_id() else { return };
+        let text = sanitize_paste(&text);
         let bracketed = self
             .pane(id)
             .is_some_and(|pane| pane.session.screen.bracketed_paste);
@@ -188,14 +189,28 @@ impl App {
             pane.input.paste(&text);
             pane.view_offset = 0;
         }
-        let mut bytes = Vec::new();
-        if bracketed {
-            bytes.extend_from_slice(b"\x1b[200~");
-        }
-        bytes.extend_from_slice(text.replace('\n', "\r").as_bytes());
-        if bracketed {
-            bytes.extend_from_slice(b"\x1b[201~");
-        }
-        self.send_to(id, bytes);
+        self.send_to(id, paste_bytes(&text, bracketed));
     }
+}
+
+/// Pasted text without control introducers. ESC and the C1 CSI byte (U+009B) start escape sequences, so they
+/// are dropped; a pasted `ESC[201~` therefore cannot end a bracketed paste early.
+#[must_use]
+pub fn sanitize_paste(text: &str) -> String {
+    text.chars().filter(|&c| c != '\x1b' && c != '\u{9b}').collect()
+}
+
+/// Bytes sent to the child for a paste. Sanitized text, LF as CR, wrapped in 200/201 markers when bracketed.
+#[must_use]
+pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    let body = sanitize_paste(text).replace('\n', "\r");
+    let mut bytes = Vec::with_capacity(body.len() + 12);
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[200~");
+    }
+    bytes.extend_from_slice(body.as_bytes());
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[201~");
+    }
+    bytes
 }
