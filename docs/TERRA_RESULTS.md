@@ -263,3 +263,13 @@
 ## G8 Terminal — NOT STARTED (inventory only)
 - Existing in source (grep): NewTab shortcut (crates/flamewm-terminal/src/keys.rs), scrollback limit (screen.rs `scrollback_limit`), tab/split/rename identifiers in app.rs; not verified against the spec items individually
 - Not done: find-in-scrollback, URL Ctrl+click verification, bracketed paste safety audit, scrollback throughput and RSS measurement
+
+## Settings acceptance triage run 2 (HEAD 473d5658 + harness display fix) — FAIL, triage partial
+
+- Harness root cause, fixed (`187465ff`): `display_in_use` treated any `/tmp/.X<n>-lock` or `/tmp/.X11-unix/X<n>` as busy. Dead servers left those files on every candidate display, so XTEST scenarios could not run on `:97..:119`. Now busy only while the lock owner PID is alive or the socket accepts connections. Test: `tools/test_flamewm_harness_common.py` 6/6 exit 0; `tools/architecture_guard.py` exit 0.
+- Run: `scripts/settings-acceptance --run-dir <scratch>/run2 --display :97 --wm-bin … --settings-bin … --shell-bin … --desktop-bin …` (host Xvfb `:110`, stopped by PID after the run). Exit 1, verdict FAIL.
+- Baseline (run 1, `:90`, pre-fix): SS10/SS11/SS12/SS17 NOT_RUN "requires an owned display in :97..:119" (harness env, now fixed).
+- Run 2 results: PASS SS00, SS01, SS02, SS04, SS09 (source-test), SS13. FAIL SS05 (`error_preserved_and_visible`), SS06 (`snap_preview_consumer`), SS07 (`settings_snapshot_values`, `panel_edge_and_size_snapshot`), SS10 (`scale_changed_snapshot`), SS14 (`settings_visible_without_input`, `signal_loss_recovery`), SS15 (`disabled_mode_ends_inert`, `settings_survived_keyboard_escape`), SS17 (`scale_scroll_ss10`), SS19 (`repeated_pages_opened_and_closed`, `external_update_responsive`), SS16 (static `verify_rwr_promotion=1`, pre-existing). NOT_RUN SS03 (blue/teal snapshots unverified), SS11 (family/size snapshots unverified), SS12 (client measured 960x640, not the 820x540 fixture; default clicks refused), SS18 (no installed-prefix result), SS08 ENVIRONMENT_BLOCKED (one RandR output per host X server).
+- SS05 detail: success and cancel observations now pass in run 2 (only `error_preserved_and_visible` remains). SS06 detail: desktop snapshot passes, the snap-preview consumer is unverified (WM preview is border-only; opacity ignored by design per `snap_preview.rs`).
+- Not verified: root causes for SS03, SS06 (snap preview), SS07, SS10, SS11, SS12, SS14, SS15, SS17, SS19. No product or harness fix beyond the display check was made in this run.
+- Risk: the acceptance matrix is still FAIL; the display fix only unblocks XTEST rows. Each full run takes about 30 minutes.
