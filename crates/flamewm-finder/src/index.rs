@@ -402,3 +402,52 @@ mod tests {
         assert_eq!(cache_path(None, None), None);
     }
 }
+
+/// Resident set size in KiB from `/proc/self/status`; zero where it is unavailable.
+#[cfg(test)]
+fn resident_kib() -> u64 {
+    fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .and_then(|rest| rest.split_whitespace().next()?.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+/// Manual benchmark over a synthetic tree. Run with
+/// `FLAMEWM_FINDER_BENCH_ROOT=<dir> cargo test -p flamewm-finder bench_index -- --ignored --nocapture`.
+#[cfg(test)]
+#[test]
+#[ignore = "benchmark: set FLAMEWM_FINDER_BENCH_ROOT"]
+fn bench_index_walk_and_first_query() {
+    let Some(root) = std::env::var_os("FLAMEWM_FINDER_BENCH_ROOT") else {
+        return;
+    };
+    let roots = vec![PathBuf::from(root)];
+    let before = resident_kib();
+    let started = Instant::now();
+    let index = walk(&roots, MAX_ENTRIES, MAX_DEPTH, WALK_BUDGET);
+    let walk_ms = started.elapsed().as_millis();
+    let after = resident_kib();
+    let cache = std::env::temp_dir().join(format!("finder-bench-{}.tsv", std::process::id()));
+    save_cache(&cache, &index).unwrap();
+
+    // First result on a warm start: read the cache, then rank one query, as the window does.
+    let started = Instant::now();
+    let cached = load_cache(&cache).unwrap();
+    let load_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let query = crate::search::Query::parse("report", "/home/bench");
+    let started = Instant::now();
+    let hits = crate::search::rank(&cached, &query, 1_700_000_000);
+    let rank_ms = started.elapsed().as_secs_f64() * 1000.0;
+    println!(
+        "bench entries={} truncated={} walk_ms={walk_ms} index_rss_delta_kib={} rss_kib={after} cache_load_ms={load_ms:.2} first_query_rank_ms={rank_ms:.2} matches={}",
+        index.len(),
+        index.truncated,
+        after.saturating_sub(before),
+        hits.total
+    );
+    let _ = fs::remove_file(cache);
+}

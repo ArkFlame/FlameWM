@@ -10,6 +10,7 @@ mod instance;
 mod keys;
 mod kind;
 mod palette;
+mod quick;
 mod preview;
 mod search;
 
@@ -26,6 +27,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use calloop::Interest;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
+use flamewm_applications::ApplicationCatalog;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
@@ -89,6 +92,18 @@ enum Item {
     Entry(usize),
     Command(&'static CommandSpec),
     Scope(palette::Choice),
+    /// Calculator answer; Enter puts the result into the search box.
+    Calc(quick::Answer),
+    /// Index into `Finder::apps`.
+    App(usize),
+    Action(&'static quick::SystemAction),
+}
+
+/// What the background worker sends the window: the application list first, then the file index.
+enum Loaded {
+    Apps(Vec<DesktopApplication>),
+    Cached(Index),
+    Files(Index),
 }
 
 /// Text and accent colours for the current glass tint.
@@ -160,6 +175,13 @@ struct Finder {
     palette: Palette,
     pid_file: PathBuf,
     last_click: Option<(usize, Instant)>,
+    apps: Vec<DesktopApplication>,
+    /// Calculator answer, application matches and system actions for the current query.
+    answer: Option<quick::Answer>,
+    app_hits: Vec<usize>,
+    actions: Vec<&'static quick::SystemAction>,
+    frecency: quick::Frecency,
+    frecency_file: Option<PathBuf>,
 }
 
 fn now_secs() -> i64 {
@@ -220,6 +242,12 @@ impl Finder {
             palette,
             pid_file,
             last_click: None,
+            apps: Vec::new(),
+            answer: None,
+            app_hits: Vec::new(),
+            actions: Vec::new(),
+            frecency: quick::Frecency::default(),
+            frecency_file: None,
         };
         app.refresh();
         app
@@ -227,13 +255,67 @@ impl Finder {
 
     fn refresh(&mut self) {
         self.parsed = Query::parse(&self.query, &self.home);
-        self.hits = if palette::mode(&self.query) == Mode::Files {
-            search::rank(&self.index, &self.parsed, now_secs())
+        let now = now_secs();
+        let files = palette::mode(&self.query) == Mode::Files;
+        self.hits = if files {
+            search::rank(&self.index, &self.parsed, now)
         } else {
             Hits::default()
         };
+        let quick = files && !self.query.trim().is_empty();
+        self.answer = quick.then(|| quick::calculate(&self.query)).flatten();
+        self.app_hits = if quick {
+            quick::rank_apps(&self.apps, &self.query, &self.frecency, now)
+        } else {
+            Vec::new()
+        };
+        self.actions = if quick {
+            quick::actions_matching(&self.query)
+        } else {
+            Vec::new()
+        };
         self.selected = 0;
         self.first = 0;
+    }
+
+    /// Quick rows above the file results: calculator answer, applications, then system actions.
+    fn quick_count(&self) -> usize {
+        self.answer.is_some() as usize + self.app_hits.len() + self.actions.len()
+    }
+
+    /// Cached files are shown but do not end the indexing state, since the fresh walk follows.
+    fn accept_cached(&mut self, index: Index) {
+        self.index = index;
+        self.refresh();
+    }
+
+    fn accept_apps(&mut self, apps: Vec<DesktopApplication>) {
+        self.apps = apps;
+        self.refresh();
+    }
+
+    fn launch_app(&mut self, position: usize) {
+        let Some(app) = self.apps.get(position) else {
+            return;
+        };
+        if let Err(error) =
+            flamewm_applications::launch_argv(&app.argv, &ApplicationLaunchOptions::default())
+        {
+            eprintln!("flamewm-finder: launch {} failed: {error}", app.id.as_str());
+            return;
+        }
+        self.frecency.record(app.id.as_str(), now_secs());
+        if let Some(path) = &self.frecency_file {
+            if let Err(error) = self.frecency.save(path) {
+                eprintln!("flamewm-finder: frecency save failed: {error}");
+            }
+        }
+    }
+
+    fn run_quick_action(&self, action: &quick::SystemAction) {
+        if let Err(error) = quick::run_action(action) {
+            eprintln!("flamewm-finder: {} failed: {error}", action.label);
+        }
     }
 
     fn set_query(&mut self, query: String) {
@@ -244,7 +326,13 @@ impl Finder {
     /// Items of the current view: result files, commands, or folder scopes.
     fn items(&self) -> Vec<Item> {
         match palette::mode(&self.query) {
-            Mode::Files => self.hits.indices.iter().map(|&i| Item::Entry(i)).collect(),
+            Mode::Files => {
+                let mut items: Vec<Item> = self.answer.iter().cloned().map(Item::Calc).collect();
+                items.extend(self.app_hits.iter().map(|&i| Item::App(i)));
+                items.extend(self.actions.iter().copied().map(Item::Action));
+                items.extend(self.hits.indices.iter().map(|&i| Item::Entry(i)));
+                items
+            }
             Mode::Commands(filter) => palette::command_matches(&filter)
                 .into_iter()
                 .map(Item::Command)
@@ -262,18 +350,19 @@ impl Finder {
 
     /// True when results appear as tiles: always for the home view, and for results once the user
     /// has switched to the grid.
+    /// Quick rows are list rows, so a query with quick rows always shows the list.
     fn tiles_shown(&self) -> bool {
         palette::mode(&self.query) == Mode::Files
             && !self.hits.indices.is_empty()
+            && self.quick_count() == 0
             && (self.grid || self.query.is_empty())
     }
 
     fn selected_entry(&self) -> Option<&Entry> {
-        if palette::mode(&self.query) != Mode::Files {
-            return None;
+        match self.selected_item()? {
+            Item::Entry(position) => self.index.entries.get(position),
+            _ => None,
         }
-        let position = *self.hits.indices.get(self.selected)?;
-        self.index.entries.get(position)
     }
 
     fn select(&mut self, position: usize) {
@@ -354,6 +443,9 @@ impl Finder {
             Some(Item::Entry(_)) => self.open_selected(false),
             Some(Item::Command(spec)) => self.run_command(spec.id),
             Some(Item::Scope(choice)) => self.set_query(choice.query),
+            Some(Item::Calc(answer)) => self.set_query(answer.result),
+            Some(Item::App(position)) => self.launch_app(position),
+            Some(Item::Action(action)) => self.run_quick_action(action),
             None => {}
         }
     }
@@ -557,7 +649,7 @@ impl Finder {
         let items = self.items().len();
         let count = match palette::mode(&self.query) {
             _ if !typing => String::new(),
-            Mode::Files => match self.hits.total {
+            Mode::Files => match self.hits.total + self.quick_count() {
                 0 => "No results".to_owned(),
                 1 => "1 result".to_owned(),
                 total => format!("{} results", format::count(total)),
@@ -648,6 +740,34 @@ impl Finder {
                 Kind::Folder,
                 vec![(choice.label.clone(), false)],
                 choice.query.trim().to_owned(),
+                String::new(),
+            ),
+            Item::Calc(answer) => (
+                Kind::Code,
+                vec![(answer.result.clone(), false)],
+                answer.input.clone(),
+                "Calculator".to_owned(),
+            ),
+            Item::App(position) => {
+                let Some(app) = self.apps.get(*position) else {
+                    return doc.visible(&row, false);
+                };
+                let detail = if app.comment.is_empty() {
+                    app.generic_name.clone()
+                } else {
+                    app.comment.clone()
+                };
+                (
+                    Kind::Code,
+                    search::segments(&app.name, &self.parsed.terms),
+                    detail,
+                    "Application".to_owned(),
+                )
+            }
+            Item::Action(action) => (
+                Kind::Code,
+                vec![(action.label.to_owned(), false)],
+                "System action".to_owned(),
                 String::new(),
             ),
         };
@@ -946,15 +1066,38 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let theme = initial_settings();
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
-    let cached = cache_file.and_then(index::load_cache).unwrap_or_default();
-    let mut app = Finder::new(home.to_owned(), cached, theme, pid_file.to_path_buf());
+    let mut app = Finder::new(home.to_owned(), Index::default(), theme, pid_file.to_path_buf());
     app.paint(&mut document)?;
 
+    app.frecency_file = cache_file
+        .and_then(Path::parent)
+        .map(|dir| dir.join("frecency.tsv"));
+    app.frecency = app
+        .frecency_file
+        .as_deref()
+        .map(quick::Frecency::load)
+        .unwrap_or_default();
+
     let (mut index_reader, mut index_writer) = nonblocking_pair()?;
-    let (sender, receiver) = mpsc::sync_channel::<Index>(1);
+    let (sender, receiver) = mpsc::sync_channel::<Loaded>(1);
     let walk_cache = cache_file.map(Path::to_path_buf);
     let roots = index::default_roots(env::var_os("HOME"));
     std::thread::spawn(move || {
+        // Applications first: the desktop catalog is a few hundred small files, so it lands
+        // long before the file walk finishes.
+        let apps = ApplicationCatalog::discover()
+            .map(|catalog| catalog.all())
+            .unwrap_or_default();
+        if sender.send(Loaded::Apps(apps)).is_ok() {
+            let _ = index_writer.write(&[1]);
+        }
+        // The cached index answers queries while the fresh walk runs; reading it here keeps the
+        // window's first paint off the disk.
+        if let Some(cached) = walk_cache.as_deref().and_then(index::load_cache) {
+            if sender.send(Loaded::Cached(cached)).is_ok() {
+                let _ = index_writer.write(&[1]);
+            }
+        }
         let fresh = index::walk(
             &roots,
             index::MAX_ENTRIES,
@@ -964,7 +1107,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         if let Some(path) = &walk_cache {
             let _ = index::save_cache(path, &fresh);
         }
-        if sender.send(fresh).is_ok() {
+        if sender.send(Loaded::Files(fresh)).is_ok() {
             let _ = index_writer.write(&[1]);
         }
     });
@@ -987,7 +1130,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let window = Rc::new(RefCell::new(app));
     let event_window = Rc::clone(&window);
     let wake_window = Rc::clone(&window);
-    let incoming: Rc<RefCell<Receiver<Index>>> = Rc::new(RefCell::new(receiver));
+    let incoming: Rc<RefCell<Receiver<Loaded>>> = Rc::new(RefCell::new(receiver));
     let wake_incoming = Rc::clone(&incoming);
 
     run_with_controller_events_role_with_presses_and_reactor_geometry(
@@ -1021,8 +1164,12 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         move |doc| {
             let mut app = wake_window.borrow_mut();
             let mut changed = false;
-            while let Ok(fresh) = wake_incoming.borrow().try_recv() {
-                app.accept_index(fresh);
+            while let Ok(message) = wake_incoming.borrow().try_recv() {
+                match message {
+                    Loaded::Apps(apps) => app.accept_apps(apps),
+                    Loaded::Cached(cached) => app.accept_cached(cached),
+                    Loaded::Files(fresh) => app.accept_index(fresh),
+                }
                 changed = true;
             }
             if let Some(next) = placeholder_due(Instant::now(), next_placeholder) {

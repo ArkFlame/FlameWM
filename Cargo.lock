@@ -888,6 +888,7 @@ version = "0.1.7"
 dependencies = [
  "calloop 0.14.4",
  "flamewm-api",
+ "flamewm-applications",
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
