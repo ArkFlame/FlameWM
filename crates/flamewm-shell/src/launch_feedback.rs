@@ -343,6 +343,13 @@ impl LaunchFeedback {
             self.visible = true;
         }
         if moved || icon_ready || !was_visible {
+            // Translucent pixels blend over the desktop behind the badge, as popups do, instead of
+            // over the opaque surface fill (which reads as a black square).
+            let backdrop = runtime.desktop_backdrop((x, y, side as u32, side as u32), 100, 0);
+            runtime.set_surface_backdrop(
+                surface,
+                backdrop.as_deref().map(|words| (words, side as u32, side as u32)),
+            )?;
             runtime.redraw(surface)?;
         }
         if self.painted != self.requested || should_poll {
