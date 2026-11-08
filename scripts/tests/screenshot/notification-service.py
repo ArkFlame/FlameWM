@@ -18,14 +18,18 @@ if reply.unpack()[0] != 1:
     raise RuntimeError("notification service name unavailable")
 
 
+NEXT_ID = [0]
+
+
 def method_call(_connection, _sender, _path, _interface, method, parameters, invocation):
     if method == "Notify":
         args = parameters.unpack()
+        NEXT_ID[0] += 1
         with open(sys.argv[1], "a", encoding="utf-8") as log:
-            log.write(json.dumps({"app": args[0], "summary": args[3], "body": args[4]}) + "\n")
-        invocation.return_value(GLib.Variant("(u)", (1,)))
+            log.write(json.dumps({"id": NEXT_ID[0], "app": args[0], "summary": args[3], "body": args[4], "actions": args[5]}) + "\n")
+        invocation.return_value(GLib.Variant("(u)", (NEXT_ID[0],)))
     elif method == "GetCapabilities":
-        invocation.return_value(GLib.Variant("(as)", ([],)))
+        invocation.return_value(GLib.Variant("(as)", (["actions", "body"],)))
     elif method == "GetServerInformation":
         invocation.return_value(GLib.Variant("(ssss)", ("G3 fixture", "FlameWM", "1", "1.2")))
 
