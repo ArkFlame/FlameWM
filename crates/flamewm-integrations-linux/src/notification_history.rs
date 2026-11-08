@@ -538,7 +538,7 @@ mod tests {
             history.record(big, index);
         }
         assert!(history.text_bytes() <= MAX_HISTORY_TEXT_BYTES);
-        assert!(history.len() < 100 && history.len() > 0);
+        assert!(history.len() < 100 && !history.is_empty());
         let retained: usize = history
             .entries()
             .map(|entry| entry_text_bytes(&entry.view))
