@@ -267,6 +267,8 @@ fn repaint_slot(
         slot.role,
         slot.button,
         feedback,
+        crate::render::titlebar_button_shape(),
+        (slot.x0, slot.x1),
     );
 }
 
@@ -817,6 +819,8 @@ pub(super) fn chrome_pixels_over(
             slot.role,
             slot.button,
             feedback,
+            crate::render::titlebar_button_shape(),
+            (slot.x0, slot.x1),
         );
     }
     // Stable, centered title, ellipsized before reaching the controls. Rasterised only when

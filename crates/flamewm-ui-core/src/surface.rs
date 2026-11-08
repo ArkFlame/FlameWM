@@ -87,6 +87,19 @@ pub fn titlebar_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     surface_fill(snapshot)
 }
 
+/// `titlebarButtonStyle` as the shared titlebar shape: `square` is square, and an unset, empty or
+/// unknown value is the `circle` default. Both window-manager backends read it through here.
+#[must_use]
+pub fn titlebar_button_shape(
+    snapshot: &SettingsSnapshot,
+) -> flamewm_skin::recipes::decoration::ButtonShape {
+    use flamewm_skin::recipes::decoration::ButtonShape;
+    match snapshot.values.get("titlebarButtonStyle") {
+        Some(SettingValue::Text(value)) if value == "square" => ButtonShape::Square,
+        _ => ButtonShape::Circle,
+    }
+}
+
 /// Light taskbar alpha floor (0.8 of 255). See `dock_fill`.
 const LIGHT_TASKBAR_MIN_ALPHA: u8 = 204;
 

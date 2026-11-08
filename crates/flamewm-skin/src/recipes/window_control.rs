@@ -14,6 +14,16 @@ pub const LIGHT_INVERTED_PRESSED_FILL: Rgb = Rgb(0x0034_3a40);
 /// Pressed fill for close: one step darker than `WINDOW_CHROME.close_hover`.
 pub const CLOSE_PRESSED_FILL: Rgb = Rgb(0x00c4_2b1c);
 
+/// Straight alpha of a resting control plate (circle disk or square tile): the titlebar ink at
+/// about 9%, so the shape reads at rest without a new colour. Both backends paint it.
+pub const REST_PLATE_ALPHA: u8 = 24;
+
+/// Resting plate for the circle and square button styles: `(rgb, straight alpha)`.
+#[must_use]
+pub const fn rest_plate(ink: Palette) -> (Rgb, u8) {
+    (ink.text, REST_PLATE_ALPHA)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ControlKind {
     Minimize,

@@ -73,6 +73,26 @@ pub(crate) fn set_titlebar_light(light: bool) -> bool {
     TITLEBAR_LIGHT.swap(light, std::sync::atomic::Ordering::Relaxed) != light
 }
 
+/// `titlebarButtonStyle` is square, from the committed settings snapshot (`sync_chrome_settings`).
+/// Unset or any other value is the circle default, as on X11.
+static TITLEBAR_SQUARE_BUTTONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Records the button style. Returns whether it changed, so the caller drops cached bars.
+pub(crate) fn set_titlebar_button_shape(shape: flamewm_skin::recipes::decoration::ButtonShape) -> bool {
+    let square = shape == flamewm_skin::recipes::decoration::ButtonShape::Square;
+    TITLEBAR_SQUARE_BUTTONS.swap(square, std::sync::atomic::Ordering::Relaxed) != square
+}
+
+/// Button shape the titlebar paint path draws, as last committed.
+pub(crate) fn titlebar_button_shape() -> flamewm_skin::recipes::decoration::ButtonShape {
+    if TITLEBAR_SQUARE_BUTTONS.load(std::sync::atomic::Ordering::Relaxed) {
+        flamewm_skin::recipes::decoration::ButtonShape::Square
+    } else {
+        flamewm_skin::recipes::decoration::ButtonShape::Circle
+    }
+}
+
 /// Titlebar material for one appearance: the shipped Dark glass, or the Light panel token.
 pub(crate) const fn titlebar_material(light: bool) -> u32 {
     if light {

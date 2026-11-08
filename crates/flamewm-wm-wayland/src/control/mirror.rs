@@ -155,13 +155,17 @@ impl Service {
         let fill = flamewm_ui_core::surface::titlebar_fill(&snapshot);
         let blur = flamewm_ui_core::surface::surface_blur_percent(&snapshot);
         let light_changed = crate::render::set_titlebar_light(appearance.light);
+        // `titlebarButtonStyle` is hot-reloaded: a change drops the cached bars so the plates repaint.
+        let shape_changed = crate::render::set_titlebar_button_shape(
+            flamewm_ui_core::surface::titlebar_button_shape(&snapshot),
+        );
         let fill_changed = crate::render::set_glass_fill(
             fill.rgb,
             fill.alpha,
             blur,
             appearance.reduce_transparency,
         );
-        if light_changed || fill_changed {
+        if light_changed || fill_changed || shape_changed {
             state.decorations.borrow_mut().invalidate_bars();
             state.request_redraw();
         }

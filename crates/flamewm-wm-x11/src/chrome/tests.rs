@@ -2,6 +2,7 @@
 
 use super::*;
 use flamewm_skin::recipes::decoration::corner_radius;
+use flamewm_skin::recipes::window_control::REST_PLATE_ALPHA;
 
 fn put(snapshot: &mut SettingsSnapshot, key: &str, value: SettingValue) {
     snapshot.values.insert(key.to_owned(), value);
@@ -277,8 +278,11 @@ fn windows11_square_hover_coverage_at_100_135_200_percent() {
                 };
                 let plates =
                     control_backplates_for(600, height, outer_radius, Some(control), None, &tokens);
-                assert_eq!(plates.len(), 1);
-                let plate = &plates[0];
+                assert_eq!(plates.len(), 3, "resting controls keep their tiles");
+                let plate = plates
+                    .iter()
+                    .find(|plate| plate.control == control)
+                    .expect("hovered control has a plate");
                 assert_eq!(plate.control, control);
                 assert_eq!(plate.x, cells[index].x);
                 assert_eq!(
@@ -376,7 +380,22 @@ fn frame_backplates_blend_over_wallpaper_and_leave_adjacent_pixels_unchanged() {
         31,
         &control_backplates_for(400, 31, 12, None, None, &tokens),
     );
-    assert!(clean.chunks_exact(4).all(|p| p == [30, 40, 50, 255]));
+    let at = |x: usize, y: usize| &clean[(y * 400 + x) * 4..(y * 400 + x) * 4 + 4];
+    assert_eq!(
+        at(0, 0),
+        &[30, 40, 50, 255],
+        "left of the controls stays untouched"
+    );
+    assert_eq!(
+        at(361, 15),
+        &[30, 40, 50, 255],
+        "adjacent cell stays untouched"
+    );
+    assert_ne!(
+        at(380, 15),
+        &[30, 40, 50, 255],
+        "close rest tile is painted"
+    );
 }
 
 #[test]
@@ -412,7 +431,11 @@ fn narrow_frame_backplates_tile_without_leaking_beyond_frame() {
             FrameControl::Close,
         ]
         .into_iter()
-        .flat_map(|control| control_backplates_for(width, 31, 12, Some(control), None, &tokens))
+        .flat_map(|control| {
+            control_backplates_for(width, 31, 12, Some(control), None, &tokens)
+                .into_iter()
+                .filter(move |plate| plate.control == control)
+        })
         .collect();
         assert_eq!(plates.len(), 3);
         for pair in plates.windows(2) {
@@ -423,6 +446,111 @@ fn narrow_frame_backplates_tile_without_leaking_beyond_frame() {
         composite_control_backplates(&mut background, width, 31, &plates);
         assert_eq!(background.len(), width as usize * 31 * 4);
     }
+}
+
+#[test]
+fn circle_style_rests_on_round_plates_of_glyph_edge_size() {
+    use crate::frame::model::FrameControl;
+    let mut tokens = ChromeTokens::default();
+    for button in &mut tokens.buttons {
+        button.shape = ButtonShape::Circle;
+    }
+    let cells = crate::frame::layout::layout_frame_children(
+        600,
+        31 + crate::frame::layout::resize_thickness_for_titlebar(31),
+        31,
+        crate::frame::layout::controls_width_for_titlebar(31),
+        crate::frame::layout::resize_thickness_for_titlebar(31),
+    )
+    .controls;
+    let edge = control_glyph_edge(31, cells[0].w);
+    for (index, control) in [
+        FrameControl::Minimize,
+        FrameControl::MaximizeRestore,
+        FrameControl::Close,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let plates = control_backplates_for(600, 31, 12, None, None, &tokens);
+        let plate = &plates[index];
+        assert_eq!(plate.control, control);
+        assert_eq!(u32::from(plate.width), edge);
+        assert_eq!(u32::from(plate.height), edge);
+        assert_eq!(
+            plate.x + i32::from(plate.width) / 2,
+            cells[index].x + cells[index].w / 2,
+            "disk centred in its cell"
+        );
+        let w = usize::from(plate.width);
+        let at = |x: usize, y: usize| plate.coverage[y * w + x];
+        assert_eq!(
+            at(w / 2, w / 2),
+            REST_PLATE_ALPHA,
+            "disk centre at rest alpha"
+        );
+        assert_eq!(at(0, 0), 0, "round: corners are outside the disk");
+        assert_eq!(at(w - 1, w - 1), 0, "round: corners are outside the disk");
+        let ink = flamewm_skin::recipes::window_control::rest_plate(
+            flamewm_skin::palette::ink_palette_on(tokens.titlebar_bg),
+        )
+        .0;
+        assert_eq!(
+            plate.rgb,
+            [(ink.0 >> 16) as u8, (ink.0 >> 8) as u8, ink.0 as u8]
+        );
+    }
+    // Hover/pressed circles keep the glyph-baked disk: no backplate.
+    let hovered = control_backplates_for(600, 31, 12, Some(FrameControl::Minimize), None, &tokens);
+    assert!(
+        hovered
+            .iter()
+            .all(|plate| plate.control != FrameControl::Minimize),
+        "hovered circle has no backplate: its disk is in the glyph"
+    );
+    assert_eq!(
+        hovered.len(),
+        2,
+        "the other controls keep their resting plates"
+    );
+}
+
+#[test]
+fn square_style_rests_on_inset_rounded_tiles_and_hover_fills_the_cell() {
+    use crate::frame::model::FrameControl;
+    let mut tokens = ChromeTokens::default();
+    for button in &mut tokens.buttons {
+        button.shape = ButtonShape::Square;
+    }
+    let rest = control_backplates_for(400, 31, 12, None, None, &tokens);
+    assert_eq!(rest.len(), 3);
+    for plate in &rest {
+        let w = usize::from(plate.width);
+        let h = usize::from(plate.height);
+        assert_eq!(plate.y, 3, "rest tile is inset from the titlebar top");
+        assert_eq!(
+            plate.height,
+            31 - 6,
+            "rest tile is inset from the titlebar bottom"
+        );
+        assert_eq!(plate.coverage[(h / 2) * w + w / 2], REST_PLATE_ALPHA);
+        assert_eq!(plate.coverage[0], 0, "rounded tile: corner is cut");
+        assert_eq!(
+            plate.coverage[(h / 2) * w],
+            REST_PLATE_ALPHA,
+            "mid-height edge is covered"
+        );
+    }
+    let hover = control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens);
+    assert_eq!(hover[0].y, 0);
+    assert_eq!(hover[0].height, 31);
+    let hw = usize::from(hover[0].width);
+    assert_eq!(hover[0].coverage[0], 255, "hover top-left stays square");
+    assert_eq!(
+        hover[0].coverage[30 * hw],
+        0,
+        "hover bottom-left curve cuts the corner"
+    );
 }
 
 #[test]

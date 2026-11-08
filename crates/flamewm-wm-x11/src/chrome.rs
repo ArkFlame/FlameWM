@@ -6,7 +6,9 @@ use flamewm_skin::icons::IconRole;
 use flamewm_skin::palette::Rgb;
 use flamewm_skin::recipes::decoration::{ButtonShape, ButtonTokens, ChromeTokens, DecorationStyle};
 use flamewm_skin::recipes::window_chrome::{self as recipe, WINDOW_CHROME, WindowControlRole};
-use flamewm_skin::recipes::window_control::{ControlKind, ControlState, control_colors};
+use flamewm_skin::recipes::window_control::{
+    ControlKind, ControlState, control_colors, rest_plate,
+};
 
 /// Skin-owned titlebar height (flamewm-skin RWR 0.0.9 chrome titlebar).
 pub const TITLEBAR_HEIGHT: u16 = WINDOW_CHROME.metrics.titlebar;
@@ -498,12 +500,6 @@ pub fn control_blits_for_height(
         resize_thickness_for_titlebar(titlebar_h),
     )
     .controls;
-    let base_h = u32::from(WINDOW_CHROME.metrics.titlebar);
-    let glyph_edge = ((u32::from(WINDOW_CHROME.metrics.control_glyph_edge)
-        * u32::from(titlebar_height)
-        + base_h / 2)
-        / base_h)
-        .max(1);
     let controls = [
         FrameControl::Minimize,
         FrameControl::MaximizeRestore,
@@ -521,9 +517,7 @@ pub fn control_blits_for_height(
         };
         let Some(raster) = control_glyph_raster_shared(
             role,
-            glyph_edge
-                .min(u32::try_from(geometries[index].w.saturating_sub(2)).unwrap_or(1))
-                .max(1),
+            control_glyph_edge(titlebar_height, geometries[index].w),
             material,
             look,
         ) else {
@@ -561,6 +555,8 @@ struct ControlMaskKey {
     w: u16,
     h: u16,
     corners: ControlCorners,
+    /// Straight alpha scaling the coverage: 255 for a filled hover/pressed plate.
+    alpha: u8,
 }
 
 /// Coverage is cached by geometry, not color: live theme/accent edits can
@@ -631,7 +627,8 @@ fn control_mask(key: ControlMaskKey) -> Arc<Vec<u8>> {
                     }
                 }
             }
-            alpha.push(((covered * 255 + (SAMPLES * SAMPLES) / 2) / (SAMPLES * SAMPLES)) as u8);
+            let coverage = (covered * 255 + (SAMPLES * SAMPLES) / 2) / (SAMPLES * SAMPLES);
+            alpha.push(((coverage * u32::from(key.alpha) + 127) / 255) as u8);
         }
     }
     let mask = Arc::new(alpha);
@@ -689,71 +686,143 @@ pub fn control_backplates_for(
         FrameControl::MaximizeRestore,
         FrameControl::Close,
     ];
+    let ink = flamewm_skin::palette::ink_palette_on(tokens.titlebar_bg);
     let mut plates = Vec::with_capacity(3);
     for (index, control) in controls.into_iter().enumerate() {
         let button = tokens.buttons[index];
         let material =
             ControlMaterial::for_pointer(hover == Some(control), pressed == Some(control));
-        if button.shape != ButtonShape::Square || material == ControlMaterial::Rest {
-            continue;
-        }
         let rect = layout.controls[index];
         if rect.w <= 0 || h <= 0 {
             continue;
         }
-        let Ok(width) = u16::try_from(rect.w) else {
+        let Ok(cell_w) = u16::try_from(rect.w) else {
             continue;
         };
-        let radius = (titlebar_height / 5)
-            .max(1)
-            .min(width / 2)
-            .min(titlebar_height / 2);
-        let corners = ControlCorners {
-            top_left: 0,
-            top_right: if control == FrameControl::Close {
-                frame_radius.min(width).min(titlebar_height)
-            } else {
-                0
-            },
-            bottom_right: radius,
-            bottom_left: radius,
+        // Circle/square at rest: a subtle resting plate. Square hover/pressed: the full cell.
+        // Circle hover/pressed: the disk is baked into the glyph raster (`paint_fill_behind`).
+        let (x, y, width, height, corners, rgb, alpha) = match (button.shape, material) {
+            (ButtonShape::Circle, ControlMaterial::Rest) => {
+                let edge = control_glyph_edge(titlebar_height, rect.w);
+                let Ok(edge) = u16::try_from(edge) else {
+                    continue;
+                };
+                let radius = edge / 2;
+                let corners = ControlCorners {
+                    top_left: radius,
+                    top_right: radius,
+                    bottom_right: radius,
+                    bottom_left: radius,
+                };
+                let (rgb, alpha) = rest_plate_bytes(ink);
+                let x = rect.x + (i32::from(cell_w) - i32::from(edge)) / 2;
+                let y = (i32::from(titlebar_height) - i32::from(edge)) / 2;
+                (x, y, edge, edge, corners, rgb, alpha)
+            }
+            (ButtonShape::Square, ControlMaterial::Rest) => {
+                let inset = (titlebar_height / 8).max(1);
+                let Some(width) = cell_w.checked_sub(inset * 2).filter(|w| *w > 0) else {
+                    continue;
+                };
+                let Some(height) = titlebar_height.checked_sub(inset * 2).filter(|h| *h > 0) else {
+                    continue;
+                };
+                let radius = (height / 4).max(1).min(width / 2);
+                let corners = ControlCorners {
+                    top_left: radius,
+                    top_right: radius,
+                    bottom_right: radius,
+                    bottom_left: radius,
+                };
+                let (rgb, alpha) = rest_plate_bytes(ink);
+                (
+                    rect.x + i32::from(inset),
+                    i32::from(inset),
+                    width,
+                    height,
+                    corners,
+                    rgb,
+                    alpha,
+                )
+            }
+            (ButtonShape::Square, _) => {
+                let radius = (titlebar_height / 5)
+                    .max(1)
+                    .min(cell_w / 2)
+                    .min(titlebar_height / 2);
+                let corners = ControlCorners {
+                    top_left: 0,
+                    top_right: if control == FrameControl::Close {
+                        frame_radius.min(cell_w).min(titlebar_height)
+                    } else {
+                        0
+                    },
+                    bottom_right: radius,
+                    bottom_left: radius,
+                };
+                let role = match control {
+                    FrameControl::Minimize => ControlRole::Minimize,
+                    FrameControl::MaximizeRestore => ControlRole::Maximize,
+                    FrameControl::Close => ControlRole::Close,
+                };
+                let scheme = control_glyph_scheme(
+                    role,
+                    material,
+                    ControlLook {
+                        button,
+                        titlebar: tokens.titlebar_bg,
+                    },
+                );
+                let rgb = [
+                    scheme.background[0],
+                    scheme.background[1],
+                    scheme.background[2],
+                ];
+                (rect.x, 0, cell_w, titlebar_height, corners, rgb, 255)
+            }
+            _ => continue,
         };
         let key = ControlMaskKey {
             w: width,
-            h: titlebar_height,
+            h: height,
             corners,
+            alpha,
         };
-        let role = match control {
-            FrameControl::Minimize => ControlRole::Minimize,
-            FrameControl::MaximizeRestore => ControlRole::Maximize,
-            FrameControl::Close => ControlRole::Close,
-        };
-        let scheme = control_glyph_scheme(
-            role,
-            material,
-            ControlLook {
-                button,
-                titlebar: tokens.titlebar_bg,
-            },
-        );
         plates.push(ControlBackplate {
             #[cfg(test)]
             control,
-            x: rect.x,
-            y: 0,
+            x,
+            y,
             width,
-            height: titlebar_height,
+            height,
             #[cfg(test)]
             corners,
-            rgb: [
-                scheme.background[0],
-                scheme.background[1],
-                scheme.background[2],
-            ],
+            rgb,
             coverage: control_mask(key),
         });
     }
     plates
+}
+
+/// Resting plate colour and alpha as the byte triple the composite paints.
+fn rest_plate_bytes(ink: flamewm_skin::palette::Palette) -> ([u8; 3], u8) {
+    let (Rgb(rgb), alpha) = rest_plate(ink);
+    ([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8], alpha)
+}
+
+/// Glyph edge of one titlebar control: the metrics scaled to this titlebar height, clamped to the
+/// cell. The hover disk and the resting circle plate are both this size.
+#[must_use]
+pub fn control_glyph_edge(titlebar_height: u16, cell_w: i32) -> u32 {
+    let base_h = u32::from(WINDOW_CHROME.metrics.titlebar);
+    let scaled = ((u32::from(WINDOW_CHROME.metrics.control_glyph_edge)
+        * u32::from(titlebar_height)
+        + base_h / 2)
+        / base_h)
+        .max(1);
+    scaled
+        .min(u32::try_from(cell_w.saturating_sub(2)).unwrap_or(1))
+        .max(1)
 }
 
 /// Composite AA cell backgrounds into the titlebar's already-opaque,
@@ -963,11 +1032,8 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         _ => DecorationStyle::Rounded,
     };
     let (titlebar_bg, titlebar_alpha, titlebar_blur_percent) = surface_tokens(snapshot);
-    // One shape for all three controls; anything but "square" is the circle default.
-    let shape = match text("titlebarButtonStyle") {
-        "square" => ButtonShape::Square,
-        _ => ButtonShape::Circle,
-    };
+    // One shape for all three controls, read by the shared owner the Wayland chrome also uses.
+    let shape = flamewm_ui_core::surface::titlebar_button_shape(snapshot);
     // Per-state colour overrides were removed; the skin supplies glyph, hover and pressed colours.
     let button = |_name: &str| ButtonTokens {
         shape,
