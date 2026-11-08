@@ -1,7 +1,40 @@
 #!/usr/bin/env bash
+# Local mirror of the gates in .github/workflows/ci.yml, in CI order. Fails on the first error.
+#
+# Toolchain: CI pins Rust 1.89.0. Selection order:
+#   1. FLAMEWM_TOOLCHAIN_BIN=<dir containing cargo/rustc/rustfmt/clippy-driver>
+#   2. rustup toolchain 1.89.0, if installed
+#   3. system cargo (prints a warning; results may differ from CI)
+# Env: CARGO_BUILD_JOBS (default 2), RUST_TEST_THREADS (default 2).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
+
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+export RUST_TEST_THREADS="${RUST_TEST_THREADS:-2}"
+
+if [ -n "${FLAMEWM_TOOLCHAIN_BIN:-}" ]; then
+  [ -x "$FLAMEWM_TOOLCHAIN_BIN/cargo" ] || { echo "lint: no cargo in FLAMEWM_TOOLCHAIN_BIN=$FLAMEWM_TOOLCHAIN_BIN" >&2; exit 1; }
+  export PATH="$FLAMEWM_TOOLCHAIN_BIN:$PATH"
+elif command -v rustup >/dev/null 2>&1 && rustup which --toolchain 1.89.0 cargo >/dev/null 2>&1; then
+  TC_BIN="$(dirname "$(rustup which --toolchain 1.89.0 cargo)")"
+  export PATH="$TC_BIN:$PATH"
+else
+  echo "lint: WARNING Rust 1.89.0 not found; using system toolchain ($(cargo --version))" >&2
+fi
+echo "lint: $(cargo --version) | $(rustc --version)"
+
+echo "lint: [1/4] architecture boundary guard"
+python3 -I tools/architecture_guard.py
+python3 -I -m unittest discover -s tools -p 'test_architecture_guard.py' -q
+
+echo "lint: [2/4] cargo fmt --check"
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets
-echo 'OK FlameWM formatting + Clippy'
+
+echo "lint: [3/4] cargo check --workspace --all-targets"
+cargo check --workspace --all-targets
+
+echo "lint: [4/4] cargo clippy -D warnings"
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+echo "OK FlameWM lint (CI parity: guard, fmt, check, clippy -D warnings)"

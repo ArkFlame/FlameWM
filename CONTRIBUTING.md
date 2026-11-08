@@ -2,13 +2,13 @@
 
 Read `README.md` and `docs/DEVELOPMENT.md` before changing code. Keep changes scoped to the owning crate or documented integration boundary.
 
-Use Rust toolchain `1.89.0`. Before opening a pull request, run:
+Use Rust toolchain `1.89.0`. Before opening a pull request, run the local CI mirror:
 
 ```bash
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+scripts/lint
 ```
+
+`scripts/lint` runs the same gates as `.github/workflows/ci.yml`, in CI order: architecture guard (and its unit tests), `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets --all-features -- -D warnings`. It picks Rust 1.89.0 from `FLAMEWM_TOOLCHAIN_BIN` (a toolchain `bin` directory), then from rustup, and otherwise falls back to the system toolchain with a warning. The `.githooks/pre-push` hook is lighter (fmt and guard only); run `scripts/lint` before pushing changes that touch Rust code.
 
 Do not commit generated build output, local runtime coordination state, credentials, or host-specific configuration. Explain behavior changes and verification in pull requests; the pull request template lists what to include.
 
