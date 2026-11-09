@@ -682,13 +682,15 @@ mod tests {
     }
 
     /// Migrating dock slot classes to utilities must not change the compiled dock document.
-    /// Golden recorded from the pre-migration tree (284001 bytes). Update only for an intended dock change.
+    /// Golden recorded from the pre-migration dock (dock slot classes reverted after 2e41bbe4 regressed compile
+    /// time). Re-pinned from 284001 bytes once the shared shell styles (a0a0034b) changed the compiled output.
+    /// Update only for an intended dock change.
     #[test]
     fn dock_document_is_unchanged_by_utility_migration() {
         let page = ui_dir().join("shell/dock.html");
         assert_eq!(
             compiled_page_digest(&page, false),
-            (284_001, 0x5984_6a6c_bee8_c2c8)
+            (284_218, 0xc81f_3439_2812_9276)
         );
     }
 
