@@ -17,7 +17,9 @@ use flamewm_integrations_linux::themes::import::{
 };
 use flamewm_integrations_linux::themes::{ThemeCatalog, ThemeKind};
 use flamewm_integrations_linux::{DirListings, IconLookupIndex};
-use flamewm_session_core::{CursorThemeFamily, cursor_theme_family};
+use flamewm_session_core::{
+    CURSOR_THEME_ID, CursorThemeFamily, STANDARD_CURSOR_NAMES, cursor_covers, cursor_theme_family,
+};
 
 use crate::file_chooser::publish_background_completion;
 
@@ -38,11 +40,48 @@ const ICON_PREVIEW_PX: u32 = 24;
 pub const SELECTED_ICON_PREVIEW_NODE: &str = "icon-theme-selected-preview";
 
 /// Pre-registry icon values, kept so stored settings keep their label.
-pub const LEGACY_ICON_THEMES: [(&str, &str); 3] = [
+pub const LEGACY_ICON_THEMES: [(&str, &str); 4] = [
     ("*:-HighContrast", "FlameWM Breeze"),
     ("breeze-dark", "Breeze Dark"),
     ("HighContrast", "High Contrast"),
+    ("breeze", "Breeze"),
 ];
+
+/// Cursor-theme rank in the picker: Breeze, Adwaita, `MacTahoe`, `Oxygen`, then the rest.
+fn cursor_picker_rank(id: &str) -> u8 {
+    let lower = id.to_ascii_lowercase();
+    if lower == CURSOR_THEME_ID.to_ascii_lowercase() || lower.starts_with("breeze") {
+        return 0;
+    }
+    if lower == "adwaita" {
+        return 1;
+    }
+    match cursor_theme_family(id) {
+        Some(CursorThemeFamily::MacTahoe) => 2,
+        Some(CursorThemeFamily::Oxygen) => 3,
+        None => 4,
+    }
+}
+
+/// Count of standard cursor names the theme provides, raw or through an alias.
+#[must_use]
+pub fn cursor_coverage(theme: &Path) -> (usize, usize) {
+    let have = STANDARD_CURSOR_NAMES
+        .iter()
+        .filter(|name| cursor_covers(theme, name))
+        .count();
+    (have, STANDARD_CURSOR_NAMES.len())
+}
+
+/// Picker label; incomplete cursor themes carry an `(incomplete)` warning suffix.
+#[must_use]
+pub fn cursor_label(name: &str, (have, total): (usize, usize)) -> String {
+    if have < total {
+        format!("{name} (incomplete)")
+    } else {
+        name.to_owned()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickerKind {
@@ -224,13 +263,8 @@ pub fn with_installed_cursor_themes(cursor: Vec<ThemeItem>) -> Vec<ThemeItem> {
         })
         .collect();
     themes.sort_by(|a, b| {
-        let order = |item: &ThemeItem| match cursor_theme_family(&item.id) {
-            Some(CursorThemeFamily::MacTahoe) => 0,
-            Some(CursorThemeFamily::Oxygen) => 1,
-            None => 2,
-        };
-        order(a)
-            .cmp(&order(b))
+        cursor_picker_rank(&a.id)
+            .cmp(&cursor_picker_rank(&b.id))
             .then_with(|| a.id.to_ascii_lowercase().cmp(&b.id.to_ascii_lowercase()))
     });
     themes
@@ -251,7 +285,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
             ThemeKind::Cursor => {
                 registry.cursor.push(ThemeItem {
                     id: entry.id.clone(),
-                    name: entry.name.clone(),
+                    name: cursor_label(&entry.name, cursor_coverage(&entry.root)),
                     previews: cursor::load_left_ptr_preview(&entry.root)
                         .ok()
                         .map(cursor_image)
@@ -726,5 +760,71 @@ mod tests {
         });
         assert_eq!((image.width, image.height), (2, 1));
         assert_eq!(*image.pixels, vec![1, 2, 3, 255, 4, 5, 6, 0]);
+    }
+
+    fn with_cursor_preview(id: &str, name: &str) -> ThemeItem {
+        ThemeItem {
+            previews: vec![PreviewImage {
+                source: "left_ptr".to_owned(),
+                width: 1,
+                height: 1,
+                pixels: Arc::new(vec![255, 255, 255, 255]),
+            }],
+            ..item(id, name)
+        }
+    }
+
+    #[test]
+    fn cursor_picker_orders_breeze_adwaita_then_mactahoe_oxygen_then_rest() {
+        let picked = with_installed_cursor_themes(vec![
+            with_cursor_preview("zeta", "Zeta"),
+            with_cursor_preview("Oxygen_White", "Oxygen White"),
+            with_cursor_preview("MacTahoe-dark-cursors", "MacTahoe"),
+            with_cursor_preview("Adwaita", "Adwaita"),
+            with_cursor_preview("breeze_cursors", "Breeze"),
+            with_cursor_preview("FlameWM-Breeze-Dark", "FlameWM Breeze Dark"),
+        ]);
+        let ids: Vec<&str> = picked.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "breeze_cursors",
+                "FlameWM-Breeze-Dark",
+                "Adwaita",
+                "MacTahoe-dark-cursors",
+                "Oxygen_White",
+                "zeta",
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_cursor_themes_carry_warning_label() {
+        assert_eq!(cursor_label("Partial", (14, 15)), "Partial (incomplete)");
+        assert_eq!(cursor_label("Full", (15, 15)), "Full");
+    }
+
+    #[test]
+    fn cursor_coverage_counts_raw_and_alias_names() {
+        let root = env::temp_dir().join(format!("flamewm-picker-coverage-{}", std::process::id()));
+        let cursors = root.join("cursors");
+        std::fs::create_dir_all(&cursors).expect("cursors dir");
+        std::fs::write(cursors.join("left_ptr"), b"x").expect("left_ptr");
+        assert_eq!(
+            cursor_coverage(&root),
+            (1, 15),
+            "left_ptr covers only default"
+        );
+        for name in STANDARD_CURSOR_NAMES {
+            std::fs::write(cursors.join(name), b"x").expect("raw name");
+        }
+        assert_eq!(cursor_coverage(&root), (15, 15));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn breeze_icon_theme_has_a_label_without_installed_item() {
+        let registry = ThemeRegistry::default();
+        assert_eq!(registry.label(PickerKind::Icon, "breeze"), "Breeze");
     }
 }

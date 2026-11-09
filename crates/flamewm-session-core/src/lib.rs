@@ -20,6 +20,57 @@ pub use appearance::{
 /// Default cursor: the bundled Breeze theme (LGPL-3.0, `assets/cursors`).
 /// Also the final fallback, and the id used for explicit saved selections from earlier builds.
 pub const CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark";
+/// The 15 names every complete cursor theme provides, raw or through [`CURSOR_ALIASES`].
+pub const STANDARD_CURSOR_NAMES: [&str; 15] = [
+    "default",
+    "pointer",
+    "text",
+    "wait",
+    "progress",
+    "grab",
+    "grabbing",
+    "move",
+    "ew-resize",
+    "ns-resize",
+    "nesw-resize",
+    "nwse-resize",
+    "crosshair",
+    "not-allowed",
+    "help",
+];
+
+/// `Xcursor` alias target for each standard name, used when no raw file exists.
+pub const CURSOR_ALIASES: [(&str, &str); 15] = [
+    ("default", "left_ptr"),
+    ("pointer", "hand2"),
+    ("text", "xterm"),
+    ("wait", "watch"),
+    ("progress", "left_ptr_watch"),
+    ("grab", "openhand"),
+    ("grabbing", "closedhand"),
+    ("move", "fleur"),
+    ("ew-resize", "sb_h_double_arrow"),
+    ("ns-resize", "sb_v_double_arrow"),
+    ("nesw-resize", "bottom_left_corner"),
+    ("nwse-resize", "bottom_right_corner"),
+    ("crosshair", "cross"),
+    ("not-allowed", "crossed_circle"),
+    ("help", "question_arrow"),
+];
+
+/// True when `name` is a raw file in `theme` (its `cursors/` dir) or its alias target is.
+#[must_use]
+pub fn cursor_covers(theme: &Path, name: &str) -> bool {
+    let cursors = theme.join("cursors");
+    if cursors.join(name).is_file() {
+        return true;
+    }
+    CURSOR_ALIASES
+        .iter()
+        .find(|(standard, _)| *standard == name)
+        .is_some_and(|(_, target)| cursors.join(target).is_file())
+}
+
 /// Installed Breeze cursor family, used when the bundled theme is absent.
 pub const BREEZE_CURSOR_THEME_ID: &str = "breeze_cursors";
 /// Adwaita (LGPL-3.0 or CC-BY-SA), the second fallback after Breeze.
@@ -1117,25 +1168,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The 15 names every bundled cursor theme must provide as files (raw, no alias lookup).
-    const STANDARD_CURSOR_NAMES: [&str; 15] = [
-        "default",
-        "pointer",
-        "text",
-        "wait",
-        "progress",
-        "grab",
-        "grabbing",
-        "move",
-        "ew-resize",
-        "ns-resize",
-        "nesw-resize",
-        "nwse-resize",
-        "crosshair",
-        "not-allowed",
-        "help",
-    ];
-
     #[test]
     fn bundled_cursor_themes_cover_the_standard_names() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1151,31 +1183,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// `Xcursor` alias names a standard name may resolve through when no raw file exists.
-    const CURSOR_ALIASES: [(&str, &str); 9] = [
-        ("default", "left_ptr"),
-        ("pointer", "hand2"),
-        ("text", "xterm"),
-        ("wait", "watch"),
-        ("progress", "left_ptr_watch"),
-        ("grab", "openhand"),
-        ("grabbing", "closedhand"),
-        ("move", "fleur"),
-        ("crosshair", "cross"),
-    ];
-
-    /// True when `name` is a raw file in `theme` or its alias target is.
-    fn cursor_covers(theme: &Path, name: &str) -> bool {
-        let cursors = theme.join("cursors");
-        if cursors.join(name).is_file() {
-            return true;
-        }
-        CURSOR_ALIASES
-            .iter()
-            .find(|(standard, _)| *standard == name)
-            .is_some_and(|(_, target)| cursors.join(target).is_file())
     }
 
     #[test]
