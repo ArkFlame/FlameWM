@@ -181,6 +181,10 @@ impl App {
     /// Escape closes the bar. Every other key is dropped while the bar is open.
     fn find_key(&mut self, event: &UiKeyEvent) {
         let shift = event.modifiers.iter().any(|m| m == "shift");
+        if event.modifiers.iter().any(|m| m == "alt") && event.key.eq_ignore_ascii_case("c") {
+            self.find_toggle_case();
+            return;
+        }
         let text = event
             .text
             .as_deref()
@@ -212,9 +216,21 @@ impl App {
             return;
         };
         edit(&mut search.query);
-        search.matches = crate::search::find(&pane.session.screen, &search.query);
+        search.matches =
+            crate::search::find(&pane.session.screen, &search.query, search.match_case);
         search.current = 0;
         self.find_reveal();
+    }
+
+    /// Alt+C: flips case sensitivity and recomputes the matches from the first one.
+    fn find_toggle_case(&mut self) {
+        if let Some(search) = self
+            .focused_pane_mut()
+            .and_then(|pane| pane.search.as_mut())
+        {
+            search.match_case = !search.match_case;
+        }
+        self.find_edit(|_| {});
     }
 
     fn find_step(&mut self, forward: bool) {

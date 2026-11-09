@@ -1083,3 +1083,55 @@ fn paste_strips_escape_introducers_and_brackets_only_when_enabled() {
     );
     assert_eq!(plain, b"ls[201~; rm -rf ~\r]0;x\x0731m".to_vec());
 }
+
+/// Alt+C inside the find bar flips case sensitivity without editing the query. The bar shows the state.
+#[test]
+fn alt_c_toggles_match_case_in_the_find_bar() {
+    let mut app = test_app();
+    app.open_tab(cat()).expect("tab");
+    {
+        let pane = app.focused_pane_mut().expect("pane");
+        crate::parser::Parser::new()
+            .advance(b"alpha needle\r\nbeta NEEDLE\r\n", &mut pane.session.screen);
+    }
+    app.key(&UiKeyEvent {
+        phase: UiKeyPhase::Press,
+        modifiers: vec!["ctrl".to_owned(), "shift".to_owned()],
+        key: "f".to_owned(),
+        text: None,
+    });
+    for ch in "needle".chars() {
+        let text = ch.to_string();
+        app.key(&UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: Vec::new(),
+            key: text.clone(),
+            text: Some(text),
+        });
+    }
+    let alt_c = UiKeyEvent {
+        phase: UiKeyPhase::Press,
+        modifiers: vec!["alt".to_owned()],
+        key: "c".to_owned(),
+        text: Some("c".to_owned()),
+    };
+    let search = |app: &crate::app::App| app.focused_pane().unwrap().search.clone().unwrap();
+    assert!(!search(&app).match_case, "default is case-insensitive");
+    assert_eq!(search(&app).matches.len(), 2);
+
+    app.key(&alt_c);
+    let on = search(&app);
+    assert!(on.match_case);
+    assert_eq!(on.query, "needle", "Alt+C is not typed into the query");
+    assert_eq!(on.matches.len(), 1, "only the lower-case line matches");
+    let bar: String = app.frame()[0]
+        .to_vec()
+        .iter()
+        .map(|r| r.text.clone())
+        .collect();
+    assert!(bar.contains("[Aa]"), "bar: {bar}");
+
+    app.key(&alt_c);
+    assert!(!search(&app).match_case);
+    assert_eq!(search(&app).matches.len(), 2);
+}

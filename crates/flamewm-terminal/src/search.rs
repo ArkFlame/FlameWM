@@ -27,22 +27,26 @@ pub fn line_chars(line: &[Cell]) -> Vec<char> {
         .collect()
 }
 
-/// Lower-case fold of one char. Single-char folding keeps columns aligned with the cells.
-fn fold(c: char) -> char {
-    c.to_lowercase().next().unwrap_or(c)
+/// Case fold of one char. Single-char folding keeps columns aligned with the cells. `match_case` keeps the char as is.
+fn fold(c: char, match_case: bool) -> char {
+    if match_case {
+        c
+    } else {
+        c.to_lowercase().next().unwrap_or(c)
+    }
 }
 
-/// Every non-overlapping, case-insensitive occurrence of `query` in `lines`, in reading order.
+/// Every non-overlapping occurrence of `query` in `lines`, in reading order. Case-insensitive unless `match_case`.
 /// An empty query matches nothing.
 #[must_use]
-pub fn find_in(lines: &[Vec<char>], query: &str) -> Vec<Match> {
-    let needle: Vec<char> = query.chars().map(fold).collect();
+pub fn find_in(lines: &[Vec<char>], query: &str, match_case: bool) -> Vec<Match> {
+    let needle: Vec<char> = query.chars().map(|c| fold(c, match_case)).collect();
     if needle.is_empty() {
         return Vec::new();
     }
     let mut matches = Vec::new();
     for (line_index, line) in lines.iter().enumerate() {
-        let folded: Vec<char> = line.iter().map(|&c| fold(c)).collect();
+        let folded: Vec<char> = line.iter().map(|&c| fold(c, match_case)).collect();
         let mut col = 0;
         while col + needle.len() <= folded.len() {
             if folded[col..col + needle.len()] == needle[..] {
@@ -62,12 +66,12 @@ pub fn find_in(lines: &[Vec<char>], query: &str) -> Vec<Match> {
 
 /// Searches every line of `screen`, scrollback included. The alt screen has no scrollback.
 #[must_use]
-pub fn find(screen: &Screen, query: &str) -> Vec<Match> {
+pub fn find(screen: &Screen, query: &str, match_case: bool) -> Vec<Match> {
     let lines: Vec<Vec<char>> = (0..screen.total_lines())
         .filter_map(|index| screen.line_abs(index))
         .map(|line| line_chars(&line))
         .collect();
-    find_in(&lines, query)
+    find_in(&lines, query, match_case)
 }
 
 /// Find bar state of one pane. `current` indexes `matches` and is kept in range by `step`.
@@ -76,6 +80,8 @@ pub struct Search {
     pub query: String,
     pub matches: Vec<Match>,
     pub current: usize,
+    /// Exact-case matching when set; the find bar starts case-insensitive.
+    pub match_case: bool,
 }
 
 impl Search {
@@ -123,7 +129,7 @@ mod tests {
             chars("no hit here"),
             chars("WORLD of worlds"),
         ];
-        let found = find_in(&lines, "world");
+        let found = find_in(&lines, "world", false);
         assert_eq!(
             found,
             vec![
@@ -149,22 +155,22 @@ mod tests {
     #[test]
     fn matches_do_not_overlap_within_a_line() {
         let lines = vec![chars("aaaa")];
-        let found = find_in(&lines, "aa");
+        let found = find_in(&lines, "aa", false);
         assert_eq!(found.iter().map(|m| m.col).collect::<Vec<_>>(), vec![0, 2]);
     }
 
     #[test]
     fn empty_query_and_missing_text_match_nothing() {
         let lines = vec![chars("abc")];
-        assert!(find_in(&lines, "").is_empty());
-        assert!(find_in(&lines, "zz").is_empty());
-        assert!(find_in(&lines, "abcd").is_empty());
+        assert!(find_in(&lines, "", false).is_empty());
+        assert!(find_in(&lines, "zz", false).is_empty());
+        assert!(find_in(&lines, "abcd", false).is_empty());
     }
 
     #[test]
     fn non_ascii_folds_by_char() {
         let lines = vec![chars("Ünïcode ÉCOLE")];
-        let found = find_in(&lines, "école");
+        let found = find_in(&lines, "école", false);
         assert_eq!(
             found,
             vec![Match {
@@ -173,6 +179,20 @@ mod tests {
                 len: 5
             }]
         );
+    }
+
+    #[test]
+    fn match_case_mode_only_matches_exact_case() {
+        let lines = vec![chars("Hello hello HELLO")];
+        let insensitive = find_in(&lines, "hello", false);
+        assert_eq!(
+            insensitive.iter().map(|m| m.col).collect::<Vec<_>>(),
+            vec![0, 6, 12]
+        );
+        let exact = find_in(&lines, "hello", true);
+        assert_eq!(exact.iter().map(|m| m.col).collect::<Vec<_>>(), vec![6]);
+        assert_eq!(find_in(&lines, "Hello", true)[0].col, 0);
+        assert!(find_in(&lines, "HeLLo", true).is_empty());
     }
 
     #[test]
@@ -192,7 +212,7 @@ mod tests {
             },
         ];
         assert_eq!(line_chars(&line), vec!['漢', '\0']);
-        assert!(find_in(&[line_chars(&line)], " ").is_empty());
+        assert!(find_in(&[line_chars(&line)], " ", false).is_empty());
     }
 
     #[test]
@@ -232,6 +252,7 @@ mod tests {
                 len: 1,
             }],
             current: 0,
+            match_case: false,
         };
         assert_eq!(
             state.current_match(),
@@ -250,7 +271,7 @@ mod tests {
         // Two rows of width 8 with 10 lines of scrollback: the first line scrolls into history.
         let mut screen = Screen::new(8, 2, 10);
         Parser::new().advance(b"needle1\r\nmid\r\nneedle2", &mut screen);
-        let found = find(&screen, "NEEDLE");
+        let found = find(&screen, "NEEDLE", false);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].line, 0, "first hit is in scrollback");
         assert!(

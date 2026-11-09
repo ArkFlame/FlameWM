@@ -193,7 +193,8 @@ impl App {
         } else {
             format!("{}/{}", search.current + 1, search.matches.len())
         };
-        let label = format!(" Find: {}  {position} ", search.query);
+        let case = if search.match_case { "[Aa]" } else { "Aa" };
+        let label = format!(" Find: {}  {position}  {case} ", search.query);
         if let Some(bar) = rows.first_mut() {
             *bar = Row::from(vec![text_run(
                 0,
