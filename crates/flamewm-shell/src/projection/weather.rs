@@ -528,10 +528,11 @@ mod panel_tray_tests {
         assert!(unknown.foregrounds.is_empty());
     }
 
-    // REGRESSION: the condition glyph and the temperature pill share the taskbar entry's
-    // vertical centre (the pill overlays the glyph). Measured in the real compiled panel.
-    // OBSERVABLE: |glyph centre - entry centre| and |pill centre - entry centre| <= 1px.
-    // MUTATION: restoring the stacked column (text under the glyph) fails here.
+    // REGRESSION: the condition glyph stays centred on the taskbar entry; the temperature pill
+    // overlays the glyph and sits 4 px below that centre (`.tray-weather-temp` margin-top 8px).
+    // Measured in the real compiled panel.
+    // OBSERVABLE: |glyph centre - entry centre| <= 0.5px; pill centre - entry centre == 4px +-0.5.
+    // MUTATION: restoring the stacked column, or dropping the offset, fails here.
     #[test]
     fn tray_glyph_and_temperature_share_the_entry_vertical_centre() {
         let mut doc = flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel decodes");
@@ -548,10 +549,16 @@ mod panel_tray_tests {
             .layout_box_by_id("tray-weather-temp", viewport)
             .expect("pill");
         let centre_y = button.1 + button.3 / 2.0;
-        let glyph_dy = (glyph.1 + glyph.3 / 2.0 - centre_y).abs();
-        let pill_dy = (pill.1 + pill.3 / 2.0 - centre_y).abs();
-        assert!(glyph_dy <= 1.0, "glyph {glyph:?} off centre {button:?}");
-        assert!(pill_dy <= 1.0, "pill {pill:?} off centre {button:?}");
+        let glyph_dy = glyph.1 + glyph.3 / 2.0 - centre_y;
+        let pill_dy = pill.1 + pill.3 / 2.0 - centre_y;
+        assert!(
+            glyph_dy.abs() <= 0.5,
+            "glyph {glyph:?} off centre {button:?}"
+        );
+        assert!(
+            (pill_dy - 4.0).abs() <= 0.5,
+            "pill offset {pill_dy} not 4px: {pill:?}"
+        );
         assert!(pill.2 > 0.0 && pill.3 > 0.0, "zero-size pill {pill:?}");
     }
 }

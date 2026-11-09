@@ -101,6 +101,11 @@ pub fn project(
             document.corner_radius(root, popup_corner_radius(snapshot))?;
             // Opaque interior token: the menu root already carries the surface alpha, so the
             // search field must not apply surfaceOpacity a second time.
+            // The search field's contour is the shared Surfaces outline, not the fixed `--rim` token.
+            document.border(
+                "start-search-box",
+                flamewm_ui_x11::surface_style::surface_outline(snapshot),
+            )?;
             document.background(
                 "start-search-box",
                 UiColor {

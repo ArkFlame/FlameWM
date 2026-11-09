@@ -284,7 +284,8 @@ input { cursor:text; }
    The temperature overlays the glyph inside a dark rounded pill (surface token) for legibility. */
 .tray-weather { flex-direction:column; position:relative; }
 .tray-weather-overlay { position:absolute; left:0px; top:0px; width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
-.tray-weather-temp { height:14px; padding:1px 6px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:var(--r-md); background:var(--weather-pill); font-size:var(--font-xs); color:var(--text); }
+/* margin-top 8px centres the pill 4px below the glyph centre; the glyph itself stays centred. */
+.tray-weather-temp { margin-top:8px; height:14px; padding:1px 6px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:var(--r-md); background:var(--weather-pill); font-size:var(--font-xs); color:var(--text); }
 
 /* Top-center application launcher: Start's search field, rows and surface tokens only. */
 .launcher-popup { position:absolute; left:0px; top:0px; width:600px; padding:var(--sp-3); box-sizing:border-box; display:flex; flex-direction:column; background:var(--surface); color:var(--text); border:1px solid var(--rim); border-radius:18px; }
