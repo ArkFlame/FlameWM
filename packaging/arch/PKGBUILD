@@ -38,6 +38,7 @@ options=('!lto')
 optdepends=(
   'breeze-icons: default icon theme (Breeze, LGPL-3.0+)'
   'papirus-icon-theme: optional Papirus icons (GPL-3.0, not bundled)'
+  'adwaita-icon-theme: fallback icons'
   'libxcursor: cursor theme loading'
   'libxext: XShape window masks (rectangle fallback without it)'
   'libxrender: core render extension (fallback without it)'
