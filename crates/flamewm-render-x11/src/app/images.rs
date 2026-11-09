@@ -200,6 +200,12 @@ fn packed_rgb_stride(head: &XImageHead) -> Option<usize> {
         .then_some(stride_bytes / std::mem::size_of::<u32>())
 }
 
+/// The packed-layout pixel for `r,g,b` under the standard 0xRRGGBB masks. Equals `rgb_to_pixel`
+/// with those masks, because each 8-bit channel maps to itself at its shift.
+fn packed_rgb_word(r: u8, g: u8, b: u8) -> u32 {
+    (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
 /// Upload a fully opaque ARGB32 image into a pixmap matching its X11 target depth.
 /// Core X11 cannot blend, and XCopyArea requires source/destination depths to match.
 /// The caller checks alpha before reaching this path.
@@ -543,7 +549,7 @@ impl X11App {
         if visual.is_null() {
             return Err("XDefaultVisual returned NULL".to_string());
         }
-        let (ximage, _) = unsafe {
+        let (ximage, total) = unsafe {
             create_zeroed_ximage(
                 self.display,
                 visual,
@@ -554,20 +560,35 @@ impl X11App {
             )?
         };
         let head = unsafe { &*(ximage as *const XImageHead) };
+        // Packed rows write whole words; otherwise each pixel goes through XPutPixel.
+        let mut packed = packed_rgb_stride(head).map(|stride| {
+            // SAFETY: create_zeroed_ximage owns `total` bytes at `head.data`, word-aligned by the
+            // stride check in packed_rgb_stride.
+            let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
+            (stride, raw)
+        });
         for y in 0..height {
             let sy = ((y as u64 * src_height as u64) / height as u64) as u32;
             for x in 0..width {
                 let sx = ((x as u64 * src_width as u64) / width as u64) as u32;
                 let offset = ((sy as usize * src_width as usize) + sx as usize) * 4;
-                let pixel = rgb_to_pixel(
-                    pixels[offset],
-                    pixels[offset + 1],
-                    pixels[offset + 2],
-                    head.red_mask as u64,
-                    head.green_mask as u64,
-                    head.blue_mask as u64,
-                );
-                unsafe { XPutPixel(ximage, x as i32, y as i32, pixel as _) };
+                let (r, g, b) = (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+                match packed.as_mut() {
+                    Some((stride, raw)) => {
+                        raw[y as usize * *stride + x as usize] = packed_rgb_word(r, g, b);
+                    }
+                    None => {
+                        let pixel = rgb_to_pixel(
+                            r,
+                            g,
+                            b,
+                            head.red_mask as u64,
+                            head.green_mask as u64,
+                            head.blue_mask as u64,
+                        );
+                        unsafe { XPutPixel(ximage, x as i32, y as i32, pixel as _) };
+                    }
+                }
             }
         }
         unsafe {
@@ -728,6 +749,21 @@ mod tests {
                 0xdead_beef,
                 "row {y} padding untouched"
             );
+        }
+    }
+
+    #[test]
+    fn packed_rgb_word_matches_rgb_to_pixel_for_every_channel_value() {
+        for value in 0..=255u8 {
+            for (r, g, b) in [
+                (value, 0, 0),
+                (0, value, 0),
+                (0, 0, value),
+                (value, value ^ 0x5a, 255 - value),
+            ] {
+                let expected = rgb_to_pixel(r, g, b, 0xff_0000, 0xff_00, 0xff) as u32;
+                assert_eq!(packed_rgb_word(r, g, b), expected, "rgb({r},{g},{b})");
+            }
         }
     }
 
