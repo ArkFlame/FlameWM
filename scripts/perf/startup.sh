@@ -161,7 +161,7 @@ mkdir -p "$ENVDIR"
 run_env() {
   # Isolated HOME/XDG so user state never changes the measurement; caches persist across runs.
   env -i PATH="$PATH" DISPLAY="$DISPLAY" DBUS_SESSION_BUS_ADDRESS="$BUS_ADDR" \
-    PYTHONUSERBASE="$HOME/.local" HOME="$ENVDIR/home"XDG_CONFIG_HOME="$ENVDIR/config" XDG_CACHE_HOME="$ENVDIR/cache" \
+    PYTHONUSERBASE="$HOME/.local" HOME="$ENVDIR/home" XDG_CONFIG_HOME="$ENVDIR/config" XDG_CACHE_HOME="$ENVDIR/cache" \
     XDG_DATA_HOME="$ENVDIR/data" XDG_RUNTIME_DIR="$ENVDIR/run" LANG=C.UTF-8 "$@"
 }
 mkdir -p "$ENVDIR/home" "$ENVDIR/config" "$ENVDIR/cache" "$ENVDIR/data" "$ENVDIR/run"

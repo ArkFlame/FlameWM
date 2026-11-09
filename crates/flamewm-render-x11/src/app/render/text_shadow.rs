@@ -11,6 +11,12 @@ pub(super) struct ShadowScratch {
     pub(super) mask: Vec<u8>,
 }
 
+/// Whether `text` has any glyph that could draw ink. Whitespace draws none, so its shadow is
+/// transparent: the blur, upload and blit for it are skipped, and the output is unchanged.
+fn has_ink(text: &str) -> bool {
+    !text.chars().all(char::is_whitespace)
+}
+
 thread_local! {
     pub(super) static SHADOW_SCRATCH: std::cell::RefCell<ShadowScratch> = std::cell::RefCell::default();
 }
@@ -85,6 +91,7 @@ impl X11App {
                 text,
                 ..
             } = command
+                && has_ink(text)
             {
                 let radius = (*blur_radius * scale).clamp(0.0, 8.0);
                 let pad = (radius * 3.0).ceil() as u32 + 4;
@@ -155,6 +162,10 @@ impl X11App {
         text: &str,
         family: &str,
     ) -> Result<bool, String> {
+        if !has_ink(text) {
+            // Nothing to blur: the shadow of blank text is fully transparent.
+            return Ok(true);
+        }
         let mut scratch = SHADOW_SCRATCH.take();
         let placed = self.text_shadow_rgba(
             &mut scratch,
@@ -206,5 +217,19 @@ impl X11App {
         })();
         SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
         result.map(|()| true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_ink;
+
+    #[test]
+    fn whitespace_only_text_has_no_ink_so_its_shadow_work_is_skipped() {
+        assert!(!has_ink(""));
+        assert!(!has_ink("        "));
+        assert!(!has_ink("\t \u{a0}"));
+        assert!(has_ink(" a "));
+        assert!(has_ink("$ "));
     }
 }
