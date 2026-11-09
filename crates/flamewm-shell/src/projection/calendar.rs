@@ -163,6 +163,22 @@ mod calendar_tests {
             .unwrap_or_else(|| panic!("missing {property}"))
             + key.len();
         let value = rule[start..].split(';').next().expect("value").trim();
+        let value = match value.strip_prefix("var(").and_then(|v| v.strip_suffix(')')) {
+            Some(token) => {
+                let tokens = include_str!("../../../../ui/base/tokens.css");
+                let decl = format!("{token}:");
+                let from = tokens
+                    .find(&decl)
+                    .unwrap_or_else(|| panic!("missing token {token}"))
+                    + decl.len();
+                tokens[from..]
+                    .split(';')
+                    .next()
+                    .expect("token value")
+                    .trim()
+            }
+            None => value,
+        };
         value.trim_end_matches("px").parse().expect("px value")
     }
 

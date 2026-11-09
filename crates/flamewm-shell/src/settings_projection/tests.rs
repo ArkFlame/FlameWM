@@ -711,7 +711,7 @@ fn preview_outline_stays_opaque_when_accent_opacity_changes() {
     project_accent_tokens(&mut doc, &snapshot).expect("project accent tokens");
     assert_eq!(doc.variables["--preview-outline"], rgb(0x0012_3456, 255));
     let css = include_str!("../../../../ui/shell/flamewm.css");
-    assert!(css.contains(".desktop-selection { position:absolute; left:0px; top:0px; width:0px; height:0px; border:2px solid var(--preview-outline); border-radius:8px; }"));
+    assert!(css.contains(".desktop-selection { position:absolute; left:0px; top:0px; width:0px; height:0px; border:2px solid var(--preview-outline); border-radius:var(--r-md); }"));
     assert!(css.contains(".snap-preview { position:absolute; left:0px; top:0px; width:0px; height:0px; background:var(--snap-fill); border:2px solid var(--preview-outline); }"));
 }
 
