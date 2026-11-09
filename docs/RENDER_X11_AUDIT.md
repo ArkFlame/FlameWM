@@ -1,29 +1,35 @@
 # flamewm-render-x11 presenter audit
 
-Base: `origin/main` e77035db. Branch `perf/render-x11-presenter`. Dev profile, Xvfb 1280x800x24.
+Base: `origin/main` 9a0dae1b. Branch `perf/render-x11-presenter-2`. Dev profile, nested session via `scripts/perf/fm.sh`.
 
-## Measurement status
+## Measurement
 
-| Item | Status |
-|---|---|
-| Harness | `/tmp/claude-1000/rx11-bench/{bench.py,run.sh}` (outside repo). PSS from `smaps_rollup`, CPU from `/proc/PID/stat`, XTest hover/scroll via python-xlib. |
-| Target | `.target/flamewm/flamewm-shell.rwr` only. No settings, task-manager or dock `.rwr` exists in the repo or the shared `.target`. |
-| Baseline (3 runs, 20 s each) | PSS median 13.6-13.9 MiB across idle/hover/scroll. CPU 0.0% in all 9 samples. |
-| Screenshot | `/tmp/claude-1000/rx11-bench/base-idle.png` is solid black. The surface is not visibly rendering in this harness. |
-| Conclusion | **Baseline is not representative. No before/after claim is made.** PSS is valid as a process-size sample only. CPU and input response are not measured. |
+Harness: `scripts/perf/fm.sh <bin-dir> all --json`, the real nested session with XTEST marquee and hover. Each build ran 3 times, interleaved. Binaries: base is `origin/main` 9a0dae1b, rebuilt from a touched source tree because shared fingerprints reused the candidate build. Cand is `70bccdd1`. Medians of 3 runs.
 
-Blockers for the acceptance criteria:
-- `scripts/gate` does not exist in this checkout. The gate command in the brief cannot run.
-- Settings, task manager and dock `.rwr` inputs are not built here.
-- The shell `.rwr` shows black, so XTest input produces no repaint work. The hover and scroll CPU figures are therefore not discriminating.
-- `docs/AGENT_PLAYBOOK.md`, `docs/PERF_AUDIT.md` and `docs/DEBT_REGISTER.md` do not exist. The audit uses `docs/PERFORMANCE.md` instead.
+| Process | idle CPU% base / cand | marquee CPU% base / cand | hover CPU% base / cand | PSS MiB base / cand |
+|---|---|---|---|---|
+| flamewm-wayland | 5.99 / 6.10 | 96.60 / 96.24 | 81.73 / 80.35 | 94.6 / 93.6 |
+| flamewm-desktop | 9.60 / 10.59 | 13.74 / 13.32 | 7.76 / 7.34 | 24.0 / 23.6 |
+| flamewm-shell | 8.73 / 13.46 | 1.79 / 1.79 | 0.20 / 0.00 | 18.7 / 17.9 |
+| Xwayland | 0.37 / 0.37 | 3.98 / 3.98 | 1.59 / 1.39 | n/a |
+| total PSS | | | | 175.4 / 174.4 |
+
+Reading: differences are inside the run-to-run spread. The shell idle CPU moved from 8.7 to 13.5 with no change on its path, so it is noise. Nothing here shows a win.
+
+Attribution gap: the changes fire only on opaque cache-miss uploads through `upload_opaque_*`. No counter confirms they run in this session. The benefit is unproven.
+
+Harness notes:
+- `scripts/perf/settings_session.sh` and `fm.sh` do not set `FLAMEWM_WAYLAND_WIDTH`/`HEIGHT`. Nothing in `crates/` reads those variables.
+- `scripts/perf/backdrop_cpu.py` does not exist on `origin/main`.
+- The earlier `.rwr` path was wrong: the shell `.rwr` renders black and produced 0% CPU. Do not use it for UI CPU.
+- Screenshots: not taken on the fixed harness.
 
 ## Findings (file:line on e77035db)
 
 | # | file:line | issue | est. win | risk | fixed? |
 |---|---|---|---|---|---|
 | 1 | app/images.rs:226 (`upload_opaque_argb32_image`) | Per-pixel `rgb_to_pixel` + `XPutPixel` for every opaque cache-miss upload. Runs for external opaque blits (`external_drawable.rs:581`, `:739`). | High CPU on icon or image cache misses. Unmeasured. | Low: byte-equal to per-pixel result for standard 0xRRGGBB, 32-bit, host-order XImage. Other layouts keep the old loop. | **Yes** (commit 1). Unit tests cover equivalence and gating. Not runtime-measured. |
-| 2 | app/images.rs:523 (`upload_opaque_fallback`) | Same per-pixel `XPutPixel` loop, in the opaque fallback path. | Medium CPU on fallback. | Low, same rule as #1. | No. Next candidate. |
+| 2 | app/images.rs:523 (`upload_opaque_fallback`) | Same per-pixel `XPutPixel` loop, in the opaque fallback path. | Medium CPU on fallback. | Low, same rule as #1. | **Yes** (commit 70bccdd1). Covered by the packed-word equivalence test. Not runtime-measured. |
 | 3 | app/images.rs:155, 234 | `XCreateGC`/`XFreeGC` per upload. 19 `XCreateGC` sites in the crate. | Small; GC churn per miss. | Low. | No. Needs a per-pixmap or per-display GC owner. |
 | 4 | app/render/present.rs:162-185 (`present_scene`) | Full-window `XCopyArea` backbuffer to window on every present, plus `XFlush`. | Medium: copies the whole surface even for small damage. | **High**: expose and overlap correctness depends on the full copy. Needs a damage-rect proof first. | No. |
 | 5 | app/render/paint_full.rs:34-66 | `paint_full` clears and repaints every retained command each frame. Region paint exists only for some paths (`region_equivalence_tests.rs`). | High, but architectural. | High. | No. |
@@ -40,22 +46,23 @@ Blockers for the acceptance criteria:
 
 ## Commits
 
-1. `perf(render-x11): pack opaque uploads row-wise` (finding #1). Changes `app/images.rs` only. Generalises `copy_argb32_rows` to `copy_argb32_rows_with`. Adds `packed_rgb_stride`, which gates the fast path, and two regression tests.
-2. This audit doc (`docs/RENDER_X11_AUDIT.md`).
+1. `c0db984f` (was `cc9d2d32`): `perf(render-x11): pack opaque uploads row-wise`, finding #1. Gated on `4bdebf3c`, pushed.
+2. `4bdebf3c`: audit doc, first version. Superseded by this file.
+3. `70bccdd1`: `perf(render-x11): pack opaque fallback rows`, finding #2. Gate: pending at time of writing.
+4. This revision of the audit doc.
 
-Not done: the split of xft.rs, surface_controller.rs, app/mod.rs and app/events.rs. Not done: `tools/architecture_guard.py` owner-list updates.
+Not done: finding #3 (GC per upload), #4 (damage-limited present), #13 (shrink policy), and the file splits. The `tools/architecture_guard.py` owner-list update is not needed yet.
 
 ## Verification
 
-- `cargo test -p flamewm-render-x11 --lib images`: 11 passed, 0 failed (exit 0, run without the pipe mask).
-- rustfmt applied to `app/images.rs` only. Hunks confined to the edited regions.
-- Full crate test exit: see the report.
-- Gate: not run. `scripts/gate` is absent.
-- Runtime, screenshot and CPU before/after: not verified.
+- `cargo test -p flamewm-render-x11 --lib images`: 12 passed on `70bccdd1`, exit 0.
+- Gate `scripts/gate flamewm-render-x11` on `4bdebf3c`: `GATE_DONE all=0`, all four checks exit 0. This gate covered `c0db984f` and the doc.
+- Gate on `70bccdd1`: see the gate log in the report.
+- Runtime CPU/PSS change: not shown. See Measurement.
 
 ## Next steps
 
-1. Fix finding #2 with the same packed path.
-2. Fix the measurement gap: build or locate settings, task-manager and dock `.rwr`, then drive real hover and scroll input.
-3. Design damage-limited `present_scene` (finding #4) behind an expose and overlap regression test.
-4. Add an idle shrink policy with hysteresis (finding #13).
+1. Add a counter or trace for the upload fast paths, so a run proves they fire.
+2. Finding #3, GC reuse per upload, with a clear owner.
+3. Finding #13, shrink policy with hysteresis, with a test.
+4. Finding #4, damage-limited present, only after an expose and overlap equivalence test.
