@@ -7,21 +7,21 @@
   <link rel="stylesheet" href="flamewm.css">
   <style>
     body { margin:0px; }
-    .tray-popup.weather-popup { position:absolute; left:0px; top:0px; width:300px; height:320px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:8px; background:var(--surface); }
-    .weather-search { position:absolute; left:20px; top:8px; width:260px; height:22px; box-sizing:border-box; background:#1b1d20; border:1px solid #353638; border-radius:4px; overflow:hidden; }
-    .weather-search input { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; background:transparent; color:transparent; border:0px solid #00000000; padding:0px 8px; }
-    .weather-search-value { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; font-size:12px; color:#f1f2f3; white-space:nowrap; overflow:hidden; }
-    .weather-search-placeholder { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; font-size:12px; color:#aeb4bb; }
-    .weather-location { position:absolute; left:20px; top:38px; width:260px; height:18px; font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; }
+    .tray-popup.weather-popup { position:absolute; left:0px; top:0px; width:300px; height:320px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:var(--r-md); background:var(--surface); }
+    .weather-search { position:absolute; left:20px; top:8px; width:260px; height:22px; box-sizing:border-box; background:#1b1d20; border:1px solid #353638; border-radius:var(--r-sm); overflow:hidden; }
+    .weather-search input { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; background:transparent; color:transparent; border:0px solid #00000000; padding:0px var(--sp-3); }
+    .weather-search-value { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; font-size:var(--fs-sm); color:#f1f2f3; white-space:nowrap; overflow:hidden; }
+    .weather-search-placeholder { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; font-size:var(--fs-sm); color:#aeb4bb; }
+    .weather-location { position:absolute; left:20px; top:38px; width:260px; height:18px; font-size:var(--fs-md); color:var(--text); white-space:nowrap; overflow:hidden; }
     .weather-icon { position:absolute; left:20px; top:62px; width:56px; height:56px; }
     .weather-temp { position:absolute; left:96px; top:60px; width:180px; height:52px; font-size:44px; font-weight:400; color:var(--text); white-space:nowrap; overflow:hidden; }
     .weather-condition { position:absolute; left:96px; top:114px; width:180px; height:18px; font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; }
-    .weather-state { position:absolute; left:20px; top:134px; width:260px; height:16px; font-size:12px; color:var(--accent); white-space:nowrap; overflow:hidden; }
-    .weather-day-name { position:absolute; left:20px; width:60px; height:18px; font-size:12px; color:var(--text); }
+    .weather-state { position:absolute; left:20px; top:134px; width:260px; height:16px; font-size:var(--fs-sm); color:var(--accent); white-space:nowrap; overflow:hidden; }
+    .weather-day-name { position:absolute; left:20px; width:60px; height:18px; font-size:var(--fs-sm); color:var(--text); }
     .weather-day-icon { position:absolute; left:100px; width:18px; height:18px; }
-    .weather-day-range { position:absolute; left:132px; width:148px; height:18px; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-    .weather-search-status { position:absolute; left:20px; top:154px; width:260px; height:16px; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-    .weather-result { position:absolute; left:20px; width:260px; height:20px; font-size:12px; color:var(--text); white-space:nowrap; overflow:hidden; }
+    .weather-day-range { position:absolute; left:132px; width:148px; height:18px; font-size:var(--fs-sm); color:var(--muted); white-space:nowrap; overflow:hidden; }
+    .weather-search-status { position:absolute; left:20px; top:154px; width:260px; height:16px; font-size:var(--fs-sm); color:var(--muted); white-space:nowrap; overflow:hidden; }
+    .weather-result { position:absolute; left:20px; width:260px; height:20px; font-size:var(--fs-sm); color:var(--text); white-space:nowrap; overflow:hidden; }
     .weather-offline-veil { position:absolute; left:0px; top:36px; width:300px; height:256px; }
     .weather-attribution { position:absolute; left:20px; top:300px; width:260px; height:14px; font-size:10px; color:var(--muted); white-space:nowrap; overflow:hidden; }
     .weather-row-1 { top:154px; }

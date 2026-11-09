@@ -1,2 +1,7 @@
-/* Shared length tokens. Shell pages link this sheet; base.css imports it. */
-:root { --radius-sm:3px; --radius-md:6px; --radius-lg:9px; --radius-xl:11px; --font-xs:10px; --font-sm:11px; --font-base:12px; --font-md:13px; --font-lg:14px; --font-xl:16px; --space-xs:4px; --space-sm:6px; --space-md:8px; --space-lg:10px; --space-xl:12px; }
+/* Shared design tokens: the single token sheet. Shell pages link this sheet; base.css imports it.
+   Type scale, 4-pt spacing and radii. Legacy --font-*, --space-* and --radius-* names are retired
+   surface by surface; their values differ from this scale, so they stay until each use is decided. */
+:root { --radius-sm:3px; --radius-md:6px; --radius-lg:9px; --radius-xl:11px; --font-xs:10px; --font-sm:11px; --font-base:12px; --font-md:13px; --font-lg:14px; --font-xl:16px; --space-xs:4px; --space-sm:6px; --space-md:8px; --space-lg:10px; --space-xl:12px;
+  --fs-xs:11px; --fs-sm:12px; --fs-md:13px; --fs-lg:15px; --fs-xl:18px; --fs-2xl:22px;
+  --sp-1:2px; --sp-2:4px; --sp-3:8px; --sp-4:12px; --sp-5:16px; --sp-6:24px;
+  --r-sm:4px; --r-md:8px; --r-lg:12px; --r-pill:999px; }

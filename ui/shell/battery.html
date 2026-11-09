@@ -7,15 +7,15 @@
   <link rel="stylesheet" href="flamewm.css">
   <style>
     body { margin:0px; }
-    .tray-popup.battery-popup { position:absolute; left:0px; top:0px; width:300px; height:132px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:8px; background:var(--surface); }
+    .tray-popup.battery-popup { position:absolute; left:0px; top:0px; width:300px; height:132px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:var(--r-md); background:var(--surface); }
     .battery-icon { position:absolute; left:20px; top:20px; width:32px; height:32px; }
     .battery-percent { position:absolute; left:64px; top:6px; height:52px; font-size:44px; font-weight:400; color:var(--text); }
-    .battery-track { position:absolute; left:20px; top:76px; width:260px; height:8px; border-radius:4px; background:#3a3d40; }
-    .battery-progress-fill { position:absolute; left:0px; top:0px; width:0px; height:8px; border-radius:4px; background:var(--accent); }
+    .battery-track { position:absolute; left:20px; top:76px; width:260px; height:8px; border-radius:var(--r-sm); background:#3a3d40; }
+    .battery-progress-fill { position:absolute; left:0px; top:0px; width:0px; height:8px; border-radius:var(--r-sm); background:var(--accent); }
     .battery-status-row { position:absolute; left:20px; top:92px; width:260px; height:18px; display:flex; justify-content:space-between; }
     .battery-state { width:120px; height:18px; font-size:14px; color:var(--text); }
     .battery-rate { width:130px; height:18px; font-size:14px; color:var(--muted); justify-content:flex-end; }
-    .battery-cpu { position:absolute; left:20px; top:112px; width:260px; height:16px; font-size:12px; color:var(--muted); }
+    .battery-cpu { position:absolute; left:20px; top:112px; width:260px; height:16px; font-size:var(--fs-sm); color:var(--muted); }
   </style>
 </head>
 <body class="popup-body">
