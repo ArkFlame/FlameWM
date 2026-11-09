@@ -218,50 +218,65 @@ const MAX_TOKEN_LEN: usize = 128;
 /// Variant prefixes accepted by `lookup`. Kept in step with its match arms (checked by a test).
 const VARIANTS: [&str; 3] = ["hover", "focus", "active"];
 
-/// One bit per two-byte prefix (65536 bits): set when a utility, scaled family or variant starts with it.
-/// A scaled family `h` is keyed as `h-`, so every prefix a utility can start with is covered.
-const BIGRAMS: [u64; 1024] = bigrams();
+/// Hashed three-byte prefixes (16-bit key, 65536 bits): every prefix a utility token can start with.
+/// Fixed names and variants contribute their first three bytes. A one-letter scaled family `h` contributes
+/// `h-` followed by each step, bracket or `px` start; a longer family contributes its first three bytes.
+const TRIGRAMS: [u64; 1024] = trigrams();
 
-const fn bigrams() -> [u64; 1024] {
+/// Tokens whose first three bytes are not marked here cannot be utilities.
+const SCALED_NEXT: &[u8] = b"0123456789[p";
+
+const fn trigram_key(a: u8, b: u8, c: u8) -> usize {
+    let mixed = ((a as u32) << 16 | (b as u32) << 8 | c as u32).wrapping_mul(0x9E37_79B1);
+    (mixed >> 16) as usize
+}
+
+const fn set_trigram(mask: &mut [u64; 1024], key: usize) {
+    mask[key >> 6] |= 1u64 << (key & 63);
+}
+
+const fn trigrams() -> [u64; 1024] {
     let mut mask = [0u64; 1024];
     let mut i = 0;
     while i < UTILITIES.len() {
-        mark_bigram(&mut mask, UTILITIES[i].0, b'\0');
-        i += 1;
-    }
-    i = 0;
-    while i < SCALED.len() {
-        mark_bigram(&mut mask, SCALED[i].0, b'-');
+        let bytes = UTILITIES[i].0.as_bytes();
+        assert!(bytes.len() >= 3, "utility names are at least three bytes");
+        set_trigram(&mut mask, trigram_key(bytes[0], bytes[1], bytes[2]));
         i += 1;
     }
     i = 0;
     while i < VARIANTS.len() {
-        mark_bigram(&mut mask, VARIANTS[i], b'\0');
+        let bytes = VARIANTS[i].as_bytes();
+        set_trigram(&mut mask, trigram_key(bytes[0], bytes[1], bytes[2]));
+        i += 1;
+    }
+    i = 0;
+    while i < SCALED.len() {
+        let bytes = SCALED[i].0.as_bytes();
+        if bytes.len() == 1 {
+            let mut next = 0;
+            while next < SCALED_NEXT.len() {
+                set_trigram(&mut mask, trigram_key(bytes[0], b'-', SCALED_NEXT[next]));
+                next += 1;
+            }
+        } else if bytes.len() == 2 {
+            set_trigram(&mut mask, trigram_key(bytes[0], bytes[1], b'-'));
+        } else {
+            set_trigram(&mut mask, trigram_key(bytes[0], bytes[1], bytes[2]));
+        }
         i += 1;
     }
     mask
 }
 
-/// Sets the bit for the first two bytes of `name`; `after_short` stands in for the second byte of a one-byte name.
-const fn mark_bigram(mask: &mut [u64; 1024], name: &str, after_short: u8) {
-    let bytes = name.as_bytes();
-    let second = if bytes.len() > 1 {
-        bytes[1]
-    } else {
-        after_short
-    };
-    let key = ((bytes[0] as usize) << 8) | second as usize;
-    mask[key >> 6] |= 1u64 << (key & 63);
-}
-
-/// Cheap reject before `lookup`: length bound, then two-byte mask. Never rejects a token `lookup` accepts.
+/// Cheap reject before `lookup`: length bound, then the hashed three-byte mask. Never rejects a token `lookup` accepts.
 fn is_candidate(token: &str) -> bool {
     let bytes = token.as_bytes();
-    if bytes.len() < 2 || bytes.len() > MAX_TOKEN_LEN {
+    if bytes.len() < 3 || bytes.len() > MAX_TOKEN_LEN {
         return false;
     }
-    let key = ((bytes[0] as usize) << 8) | bytes[1] as usize;
-    BIGRAMS[key >> 6] & (1u64 << (key & 63)) != 0
+    let key = trigram_key(bytes[0], bytes[1], bytes[2]);
+    TRIGRAMS[key >> 6] & (1u64 << (key & 63)) != 0
 }
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -746,7 +761,7 @@ mod prefilter_and_revision_tests {
     fn prefilter_rejects_empty_long_and_unmasked_tokens() {
         assert!(!is_candidate(""));
         assert!(!is_candidate("x"));
-        assert!(UTILITIES.iter().all(|(name, _)| name.len() >= 2));
+        assert!(UTILITIES.iter().all(|(name, _)| name.len() >= 3));
         assert!(!is_candidate(&format!("w-[{}]", "1".repeat(MAX_TOKEN_LEN))));
         assert!(!is_candidate("Zebra"));
         assert!(is_candidate("flex"));
