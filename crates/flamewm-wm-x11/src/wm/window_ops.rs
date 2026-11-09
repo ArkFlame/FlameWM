@@ -302,11 +302,13 @@ impl<C: Connection> Wm<'_, C> {
         }
         if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
             if enable {
-                // Fullscreen covers docks: raise the frame to the top of the stack.
+                // Fullscreen covers docks: raise the frame to the top of the stack, then keep
+                // auto-hidden reveal strips above it so the edge still reveals the dock.
                 self.conn.configure_window(
                     frame,
                     &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
                 )?;
+                self.raise_reveal_strips()?;
             } else {
                 // Leaving fullscreen restores the taskbar above the restored frame.
                 self.raise_docks_above_normal(client, frame)?;
