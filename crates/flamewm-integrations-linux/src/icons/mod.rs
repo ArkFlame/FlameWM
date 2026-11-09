@@ -1256,3 +1256,5 @@ pub fn xdg_data_search_dirs(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod theme_matrix_tests;
