@@ -485,6 +485,23 @@ fn with_test_display(body: impl FnOnce(*mut Display)) -> bool {
     true
 }
 
+/// Harness for scoping changes: after `mutation` on `make()`, the scoped (Region) repaint must
+/// match a Full repaint byte for byte, and must actually take the Region path. Needs
+/// `FLAMEWM_TEST_DISPLAY`; without it the check is skipped with a note.
+#[allow(dead_code)] // Entry point for scoping tests added with the scoping items.
+pub(crate) fn assert_scoped_matches_full(make: fn() -> RuntimeDocument, mutation: Step) {
+    let ran = with_test_display(|display| {
+        // SAFETY: the display is open for the body's duration.
+        let steps = unsafe {
+            compare_region_and_full(display, make, vec![("mutation", mutation, true)], None)
+        };
+        assert_eq!(steps, 1, "mutation must take the Region path");
+    });
+    if !ran {
+        eprintln!("assert_scoped_matches_full skipped: FLAMEWM_TEST_DISPLAY unset");
+    }
+}
+
 #[test]
 fn region_paint_matches_full_for_every_scripted_event() {
     with_test_display(|display| {

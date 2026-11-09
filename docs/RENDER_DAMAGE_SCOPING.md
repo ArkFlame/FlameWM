@@ -187,3 +187,29 @@ Parallel-safe now: **1** (render-x11 `damage_plan.rs`, `render.rs`), **5** (`fla
 - Not read: `app/render/paint_full.rs:88` trigger; Wayland render damage model; dock role variant;
   shell clock/weather text path (no `set_text` hit in `flamewm-shell`).
 - Items 2-4 change render-core and region-paint behaviour. Each needs paranoid runs before merge.
+
+## 10. Results: paranoid damage mode (item 1)
+
+Built: `crates/flamewm-render-x11/src/app/paranoid_damage.rs` (`enabled`, `diff_rects` 32x32 tiles,
+`first_difference`, `check_frame`, backbuffer readback) and two hooks in `app/render.rs` `redraw`.
+On: a Region frame is read back, the same frame is repainted in full and presented, the two are
+compared, and each distinct mismatching rect-set is logged once as `FLAMEWM_PARANOID mismatch`.
+Harness: `assert_scoped_matches_full(make, mutation)` in `app/region_equivalence_tests.rs`.
+Counter note: a paranoid frame is still counted as `Region` in the plan counters.
+
+Measured 2026-11-09 on private Xvfb `:105`, debug builds, `FLAMEWM_PARANOID_DAMAGE=1` unless stated:
+
+| Run | Result |
+|---|---|
+| `app::region_equivalence_tests`, 3 loops in 30 s | 174 Region frames checked, **0 mismatches**, 0 failed runs |
+| Task manager 30 s, `FLAMEWM_RENDER_REGION=1` (x2 runs) | **0 Region frames**, 25 Full (`reason=region_too_large`, diff area ~925k of 944k px). **0 checks: the zero is vacuous.** |
+| Env off, base `origin/main` vs change, 3 runs each, task manager 30 s | CPU mean 61.05% vs 60.50%; PSS 23.8 MB vs 23.2 MB. Within noise. |
+
+Findings:
+- **F1 (coverage gap).** Task-manager 1 Hz updates never take the Region path. The planner's diff
+  bounding area covers about 98% of the viewport, so `region_too_large` wins. Paranoid mode cannot
+  check task manager until item 4 shrinks that diff rect.
+- **F2 (not verified).** No live hover or click run: `python-Xlib` and `xdotool` are absent, so no
+  interaction-driven Region frame was produced in a real UI. The Region checks above come from scripted
+  harness events, which compare against Full by construction. Dock, settings, terminal and desktop
+  roles were not run.

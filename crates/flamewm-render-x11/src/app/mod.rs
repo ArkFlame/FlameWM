@@ -46,6 +46,7 @@ mod events;
 mod geometry;
 mod gpu_frame;
 mod images;
+mod paranoid_damage;
 #[cfg(test)]
 mod region_equivalence_tests;
 mod xdnd;

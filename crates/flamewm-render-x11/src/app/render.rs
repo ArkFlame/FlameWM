@@ -14,6 +14,7 @@ pub(crate) use self::shape::StaticShapeKey;
 use self::shape::{fixed_shape_unchanged, shape_needs_apply, static_shape_key};
 
 use super::clip::{Visible, intersect, visible_under};
+use super::paranoid_damage;
 
 /// Picture clip for a partly visible fill: the visible part, cut to the active region paint
 /// when there is one. `None` means nothing of the fill lies inside the region.
@@ -303,12 +304,28 @@ impl X11App {
                 Err(error) => eprintln!("FLAMEWM_RENDER_REGION fallback reason={error}"),
             }
         }
+        // Paranoid mode (FLAMEWM_PARANOID_DAMAGE=1): keep the region frame, then present a full repaint of
+        // the same frame and compare the two. Off, this is one cached bool read.
+        let paranoid_region = match region_done {
+            Some(_) if paranoid_damage::enabled() => Some(unsafe { self.read_backbuffer_pixels() }),
+            _ => None,
+        };
         let (used, visits) = match region_done {
-            Some(done) => done,
+            // Paranoid: the region paint is still reported as used; the full frame is what gets presented.
+            Some(done) if paranoid_region.is_none() => done,
+            Some(done) => {
+                unsafe { self.paint_full(document, scale)? };
+                done
+            }
             None => (RedrawPlan::Full, unsafe {
                 self.paint_full(document, scale)?
             }),
         };
+        match paranoid_region {
+            Some(Ok(region_px)) => unsafe { self.paranoid_compare_full(&region_px) },
+            Some(Err(error)) => eprintln!("FLAMEWM_PARANOID readback failed reason={error}"),
+            None => {}
+        }
         unsafe { self.bind_presented_backbuffer_as_window_background()? };
         self.presented_size = Some((self.width, self.height));
         if self.role == X11WindowRole::Desktop {
