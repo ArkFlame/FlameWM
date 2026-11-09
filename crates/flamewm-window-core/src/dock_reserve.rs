@@ -196,6 +196,44 @@ mod tests {
         );
     }
 
+    /// The four edges with their reserve side, for per-edge rules.
+    const EDGES: [(&str, ReserveEdge); 4] = [
+        ("bottom", ReserveEdge::Bottom),
+        ("top", ReserveEdge::Top),
+        ("left", ReserveEdge::Left),
+        ("right", ReserveEdge::Right),
+    ];
+
+    #[test]
+    fn auto_hide_on_reserves_nothing_on_every_edge() {
+        for (position, _) in EDGES {
+            assert_eq!(
+                dock_reserve_from_snapshot(&snapshot(&[
+                    ("dock.enabled", SettingValue::Boolean(true)),
+                    ("dock.autoHide", SettingValue::Boolean(true)),
+                    ("dock.position", SettingValue::Text(position.into())),
+                ])),
+                None,
+                "auto-hide on, {position}"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_hide_off_reserves_the_extent_on_every_edge() {
+        for (position, edge) in EDGES {
+            assert_eq!(
+                dock_reserve_from_snapshot(&snapshot(&[
+                    ("dock.enabled", SettingValue::Boolean(true)),
+                    ("dock.autoHide", SettingValue::Boolean(false)),
+                    ("dock.position", SettingValue::Text(position.into())),
+                ])),
+                Some((edge, dock_extent(DEFAULT_ICON_SIZE))),
+                "auto-hide off, {position}"
+            );
+        }
+    }
+
     #[test]
     fn auto_hidden_dock_reserves_nothing() {
         assert_eq!(
