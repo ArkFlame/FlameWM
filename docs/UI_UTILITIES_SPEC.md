@@ -25,6 +25,26 @@ with token values. Hardcoded: 328 hex literals and 2150 px literals outside toke
    exist. Arbitrary values `p-[10px]`, `w-[240px]` accept only what `parse_length` already accepts (px, %, var()).
    Unknown value = ignored token + a compile-time warning list in tests, never a panic.
 
+## Tailwind compatibility (the language is Tailwind's, not ours)
+Names, argument shapes and semantics follow Tailwind CSS v3/v4 exactly, so a model or person writing Tailwind gets
+the expected result:
+- Spacing scale = Tailwind's: 1 step = 0.25rem = 4px (`p-4` = 16px, `gap-2` = 8px, `w-12` = 48px, `p-0.5` = 2px,
+  `px-1.5` = 6px), plus `px` (1px), `full` (100%), `auto`, fractions `w-1/2` (50%), `w-1/3`, `w-2/3`, `w-1/4`.
+- Arbitrary values use Tailwind's bracket form: `w-[240px]`, `p-[10px]`, `gap-[var(--space-md)]` (px, %, var() only).
+- Same names for flex/grid-less layout, `items-*`, `justify-*`, `flex-1`, `grow`, `shrink-0`, `truncate`, `overflow-*`,
+  `font-medium|semibold|bold`, `rounded`, `rounded-sm|md|lg|xl|full`, `border`, `border-2`, `opacity-N`,
+  `cursor-*`, `select-none`, `absolute inset-0`.
+- Named scales that Tailwind defines in rem map to our tokens because the desktop type/radius scale is smaller:
+  `text-xs|sm|base|lg|xl` -> `--font-xs|sm|base|lg|xl` (our px sizes, not Tailwind's), `rounded-sm|md|lg|xl` -> `--radius-*`.
+  This is the only deviation and is stated in the generated docs table.
+- Colours: Tailwind form `bg-<token>`, `text-<token>`, `border-<token>` over our semantic tokens (`accent`,
+  `accent-soft`, `text`, `muted`, `rim`, `transparent`, `white`, `black`). The Tailwind default palette (`blue-500`) is
+  NOT shipped (it would hurt theming and size); a new colour is a token first.
+- Variants use Tailwind syntax `hover:bg-accent-soft`, `focus:`, `active:`, `disabled:` where the compiler supports the
+  pseudo-class; anything else is rejected at compile time in tests, not silently dropped.
+- Not supported (documented, so nobody guesses): `@apply`, `@theme`, arbitrary variants, `dark:`/responsive variants,
+  opacity slash modifiers (`bg-accent/50`) in v1.
+
 ## v1 table (about 90 names; extend only from measured repeats)
 - layout: `flex inline-flex block hidden relative absolute`, `flex-row flex-col`, `flex-1 grow grow-0 shrink-0`,
   `items-start|center|end|stretch`, `justify-start|center|end|between`, `min-w-0`, `overflow-hidden`, `box-border`
