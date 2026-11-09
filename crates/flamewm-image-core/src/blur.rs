@@ -188,6 +188,16 @@ pub fn frosted_backdrop_with(
     let cw = crop.width.max(1) as usize;
     let ch = crop.height.max(1) as usize;
     let (pw, ph) = (cw + 2 * pad, ch + 2 * pad);
+    // Reject crops whose output or padded working buffers cannot be sized in
+    // `usize` instead of wrapping and allocating a bogus length.
+    let sized = |w: usize, h: usize| w.checked_mul(h).and_then(|n| n.checked_mul(4));
+    if sized(cw, ch).is_none() || sized(pw, ph).is_none() {
+        return RgbaImage {
+            width: 1,
+            height: 1,
+            pixels: vec![0, 0, 0, 0],
+        };
+    }
     let src_w = src.width as usize;
     let max_x = i64::from(src.width) - 1;
     let max_y = i64::from(src.height) - 1;
