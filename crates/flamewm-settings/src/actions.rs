@@ -46,6 +46,8 @@ impl AppearanceTab {
 pub(crate) enum SettingsAction {
     /// The disabled Vulkan segment: names why nothing changes, never stores a value.
     RenderBackendUnavailable,
+    /// Runs the GPU probe in a child process; the Settings process never loads GL.
+    RenderBackendCheck,
     FileManagerCycle,
     StartupToggle(usize),
     StartupRemove(usize),
@@ -803,6 +805,7 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         }),
         // Disabled in the markup until Vulkan is built (phase 4).
         "settings.render-backend.vulkan" => Ok(SettingsAction::RenderBackendUnavailable),
+        "settings.render-backend.check" => Ok(SettingsAction::RenderBackendCheck),
         "settings.render-backend.opengl" => Ok(SettingsAction::TextSelect {
             key: "renderBackend",
             value: "opengl",

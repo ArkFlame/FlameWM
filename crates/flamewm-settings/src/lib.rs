@@ -122,6 +122,8 @@ pub struct SettingsApplication<T: ControlTransport> {
     api_key_draft: Option<ApiKeyDraft>,
     /// Custom startup command being typed; `Some` while the field takes typed text.
     startup_command: Option<startup_extras::StartupCommandDraft>,
+    /// Result line of the last Rendering "Check" child probe; `None` until the button is pressed.
+    render_probe: Option<String>,
     /// Index of the installed application offered by the Startup picker.
     startup_pick: usize,
     file_manager_label: String,

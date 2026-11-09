@@ -27,6 +27,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             nav_search_focused: false,
             api_key_draft: None,
             startup_command: None,
+            render_probe: None,
             startup_pick: 0,
             file_manager_label: "FlameWM Explorer".into(),
         }
@@ -527,6 +528,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         match action {
             SettingsAction::RenderBackendUnavailable => {
                 return Err("Vulkan is not built into this version".to_owned());
+            }
+            SettingsAction::RenderBackendCheck => {
+                self.render_probe = Some(render_backend_row::run_probe_child());
             }
             SettingsAction::FileManagerCycle => {
                 self.file_manager_label = file_manager::toggle()?;

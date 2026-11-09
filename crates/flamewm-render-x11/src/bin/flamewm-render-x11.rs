@@ -4,7 +4,19 @@ use std::fs;
 use flamewm_render_core::{RuntimeDocument, decode};
 use flamewm_render_x11::{X11Config, run};
 
+/// One line the Settings Check button parses: `backend=... device=... reason=...`.
+fn probe_line(result: Result<String, String>) -> String {
+    match result {
+        Ok(device) => format!("backend=opengl device={device} reason=none"),
+        Err(reason) => format!("backend=cpu device=none reason={reason}"),
+    }
+}
+
 fn main() {
+    if env::args().nth(1).as_deref() == Some("--gpu-probe") {
+        println!("{}", probe_line(flamewm_render_x11::probe_gpu_renderer()));
+        return;
+    }
     if let Err(error) = execute() {
         eprintln!("flamewm-render-x11: {error}");
         std::process::exit(1);
@@ -51,4 +63,21 @@ fn execute() -> Result<(), String> {
     let compiled = decode(&bytes)?;
     let runtime = RuntimeDocument::new(compiled)?;
     run(runtime, config)
+}
+
+#[cfg(test)]
+mod probe_line_tests {
+    use super::probe_line;
+
+    #[test]
+    fn probe_line_reports_the_device_or_the_fallback_reason() {
+        assert_eq!(
+            probe_line(Ok("NVIDIA RTX".to_owned())),
+            "backend=opengl device=NVIDIA RTX reason=none"
+        );
+        assert_eq!(
+            probe_line(Err("libEGL.so.1 missing".to_owned())),
+            "backend=cpu device=none reason=libEGL.so.1 missing"
+        );
+    }
 }

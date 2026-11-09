@@ -27,9 +27,53 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let current = self
             .text_setting("renderBackend")
             .unwrap_or_else(|_| "cpu".to_owned());
-        optional_text(document, "render-backend-note", status_text(&current));
+        let note = match &self.render_probe {
+            Some(probe) => probe.clone(),
+            None => status_text(&current),
+        };
+        optional_text(document, "render-backend-note", note);
         self.sync_option_setting(document, "renderBackend", RENDER_BACKEND_OPTIONS)
     }
+}
+
+/// Runs `flamewm-render-x11 --gpu-probe` next to this binary (PATH as fallback) and returns
+/// the note line. The child owns every GL load; a hung driver is killed after 10 seconds.
+pub(crate) fn run_probe_child() -> String {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("flamewm-render-x11")))
+        .filter(|path| path.exists());
+    let program = sibling.unwrap_or_else(|| "flamewm-render-x11".into());
+    let spawned = Command::new(program)
+        .arg("--gpu-probe")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else {
+        return "GPU check: flamewm-render-x11 could not be started".to_owned();
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return "GPU check: timed out after 10 s".to_owned();
+            }
+        }
+    }
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+    format!("GPU check: {}", out.trim())
 }
 
 #[cfg(test)]
