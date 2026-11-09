@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use flamewm_api::settings::AppearanceMode;
 
@@ -586,7 +587,9 @@ pub fn appearance_environment(appearance: AppearanceMode) -> BTreeMap<String, St
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SupervisorPolicy {
+    /// Restarts allowed inside one `restart_window_ms` window; the next exit gives up.
     pub maximum_restarts: u8,
+    pub restart_window_ms: u64,
     pub initial_backoff_ms: u64,
     pub maximum_backoff_ms: u64,
     pub graceful_stop_ms: u64,
@@ -596,6 +599,7 @@ impl Default for SupervisorPolicy {
     fn default() -> Self {
         Self {
             maximum_restarts: 5,
+            restart_window_ms: 60_000,
             initial_backoff_ms: 500,
             maximum_backoff_ms: 8_000,
             graceful_stop_ms: 1_500,
@@ -623,6 +627,8 @@ pub enum SupervisorDecision {
 pub struct ProcessSupervisorPolicy {
     policy: SupervisorPolicy,
     restarts: u8,
+    window_started: Option<Instant>,
+    window_restarts: u8,
     stopping: bool,
     gave_up: bool,
 }
@@ -639,6 +645,8 @@ impl ProcessSupervisorPolicy {
         Self {
             policy,
             restarts: 0,
+            window_started: None,
+            window_restarts: 0,
             stopping: false,
             gave_up: false,
         }
@@ -659,15 +667,30 @@ impl ProcessSupervisorPolicy {
         SupervisorDecision::StopCleanly
     }
 
-    pub fn child_exited(&mut self, _exit: ChildExit) -> SupervisorDecision {
+    pub fn child_exited(&mut self, exit: ChildExit) -> SupervisorDecision {
+        self.child_exited_at(exit, Instant::now())
+    }
+
+    /// Clock-injected form of [`Self::child_exited`]. A crash loop hits the per-window limit and
+    /// gives up; a child that stays up for a full window starts a fresh window and backoff.
+    pub fn child_exited_at(&mut self, _exit: ChildExit, now: Instant) -> SupervisorDecision {
         if self.stopping {
             return SupervisorDecision::StopCleanly;
         }
-        if self.restarts >= self.policy.maximum_restarts {
+        let window = Duration::from_millis(self.policy.restart_window_ms);
+        match self.window_started {
+            Some(started) if now.saturating_duration_since(started) < window => {}
+            _ => {
+                self.window_started = Some(now);
+                self.window_restarts = 0;
+            }
+        }
+        if self.window_restarts >= self.policy.maximum_restarts {
             self.gave_up = true;
             return SupervisorDecision::GiveUp;
         }
-        let delay = self.backoff_for(self.restarts);
+        let delay = self.backoff_for(self.window_restarts);
+        self.window_restarts = self.window_restarts.saturating_add(1);
         self.restarts = self.restarts.saturating_add(1);
         SupervisorDecision::RestartAfter(delay)
     }
@@ -1256,5 +1279,36 @@ mod tests {
             supervisor.child_exited(ChildExit::ExitCode(1)),
             SupervisorDecision::GiveUp
         );
+    }
+
+    #[test]
+    fn restart_limit_is_per_window_and_healthy_runs_reset_it() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut supervisor = ProcessSupervisorPolicy::default();
+        // A crash loop inside one minute: five restarts, then give up.
+        for ms in [0, 100, 200, 300, 400] {
+            assert!(matches!(
+                supervisor.child_exited_at(ChildExit::ExitCode(1), at(ms)),
+                SupervisorDecision::RestartAfter(_)
+            ));
+        }
+        assert_eq!(
+            supervisor.child_exited_at(ChildExit::ExitCode(1), at(500)),
+            SupervisorDecision::GiveUp
+        );
+        assert!(supervisor.gave_up());
+
+        // Five crashes spread over an hour, each after a healthy minute, never trip the guard
+        // and restart at the initial backoff.
+        let mut healthy = ProcessSupervisorPolicy::default();
+        for n in 0..10_u64 {
+            assert_eq!(
+                healthy.child_exited_at(ChildExit::ExitCode(1), at(n * 61_000)),
+                SupervisorDecision::RestartAfter(500)
+            );
+        }
+        assert!(!healthy.gave_up());
+        assert_eq!(healthy.restarts(), 10);
     }
 }
