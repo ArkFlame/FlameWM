@@ -86,10 +86,10 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .mode-grid { width:100%; min-width:0; display:flex; flex-direction:column; gap:var(--space-xs); overflow:hidden; }
 .mode-slot { width:100%; min-width:0; flex-grow:0; height:28px; padding:0 8px; font-size:var(--font-sm); display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden; border:1px solid var(--control-edge); border-radius:var(--radius-xl); background:var(--control); }
 .hotkey-card { padding:0; }
-.hotkey-row { min-height:40px; padding:7px 14px; display:flex; align-items:center; justify-content:space-between; gap:var(--space-xl); border-width:0; }
+.hotkey-row { min-height:40px; padding:7px 14px; border-width:0; }
 .hotkey-copy { flex-grow:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
 .hotkey-copy small { color:var(--muted); font-size:var(--font-xs); }
-.hotkey-key { min-width:168px; height:30px; padding:0 8px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid var(--control-edge); border-radius:var(--radius-xl); background:var(--control); }
+.hotkey-key { min-width:168px; padding:0 8px; border:1px solid var(--control-edge); border-radius:var(--radius-xl); background:var(--control); }
 .hotkey-footer { min-height:40px; padding:7px 14px; display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); border-width:0; }
 .settings-inline-error { position:absolute; left:0; bottom:0; width:100%; height:28px; padding:0 30px; display:flex; align-items:center; color:var(--accent); font-size:var(--font-base); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .about-page { display:flex; flex-direction:column; align-items:center; padding-top:72px; gap:14px; }

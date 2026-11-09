@@ -510,6 +510,66 @@ mod tests {
         }
     }
 
+    /// FNV-1a 64 over the encoded document (source fingerprint zeroed), so the golden is one number.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Encoded length and FNV-1a of one UI page compiled the way `compile_file` links it.
+    /// `without_images` drops `<img>` tags: the branding assets are not in the source tree, and images do not
+    /// take part in the class migration being checked (both sides of the check strip them the same way).
+    fn compiled_page_digest(page: &Path, without_images: bool) -> (usize, u64) {
+        let mut source = fs::read_to_string(page).expect("read page");
+        if without_images {
+            while let Some(start) = source.find("<img") {
+                let end = start + source[start..].find('>').expect("img end") + 1;
+                source.replace_range(start..end, "");
+            }
+        }
+        let html = parse_html(&source).expect("parse page");
+        let base = page.parent().expect("page parent");
+        let mut css = crate::imports::expand_imports(page, &html.embedded_css).expect("css");
+        for href in &html.linked_css {
+            let path = base.join(href);
+            css.push('\n');
+            let text = fs::read_to_string(&path).expect("read sheet");
+            css.push_str(&crate::imports::expand_imports(&path, &text).expect("expand sheet"));
+        }
+        let output = compile_parsed(
+            &source,
+            &css,
+            parse_html(&source).expect("parse page"),
+            CompileOptions::default(),
+            Some(base),
+        )
+        .expect("compile page");
+        let bytes = encoded_without_fingerprint(&output);
+        (bytes.len(), fnv1a(&bytes))
+    }
+
+    /// Migrating dock slot classes to utilities must not change the compiled dock document.
+    /// Golden recorded from the pre-migration tree (284001 bytes). Update only for an intended dock change.
+    #[test]
+    fn dock_document_is_unchanged_by_utility_migration() {
+        let page = ui_dir().join("shell/dock.html");
+        assert_eq!(
+            compiled_page_digest(&page, false),
+            (284_001, 0x5984_6a6c_bee8_c2c8)
+        );
+    }
+
+    /// Settings hotkeys section: row and key classes moved to utilities; the compiled page must not change.
+    #[test]
+    fn settings_hotkeys_document_is_unchanged_by_utility_migration() {
+        let page = ui_dir().join("settings.html");
+        assert_eq!(
+            compiled_page_digest(&page, true),
+            (785_753, 0xc7fa_10d5_b256_4b1d)
+        );
+    }
+
     fn html_pages(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).expect("read ui dir") {
             let path = entry.expect("ui entry").path();
