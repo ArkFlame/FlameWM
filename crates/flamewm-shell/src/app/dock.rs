@@ -691,7 +691,21 @@ impl ShellLoop {
             }
             return Ok(());
         }
-        let request = dock::click_request(&entry.app_id, &self.shell.snapshot().windows);
+        let request = {
+            let snapshot = self.shell.snapshot();
+            let windows = &snapshot.windows;
+            // A launch (no running window yet) starts the optional hop; a focus click does not.
+            if !entry.running && dock::dock_settings(self.settings_cache.as_ref()).launch_bounce {
+                self.dock_bounce = Some((
+                    slot.wrapping_sub(1),
+                    flamewm_shell_core::dock::LaunchBounce::start(
+                        std::time::Instant::now(),
+                        windows.len(),
+                    ),
+                ));
+            }
+            dock::click_request(&entry.app_id, windows)
+        };
         self.submit(request);
         Ok(())
     }
@@ -734,6 +748,45 @@ impl ShellLoop {
         });
         if let Err(error) = result {
             eprintln!("flamewm-shell: dock hover scale failed: {error:?}");
+        }
+    }
+
+    /// Advances the launch hop: writes the icon's lifted position while it runs, then the rest
+    /// position once. Nothing is written while the dock is hidden or rebuilding.
+    pub(crate) fn tick_dock_bounce(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        now: std::time::Instant,
+    ) {
+        let Some((index, bounce)) = self.dock_bounce else {
+            return;
+        };
+        let windows = self.shell.snapshot().windows.len();
+        let lift = bounce.lift(now).filter(|_| !bounce.arrived(windows));
+        if lift.is_none() {
+            // The first window (or the period's end) settles the icon back to rest.
+            self.dock_bounce = None;
+        }
+        let hidden = self
+            .dock_stage
+            .autohide
+            .as_ref()
+            .is_some_and(AutoHide::is_hidden);
+        let (Some((frame, ..)), Some(surface), false) =
+            (self.dock_last.as_ref(), self.dock_surface, hidden)
+        else {
+            return;
+        };
+        let (Some(slot), Some(icon)) = (frame.slots.get(index), frame.icons.get(index)) else {
+            return;
+        };
+        let (x, y) = (icon.x - slot.x, icon.y - slot.y);
+        let lifted = lift.map_or(0.0_f32, |lift| lift as f32);
+        let id = format!("dock-slot-{}-icon", index + 1);
+        let result =
+            runtime.with_document(surface, |document| document.position(&id, x, y - lifted));
+        if let Err(error) = result {
+            eprintln!("flamewm-shell: dock launch bounce failed: {error:?}");
         }
     }
 

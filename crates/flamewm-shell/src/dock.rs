@@ -26,6 +26,8 @@ pub struct DockSettings {
     pub hover_scale: bool,
     /// `dock.autoHideCovered`: with auto-hide on, hide only while a window covers the dock.
     pub auto_hide_covered: bool,
+    /// `dock.launchBounce`: the icon of a pending launch hops until its first window.
+    pub launch_bounce: bool,
     /// `dock.autoHide`: the dock slides away when idle and reveals at its edge.
     pub auto_hide: bool,
 }
@@ -42,6 +44,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
             show_trash: true,
             hover_scale: false,
             auto_hide_covered: false,
+            launch_bounce: false,
             auto_hide: true,
         };
     };
@@ -67,6 +70,10 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     );
     let auto_hide_covered = matches!(
         snapshot.values.get("dock.autoHideCovered"),
+        Some(SettingValue::Boolean(true))
+    );
+    let launch_bounce = matches!(
+        snapshot.values.get("dock.launchBounce"),
         Some(SettingValue::Boolean(true))
     );
     let edge = match text("dock.position") {
@@ -102,6 +109,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         show_trash,
         hover_scale,
         auto_hide_covered,
+        launch_bounce,
         auto_hide,
     }
 }
@@ -537,6 +545,7 @@ mod tests {
             show_trash: true,
             hover_scale: false,
             auto_hide_covered: false,
+            launch_bounce: false,
             auto_hide: false,
         };
         let layout = layout_for(&settings, &[]);

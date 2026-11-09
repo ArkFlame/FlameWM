@@ -81,6 +81,8 @@ pub struct ProductSettings {
     pub dock_hover_scale: bool,
     /// `dock.autoHideCovered`: auto-hide only while a window covers the dock (default off).
     pub dock_auto_hide_covered: bool,
+    /// `dock.launchBounce`: the dock icon hops while its launch is pending (default off).
+    pub dock_launch_bounce: bool,
     /// `dock.autoHide`: slide the dock away when idle; reveal on pointer push to its edge.
     pub dock_auto_hide: bool,
     pub taskbar_floating_margin: u16,
@@ -299,6 +301,7 @@ impl Default for ProductSettings {
             dock_show_trash: true,
             dock_hover_scale: false,
             dock_auto_hide_covered: false,
+            dock_launch_bounce: false,
             dock_auto_hide: true,
             taskbar_floating_margin: 4,
             taskbar_floating_radius: 12,

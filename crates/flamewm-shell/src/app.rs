@@ -110,6 +110,8 @@ pub(crate) struct ShellLoop {
     pub(crate) dock_last: Option<dock::DockSync>,
     /// Trash folder has items, as last read on a dock rebuild or reveal.
     pub(crate) dock_trash_full: bool,
+    /// Pending launch hop: the dock slot index and its bounce state.
+    pub(crate) dock_bounce: Option<(usize, flamewm_shell_core::dock::LaunchBounce)>,
     pub(crate) dock_catalog: Option<Vec<flamewm_api::applications::DesktopApplication>>,
     pub(crate) dock_drag: Option<dock::DockDrag>,
     pub(crate) dock_menu: Option<flamewm_ui_x11::SurfaceHandle>,
@@ -215,6 +217,7 @@ impl ShellLoop {
             dock_hover: None,
             dock_last: None,
             dock_trash_full: false,
+            dock_bounce: None,
             dock_catalog: None,
             dock_drag: None,
             dock_menu: None,

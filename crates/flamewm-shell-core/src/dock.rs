@@ -450,3 +450,88 @@ mod tests {
         );
     }
 }
+
+/// Launch bounce (`dock.launchBounce`): peak lift of one pending-launch hop, in pixels.
+pub const BOUNCE_HEIGHT_PX: f64 = 22.0;
+/// Length of one hop; the icon is back at rest after it.
+pub const BOUNCE_PERIOD: std::time::Duration = std::time::Duration::from_millis(700);
+/// Redraw cadence while a hop is pending.
+pub const BOUNCE_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// One pending launch. The icon hops until the shell sees a window count above the
+/// count taken at launch, or until the hop period ends. No timer runs after either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchBounce {
+    started: std::time::Instant,
+    windows_before: usize,
+}
+
+impl LaunchBounce {
+    #[must_use]
+    pub fn start(now: std::time::Instant, windows_before: usize) -> Self {
+        Self {
+            started: now,
+            windows_before,
+        }
+    }
+
+    /// Upward lift in pixels: a parabolic arc peaking at [`BOUNCE_HEIGHT_PX`] mid-period.
+    /// `None` once the hop period has ended.
+    #[must_use]
+    pub fn lift(&self, now: std::time::Instant) -> Option<f64> {
+        let elapsed = now.saturating_duration_since(self.started);
+        if elapsed >= BOUNCE_PERIOD {
+            return None;
+        }
+        let t = elapsed.as_secs_f64() / BOUNCE_PERIOD.as_secs_f64();
+        Some(4.0 * BOUNCE_HEIGHT_PX * t * (1.0 - t))
+    }
+
+    /// True once a window appeared after the launch was requested.
+    #[must_use]
+    pub fn arrived(&self, windows_now: usize) -> bool {
+        windows_now > self.windows_before
+    }
+
+    /// Next redraw while the hop runs; `None` once it has ended.
+    #[must_use]
+    pub fn deadline(&self, now: std::time::Instant) -> Option<std::time::Instant> {
+        self.lift(now).map(|_| now + BOUNCE_FRAME)
+    }
+}
+
+#[cfg(test)]
+mod launch_bounce_tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn hop_rises_to_peak_then_lands_after_the_period() {
+        let t0 = Instant::now();
+        let bounce = LaunchBounce::start(t0, 0);
+        assert_eq!(bounce.lift(t0), Some(0.0));
+        let mid = bounce.lift(t0 + BOUNCE_PERIOD / 2).expect("mid hop");
+        assert!((mid - BOUNCE_HEIGHT_PX).abs() < 1e-9);
+        assert!(bounce.lift(t0 + BOUNCE_PERIOD).is_none());
+        assert!(bounce.deadline(t0 + BOUNCE_PERIOD).is_none());
+    }
+
+    #[test]
+    fn pending_hop_schedules_frames_only_until_it_ends() {
+        let t0 = Instant::now();
+        let bounce = LaunchBounce::start(t0, 2);
+        assert_eq!(bounce.deadline(t0), Some(t0 + BOUNCE_FRAME));
+        assert_eq!(
+            bounce.deadline(t0 + BOUNCE_PERIOD.saturating_sub(BOUNCE_FRAME)),
+            Some(t0 + BOUNCE_PERIOD)
+        );
+        assert_eq!(bounce.deadline(t0 + BOUNCE_PERIOD), None);
+    }
+
+    #[test]
+    fn first_new_window_settles_the_hop() {
+        let bounce = LaunchBounce::start(Instant::now(), 2);
+        assert!(!bounce.arrived(2));
+        assert!(bounce.arrived(3));
+    }
+}

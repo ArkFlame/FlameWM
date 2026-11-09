@@ -168,6 +168,7 @@ impl ShellLoop {
         }
         self.tick_osd(runtime);
         self.tick_switcher(runtime);
+        self.tick_dock_bounce(runtime, std::time::Instant::now());
         self.publish_wake(std::time::Instant::now());
         Ok(())
     }
@@ -190,6 +191,8 @@ impl ShellLoop {
             self.dock_stage
                 .autohide
                 .and_then(|model| model.deadline(now)),
+            self.dock_bounce
+                .and_then(|(_, bounce)| bounce.deadline(now)),
         ]));
     }
 

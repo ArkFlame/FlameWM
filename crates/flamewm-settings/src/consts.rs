@@ -65,6 +65,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "dock-trash-on",
     "dock-hover-scale-on",
     "dock-covered-on",
+    "dock-bounce-on",
     "dock-autohide-on",
     "assistant-enabled-on",
     "assistant-taskbar-icon-on",
@@ -275,6 +276,12 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "dock.autoHideCovered",
         "dock-covered-on",
         "dock-covered-off",
+        false,
+    ),
+    (
+        "dock.launchBounce",
+        "dock-bounce-on",
+        "dock-bounce-off",
         false,
     ),
     (
