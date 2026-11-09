@@ -4,7 +4,7 @@
 
 **A window manager and desktop shell for Linux, written in Rust, with its UI in HTML and CSS compiled to native code.**
 
-No browser runtime. Two sessions: X11 (default) and Wayland (in development).
+Extremely efficient. Two sessions: X11 and Wayland.
 
 [![License: LGPL-2.0-only](https://img.shields.io/badge/license-LGPL--2.0--only-blue)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-workspace-b7410e)
@@ -241,6 +241,14 @@ The ownership rules (one owner per mechanism, typed facades, no UI authority ove
 ## Contributing
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, then [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). The build and native checks are `./scripts/check`. Use [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for the gates that apply to your change. For security reports, follow [`SECURITY.md`](SECURITY.md).
+
+## AI Disclosure
+
+Hi! I am Juan Cruz Linsalata. I started my software developer career in 2012 making Minecraft servers and plugins.
+
+This is important to let you know: this project is made using AI orchestration, leveraged by decades of experience building software. I mostly use Claude Sonnet 5.5 and Haiku 5.5 as subagents, and I run a fully automated AI review process.
+
+A human stays in the loop: all releases are human-reviewed before release and tested on a low-end Coradir G5 government notebook. The project is meant to be automated, and it is also tested against real old hardware before every release.
 
 ## License
 
