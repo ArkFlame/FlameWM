@@ -50,9 +50,9 @@ ui/<app>/<app>.html      <link> base first, then shared components, then app she
 ```
 
 - Sharing is by `<link>` order. The compiler concatenates in order, so a later sheet overrides an earlier one.
-- Utility classes (Tailwind-style generator) are not planned. They would add a build tool and rule volume
-  without a measured duplicate that needs them. Revisit only if the component sheets miss a repeated
-  pattern.
+- Utility classes: planned as a used-only compile-time layer, see `docs/UI_UTILITIES_SPEC.md`
+  (measured: 5654 declarations in 17 sheets, 1057 unique; ~15 flex/size/position patterns are ~2000 of them).
+  Not a generator or build tool; it lives in the existing compiler and costs nothing for unused classes.
 - Length/radius tokens need a compiler change (`parse_length` accepting `var()`). Deferred until a
   measured need exists. Colour tokens need no compiler change.
 
