@@ -4,7 +4,7 @@ use super::{
 };
 
 fn reactor_loop_source() -> &'static str {
-    const SOURCE: &str = include_str!("../../events.rs");
+    const SOURCE: &str = include_str!("../window.rs");
     let start = SOURCE
         .find("pub(crate) unsafe fn event_loop_with_reactor")
         .expect("reactor event-loop owner remains present");
