@@ -292,7 +292,7 @@ impl<C: Connection> Wm<'_, C> {
         let clients: Vec<Window> = self.clients.keys().copied().collect();
         for client in clients {
             self.chrome_runtimes.entry(client).or_default().invalidate();
-            self.paint_chrome(client)?;
+            super::ignore_destroyed_window_race(self.paint_chrome(client))?;
         }
         if let Some(renderer) = self.renderer.as_ref() {
             renderer.borrow().flush();

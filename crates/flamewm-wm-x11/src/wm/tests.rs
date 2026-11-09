@@ -56,8 +56,35 @@ fn destroyed_window_races_are_not_fatal_but_other_errors_are() {
     };
     assert!(is_destroyed_window_race(&error(ErrorKind::Window)));
     assert!(is_destroyed_window_race(&error(ErrorKind::Drawable)));
+    assert!(is_destroyed_window_race(&error(ErrorKind::Match)));
     assert!(!is_destroyed_window_race(&error(ErrorKind::Access)));
     assert!(!is_destroyed_window_race(&ReplyOrIdError::IdsExhausted));
+
+    let reply = |kind: ErrorKind| {
+        ReplyError::X11Error(X11Error {
+            error_kind: kind,
+            error_code: 3,
+            sequence: 1,
+            bad_value: 0,
+            minor_opcode: 0,
+            major_opcode: 20,
+            extension_name: None,
+            request_name: Some("GetGeometry"),
+        })
+    };
+    assert!(ignore_destroyed_window_race(Err(reply(ErrorKind::Window))).is_ok());
+    assert!(ignore_destroyed_window_race(Ok(())).is_ok());
+    assert!(ignore_destroyed_window_race(Err(reply(ErrorKind::Value))).is_err());
+}
+
+#[test]
+fn client_moveresize_clamps_client_values_instead_of_wrapping() {
+    use super::rects::{clamp_i16, clamp_u16};
+    // A zero width is rejected by X (BadValue, fatal to the WM); a 0x10000 width wrapped to 0.
+    assert_eq!(clamp_u16(0), 1);
+    assert_eq!(clamp_u16(0x1_0000), u16::MAX);
+    assert_eq!(clamp_i16(0x8000), i16::MAX);
+    assert_eq!(clamp_i16(-0x8001), i16::MIN);
 }
 use super::*;
 use crate::frame::model::ResizeEdges;

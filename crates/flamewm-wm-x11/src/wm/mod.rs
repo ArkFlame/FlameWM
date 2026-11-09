@@ -39,13 +39,37 @@ fn desktop_stack_policy(mut aux: ConfigureWindowAux, kind: WindowKind) -> Config
     aux
 }
 
+/// True for X error kinds a request can raise when its target was destroyed or unmapped first:
+/// `Match` covers e.g. `SetInputFocus` on a window that just became unviewable.
+fn is_destroyed_window_kind(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::Window | ErrorKind::Drawable | ErrorKind::Pixmap | ErrorKind::Match
+    )
+}
+
 /// True for X errors that mean the target window/drawable no longer exists.
 fn is_destroyed_window_race(error: &ReplyOrIdError) -> bool {
-    matches!(
-        error,
-        ReplyOrIdError::X11Error(x11)
-            if matches!(x11.error_kind, ErrorKind::Window | ErrorKind::Drawable | ErrorKind::Pixmap)
-    )
+    matches!(error, ReplyOrIdError::X11Error(x11) if is_destroyed_window_kind(x11.error_kind))
+}
+
+/// Per-turn variant of [`is_destroyed_window_race`] for requests that are not tied to one event.
+pub(super) fn ignore_destroyed_window_race(
+    result: Result<(), ReplyError>,
+) -> Result<(), ReplyError> {
+    match result {
+        Err(ReplyError::X11Error(x11)) if is_destroyed_window_kind(x11.error_kind) => {
+            log_once(
+                &DESTROYED_WINDOW_RACE_LOG,
+                &format!(
+                    "ignored a request that raced a destroyed window: {:?}",
+                    x11.error_kind
+                ),
+            );
+            Ok(())
+        }
+        other => other,
+    }
 }
 
 /// Rect a maximized client returns to on unmaximize, when that is a floating restore.
