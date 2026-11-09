@@ -99,6 +99,11 @@ pub fn project(
             // Start shares the surfaceColor/surfaceOpacity pair with the taskbar and popups.
             document.background(root, surface_background(snapshot))?;
             document.corner_radius(root, popup_corner_radius(snapshot))?;
+            // Translucent Start blurs the wallpaper beneath it, as desktop menus do (surfaceBlurPercent).
+            document.node_backdrop(
+                root,
+                Some(flamewm_ui_core::surface::surface_blur_percent(snapshot)),
+            )?;
             // Opaque interior token: the menu root already carries the surface alpha, so the
             // search field must not apply surfaceOpacity a second time.
             // The search field's contour is the shared Surfaces outline, not the fixed `--rim` token.
