@@ -56,3 +56,18 @@ No `Cargo.toml`, profile, linker or `.cargo/config.toml` changes. Reasons: dupli
 ## Lint gate status
 
 `scripts/lint` ran on the shared tree. The architecture guard passed (76 ratified violations, 0 new). `cargo fmt --check` failed on other workers' uncommitted files, so the run stopped before `check` and `clippy`. Clean-tree verification is recorded below once run.
+
+## sccache evaluation (2026-11-08): not adopted
+
+Setup: sccache 0.10.0 (official release, sha256 verified) in `~/.cargo/bin`, toolchain 1.89.0, private `CARGO_TARGET_DIR` per run, `cargo build -p flamewm-wm-wayland`, shared flock, `CARGO_BUILD_JOBS=2`.
+
+| Run | Wrapper | Cargo `Finished` time | Cache hits / misses |
+|---|---|---|---|
+| plain cold | none | 4m 47s | n/a |
+| sccache cold (empty cache) | sccache | 4m 51s | 0 / 175 |
+| sccache warm (new target dir, populated cache) | sccache | 7m 18s | 0 / 175 |
+
+- Cold overhead of sccache versus plain: about +1%, so no win. The threshold to adopt was >30%.
+- The warm run got no cache hits. Cause not identified; the cache size did not grow on the second run. Under contention the warm time is not usable.
+- Decision: `scripts/gate` does not export `RUSTC_WRAPPER`. Revisit only with a warm run that shows real hits.
+- Measurement used cargo's own `Finished` time; wall times include flock queueing and are not comparable.
