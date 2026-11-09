@@ -282,6 +282,23 @@ pub struct ControlClient {
     pump: BusPump,
 }
 
+/// Settings snapshot from the session control service; defaults apply when the service is down.
+#[must_use]
+pub fn initial_settings() -> flamewm_api::settings::SettingsSnapshot {
+    ControlClient::connect(BusKind::Session)
+        .ok()
+        .and_then(|client| {
+            client
+                .call_with_timeout(&ControlRequest::GetSettings, Duration::from_millis(250))
+                .ok()
+        })
+        .and_then(|reply| match reply {
+            ControlResponse::Settings(snapshot) => Some(snapshot),
+            _ => None,
+        })
+        .unwrap_or_else(|| flamewm_api::settings::SettingsSnapshot::new(0))
+}
+
 impl ControlClient {
     pub fn connect(kind: BusKind) -> FlameResult<Self> {
         Ok(Self {

@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use crate::native::rounded::row_inset;
 use flamewm_api::render_backend::{FallbackReason, RenderBackend, RenderBackendStatus};
 
+use flamewm_render_core::soft::hole_row_span;
 pub use flamewm_render_core::{PixelBackend, PixelOp, RenderAcceleration, RoundedRect};
 
 pub const RENDER_ACCELERATION_SETTING: &str = "renderAcceleration";
@@ -96,22 +97,6 @@ fn blend_span(span: &mut [u8], color: [u8; 4], alpha: f32) {
         pixel[2] = (cb * alpha + f32::from(pixel[2]) * inverse).round() as u8;
         pixel[3] = (ca + f32::from(pixel[3]) * inverse).round() as u8;
     }
-}
-
-/// Device x range `[start, end)` of `rect`'s rounded outline on device row `y`, using the same row
-/// insets as the outer fill, or `None` when `y` is outside `rect`. An empty range is `Some` with
-/// `start == end`.
-fn hole_row_span(rect: RoundedRect, y: i32) -> Option<(i32, i32)> {
-    let row = u32::try_from(y - rect.y)
-        .ok()
-        .filter(|row| *row < rect.height)?;
-    let inset = row_inset(rect.width, rect.height, rect.radius, row) as i32;
-    let start = rect.x.saturating_add(inset);
-    let end = rect
-        .x
-        .saturating_add(rect.width as i32)
-        .saturating_sub(inset);
-    Some((start, end.max(start)))
 }
 
 impl PixelBackend for gles::GpuBlur {

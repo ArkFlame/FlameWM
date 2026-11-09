@@ -39,9 +39,7 @@ use flamewm_assistant_core::{
     default_config_path, endpoint, expand, human_error, key_or_default, now_ms, proxy_models,
     resolve, start_recording,
 };
-use flamewm_control_core::{ControlRequest, ControlResponse};
-use flamewm_control_dbus::ControlClient;
-use flamewm_dbus_reactor::BusKind;
+use flamewm_control_dbus::initial_settings;
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
     RawPress, RawPressWatch, UiActionEvent, UiActionPhase, UiColor, UiControllerEvent,
@@ -1169,22 +1167,6 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
             Ok(())
         },
     )
-}
-
-/// Settings snapshot for theme and assistant keys; defaults apply when the control service is down.
-fn initial_settings() -> SettingsSnapshot {
-    ControlClient::connect(BusKind::Session)
-        .ok()
-        .and_then(|client| {
-            client
-                .call_with_timeout(&ControlRequest::GetSettings, Duration::from_millis(250))
-                .ok()
-        })
-        .and_then(|reply| match reply {
-            ControlResponse::Settings(snapshot) => Some(snapshot),
-            _ => None,
-        })
-        .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {

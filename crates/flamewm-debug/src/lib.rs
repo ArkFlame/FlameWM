@@ -8,6 +8,8 @@
 //! suppressed events cost nothing. Never pass secrets: [`init_process`]
 //! writes only `process` name + `pid` in its session header.
 
+pub mod log_limit;
+
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

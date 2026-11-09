@@ -35,9 +35,7 @@ use calloop::Interest;
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_applications::ApplicationCatalog;
-use flamewm_control_core::{ControlRequest, ControlResponse};
-use flamewm_control_dbus::ControlClient;
-use flamewm_dbus_reactor::BusKind;
+use flamewm_control_dbus::initial_settings;
 use flamewm_reactor::{FdAction, Reactor};
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
@@ -242,22 +240,6 @@ fn meta_line(entry: &Entry, now: i64) -> String {
     } else {
         format!("{head} · {age}")
     }
-}
-
-/// Initial settings snapshot for glass and theme; defaults apply when the control service is down.
-fn initial_settings() -> SettingsSnapshot {
-    ControlClient::connect(BusKind::Session)
-        .ok()
-        .and_then(|client| {
-            client
-                .call_with_timeout(&ControlRequest::GetSettings, Duration::from_millis(250))
-                .ok()
-        })
-        .and_then(|reply| match reply {
-            ControlResponse::Settings(snapshot) => Some(snapshot),
-            _ => None,
-        })
-        .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {

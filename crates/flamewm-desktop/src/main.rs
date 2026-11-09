@@ -72,7 +72,7 @@ mod downloads;
 mod drag;
 mod icon_names;
 mod icon_raster;
-mod log_limit;
+use flamewm_debug::log_limit;
 mod output_layout;
 mod projection;
 mod rubber;

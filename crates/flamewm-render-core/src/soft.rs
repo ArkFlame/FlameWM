@@ -84,7 +84,7 @@ fn row_inset(width: u32, height: u32, radius: u32, row: u32) -> u32 {
 }
 
 /// Device x range `[start, end)` of `rect`'s rounded outline on device row `y`.
-fn hole_row_span(rect: RoundedRect, y: i32) -> Option<(i32, i32)> {
+pub fn hole_row_span(rect: RoundedRect, y: i32) -> Option<(i32, i32)> {
     let row = u32::try_from(y - rect.y)
         .ok()
         .filter(|row| *row < rect.height)?;

@@ -15,12 +15,9 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
-use std::time::Duration;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_control_core::{ControlRequest, ControlResponse};
-use flamewm_control_dbus::{ControlClient, ControlSignal, ControlSignalClient};
-use flamewm_dbus_reactor::BusKind;
+use flamewm_control_dbus::{ControlSignal, ControlSignalClient, initial_settings};
 use flamewm_image_core::ImageSourceFormat;
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
@@ -436,21 +433,6 @@ impl App {
 
 fn quit() -> ! {
     std::process::exit(0)
-}
-
-fn initial_settings() -> SettingsSnapshot {
-    ControlClient::connect(BusKind::Session)
-        .ok()
-        .and_then(|client| {
-            client
-                .call_with_timeout(&ControlRequest::GetSettings, Duration::from_millis(250))
-                .ok()
-        })
-        .and_then(|reply| match reply {
-            ControlResponse::Settings(snapshot) => Some(snapshot),
-            _ => None,
-        })
-        .unwrap_or_else(|| SettingsSnapshot::new(0))
 }
 
 fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::WindowBackdrop {
