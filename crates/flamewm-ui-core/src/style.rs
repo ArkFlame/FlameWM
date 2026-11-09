@@ -248,11 +248,13 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
+        let palette = Palette::default();
+        let shades = crate::accent::shades(palette.accent);
         Self {
-            palette: Palette::default(),
-            accent_hover: Color(0x00F0_6433),
-            accent_pressed: Color(0x00C9_4418),
-            accent_muted: Color(0x006B_2A12),
+            palette,
+            accent_hover: shades.hover,
+            accent_pressed: shades.pressed,
+            accent_muted: shades.muted,
             shell: ShellMetrics::default(),
             settings: SettingsMetrics::default(),
         }

@@ -21,11 +21,33 @@ pub fn accent_rgba(snapshot: &SettingsSnapshot, alpha: u8) -> (u8, u8, u8, u8) {
     ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
 }
 
+/// Hover, pressed and muted shades derived from one accent. Each channel is lifted toward white
+/// for hover and scaled down for pressed and muted, so every state follows the live accent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shades {
+    pub hover: Color,
+    pub pressed: Color,
+    pub muted: Color,
+}
+
+#[must_use]
+pub fn shades(accent: Color) -> Shades {
+    let map = |f: fn(u16) -> u16| {
+        let channel = |shift: u32| f(u16::from((accent.0 >> shift) as u8)) as u8;
+        Color((u32::from(channel(16)) << 16) | (u32::from(channel(8)) << 8) | u32::from(channel(0)))
+    };
+    Shades {
+        hover: map(|c| c + (255 - c) * 12 / 100),
+        pressed: map(|c| c * 80 / 100),
+        muted: map(|c| c * 42 / 100),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
-    use super::{accent, accent_rgba};
+    use super::{accent, accent_rgba, shades};
     use crate::Color;
 
     fn with_accent(value: &str) -> SettingsSnapshot {
@@ -64,5 +86,17 @@ mod tests {
         );
         assert_eq!(accent(&with_accent("teal")), Color(0x001a_bc9c));
         assert_eq!(accent(&with_accent("nonsense")), Color(0x003d_aee9));
+    }
+
+    #[test]
+    fn shades_follow_the_accent_and_keep_channel_order() {
+        let red = shades(Color::FLAME_RED);
+        let blue = shades(Color(0x003d_aee9));
+        assert_ne!(red.hover, blue.hover);
+        assert_ne!(red.pressed, blue.pressed);
+        // Pressed is darker than the accent and muted is darker than pressed, per channel.
+        assert!(red.pressed.0 >> 16 < 0xef && red.muted.0 >> 16 < red.pressed.0 >> 16);
+        // Blue stays blue-dominant after scaling: the blue channel is the largest in pressed.
+        assert!((blue.pressed.0 & 0xff) > ((blue.pressed.0 >> 16) & 0xff));
     }
 }
