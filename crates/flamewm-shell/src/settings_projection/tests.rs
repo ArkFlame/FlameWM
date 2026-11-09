@@ -149,6 +149,28 @@ fn start_projection_search_field_does_not_reapply_surface_opacity() {
     assert_eq!(doc.backgrounds["start-search-box"].a, 255);
 }
 
+// OBSERVABLE: the Start search field contour is the shared Surfaces outline (same colour and
+// alpha as the menu root), not the fixed `--rim` overlay token it used before.
+// MUTATION: dropping the search-box border projection leaves no `start-search-box` entry.
+#[test]
+fn start_search_field_outline_matches_menu_outline() {
+    let mut snapshot = SettingsSnapshot::new(1);
+    snapshot.values.insert(
+        "surfaceOutlineColor".to_owned(),
+        SettingValue::Text("#fedcba".to_owned()),
+    );
+    snapshot.values.insert(
+        "surfaceOutlineOpacity".to_owned(),
+        SettingValue::Percent(30),
+    );
+    let mut doc = RecordingUiDoc::default();
+    project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
+    let contour = flamewm_ui_x11::surface_style::surface_outline(&snapshot);
+    assert_eq!(doc.borders["start-search-box"], contour);
+    assert_eq!(doc.borders["start-menu"], contour);
+    assert_eq!(contour.a, 76);
+}
+
 #[test]
 fn launcher_projection_shares_start_surface_pair() {
     let mut doc = RecordingUiDoc::default();
