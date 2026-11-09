@@ -69,7 +69,9 @@ trap cleanup EXIT
 DNUM=90
 while [ -e "/tmp/.X${DNUM}-lock" ] || [ -e "/tmp/.X11-unix/X${DNUM}" ]; do DNUM=$((DNUM + 1)); done
 export DISPLAY=":${DNUM}"
-Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >"$WORK/xvfb.log" 2>&1 &
+# 1920x1080: must contain the largest default window (task-manager 1180x805 at y=55). A window that
+# extends past the screen edge makes GetImage fail with BadMatch, which reads as "never painted".
+Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp >"$WORK/xvfb.log" 2>&1 &
 XVFB_PID=$!
 for _ in $(seq 1 100); do
   if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then break; fi
@@ -96,6 +98,7 @@ def probe(argv, env, timeout=20.0):
                             start_new_session=True)
     t_map = t_paint = None
     win = None
+    image_error = None
     try:
         deadline = t0 + int(timeout * 1e9)
         while time.monotonic_ns() < deadline:
@@ -115,8 +118,10 @@ def probe(argv, env, timeout=20.0):
             if win is not None:
                 try:
                     img = win.get_image(0, 0, geom_w(win), geom_h(win), X.ZPixmap, 0xFFFFFFFF).data
-                except Exception:
+                except Exception as error:
+                    # Recorded in the result so a probe failure is never mistaken for a slow paint.
                     img = b""
+                    image_error = f"{type(error).__name__}: {error}"
                 # Painted = window pixels are no longer one uniform colour.
                 if img and img[:4] * (len(img) // 4) != img:
                     t_paint = time.monotonic_ns() - t0
@@ -135,6 +140,7 @@ def probe(argv, env, timeout=20.0):
         "mapped_ms": None if t_map is None else t_map / 1e6,
         "painted_ms": None if t_paint is None else t_paint / 1e6,
         "exit_early": proc.returncode is not None and win is None,
+        "image_error": image_error,
     }
 
 def geom_w(w):
