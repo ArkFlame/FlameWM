@@ -137,9 +137,11 @@ fn whole(value: f32) -> Option<u32> {
 }
 
 fn device_rect(rect: Rect, radius: f32) -> Option<RoundedRect> {
+    // `whole` admits up to u32::MAX, which does not fit the i32 device origin: refuse it rather
+    // than let `as i32` wrap the origin to a negative coordinate.
     let outer = RoundedRect {
-        x: whole(rect.x)? as i32,
-        y: whole(rect.y)? as i32,
+        x: i32::try_from(whole(rect.x)?).ok()?,
+        y: i32::try_from(whole(rect.y)?).ok()?,
         width: whole(rect.width)?,
         height: whole(rect.height)?,
         radius: whole(radius)?,
@@ -537,6 +539,19 @@ mod tests {
             }
             _ => panic!("expected a fill"),
         }
+    }
+
+    #[test]
+    fn a_device_origin_past_i32_is_refused_not_wrapped() {
+        let commands = [PaintCommand::FillRect {
+            rect: rect(3_000_000_000.0, 0.0, 10.0, 10.0),
+            color: color(1, 2, 3, 255),
+            radius: 0.0,
+        }];
+        assert_eq!(
+            lower_commands(&commands, 1.0, &[], (10, 10), None).unwrap_err(),
+            LowerError::Fractional
+        );
     }
 
     #[test]
