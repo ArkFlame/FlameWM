@@ -37,11 +37,52 @@ pub struct SearchOutcome {
     pub cancelled: bool,
 }
 
+/// Match tier of `name` for `query`, case-insensitive: 0 exact, 1 prefix, 2 substring. `None` when no match.
+/// Empty or whitespace-only queries match nothing.
+#[must_use]
+pub fn rank_match(query: &str, name: &str) -> Option<u8> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    let name = name.to_lowercase();
+    if name == query {
+        Some(0)
+    } else if name.starts_with(&query) {
+        Some(1)
+    } else if name.contains(&query) {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// Display order key: match tier, then shorter name, then alphabetical (case-insensitive).
+#[must_use]
+pub fn result_order(query: &str, name: &str) -> (u8, usize, String) {
+    (
+        rank_match(query, name).unwrap_or(u8::MAX),
+        name.chars().count(),
+        name.to_lowercase(),
+    )
+}
+
+/// True when the hit cap was reached, so the result list is a prefix of all matches.
+#[must_use]
+pub fn hit_cap_reached(count: usize) -> bool {
+    count >= MAX_HITS
+}
+
+/// One-line status shown when `hit_cap_reached`.
+#[must_use]
+pub fn cap_notice() -> String {
+    format!("Showing first {MAX_HITS} matches — refine your search")
+}
+
 /// Case-insensitive substring match on the file name. Empty or whitespace-only queries match nothing.
 #[must_use]
 pub fn name_matches(name: &str, query: &str) -> bool {
-    let query = query.trim();
-    !query.is_empty() && name.to_lowercase().contains(&query.to_lowercase())
+    rank_match(query, name).is_some()
 }
 
 /// Shared directory queue: `active` counts directories being read, so idle threads wait for them to publish subdirectories.
@@ -352,6 +393,60 @@ mod tests {
         assert!(name_matches("Report-Final.TXT", " report "));
         assert!(!name_matches("notes.md", "   "));
         assert!(!name_matches("notes.md", ""));
+    }
+
+    #[test]
+    fn rank_match_orders_exact_then_prefix_then_substring() {
+        assert_eq!(rank_match("Notes", "notes"), Some(0));
+        assert_eq!(rank_match("note", "Notes.md"), Some(1));
+        assert_eq!(rank_match("ote", "notes.md"), Some(2));
+        assert_eq!(rank_match("zzz", "notes.md"), None);
+        assert_eq!(rank_match("  ", "notes.md"), None);
+    }
+
+    #[test]
+    fn rank_match_is_unicode_case_insensitive() {
+        assert_eq!(rank_match("ÉCOLE", "école.txt"), Some(1));
+        assert_eq!(rank_match("école", "ÉCOLE"), Some(0));
+        assert_eq!(rank_match("Ü", "müller"), Some(2));
+        assert!(name_matches("ÉTÉ.md", "été"));
+    }
+
+    #[test]
+    fn result_order_sorts_by_tier_then_length_then_name() {
+        let names = [
+            "my-report.txt",
+            "report-zeta.txt",
+            "Report",
+            "report-alpha.txt",
+            "report.md",
+            "a-report-b",
+            "Reports",
+        ];
+        let mut sorted = names.to_vec();
+        sorted.sort_by_cached_key(|name| result_order("report", name));
+        assert_eq!(
+            sorted,
+            vec![
+                "Report",
+                "Reports",
+                "report.md",
+                "report-zeta.txt",
+                "report-alpha.txt",
+                "a-report-b",
+                "my-report.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn hit_cap_flag_is_set_exactly_at_the_cap() {
+        assert!(!hit_cap_reached(MAX_HITS - 1));
+        assert!(hit_cap_reached(MAX_HITS));
+        assert_eq!(
+            cap_notice(),
+            "Showing first 2000 matches — refine your search"
+        );
     }
 
     #[test]

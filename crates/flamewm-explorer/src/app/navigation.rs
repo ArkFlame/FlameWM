@@ -54,8 +54,10 @@ impl ExplorerApp {
                 },
                 SearchEvent::Done{truncated,cancelled,..}=>{
                     if cancelled {continue;}
+                    let query=self.search_text.as_str();
+                    if let Some(rows)=self.search_rows.as_mut() {rows.sort_by_cached_key(|entry|crate::search::result_order(query,&entry.name));}
                     let count=self.search_rows.as_ref().map_or(0,Vec::len);
-                    self.model.status=format!("{count} result(s){}",if truncated {" (truncated)"} else {""});
+                    self.model.status=if crate::search::hit_cap_reached(count) {crate::search::cap_notice()} else {format!("{count} result(s){}",if truncated {" (truncated)"} else {""})};
                 },
             }
         }
