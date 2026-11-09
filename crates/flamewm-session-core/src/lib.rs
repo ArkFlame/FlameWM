@@ -1117,6 +1117,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The 15 names every bundled cursor theme must provide as files (raw, no alias lookup).
+    const STANDARD_CURSOR_NAMES: [&str; 15] = [
+        "default",
+        "pointer",
+        "text",
+        "wait",
+        "progress",
+        "grab",
+        "grabbing",
+        "move",
+        "ew-resize",
+        "ns-resize",
+        "nesw-resize",
+        "nwse-resize",
+        "crosshair",
+        "not-allowed",
+        "help",
+    ];
+
+    #[test]
+    fn bundled_cursor_themes_cover_the_standard_names() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for theme in [
+            repo.join("assets/cursors"),
+            repo.join("assets/themes/cursors/MacTahoe-dark-cursors"),
+        ] {
+            for name in STANDARD_CURSOR_NAMES {
+                assert!(
+                    theme.join("cursors").join(name).is_file(),
+                    "{} missing {name}",
+                    theme.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn cursor_theme_search_path_accepts_multiple_roots() {
         let first = cursor_test_root("multi-a");
