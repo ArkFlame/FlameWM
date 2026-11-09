@@ -38,6 +38,7 @@ pub use titlebar::*;
 use crate::chrome_buttons::Feedback;
 use crate::clip::RoundedSurfaceElement;
 use crate::model::{Button, Hit, Managed, Mode, Rect, TITLEBAR_HEIGHT, WindowId};
+use crate::session_lock::Screen;
 use crate::state::State;
 use flamewm_image_core::{Rect as ImageRect, RgbaImage, frosted_backdrop};
 use flamewm_render_core::outline;
@@ -412,31 +413,34 @@ fn render_into(
         eprintln!("flamewm-wayland: dock backdrop failed: {error}");
     }
     // While locked, the lock client owns the screen: painting the desktop behind it would put
-    // other clients' content back on the output the lock exists to cover.
-    // A locker that crashed mid-lock must not keep the screen covered forever.
+    // other clients' content back on the output the lock exists to cover. A dead locker leaves
+    // the output blank (`screen_for`), it never reveals the desktop.
     crate::session_lock::prune_dead_locks(state);
-    let elements = if let Some(surface) = state.lock_surface() {
-        surface_elements(
+    let elements = match crate::session_lock::screen_for(state.session_locked, state.lock_surface())
+    {
+        Screen::Lock(surface) => surface_elements(
             backend.renderer(),
             surface.wl_surface(),
             0,
             0,
             state.output_scale(),
-        )
-    } else {
-        // The host window draws a named pointer itself (see `State::sync_host_cursor`).
-        let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {
-            Vec::new()
-        } else {
-            state.cursors.elements(
-                backend.renderer(),
-                &state.cursor_status,
-                state.pointer,
-                state.output_scale(),
-            )
-        };
-        elements.extend(build_elements(state, backend.renderer()));
-        elements
+        ),
+        Screen::Blank => Vec::new(),
+        Screen::Desktop => {
+            // The host window draws a named pointer itself (see `State::sync_host_cursor`).
+            let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {
+                Vec::new()
+            } else {
+                state.cursors.elements(
+                    backend.renderer(),
+                    &state.cursor_status,
+                    state.pointer,
+                    state.output_scale(),
+                )
+            };
+            elements.extend(build_elements(state, backend.renderer()));
+            elements
+        }
     };
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target

@@ -356,6 +356,9 @@ pub struct State {
     pub session_lock: Option<smithay::wayland::session_lock::SessionLockManagerState>,
     /// The surfaces a locking client drew, one per output, while the session is locked.
     pub locked_outputs: Vec<crate::session_lock::LockedOutput>,
+    /// True from a lock request until unlock. It outlives the locker: a locker that dies leaves
+    /// the output blank and the keyboard unfocused, never the desktop.
+    pub session_locked: bool,
     pub xdg_shell: XdgShellState,
     pub layer_shell: WlrLayerShellState,
     pub shm: ShmState,
@@ -515,6 +518,7 @@ impl State {
         Ok(Self {
             session_lock,
             locked_outputs,
+            session_locked: false,
             display,
             loop_signal,
             socket_name,
@@ -834,11 +838,13 @@ impl State {
     /// assumed still correct.
     #[must_use]
     pub fn pin_focus_to_lock(&mut self) -> bool {
-        let Some(surface) = self.lock_surface().map(|lock| lock.wl_surface().clone()) else {
+        if !self.session_locked {
             return false;
-        };
+        }
+        // With no live locker the keyboard is cleared, never handed to a window behind the lock.
+        let surface = self.lock_surface().map(|lock| lock.wl_surface().clone());
         if let Some(keyboard) = self.seat.get_keyboard() {
-            keyboard.set_focus(self, Some(surface), SERIAL_COUNTER.next_serial());
+            keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
         }
         true
     }

@@ -71,9 +71,16 @@ impl SessionLockHandler for State {
         // "frame ready" step. Dropping `confirmation` instead would refuse the request.
         confirmation.lock();
         self.clear_lock_surfaces();
+        enter_lock(
+            &mut self.session_locked,
+            &mut self.grab,
+            &mut self.decor_cursor,
+        );
+        self.refresh_cursor_status();
     }
 
     fn unlock(&mut self) {
+        self.session_locked = false;
         self.clear_lock_surfaces();
         // The keyboard still points at the destroyed lock surface; hand focus back or no client
         // receives keys until something else moves focus.
@@ -103,8 +110,35 @@ impl SessionLockHandler for State {
     }
 }
 
-/// Drops lock surfaces whose client is gone, so a crashed locker cannot leave the session
-/// permanently locked. Returns whether anything was removed.
+/// Clears the interaction state a pre-lock pointer action left behind: a move or resize grab
+/// and a decoration resize cursor. Pointer motion is diverted while locked, so nothing else would
+/// ever end them and they would show on the lock screen.
+fn enter_lock<G, C>(session_locked: &mut bool, grab: &mut Option<G>, decor_cursor: &mut Option<C>) {
+    *session_locked = true;
+    *grab = None;
+    *decor_cursor = None;
+}
+
+/// What the output shows. A live lock surface wins. Otherwise a locked session stays blank:
+/// the desktop is never painted while the lock is held, even after the locker died.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Screen<'a, S> {
+    Lock(&'a S),
+    Blank,
+    Desktop,
+}
+
+#[must_use]
+pub fn screen_for<S>(session_locked: bool, lock_surface: Option<&S>) -> Screen<'_, S> {
+    match (lock_surface, session_locked) {
+        (Some(surface), _) => Screen::Lock(surface),
+        (None, true) => Screen::Blank,
+        (None, false) => Screen::Desktop,
+    }
+}
+
+/// Drops lock surfaces whose client is gone. The session stays locked (see `screen_for`), so a
+/// dead locker leaves a blank output rather than unlocking. Returns whether anything was removed.
 pub fn prune_dead_locks(state: &mut State) -> bool {
     let before = state.locked_outputs.len();
     state.locked_outputs.retain(|locked| locked.surface.alive());
@@ -127,5 +161,35 @@ mod tests {
         let size: Size<u32, Logical> = Size::from((1920u32, 1080u32));
         assert_eq!(size.w, 1920);
         assert_eq!(size.h, 1080);
+    }
+
+    #[test]
+    fn a_dead_locker_leaves_a_locked_output_blank_not_the_desktop() {
+        let dead: Option<&u8> = None;
+        assert_eq!(screen_for(true, dead), Screen::Blank);
+    }
+
+    #[test]
+    fn a_live_lock_surface_covers_the_output_while_locked() {
+        let surface = 7u8;
+        assert_eq!(screen_for(true, Some(&surface)), Screen::Lock(&surface));
+        assert_eq!(screen_for(false, Some(&surface)), Screen::Lock(&surface));
+    }
+
+    #[test]
+    fn the_desktop_shows_only_when_unlocked() {
+        let none: Option<&u8> = None;
+        assert_eq!(screen_for(false, none), Screen::Desktop);
+    }
+
+    #[test]
+    fn entering_a_lock_drops_pre_lock_grab_and_resize_cursor() {
+        let mut locked = false;
+        let mut grab = Some("move window");
+        let mut decor_cursor = Some("ew-resize");
+        enter_lock(&mut locked, &mut grab, &mut decor_cursor);
+        assert!(locked);
+        assert_eq!(grab, None);
+        assert_eq!(decor_cursor, None);
     }
 }
