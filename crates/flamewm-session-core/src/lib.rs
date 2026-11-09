@@ -1153,6 +1153,52 @@ mod tests {
         }
     }
 
+    /// `Xcursor` alias names a standard name may resolve through when no raw file exists.
+    const CURSOR_ALIASES: [(&str, &str); 9] = [
+        ("default", "left_ptr"),
+        ("pointer", "hand2"),
+        ("text", "xterm"),
+        ("wait", "watch"),
+        ("progress", "left_ptr_watch"),
+        ("grab", "openhand"),
+        ("grabbing", "closedhand"),
+        ("move", "fleur"),
+        ("crosshair", "cross"),
+    ];
+
+    /// True when `name` is a raw file in `theme` or its alias target is.
+    fn cursor_covers(theme: &Path, name: &str) -> bool {
+        let cursors = theme.join("cursors");
+        if cursors.join(name).is_file() {
+            return true;
+        }
+        CURSOR_ALIASES
+            .iter()
+            .find(|(standard, _)| *standard == name)
+            .is_some_and(|(_, target)| cursors.join(target).is_file())
+    }
+
+    #[test]
+    fn cursor_alias_fallback_covers_standard_names_only_through_targets() {
+        let root = cursor_test_root("alias-fallback");
+        let theme = root.join("AliasOnly");
+        std::fs::create_dir_all(theme.join("cursors")).expect("cursors dir");
+        std::fs::write(theme.join("cursors/left_ptr"), b"x").expect("left_ptr");
+        assert!(
+            cursor_covers(&theme, "default"),
+            "default must alias left_ptr"
+        );
+        assert!(
+            !cursor_covers(&theme, "pointer"),
+            "pointer has no raw file or target"
+        );
+        assert!(
+            !cursor_covers(&theme, "not-allowed"),
+            "unmapped name must miss"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn cursor_theme_search_path_accepts_multiple_roots() {
         let first = cursor_test_root("multi-a");
