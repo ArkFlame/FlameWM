@@ -355,13 +355,37 @@ impl ShellLoop {
                 }
             },
         };
+        // Hidden while it moves and captures: a capture of a mapped label would bake the label itself.
+        let _ = runtime.hide(popup);
         let _ = runtime.move_resize(popup, x, y, dock::LABEL_W as u32, dock::LABEL_H as u32);
         let _ = runtime.with_document(popup, |document| {
             document.text("dock-tip-text", name.clone())
         });
+        Self::apply_label_backdrop(
+            runtime,
+            popup,
+            (x, y, dock::LABEL_W as u32, dock::LABEL_H as u32),
+        );
         let _ = runtime.show(popup);
         let _ = runtime.redraw(popup);
         self.dock_stage.label_shown = Some((name, (x, y)));
+    }
+
+    /// Bakes the real pixels beneath the label rect as its backdrop: X11 windows are opaque, so
+    /// unbacked white text would sit on a grey box. No tint, so the label shows the true background.
+    fn apply_label_backdrop(
+        runtime: &mut SurfaceRuntime,
+        popup: flamewm_ui_x11::SurfaceHandle,
+        rect: (i32, i32, u32, u32),
+    ) {
+        let words = match runtime.live_backdrop(popup, rect, 0) {
+            Ok(Some(flamewm_ui_x11::backdrop::LiveSurfaceFrame::Pixels(words))) => Some(words),
+            // The surface already holds these pixels; nothing to upload.
+            Ok(Some(flamewm_ui_x11::backdrop::LiveSurfaceFrame::Unchanged)) => return,
+            Ok(None) | Err(_) => runtime.desktop_backdrop(rect, 0, 0),
+        };
+        let _ = runtime
+            .set_surface_backdrop(popup, words.as_deref().map(|words| (words, rect.2, rect.3)));
     }
 
     /// Moves the dock and reveal strip, keeps the work-area strut in step with auto-hide, and maps
