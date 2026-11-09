@@ -19,7 +19,7 @@ mod build;
 mod declarations;
 mod node;
 mod shorthands;
-mod values;
+pub(crate) mod values;
 mod vars;
 
 use self::build::Compiler;
@@ -147,14 +147,15 @@ fn cache_key(
     Some(fnv1a64(&input))
 }
 
-fn compile_parsed(
+pub(crate) fn compile_parsed(
     html_source: &str,
     css_source: &str,
     html: ParsedHtml,
     options: CompileOptions,
     asset_base: Option<&Path>,
 ) -> Result<CompileOutput, String> {
-    let rules = parse_stylesheet(css_source)?;
+    let mut rules = parse_stylesheet(css_source)?;
+    rules.extend(crate::utilities::rules_for(&html, rules.len() as u32));
     let (variables, variable_map, length_map) = collect_variables(&rules)?;
     let mut fingerprint_input = Vec::with_capacity(html_source.len() + css_source.len() + 1);
     fingerprint_input.extend_from_slice(html_source.as_bytes());

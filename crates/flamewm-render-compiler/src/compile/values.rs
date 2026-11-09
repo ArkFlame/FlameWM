@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn parse_length(input: &str) -> Result<Length, String> {
+pub(crate) fn parse_length(input: &str) -> Result<Length, String> {
     let value = input.trim();
     if value == "auto" {
         return Ok(Length::Auto);
@@ -27,7 +27,7 @@ pub(super) fn parse_length(input: &str) -> Result<Length, String> {
     ))
 }
 
-pub(super) fn parse_px(input: &str) -> Result<f32, String> {
+pub(crate) fn parse_px(input: &str) -> Result<f32, String> {
     let value = input.trim();
     if value == "0" {
         return Ok(0.0);

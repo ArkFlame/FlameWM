@@ -302,3 +302,28 @@ fn matches_compound(html: &ParsedHtml, index: usize, compound: &CompoundSelector
         })
     })
 }
+
+/// Rule for one literal class token, used by the utility layer. `state` selects the pseudo-class pass.
+pub(crate) fn class_rule(
+    class: String,
+    state: PseudoState,
+    order: u32,
+    declarations: Vec<Declaration>,
+) -> Rule {
+    Rule {
+        selector: Selector {
+            parts: vec![SelectorPart {
+                compound: CompoundSelector {
+                    tag: None,
+                    id: None,
+                    classes: vec![class],
+                },
+                relation_to_left: Combinator::Descendant,
+            }],
+            specificity: (0, 1, 0),
+            state,
+        },
+        declarations,
+        order,
+    }
+}

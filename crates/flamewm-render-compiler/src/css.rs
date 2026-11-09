@@ -1,6 +1,7 @@
 use crate::html::{HtmlNodeKind, ParsedHtml};
 
 mod selector;
+pub(crate) use self::selector::class_rule;
 use self::selector::parse_selector;
 pub(crate) use self::selector::{Selector, SubjectKey};
 

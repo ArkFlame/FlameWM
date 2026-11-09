@@ -5,6 +5,7 @@ mod css;
 mod html;
 mod imports;
 mod rule_index;
+mod utilities;
 
 pub use compile::{compile_file, compile_str, CompileOptions, CompileOutput};
 pub use flamewm_render_core::{decode, encode};

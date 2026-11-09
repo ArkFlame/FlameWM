@@ -75,3 +75,78 @@ the expected result:
 2. Collision and coverage audit on all 17 sheets, final v1 name list from measured counts.
 3. Pilot: migrate one shell surface and one settings section; report CSS bytes, `.rwr` bytes, compile ms before/after.
 4. Only then migrate further, by measured duplicate count; never mass-rewrite.
+
+## Generated table
+
+Fixed utilities (the const table in `utilities.rs`). Scaled families (`p-N`, `w-[..]`, ...) and variants (`hover:`, `focus:`, `active:`) are described above; a test fails if this table and the code differ.
+
+<!-- utilities:begin -->
+| Class | Declarations |
+|---|---|
+| `absolute` | `position: absolute` |
+| `bg-accent` | `background: var(--accent)` |
+| `bg-accent-soft` | `background: var(--accent-soft)` |
+| `bg-black` | `background: #000000` |
+| `bg-transparent` | `background: transparent` |
+| `bg-white` | `background: #ffffff` |
+| `block` | `display: block` |
+| `border` | `border-width: 1px` |
+| `border-rim` | `border-color: var(--rim)` |
+| `bottom-0` | `bottom: 0` |
+| `box-border` | `box-sizing: border-box` |
+| `cursor-default` | `cursor: default` |
+| `cursor-pointer` | `cursor: pointer` |
+| `flex` | `display: flex` |
+| `flex-1` | `flex-grow: 1` |
+| `flex-col` | `flex-direction: column` |
+| `flex-row` | `flex-direction: row` |
+| `font-bold` | `font-weight: 700` |
+| `font-medium` | `font-weight: 500` |
+| `font-semibold` | `font-weight: 600` |
+| `grow` | `flex-grow: 1` |
+| `grow-0` | `flex-grow: 0` |
+| `h-full` | `height: 100%` |
+| `hidden` | `display: none` |
+| `inset-0` | `inset: 0` |
+| `items-center` | `align-items: center` |
+| `items-end` | `align-items: flex-end` |
+| `items-start` | `align-items: flex-start` |
+| `items-stretch` | `align-items: stretch` |
+| `justify-between` | `justify-content: space-between` |
+| `justify-center` | `justify-content: center` |
+| `justify-end` | `justify-content: flex-end` |
+| `justify-start` | `justify-content: flex-start` |
+| `left-0` | `left: 0` |
+| `min-w-0` | `min-width: 0` |
+| `opacity-0` | `opacity: 0` |
+| `opacity-100` | `opacity: 1` |
+| `opacity-25` | `opacity: 0.25` |
+| `opacity-50` | `opacity: 0.5` |
+| `opacity-75` | `opacity: 0.75` |
+| `overflow-hidden` | `overflow: hidden` |
+| `relative` | `position: relative` |
+| `right-0` | `right: 0` |
+| `rounded-full` | `border-radius: 9999px` |
+| `rounded-lg` | `border-radius: var(--radius-lg)` |
+| `rounded-md` | `border-radius: var(--radius-md)` |
+| `rounded-sm` | `border-radius: var(--radius-sm)` |
+| `rounded-xl` | `border-radius: var(--radius-xl)` |
+| `select-none` | `user-select: none` |
+| `text-accent` | `color: var(--accent)` |
+| `text-base` | `font-size: var(--font-base)` |
+| `text-lg` | `font-size: var(--font-lg)` |
+| `text-md` | `font-size: var(--font-md)` |
+| `text-muted` | `color: var(--muted)` |
+| `text-sm` | `font-size: var(--font-sm)` |
+| `text-text` | `color: var(--text)` |
+| `text-xl` | `font-size: var(--font-xl)` |
+| `text-xs` | `font-size: var(--font-xs)` |
+| `top-0` | `top: 0` |
+| `truncate` | `white-space: nowrap`; `overflow: hidden`; `text-overflow: ellipsis` |
+| `w-1/2` | `width: 50%` |
+| `w-1/3` | `width: 33.333333%` |
+| `w-1/4` | `width: 25%` |
+| `w-2/3` | `width: 66.666667%` |
+| `w-full` | `width: 100%` |
+| `whitespace-nowrap` | `white-space: nowrap` |
+<!-- utilities:end -->
