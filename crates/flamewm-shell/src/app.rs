@@ -108,6 +108,8 @@ pub(crate) struct ShellLoop {
     pub(crate) dock_entries: Vec<flamewm_shell_core::dock::DockEntry>,
     pub(crate) dock_hover: Option<usize>,
     pub(crate) dock_last: Option<dock::DockSync>,
+    /// Trash folder has items, as last read on a dock rebuild or reveal.
+    pub(crate) dock_trash_full: bool,
     pub(crate) dock_catalog: Option<Vec<flamewm_api::applications::DesktopApplication>>,
     pub(crate) dock_drag: Option<dock::DockDrag>,
     pub(crate) dock_menu: Option<flamewm_ui_x11::SurfaceHandle>,
@@ -212,6 +214,7 @@ impl ShellLoop {
             dock_entries: Vec::new(),
             dock_hover: None,
             dock_last: None,
+            dock_trash_full: false,
             dock_catalog: None,
             dock_drag: None,
             dock_menu: None,

@@ -8,7 +8,7 @@ use crate::notification_center::is_escape_key;
 use flamewm_shell::dock::{self, DockSettings};
 use flamewm_shell::icon_loader::IconTarget;
 use flamewm_shell_core::autohide::AutoHide;
-use flamewm_shell_core::dock::{drag_off_removes, move_pinned, slot_at, Edge};
+use flamewm_shell_core::dock::{drag_off_removes, move_pinned, slot_at, Edge, TRASH_SLOT_ID};
 use flamewm_ui_document::UiDocumentAccess;
 use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
 
@@ -101,6 +101,11 @@ impl ShellLoop {
             }
             self.dock_stage = DockStage::default();
             return;
+        }
+        if self.dock_last.is_none() {
+            // A rebuild reads the Trash folder once; later changes re-read it only on reveal.
+            self.dock_trash_full =
+                flamewm_shell_core::dock::trash_has_items(&dock::trash_data_home());
         }
         let snapshot = self.shell.snapshot();
         let Some(panel) = snapshot.panels.panels.first() else {
@@ -213,6 +218,9 @@ impl ShellLoop {
             .entries
             .iter()
             .map(|entry| {
+                if entry.app_id == TRASH_SLOT_ID {
+                    return "Trash".to_owned();
+                }
                 lookup(&entry.app_id).map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
             })
             .collect();
@@ -223,6 +231,10 @@ impl ShellLoop {
                 .entries
                 .iter()
                 .map(|entry| {
+                    if entry.app_id == TRASH_SLOT_ID {
+                        return flamewm_shell_core::dock::trash_icon_name(self.dock_trash_full)
+                            .to_owned();
+                    }
                     lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
                 })
                 .collect();
@@ -454,6 +466,10 @@ impl ShellLoop {
     /// Hover on the reveal strip: the dock slides in while the pointer is over it.
     pub(crate) fn route_dock_reveal(&mut self, runtime: &mut SurfaceRuntime, event: &SurfaceEvent) {
         if event.action.phase == ActionPhase::Hover {
+            if event.action.inside {
+                // Revealing is the only time the Trash folder is re-read; a change forces a rebuild.
+                self.refresh_dock_trash();
+            }
             self.dock_pointer(runtime, event.action.inside);
         }
     }
@@ -609,6 +625,12 @@ impl ShellLoop {
         let Some(entry) = self.dock_entries.get(slot.wrapping_sub(1)) else {
             return Ok(());
         };
+        if entry.app_id == TRASH_SLOT_ID {
+            if let Err(error) = flamewm_applications::open_directory(&dock::trash_files_dir()) {
+                eprintln!("flamewm-shell: trash open failed: {error}");
+            }
+            return Ok(());
+        }
         let request = dock::click_request(&entry.app_id, &self.shell.snapshot().windows);
         self.submit(request);
         Ok(())
@@ -616,6 +638,15 @@ impl ShellLoop {
 }
 
 impl ShellLoop {
+    /// Re-reads the Trash folder. A changed state drops the cached dock so the next sync rebuilds the icon.
+    pub(crate) fn refresh_dock_trash(&mut self) {
+        let full = flamewm_shell_core::dock::trash_has_items(&dock::trash_data_home());
+        if full != self.dock_trash_full {
+            self.dock_trash_full = full;
+            self.dock_last = None;
+        }
+    }
+
     /// Hides the right-click menu. The surface stays alive for the next open.
     pub(crate) fn close_dock_menu(&mut self, runtime: &mut SurfaceRuntime) {
         if let Some(menu) = self.dock_menu {
@@ -634,6 +665,10 @@ impl ShellLoop {
         let Some(entry) = self.dock_entries.get(index) else {
             return;
         };
+        if entry.app_id == TRASH_SLOT_ID {
+            // The Trash slot has no pin or run state to act on.
+            return;
+        }
         let Some(slot) = frame.slots.get(index).copied() else {
             return;
         };

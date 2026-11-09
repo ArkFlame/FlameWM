@@ -190,6 +190,27 @@ pub fn gradient_ramp(rgb: [u8; 3], alpha: u8, steps: usize, from_start: bool) ->
     pixels
 }
 
+/// Reserved slot id of the Trash slot. Never a desktop app id, so it is never pinned or launched as one.
+pub const TRASH_SLOT_ID: &str = "flamewm:trash";
+
+/// True when the freedesktop Trash `files/` folder under `data_home` holds at least one entry.
+/// Read only when the dock is revealed or rebuilt, never on a timer.
+#[must_use]
+pub fn trash_has_items(data_home: &std::path::Path) -> bool {
+    std::fs::read_dir(data_home.join("Trash/files"))
+        .is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// Freedesktop icon for the Trash slot: `user-trash-full` when it has items, else `user-trash`.
+#[must_use]
+pub fn trash_icon_name(full: bool) -> &'static str {
+    if full {
+        "user-trash-full"
+    } else {
+        "user-trash"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +335,23 @@ mod tests {
             8,
             "steps clamp to two samples"
         );
+    }
+
+    #[test]
+    fn trash_reports_items_only_when_files_folder_is_non_empty() {
+        let root = std::env::temp_dir().join(format!("flamewm-trash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!trash_has_items(&root), "missing folder is empty");
+        std::fs::create_dir_all(root.join("Trash/files")).expect("files dir");
+        assert!(!trash_has_items(&root), "empty folder is empty");
+        std::fs::write(root.join("Trash/files/note.txt"), b"x").expect("item");
+        assert!(trash_has_items(&root), "one file is full");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn trash_icon_swaps_between_empty_and_full() {
+        assert_eq!(trash_icon_name(false), "user-trash");
+        assert_eq!(trash_icon_name(true), "user-trash-full");
     }
 }

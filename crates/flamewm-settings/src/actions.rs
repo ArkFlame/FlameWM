@@ -294,10 +294,11 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 62] = [
+pub(crate) const TOGGLE_KEYS: [&str; 63] = [
     "taskbar.enabled",
     "dock.enabled",
     "dock.showRunning",
+    "dock.showTrash",
     "dock.autoHide",
     "highContrast",
     "reducedMotion",

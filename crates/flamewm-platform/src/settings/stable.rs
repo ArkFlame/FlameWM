@@ -79,6 +79,7 @@ stable_settings! {
     (false, dock, "dock.iconSize", dock_icon_size),
     (false, dock, "dock.pinned", dock_pinned),
     (false, dock, "dock.showRunning", dock_show_running),
+    (false, dock, "dock.showTrash", dock_show_trash),
     (false, dock, "dock.autoHide", dock_auto_hide),
     (false, taskbar, "taskbarFloatingMargin", taskbar_floating_margin),
     (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),

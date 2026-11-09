@@ -75,6 +75,8 @@ pub struct ProductSettings {
     pub dock_icon_size: u16,
     pub dock_pinned: Vec<String>,
     pub dock_show_running: bool,
+    /// Trash slot after the dock apps (`dock.showTrash`); empty/full icon from the Trash folder.
+    pub dock_show_trash: bool,
     /// `dock.autoHide`: slide the dock away when idle; reveal on pointer push to its edge.
     pub dock_auto_hide: bool,
     pub taskbar_floating_margin: u16,
@@ -290,6 +292,7 @@ impl Default for ProductSettings {
             dock_icon_size: 44,
             dock_pinned: Vec::new(),
             dock_show_running: true,
+            dock_show_trash: true,
             dock_auto_hide: true,
             taskbar_floating_margin: 4,
             taskbar_floating_radius: 12,

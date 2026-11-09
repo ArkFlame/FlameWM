@@ -7,7 +7,9 @@ use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_control_core::ControlRequest;
-use flamewm_shell_core::dock::{merge_dock, DockLayout, DockMenuAction, Edge, MAX_PINNED};
+use flamewm_shell_core::dock::{
+    merge_dock, DockEntry, DockLayout, DockMenuAction, Edge, MAX_PINNED, TRASH_SLOT_ID,
+};
 use flamewm_ui_document::UiDocumentAccess;
 
 /// Typed `dock.*` settings. Missing keys take the spec defaults.
@@ -18,6 +20,8 @@ pub struct DockSettings {
     pub icon_size: f32,
     pub pinned: Vec<String>,
     pub show_running: bool,
+    /// `dock.showTrash`: the Trash slot after the dock apps.
+    pub show_trash: bool,
     /// `dock.autoHide`: the dock slides away when idle and reveals at its edge.
     pub auto_hide: bool,
 }
@@ -31,6 +35,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
             icon_size: 44.0,
             pinned: Vec::new(),
             show_running: true,
+            show_trash: true,
             auto_hide: true,
         };
     };
@@ -44,6 +49,10 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     );
     let show_running = !matches!(
         snapshot.values.get("dock.showRunning"),
+        Some(SettingValue::Boolean(false))
+    );
+    let show_trash = !matches!(
+        snapshot.values.get("dock.showTrash"),
         Some(SettingValue::Boolean(false))
     );
     let edge = match text("dock.position") {
@@ -76,6 +85,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         icon_size,
         pinned,
         show_running,
+        show_trash,
         auto_hide,
     }
 }
@@ -96,11 +106,41 @@ pub fn running_apps(windows: &[WindowSnapshot]) -> Vec<String> {
 /// Dock layout for the current settings and windows.
 #[must_use]
 pub fn layout_for(settings: &DockSettings, windows: &[WindowSnapshot]) -> DockLayout {
-    merge_dock(
+    let mut layout = merge_dock(
         &settings.pinned,
         &running_apps(windows),
         settings.show_running,
-    )
+    );
+    if settings.show_trash {
+        // Trash is the last slot, after a separator when the apps are not already split by one.
+        if layout.separator_after.is_none() && !layout.entries.is_empty() {
+            layout.separator_after = Some(layout.entries.len() - 1);
+        }
+        layout.entries.push(DockEntry {
+            app_id: TRASH_SLOT_ID.to_owned(),
+            pinned: false,
+            running: false,
+        });
+    }
+    layout
+}
+
+/// `$XDG_DATA_HOME` or `~/.local/share`: the base of the freedesktop Trash folder.
+#[must_use]
+pub fn trash_data_home() -> std::path::PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/share"))
+        })
+        .unwrap_or_default()
+}
+
+/// The Trash `files/` folder the Trash slot opens.
+#[must_use]
+pub fn trash_files_dir() -> std::path::PathBuf {
+    trash_data_home().join("Trash/files")
 }
 
 /// Click on an app slot: restore a minimised window, focus a running one, or
@@ -469,6 +509,26 @@ pub fn pill_corner_radius(bar_css: f32, scale: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trash_slot_is_last_after_a_separator_and_follows_the_setting() {
+        let mut settings = DockSettings {
+            enabled: true,
+            edge: Edge::Bottom,
+            icon_size: 44.0,
+            pinned: vec!["term".to_owned()],
+            show_running: false,
+            show_trash: true,
+            auto_hide: false,
+        };
+        let layout = layout_for(&settings, &[]);
+        let ids: Vec<&str> = layout.entries.iter().map(|e| e.app_id.as_str()).collect();
+        assert_eq!(ids, ["term", TRASH_SLOT_ID]);
+        assert_eq!(layout.separator_after, Some(0));
+        assert!(!layout.entries[1].pinned && !layout.entries[1].running);
+        settings.show_trash = false;
+        assert_eq!(layout_for(&settings, &[]).entries.len(), 1);
+    }
 
     #[test]
     fn window_is_exactly_the_bar_and_labels_sit_outside_it() {
