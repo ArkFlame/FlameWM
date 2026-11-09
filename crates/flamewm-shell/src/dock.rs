@@ -33,6 +33,8 @@ pub struct DockSettings {
     /// `dock.cornerStyle` is `squared`: the dock pill takes zero corner radius. Read-only here; the
     /// radius is chosen in `pill_corner_radius` and the bar's `corner_radius` document call.
     pub squared_corners: bool,
+    /// `dock.reserveSpace`: the bar keeps windows clear. Only effective while auto-hide is off.
+    pub reserve_space: bool,
 }
 
 #[must_use]
@@ -50,6 +52,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
             launch_bounce: false,
             auto_hide: false,
             squared_corners: false,
+            reserve_space: false,
         };
     };
     let text = |key: &str| match snapshot.values.get(key) {
@@ -96,6 +99,10 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         Some(SettingValue::Boolean(true))
     );
     let squared_corners = text("dock.cornerStyle") == Some("squared");
+    let reserve_space = matches!(
+        snapshot.values.get("dock.reserveSpace"),
+        Some(SettingValue::Boolean(true))
+    );
     let mut pinned: Vec<String> = Vec::new();
     for id in text("dock.pinned").unwrap_or("").split(',').map(str::trim) {
         if !id.is_empty()
@@ -118,6 +125,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         launch_bounce,
         auto_hide,
         squared_corners,
+        reserve_space,
     }
 }
 
@@ -481,7 +489,11 @@ fn highlight_css(bar: Rect) -> (f32, f32, f32, f32) {
 }
 
 /// Writes one frame into `dock.html`. Hover labels are separate popups (`sync_dock_label`).
-pub fn project_dock(document: &mut impl UiDocumentAccess, frame: &DockFrame) -> Result<(), String> {
+pub fn project_dock(
+    document: &mut impl UiDocumentAccess,
+    frame: &DockFrame,
+    squared: bool,
+) -> Result<(), String> {
     for i in 0..MAX_SLOTS {
         let n = i + 1;
         let slot_id = format!("dock-slot-{n}");
@@ -517,7 +529,7 @@ pub fn project_dock(document: &mut impl UiDocumentAccess, frame: &DockFrame) -> 
     let (bx, by, bw, bh) = rect_to_css(frame.bar);
     document.position("dock-bar", bx, by)?;
     document.size("dock-bar", bw, bh)?;
-    let radius = frame.bar.w.min(frame.bar.h) / 2.0;
+    let radius = dock_bar_radius(frame.bar.w, frame.bar.h, squared);
     document.corner_radius("dock-bar", radius)?;
     let (hx, hy, hw, hh) = highlight_css(frame.bar);
     document.position("dock-highlight", hx, hy)?;
@@ -545,6 +557,37 @@ pub fn pill_corner_radius(bar_css: f32, scale: f32) -> u32 {
     (bar_css * scale / 2.0).round() as u32
 }
 
+/// CSS radius (px) of the `dock-bar` pill, the layout twin of [`dock_corner_radius`].
+#[must_use]
+pub fn dock_bar_radius(bar_w: f32, bar_h: f32, squared: bool) -> f32 {
+    if squared {
+        0.0
+    } else {
+        bar_w.min(bar_h) / 2.0
+    }
+}
+
+/// Window corner radius (device px) of the dock: `dock.cornerStyle=squared` is zero, otherwise the pill.
+#[must_use]
+pub fn dock_corner_radius(bar_css: f32, scale: f32, squared: bool) -> u32 {
+    if squared {
+        0
+    } else {
+        pill_corner_radius(bar_css, scale)
+    }
+}
+
+/// Bar thickness (window px) the dock reserves in the work area, or 0. Only `dock.reserveSpace`
+/// on with `dock.autoHide` off reserves; an auto-hidden or unreserved dock reserves nothing.
+#[must_use]
+pub fn reserve_thickness(reserve_space: bool, auto_hide: bool, bar_css: f32, scale: f32) -> u32 {
+    if reserve_space && !auto_hide {
+        ((bar_css + DOCK_MARGIN) * scale).round() as u32
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,6 +609,50 @@ mod tests {
         assert_eq!(squared.icon_size, 32.0);
     }
 
+    fn with_dock(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in pairs {
+            snapshot.values.insert((*key).into(), value.clone());
+        }
+        snapshot
+    }
+
+    #[test]
+    fn reserve_space_defaults_off_and_reads_the_switch() {
+        assert!(!dock_settings(None).reserve_space);
+        assert!(!dock_settings(Some(&with_dock(&[]))).reserve_space);
+        let on = with_dock(&[("dock.reserveSpace", SettingValue::Boolean(true))]);
+        assert!(dock_settings(Some(&on)).reserve_space);
+    }
+
+    #[test]
+    fn only_unhidden_reserved_dock_reserves_its_bar_thickness() {
+        // 32 px icon + 2*(6+3) padding/gap + 8 px margin at 1x = 58 px.
+        assert_eq!(reserve_thickness(true, false, 50.0, 1.0), 58);
+        assert_eq!(reserve_thickness(true, false, 50.0, 2.0), 116);
+        assert_eq!(reserve_thickness(false, false, 50.0, 1.0), 0, "default off");
+        assert_eq!(
+            reserve_thickness(true, true, 50.0, 1.0),
+            0,
+            "auto-hide reserves nothing"
+        );
+        assert_eq!(reserve_thickness(false, true, 50.0, 1.0), 0);
+    }
+
+    #[test]
+    fn squared_style_is_radius_zero_and_rounded_is_half_the_bar() {
+        assert_eq!(dock_corner_radius(62.0, 1.0, true), 0);
+        assert_eq!(dock_corner_radius(62.0, 2.0, true), 0);
+        assert_eq!(dock_corner_radius(62.0, 1.0, false), 31);
+        assert_eq!(dock_corner_radius(62.0, 2.0, false), 62);
+        assert_eq!(
+            dock_bar_radius(62.0, 62.0, true),
+            0.0,
+            "CSS radius follows the style"
+        );
+        assert_eq!(dock_bar_radius(62.0, 40.0, false), 20.0);
+    }
+
     #[test]
     fn trash_slot_is_last_after_a_separator_and_follows_the_setting() {
         let mut settings = DockSettings {
@@ -580,6 +667,7 @@ mod tests {
             launch_bounce: false,
             auto_hide: false,
             squared_corners: false,
+            reserve_space: false,
         };
         let layout = layout_for(&settings, &[]);
         let ids: Vec<&str> = layout.entries.iter().map(|e| e.app_id.as_str()).collect();

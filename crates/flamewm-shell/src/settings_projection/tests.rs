@@ -634,6 +634,80 @@ fn dock_pill_follows_the_taskbar_material_and_outline() {
     assert_ne!(taskbar_fill(&inherit), fill);
 }
 
+#[test]
+fn dock_custom_surface_paints_only_the_dock() {
+    let mut snapshot = SettingsSnapshot::new(1);
+    for (key, value) in [
+        ("surfaceOutlineColor", SettingValue::Text("#445566".into())),
+        (
+            "dock.surfaceOutlineColor",
+            SettingValue::Text("#112233".into()),
+        ),
+        ("dock.surfaceCustom", SettingValue::Boolean(true)),
+    ] {
+        snapshot.values.insert(key.to_owned(), value);
+    }
+    let mut doc = RecordingUiDoc::default();
+    project(&mut doc, &snapshot, SurfaceKind::Dock).expect("dock projection");
+    let dock = doc.borders["dock-bar"];
+    assert_eq!(
+        (dock.r, dock.g, dock.b),
+        (0x11, 0x22, 0x33),
+        "custom Dock outline"
+    );
+
+    let mut doc = RecordingUiDoc::default();
+    project(&mut doc, &snapshot, SurfaceKind::Panel).expect("taskbar projection");
+    // Classic taskbar paints the global outline on `taskbar-outline`; `taskbar` border is transparent.
+    let taskbar = doc.backgrounds["taskbar-outline"];
+    assert_eq!(
+        (taskbar.r, taskbar.g, taskbar.b),
+        (0x44, 0x55, 0x66),
+        "global outline untouched"
+    );
+
+    snapshot.values.insert(
+        "dock.surfaceCustom".to_owned(),
+        SettingValue::Boolean(false),
+    );
+    let mut doc = RecordingUiDoc::default();
+    project(&mut doc, &snapshot, SurfaceKind::Dock).expect("dock projection");
+    let inherited = doc.borders["dock-bar"];
+    assert_eq!(
+        (inherited.r, inherited.g, inherited.b),
+        (0x44, 0x55, 0x66),
+        "switch off follows global"
+    );
+}
+
+#[test]
+fn dock_backdrop_uses_dock_opacity_and_blur_only_while_custom() {
+    let mut snapshot = SettingsSnapshot::new(1);
+    snapshot
+        .values
+        .insert("dock.surfaceCustom".into(), SettingValue::Boolean(true));
+    snapshot
+        .values
+        .insert("dock.surfaceOpacity".into(), SettingValue::Percent(20));
+    snapshot
+        .values
+        .insert("dock.surfaceBlurPercent".into(), SettingValue::Percent(10));
+    snapshot
+        .values
+        .insert("surfaceOpacity".into(), SettingValue::Percent(90));
+    snapshot
+        .values
+        .insert("surfaceBlurPercent".into(), SettingValue::Percent(80));
+    assert_eq!(dock_backdrop_percents(&snapshot), (20, 10));
+    snapshot
+        .values
+        .insert("dock.surfaceCustom".into(), SettingValue::Boolean(false));
+    assert_eq!(
+        dock_backdrop_percents(&snapshot),
+        taskbar_backdrop_percents(&snapshot)
+    );
+}
+
 fn snapshot_with(key: &str, value: &str) -> SettingsSnapshot {
     let mut snapshot = SettingsSnapshot::new(1);
     snapshot

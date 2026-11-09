@@ -9,6 +9,14 @@ pub fn project(
     snapshot: &SettingsSnapshot,
     surface: SurfaceKind,
 ) -> Result<(), String> {
+    // The Dock paints its `dock.surface*` overrides while `dock.surfaceCustom` is on.
+    let dock_view;
+    let snapshot = if surface == SurfaceKind::Dock {
+        dock_view = flamewm_api::settings_groups::dock_effective_snapshot(snapshot);
+        &dock_view
+    } else {
+        snapshot
+    };
     let root = match surface {
         SurfaceKind::Panel => "taskbar",
         SurfaceKind::Start => "start-menu",

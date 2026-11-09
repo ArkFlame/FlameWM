@@ -8,6 +8,19 @@ pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     flamewm_ui_core::surface::dock_backdrop_percents(snapshot)
 }
 
+/// Dock pseudo-transparency `(opacity, blur)`: the Dock material while `dock.surfaceCustom` is off,
+/// otherwise the Dock's own `surfaceOpacity` / `surfaceBlurPercent` overrides.
+#[must_use]
+pub fn dock_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
+    if flamewm_api::settings_groups::dock_surface_custom(snapshot) {
+        start_backdrop_percents(&flamewm_api::settings_groups::dock_effective_snapshot(
+            snapshot,
+        ))
+    } else {
+        taskbar_backdrop_percents(snapshot)
+    }
+}
+
 /// Resolved taskbar/Dock material for the current appearance settings. The Dock role never
 /// reads the content glass tint, the contrast zone or `surfaceOpacity`.
 #[must_use]

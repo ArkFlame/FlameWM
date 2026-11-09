@@ -37,7 +37,11 @@ pub(crate) type DockSync = (
     (i32, i32, u32, u32),
     Vec<String>,
     Vec<flamewm_shell_core::dock::DockEntry>,
+    bool,
 );
+
+/// `(placed rect, reserved bar px, corner radius px)` last sent to the window system.
+type DockStrutKey = ((i32, i32, u32, u32), u32, u32);
 
 /// Dock surface placement state. Each field caches the last value written, so a tick only
 /// talks to the window system when something changed.
@@ -50,7 +54,8 @@ pub(crate) struct DockStage {
     reveal_placed: Option<(i32, i32, u32, u32)>,
     /// `(dock mapped, reveal mapped)`.
     mapped: Option<(bool, bool)>,
-    strut: Option<((i32, i32, u32, u32), bool)>,
+    /// `(placed rect, reserved bar px, corner radius px)` last sent to the window system.
+    strut: Option<DockStrutKey>,
     /// Backdrop last installed as `(device rect, opacity, blur)`; a recapture happens only when one changes.
     backdrop: Option<DockBackdropKey>,
     /// Hover label popup, created on first hover and hidden otherwise.
@@ -66,6 +71,9 @@ struct DockPlacement {
     output: (i32, i32, i32, i32),
     scale: f32,
     auto_hide: bool,
+    /// `dock.reserveSpace` and `dock.cornerStyle=squared`, read by the strut and the window clip.
+    reserve_space: bool,
+    squared: bool,
     /// False when the dock has no entries; it then stays unmapped, reveal included.
     shown: bool,
     model: AutoHide,
@@ -246,7 +254,13 @@ impl ShellLoop {
                 lookup(&entry.app_id).map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
             })
             .collect();
-        let state: DockSync = (frame.clone(), placed, names.clone(), layout.entries.clone());
+        let state: DockSync = (
+            frame.clone(),
+            placed,
+            names.clone(),
+            layout.entries.clone(),
+            settings.squared_corners,
+        );
         if self.dock_last.as_ref() != Some(&state) {
             let icon_px = (settings.icon_size * scale).round() as u32;
             let icon_names: Vec<String> = layout
@@ -263,7 +277,7 @@ impl ShellLoop {
             async_projection::bump_dock_view_epoch();
             let icon_loader = &mut self.icon_loader;
             if let Err(error) = runtime.with_document(surface, |document| {
-                dock::project_dock(document, &frame)?;
+                dock::project_dock(document, &frame, settings.squared_corners)?;
                 // Same miss policy as the taskbar and launcher: a cached raster, else the transparent
                 // placeholder plus one worker request. The dock's default glyph never shows for a miss.
                 for (index, name) in icon_names.iter().enumerate() {
@@ -297,6 +311,8 @@ impl ShellLoop {
                 output: output_rect,
                 scale,
                 auto_hide: settings.auto_hide,
+                reserve_space: settings.reserve_space,
+                squared: settings.squared_corners,
                 shown: !layout.entries.is_empty(),
                 model,
             },
@@ -402,6 +418,8 @@ impl ShellLoop {
             output,
             scale,
             auto_hide,
+            reserve_space,
+            squared,
             shown,
             model,
         } = placement;
@@ -431,25 +449,24 @@ impl ShellLoop {
             // The reveal strip never gets a projection, so it needs one paint before it can hit-test.
             let _ = runtime.redraw(reveal);
         }
-        // An auto-hidden Dock reserves nothing; a shown one keeps its bar plus the floating margin.
-        if self.dock_stage.strut != Some((placed, auto_hide)) {
-            let bar_css = if frame.edge.is_vertical() {
-                frame.bar.w
-            } else {
-                frame.bar.h
-            };
-            let strut =
-                (!auto_hide).then(|| ((bar_css + dock::DOCK_MARGIN) * scale).round() as u32);
-            // The window is exactly the bar, so a stadium pill clips the window corners with
-            // radius = half the bar thickness; without it the unpainted corners show clear pixels.
-            let corner_radius = dock::pill_corner_radius(bar_css, scale);
+        // Reserve and clip only when they change: an auto-hidden or unreserved Dock sends a zero-thickness
+        // bar, which deletes its strut. The window is exactly the bar, so the pill clips its corners
+        // with radius = half the bar thickness; `squared` clips nothing.
+        let bar_css = if frame.edge.is_vertical() {
+            frame.bar.w
+        } else {
+            frame.bar.h
+        };
+        let reserved = dock::reserve_thickness(reserve_space, auto_hide, bar_css, scale);
+        let corner_radius = dock::dock_corner_radius(bar_css, scale, squared);
+        if self.dock_stage.strut != Some((placed, reserved, corner_radius)) {
             let _ = runtime.set_dock_frame(
                 surface,
-                strut.map(|_| strut_edge(frame.edge)),
+                Some(strut_edge(frame.edge)),
                 corner_radius,
-                strut,
+                Some(reserved),
             );
-            self.dock_stage.strut = Some((placed, auto_hide));
+            self.dock_stage.strut = Some((placed, reserved, corner_radius));
         }
         let hidden = model.is_hidden();
         // The strip stays mapped under a shown auto-hide dock: unmapping it under the pointer
@@ -487,9 +504,7 @@ impl ShellLoop {
         rect: (i32, i32, u32, u32),
     ) {
         let (opacity, blur) = match self.settings_cache.as_ref() {
-            Some(settings) => {
-                crate::entry::settings_projection::taskbar_backdrop_percents(settings)
-            }
+            Some(settings) => crate::entry::settings_projection::dock_backdrop_percents(settings),
             None => return,
         };
         // Opaque material hides whatever lies beneath: drop any backdrop and capture nothing.

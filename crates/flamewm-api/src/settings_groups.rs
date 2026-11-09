@@ -227,6 +227,28 @@ pub fn dock_surface_value(snapshot: &SettingsSnapshot, global_key: &str) -> Opti
     snapshot.values.get(global_key).cloned()
 }
 
+/// True when `dock.surfaceCustom` is on: the Dock paints its own `dock.surface*` overrides.
+#[must_use]
+pub fn dock_surface_custom(snapshot: &SettingsSnapshot) -> bool {
+    switch_on(snapshot, "dock.surfaceCustom")
+}
+
+/// The snapshot the Dock paints with. While `dock.surfaceCustom` is on, every global surface key
+/// with a `dock.*` override takes the override; otherwise the snapshot is returned unchanged.
+#[must_use]
+pub fn dock_effective_snapshot(snapshot: &SettingsSnapshot) -> SettingsSnapshot {
+    let mut effective = snapshot.clone();
+    if !dock_surface_custom(snapshot) {
+        return effective;
+    }
+    for (global, _) in DOCK_SURFACE_OVERRIDES {
+        if let Some(value) = dock_surface_value(snapshot, global) {
+            effective.values.insert((*global).to_owned(), value);
+        }
+    }
+    effective
+}
+
 /// True when the group's switch is on. An absent switch is off; an unknown group is off.
 #[must_use]
 pub fn is_group_custom(snapshot: &SettingsSnapshot, group: &str) -> bool {
@@ -356,6 +378,35 @@ mod translucent_default_tests {
         assert_eq!(
             effective_value(&snapshot, "surfaceOpacity"),
             Some(SettingValue::Percent(75))
+        );
+    }
+
+    #[test]
+    fn dock_effective_snapshot_overrides_only_the_dock_keys_while_custom() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceOpacity".into(), SettingValue::Percent(60));
+        snapshot
+            .values
+            .insert("dock.surfaceOpacity".into(), SettingValue::Percent(20));
+        let effective = dock_effective_snapshot(&snapshot);
+        assert_eq!(
+            effective.values.get("surfaceOpacity"),
+            Some(&SettingValue::Percent(60))
+        );
+        snapshot
+            .values
+            .insert("dock.surfaceCustom".into(), SettingValue::Boolean(true));
+        let effective = dock_effective_snapshot(&snapshot);
+        assert_eq!(
+            effective.values.get("surfaceOpacity"),
+            Some(&SettingValue::Percent(20))
+        );
+        assert_eq!(
+            snapshot.values.get("surfaceOpacity"),
+            Some(&SettingValue::Percent(60)),
+            "the global key is not rewritten"
         );
     }
 
