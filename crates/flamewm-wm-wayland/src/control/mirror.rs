@@ -154,6 +154,14 @@ impl Service {
         let appearance = flamewm_ui_core::glass::appearance_from_settings(&snapshot);
         let fill = flamewm_ui_core::surface::titlebar_fill(&snapshot);
         let blur = flamewm_ui_core::surface::surface_blur_percent(&snapshot);
+        // The Dock's own material (taskbar role), which sets its backdrop; read as the shell does.
+        let (dock_opacity, dock_blur) = flamewm_ui_core::surface::dock_backdrop_percents(&snapshot);
+        if crate::render::set_dock_material(crate::render::DockMaterial {
+            opacity: dock_opacity,
+            blur: dock_blur,
+        }) {
+            state.request_redraw();
+        }
         let light_changed = crate::render::set_titlebar_light(appearance.light);
         // `titlebarButtonStyle` is hot-reloaded: a change drops the cached bars so the plates repaint.
         let shape_changed = crate::render::set_titlebar_button_shape(

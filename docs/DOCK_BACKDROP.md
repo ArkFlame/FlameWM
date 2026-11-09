@@ -1,6 +1,6 @@
 # Dock backdrop: translucent surface over windows
 
-Status: X11 live path implemented (this change). Wayland: documented gap, follow-up spec below.
+Status: X11 live path implemented (93448de1). Wayland follow-up implemented (`render/dock_backdrop.rs`); see Wayland below for the design and what is verified.
 
 ## Bug
 
@@ -48,18 +48,50 @@ path's XDamage tracking lives inside `LiveScene` and is not routed to the shell.
 damage from the controller's pump to `live.classify`, or add a low-rate tick while the dock overlaps
 a window.
 
-### Wayland (gap, not implemented)
+### Wayland (implemented)
 
-The dock is an Xwayland client, and the compositor draws it with its own scene. Windows beneath it
-are native Wayland surfaces, which the X live path cannot read (F11). A correct fix samples the
-compositor's rendered scene under the dock rect. That is an architectural change in
-`flamewm-wm-wayland/src/render` (scene readback into a small target, blur, damage-limited refresh)
-and is not done here. Current Wayland behaviour is unchanged: translucent dock over the desktop
-layer, no window content (F10, F12).
+Code: `crates/flamewm-wm-wayland/src/render/dock_backdrop.rs`. The Dock is an `XWayland` strut surface
+(`Unmanaged` entry with `strut`), so the compositor draws it with its own scene and reads its own
+rendered scene, not the X root (F10, F11).
 
-Follow-up spec: "Wayland surface backdrop from scene": render the scene elements below a strut
-surface's rect into a 1/4-scale target on damage, blur it, and feed it as that surface's backdrop
-element. Refresh only on damage intersecting the rect.
+1. Material. `control/mirror.rs` `sync_chrome_settings` reads `dock_backdrop_percents` (the Dock role
+   `(opacity, blur)`, the numbers the X11 shell reads through `taskbar_backdrop_percents`; that function
+   now delegates to the same ui-core owner) and stores them with `set_dock_material`. Opaque material
+   (opacity 100, blur 0), or flat `reduceTransparency`, calls `drop_docks()`: no render, no readback,
+   no blur, and the cached textures are freed.
+2. Sites. Each mapped `!below` strut surface is a site with its logical rect and published
+   `_FLAMEWM_DOCK_CORNER_RADIUS`.
+3. Scene stamp, every frame. `scene_beneath` walks `scene::front_to_back` after the Dock's index, so only
+   what lies beneath it is considered, and builds those elements with `scene_elements(.., capture = true)`.
+   Capture mode emits no backdrop elements, so a Dock never captures another Dock's backdrop. Elements
+   overlapping the Dock's physical rect contribute `(physical rect, CommitCounter)` in front-to-back order.
+4. Key and policy. `BackdropKey { rect, radius, scale_milli, material, scene }`.
+   `needs_capture(wanted, cached)` is "not equal". A static scene matches exactly, so the frame costs the
+   stamp comparison and nothing else. A move, resize, restack, commit or material/radius/scale change under
+   or of the Dock is a different key.
+5. Capture, only on a mismatch. The kept elements are relocated by `-origin` and rendered into a
+   Dock-sized texture (`OutputDamageTracker`, full repaint, clear `CLEAR`). `read_reduced` box-averages it
+   to 1/4 scale in strips (the same helper as the desktop capture), `blur_reduced` blurs it with
+   `frosted_backdrop` at the Dock blur radius, and `crop_capture` samples the logical buffer. Its alpha is
+   `rounded_coverage`, so the corners stay transparent, and it is premultiplied ARGB.
+6. Draw. `build_elements` places the cached buffer right after the Dock surface, so it lies beneath the
+   Dock and above the scene. The Dock's own translucent pixels blend over it.
+7. Call sites. `refresh_dock_backdrops` runs once per frame per output in the winit `render_into` and in
+   the DRM rebuild branch (DRM already rebuilds only when `scene_dirty`).
+
+Deviations from the follow-up spec:
+- The blur stays on the CPU (existing `frosted_backdrop` on the 1/4-scale capture). The Wayland
+  compositor renders with `GlowRenderer`; the `flamewm-gpu-helper` child lives in `flamewm-render-x11`
+  and is not used here. Moving the blur to GPU would be a separate change.
+- The scene is walked each frame to compute the stamp, so a static scene pays element construction,
+  not capture work. No render, readback or blur runs.
+
+Known limits:
+- A window beneath the Dock that commits every frame (video, animation) recaptures every frame. That is
+  the damage gate working, at Dock size; it is bounded by the Dock rect, not the output.
+- Menus beneath the Dock and a lower translucent Dock are drawn in the Dock backdrop without their own
+  blur (capture mode emits no backdrops).
+- Transparency is not disabled. Full-repaint policy is unchanged (partial repaint still waits on buffer age).
 
 ## Verification
 

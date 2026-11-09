@@ -350,6 +350,9 @@ impl Drm {
             {
                 eprintln!("flamewm-wayland: desktop backdrop failed: {error}");
             }
+            if let Err(error) = render::refresh_dock_backdrops(state, &mut self.renderer) {
+                eprintln!("flamewm-wayland: dock backdrop failed: {error}");
+            }
             let cursor_len = cursor.len();
             let mut elements = cursor;
             elements.extend(render::build_elements(state, &mut self.renderer));

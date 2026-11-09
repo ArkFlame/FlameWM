@@ -27,10 +27,12 @@ use smithay::utils::{Buffer, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
+mod dock_backdrop;
 mod titlebar;
 pub(crate) use titlebar::{premultiplied_argb_bytes, put};
 
 pub(crate) use backdrop::*;
+pub(crate) use dock_backdrop::*;
 pub use titlebar::*;
 
 use crate::chrome_buttons::Feedback;
@@ -182,16 +184,37 @@ fn surface_elements(
 /// `scene::front_to_back` traversal, so every surface that can visually cover another is tested
 /// before the covered owner receives pointer input.
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
-    use crate::scene::SceneItem;
-
     let scale = state.output_scale();
     let mut out: Vec<Elem> = Vec::new();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
     // Topmost: the snap preview is drawn over every window while a move grab targets a snap.
     out.extend(state.snap_preview.elements(renderer, scale));
+    out.extend(scene_elements(
+        state,
+        renderer,
+        &mut decorations,
+        crate::scene::front_to_back(state),
+        false,
+    ));
+    out
+}
+
+/// Elements for `items` in front-to-back order. `capture` builds the scene under a Dock backdrop:
+/// it produces no backdrop elements, so a translucent surface never captures another one.
+fn scene_elements(
+    state: &State,
+    renderer: &mut GlowRenderer,
+    decorations: &mut Decorations,
+    items: impl IntoIterator<Item = crate::scene::SceneItem>,
+    capture: bool,
+) -> Vec<Elem> {
+    use crate::scene::SceneItem;
+
+    let scale = state.output_scale();
+    let mut out: Vec<Elem> = Vec::new();
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
-    for item in crate::scene::front_to_back(state) {
+    for item in items {
         match item {
             SceneItem::Layer { surface, .. } => {
                 out.extend(layer_elements(state, renderer, &surface));
@@ -227,19 +250,25 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                                 (element, _) => element,
                             }),
                     );
-                    // Translucent X11 menus and tooltips blur the desktop beneath them. Docks
-                    // (struts) are excluded: they are not glass and the taskbar is opaque.
-                    if !entry.below && entry.strut.is_none() && !glass_flat() {
+                    // Translucent X11 menus and tooltips blur the desktop beneath them. A Dock (strut)
+                    // blends over the scene beneath it instead, captured by `dock_backdrop`.
+                    if !entry.below && !capture && !glass_flat() {
                         let rect = Rect::new(
                             geometry.loc.x,
                             geometry.loc.y,
                             geometry.size.w,
                             geometry.size.h,
                         );
-                        if let Some(backdrop) = decorations.surface_backdrop(renderer, rect, scale)
-                        {
-                            out.push(backdrop);
-                        }
+                        let backdrop = if entry.strut.is_some() {
+                            decorations.dock_backdrop(
+                                renderer,
+                                (rect.x, rect.y, rect.w, rect.h),
+                                scale,
+                            )
+                        } else {
+                            decorations.surface_backdrop(renderer, rect, scale)
+                        };
+                        out.extend(backdrop);
                     }
                 }
             }
@@ -379,6 +408,9 @@ fn render_into(
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
     refresh_desktop_backdrop(state, backend.renderer(), size)?;
+    if let Err(error) = refresh_dock_backdrops(state, backend.renderer()) {
+        eprintln!("flamewm-wayland: dock backdrop failed: {error}");
+    }
     // While locked, the lock client owns the screen: painting the desktop behind it would put
     // other clients' content back on the output the lock exists to cover.
     // A locker that crashed mid-lock must not keep the screen covered forever.

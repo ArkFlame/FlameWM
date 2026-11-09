@@ -136,6 +136,24 @@ pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     }
 }
 
+/// Taskbar/Dock `(opacity, blur)` percents for the pseudo-transparency backdrop. Shared by the X11
+/// shell and the Wayland compositor so both backends read one Dock material.
+#[must_use]
+pub fn dock_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
+    let dock = crate::glass::resolve(
+        crate::glass::MaterialRole::Dock,
+        crate::glass::appearance_from_settings(snapshot),
+        100,
+        crate::glass::RendererCaps {
+            backdrop_blur: true,
+        },
+    );
+    (
+        u8::try_from(dock.alpha_permille / 10).unwrap_or(100),
+        crate::glass::blur_percent_from_px(dock.blur_px),
+    )
+}
+
 /// Backdrop blur percent that menus and inheriting widgets use: the regular glass blur, 0 when
 /// reduce transparency is on.
 #[must_use]

@@ -16,6 +16,10 @@ pub struct Decorations {
     /// Blurred desktop under override-redirect `XWayland` surfaces, keyed by their rect. Cleared
     /// with the desktop capture it was cropped from.
     pub(super) surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
+    /// Scene beneath each translucent strut surface (Dock), keyed by its logical rect. See `dock_backdrop`.
+    pub(super) docks: HashMap<RectKey, DockBacking>,
+    /// Dock-sized GL texture the dock scene is rendered into; reused while the size matches.
+    pub(super) dock_scratch: Option<((usize, usize), GlesTexture)>,
     /// Rounded-client clip program, compiled on first use. `Some(Err(()))` records the already
     /// logged failure so a broken shader is not recompiled for every frame or window.
     pub(super) clip: Option<Result<GlesTexProgram, ()>>,
@@ -327,23 +331,14 @@ impl Decorations {
         scale: f64,
     ) -> Option<Vec<u8>> {
         let desktop = self.desktop.as_ref()?;
-        let stored = stored_size((desktop.width, desktop.height));
-        let stored_scale = DESKTOP_SCALE as f32;
-        let scale = scale as f32;
-        let mut out = Vec::with_capacity(w * h * 4);
-        for y in 0..h {
-            // Output pixel centre mapped into stored space, clamped to the output edges.
-            let oy = ((origin.1 + y as i32) as f32 * scale)
-                .clamp(0.0, (desktop.height as i32 - 1) as f32);
-            let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.1 - 1) as f32);
-            for x in 0..w {
-                let ox = ((origin.0 + x as i32) as f32 * scale)
-                    .clamp(0.0, (desktop.width as i32 - 1) as f32);
-                let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.0 - 1) as f32);
-                out.extend_from_slice(&sample_bilinear(&desktop.pixels, stored, fx, fy));
-            }
-        }
-        Some(out)
+        Some(crop_capture(
+            &desktop.pixels,
+            (desktop.width, desktop.height),
+            origin,
+            w,
+            h,
+            scale,
+        ))
     }
 
     /// Frees the output-sized capture and everything baked from it, for an idle desktop.

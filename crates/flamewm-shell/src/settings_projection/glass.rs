@@ -5,11 +5,7 @@ use super::*;
 /// Surface `(opacity, blur)` percents for the taskbar pseudo-transparency backdrop.
 #[must_use]
 pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
-    let dock = dock_material(snapshot);
-    (
-        u8::try_from(dock.alpha_permille / 10).unwrap_or(100),
-        blur_px_to_percent(dock.blur_px),
-    )
+    flamewm_ui_core::surface::dock_backdrop_percents(snapshot)
 }
 
 /// Resolved taskbar/Dock material for the current appearance settings. The Dock role never

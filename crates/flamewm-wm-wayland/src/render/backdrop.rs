@@ -102,6 +102,86 @@ pub(super) fn sample_bilinear(
     out
 }
 
+/// Samples a reduced capture of a `src` physical-pixel region into a `w` x `h` logical buffer. The
+/// logical `origin` and size map to physical pixels at `scale`, clamped to the region's edges.
+pub(super) fn crop_capture(
+    pixels: &[u8],
+    src: (usize, usize),
+    origin: (i32, i32),
+    w: usize,
+    h: usize,
+    scale: f64,
+) -> Vec<u8> {
+    let stored = stored_size(src);
+    let stored_scale = DESKTOP_SCALE as f32;
+    let scale = scale as f32;
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        // Output pixel centre mapped into stored space, clamped to the output edges.
+        let oy = ((origin.1 + y as i32) as f32 * scale).clamp(0.0, (src.1 as i32 - 1) as f32);
+        let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.1 - 1) as f32);
+        for x in 0..w {
+            let ox = ((origin.0 + x as i32) as f32 * scale).clamp(0.0, (src.0 as i32 - 1) as f32);
+            let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.0 - 1) as f32);
+            out.extend_from_slice(&sample_bilinear(pixels, stored, fx, fy));
+        }
+    }
+    out
+}
+
+/// Reads the `dims` region of `texture` back in [`DESKTOP_STRIP_ROWS`] strips and box-averages each
+/// into the reduced image, so only one strip of full-size pixels is ever resident.
+pub(super) fn read_reduced(
+    renderer: &mut GlowRenderer,
+    texture: &mut GlesTexture,
+    dims: (usize, usize),
+    clock: &mut PhaseClock,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let (sw, sh) = stored_size(dims);
+    let mut stored = vec![0u8; sw * sh * 4];
+    let target = renderer.bind(texture)?;
+    let mut y0 = 0;
+    while y0 < dims.1 {
+        let rows = DESKTOP_STRIP_ROWS.min(dims.1 - y0);
+        let region = Rectangle::<i32, Buffer>::new(
+            Point::from((0, y0 as i32)),
+            Size::from((dims.0 as i32, rows as i32)),
+        );
+        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888)?;
+        clock.split("copy");
+        let strip = renderer.map_texture(&mapping)?;
+        clock.split("map");
+        downscale_strip(strip, (dims.0, y0, rows), &mut stored, (sw, sh));
+        clock.split("downscale");
+        y0 += rows;
+    }
+    drop(target);
+    Ok(stored)
+}
+
+/// Blurs a reduced capture by `blur_percent` of the surface blur radius. 100% is
+/// [`MAX_BLUR_RADIUS_PX`] at 1x, scaled to the reduced image.
+pub(super) fn blur_reduced(stored: Vec<u8>, (sw, sh): (usize, usize), blur_percent: u8) -> Vec<u8> {
+    let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0 / DESKTOP_SCALE as f32;
+    let source = RgbaImage {
+        width: sw as u32,
+        height: sh as u32,
+        pixels: stored,
+    };
+    frosted_backdrop(
+        &source,
+        ImageRect {
+            x: 0,
+            y: 0,
+            width: sw as u32,
+            height: sh as u32,
+        },
+        radius,
+        None,
+    )
+    .pixels
+}
+
 /// Box-averages `rows` full-width readback rows starting at output row `y0` into the stored image.
 /// `y0` and the strip height are multiples of `DESKTOP_SCALE` except at the output bottom.
 pub(super) fn downscale_strip(
@@ -250,50 +330,18 @@ pub(crate) fn refresh_desktop_backdrop(
         tracker.render_output(renderer, &mut target, 0, &elements, CLEAR)?;
     }
     clock.split("render");
-    // Read back and box-average one strip at a time: only the reduced image is ever resident.
-    let (sw, sh) = stored_size(dims);
-    let mut stored = vec![0u8; sw * sh * 4];
-    let target = renderer.bind(&mut texture)?;
-    let mut y0 = 0;
-    while y0 < dims.1 {
-        let rows = DESKTOP_STRIP_ROWS.min(dims.1 - y0);
-        let region = Rectangle::<i32, Buffer>::new(
-            Point::from((0, y0 as i32)),
-            Size::from((dims.0 as i32, rows as i32)),
-        );
-        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888)?;
-        clock.split("copy");
-        let strip = renderer.map_texture(&mapping)?;
-        clock.split("map");
-        downscale_strip(strip, (dims.0, y0, rows), &mut stored, (sw, sh));
-        clock.split("downscale");
-        y0 += rows;
-    }
-    drop(target);
+    let stored = read_reduced(renderer, &mut texture, dims, &mut clock)?;
     state.decorations.borrow_mut().scratch = Some((dims, texture));
-    let blur_percent = DESKTOP_BLUR_PERCENT.load(std::sync::atomic::Ordering::Relaxed);
-    let radius = MAX_BLUR_RADIUS_PX * f32::from(blur_percent) / 100.0 / DESKTOP_SCALE as f32;
-    let source = RgbaImage {
-        width: sw as u32,
-        height: sh as u32,
-        pixels: stored,
-    };
-    let blurred = frosted_backdrop(
-        &source,
-        ImageRect {
-            x: 0,
-            y: 0,
-            width: sw as u32,
-            height: sh as u32,
-        },
-        radius,
-        None,
+    let blurred = blur_reduced(
+        stored,
+        stored_size(dims),
+        DESKTOP_BLUR_PERCENT.load(std::sync::atomic::Ordering::Relaxed),
     );
     clock.split("blur");
     state
         .decorations
         .borrow_mut()
-        .set_desktop(dims, commits, blurred.pixels);
+        .set_desktop(dims, commits, blurred);
     clock.split("store");
     clock.report(dims.1);
     Ok(())
