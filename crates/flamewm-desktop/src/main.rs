@@ -117,6 +117,16 @@ use slots::{SlotInputs, apply_pending_icon_results, apply_ready_icons, project_s
 
 mod profiling;
 use profiling::*;
+/// The log line for a failed settings-bus read, or None when the read succeeded.
+fn settings_sync_failure_line(result: &flamewm_api::FlameResult<usize>) -> Option<String> {
+    result.as_ref().err().map(|error| {
+        format!(
+            "desktop: settings sync read failed: {}; settings stop following the session",
+            error.message
+        )
+    })
+}
+
 fn report_action_failure(context: &str, error: String) {
     action_failure_counter().increment();
     eprintln!("desktop: {context} failed: {error}; keeping event loop alive");
@@ -554,7 +564,7 @@ fn register_workspace_signals(
                 move |_, _| {
                     let state_cell = &workspace_cell;
                     let panels_flag = &panels_signal_flag;
-                    let _ = client.on_ready(|signal| {
+                    let ready = client.on_ready(|signal| {
                         match signal {
                             flamewm_control_wire::ControlSignal::SettingsSnapshotChanged {
                                 snapshot,
@@ -626,6 +636,9 @@ fn register_workspace_signals(
                         // The next UI turn projects sync_sticky and sync_menu only;
                         // workspace signals never enter filesystem refresh.
                     });
+                    if let Some(line) = settings_sync_failure_line(&ready) {
+                        log_limit::emit("desktop.settings_sync", format_args!("{line}"));
+                    }
                     FdAction::Continue
                 }
             });

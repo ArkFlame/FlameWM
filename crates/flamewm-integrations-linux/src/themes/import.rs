@@ -219,11 +219,22 @@ fn commit(
     ));
     fs::rename(dest, &backup)?;
     if let Err(err) = fs::rename(staging, dest) {
-        let _ = fs::rename(&backup, dest);
-        return Err(err.into());
+        return Err(restore_failed_install(err, &backup, dest));
     }
     let _ = remove_entry(&backup);
     Ok(())
+}
+
+/// Puts the replaced theme back after a failed install. The backup stays in place when the restore
+/// fails, and the error names it so the previous theme can be recovered by hand.
+fn restore_failed_install(err: io::Error, backup: &Path, dest: &Path) -> ImportError {
+    match fs::rename(backup, dest) {
+        Ok(()) => ImportError::Io(err),
+        Err(restore) => ImportError::Io(io::Error::other(format!(
+            "installing the icon theme failed ({err}); restoring the previous theme failed ({restore}); it is kept at {}",
+            backup.display()
+        ))),
+    }
 }
 
 fn write_plan(
@@ -598,7 +609,29 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
-    use super::{REPLACED_PREFIX, STAGING_PREFIX, STALE_AGE, sweep_stale};
+    use super::{REPLACED_PREFIX, STAGING_PREFIX, STALE_AGE, restore_failed_install, sweep_stale};
+
+    #[test]
+    fn failed_restore_keeps_backup_and_names_it() {
+        let dir = scratch("restore-fail");
+        let backup = dir.join("backup");
+        let dest = dir.join("dest");
+        fs::create_dir_all(&backup).expect("backup");
+        fs::write(backup.join("index.theme"), b"old").expect("old theme");
+        fs::create_dir_all(&dest).expect("dest");
+        fs::write(dest.join("new.theme"), b"new").expect("new theme");
+
+        let err = restore_failed_install(
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+            &backup,
+            &dest,
+        );
+
+        let text = err.to_string();
+        assert!(text.contains(&backup.display().to_string()), "{text}");
+        assert!(backup.join("index.theme").exists());
+        assert!(dest.join("new.theme").exists());
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("flamewm-sweep-{name}-{}", std::process::id()));

@@ -335,12 +335,29 @@ pub fn remount_pass(memory: &Mutex<Memory>) {
         is_removable,
     );
     let plan = plan(&memory, &devices);
-    if memory.apply(&plan, &devices) {
-        let _ = save(&path, &memory.known);
+    if memory.apply(&plan, &devices)
+        && let Err(error) = save(&path, &memory.known)
+    {
+        eprintln!(
+            "removable-mounts: saving {} failed: {error}",
+            path.display()
+        );
     }
     for block in &plan.mount {
-        let _ = udisks_action("mount", &format!("/dev/{block}"));
+        let result = udisks_action("mount", &format!("/dev/{block}"));
+        if let Some(line) = mount_failure_line(block, &result) {
+            eprintln!("{line}");
+        }
     }
+}
+
+/// The log line for a failed auto-mount, or None when it succeeded. A failed mount never sets
+/// `seen_mounted`, so the next pass retries it.
+fn mount_failure_line(block: &str, result: &Result<String, String>) -> Option<String> {
+    result
+        .as_ref()
+        .err()
+        .map(|error| format!("removable-mounts: mount /dev/{block} failed: {error}"))
 }
 
 /// The session's removable-media worker. It runs one remount pass at start, then one per settled
@@ -460,6 +477,15 @@ mod tests {
         let text = "abc-1\n\nbad uuid\n../etc\nabc-1\n  def  \n";
         assert_eq!(parse(text), vec!["abc-1".to_owned(), "def".to_owned()]);
         assert!(parse(&"x".repeat(MAX_UUID_LEN + 1)).is_empty());
+    }
+
+    #[test]
+    fn failed_auto_mount_is_reported_and_successful_one_is_not() {
+        assert_eq!(
+            mount_failure_line("sdb1", &Err("udisksctl unavailable".into())),
+            Some("removable-mounts: mount /dev/sdb1 failed: udisksctl unavailable".to_owned())
+        );
+        assert_eq!(mount_failure_line("sdb1", &Ok("Mounted".into())), None);
     }
 
     #[test]

@@ -454,6 +454,19 @@ fn array(values: Vec<MessageItem>, signature: &str) -> Result<MessageItem, Strin
     .map_err(|error| format!("{error:?}"))
 }
 
+/// Collects a D-Bus `as` array; a non-string element from a client is an error, never a panic.
+fn collect_string_array(values: Vec<WireValue>) -> Result<Vec<String>, FlameError> {
+    values
+        .into_iter()
+        .map(|value| match value {
+            WireValue::String(v) => Ok(v),
+            _ => Err(FlameError::invalid(
+                "D-Bus string array element must be string",
+            )),
+        })
+        .collect()
+}
+
 fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
     let signature = item.signature().to_string();
     match item {
@@ -472,18 +485,7 @@ fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
                 .map(from_item)
                 .collect::<Result<Vec<_>, _>>()?;
             if string_array {
-                Ok(WireValue::StringArray(
-                    values
-                        .into_iter()
-                        .map(|v| {
-                            if let WireValue::String(v) = v {
-                                v
-                            } else {
-                                unreachable!()
-                            }
-                        })
-                        .collect(),
-                ))
+                Ok(WireValue::StringArray(collect_string_array(values)?))
             } else {
                 Ok(WireValue::Array(values))
             }
@@ -567,6 +569,17 @@ fn error_code_for_name(name: &str) -> Option<ErrorCode> {
 mod tests {
     use super::*;
     use flamewm_control_wire::{SwitcherEntry, system_dict};
+
+    #[test]
+    fn non_string_element_in_string_array_is_an_error_not_a_panic() {
+        assert_eq!(
+            collect_string_array(vec![WireValue::String("a".into())]).ok(),
+            Some(vec!["a".to_owned()])
+        );
+        assert!(
+            collect_string_array(vec![WireValue::String("a".into()), WireValue::I32(3)]).is_err()
+        );
+    }
 
     fn signal_message(signal: &ControlSignal) -> Message {
         wire_signal_message(&encode_signal(signal))

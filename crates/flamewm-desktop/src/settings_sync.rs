@@ -13,7 +13,7 @@ pub(super) fn signal_callback_source() -> &'static str {
     let source = include_str!("main.rs");
     source_between(
         source,
-        "let _ = client.on_ready(|signal| {",
+        "let ready = client.on_ready(|signal| {",
         "FdAction::Continue",
     )
 }
