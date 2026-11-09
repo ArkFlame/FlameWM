@@ -396,4 +396,33 @@ mod tests {
             .expect_err("size mismatch must fail");
         assert!(error.contains("does not match"), "{error}");
     }
+
+    /// A light translucent fill (the Dock material, alpha 46) over an opaque mid-grey backdrop must lighten it.
+    /// Expected: 255 * 46/255 + 128 * (1 - 46/255) = 151 per colour channel, alpha stays 255.
+    #[test]
+    fn light_translucent_fill_over_mid_grey_lightens_not_blackens() {
+        let (width, height) = (4u32, 4u32);
+        let mut pixels: Vec<u8> = (0..width * height)
+            .flat_map(|_| [128u8, 128, 128, 255])
+            .collect();
+        let rect = RoundedRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            radius: 0,
+        };
+        fill_rounded_rect_cpu(
+            &mut pixels,
+            width,
+            height,
+            rect,
+            None,
+            [255, 255, 255, 0x2e],
+        )
+        .expect("fill");
+        for px in pixels.chunks_exact(4) {
+            assert_eq!(px, [151, 151, 151, 255], "light fill must lighten grey");
+        }
+    }
 }

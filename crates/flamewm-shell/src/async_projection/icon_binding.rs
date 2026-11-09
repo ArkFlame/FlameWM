@@ -173,12 +173,6 @@ pub fn apply_cached_binding(
     Ok(true)
 }
 
-/// Binds a node to one requested icon key and generation, so only the
-/// matching completion may paint it. Used by surfaces that request directly.
-pub fn bind_icon_request(target: IconTarget, name: &str, w: u32, h: u32, generation: u64) {
-    record_binding(target, name, w, h, generation);
-}
-
 #[cfg(test)]
 pub fn test_record_binding(target: IconTarget, name: &str, w: u32, h: u32, generation: u64) {
     record_binding(target, name, w, h, generation);
@@ -268,6 +262,27 @@ mod tests {
         .expect("apply ok");
         assert!(applied, "live binding must mutate");
         assert_eq!(doc.images, vec!["start-app-slot-1-icon".to_owned()]);
+    }
+
+    #[test]
+    fn dock_slot_miss_paints_the_transparent_placeholder_on_its_own_node() {
+        // Regression: the dock used to request + apply_cached_binding only, so a miss left the
+        // node on its HTML default (brand gear). A miss must repaint the slot's own node.
+        let _guard = icon_test_lock().lock();
+        test_reset_icon_bindings();
+        let mut doc = FakeDoc::default();
+        let target = IconTarget::DockSlot(0);
+        schedule_visible(
+            &mut doc,
+            &icon_node_id_for_target(target),
+            &mut None,
+            target,
+            "",
+            44,
+            44,
+        )
+        .expect("miss ok");
+        assert_eq!(doc.images, vec![icon_node_id_for_target(target)]);
     }
 
     #[test]

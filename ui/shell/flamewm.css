@@ -1,6 +1,6 @@
 @import "../base/tokens.css";
 :root {
-  --rim:#ffffff7f; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#000000bf; --dock-fill:#ffffff2e; --surface:#000000bf; --sidebar:#000000bf; --text:#f1f2f3; --muted:#aeb4bb; --hover-fill:#ffffff40; --pressed-fill:#ffffff26; --strong:#ffffff; --c-ffffff1f:#ffffff1f;
+  --rim:#ffffff7f; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#000000bf; --surface:#000000bf; --sidebar:#000000bf; --text:#f1f2f3; --muted:#aeb4bb; --hover-fill:#ffffff40; --pressed-fill:#ffffff26; --strong:#ffffff; --c-ffffff1f:#ffffff1f;
   --c-00000080:#00000080; --c-050607:#050607; --c-0c0d0e:#0c0d0e; --c-111315:#111315; --c-151719:#151719; --c-17191b:#17191b;
   --c-181a1c:#181a1c; --c-191b1d:#191b1d; --c-1abc9c:#1abc9c; --c-1c2740:#1c2740; --c-1e1e1e:#1e1e1e; --c-202224:#202224;
   --c-232629:#232629; --c-24272a:#24272a; --c-25282b:#25282b; --c-25314a:#25314a; --c-27292b:#27292b; --c-272a2d:#272a2d;
@@ -12,6 +12,7 @@
   --c-df703e:#df703e; --c-dfe2e4:#dfe2e4; --c-e7eaed:#e7eaed; --c-ef4048:#ef4048; --c-f0f2f3:#f0f2f3; --c-f39c12:#f39c12;
   --c-ff9c9f:#ff9c9f;
   --c-ffffff:#ffffff; --c-000000:#000000;
+  --weather-pill:#00000066;
 }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; background:transparent; color:var(--text); font-size:var(--font-md); position:relative; overflow:hidden; }
@@ -282,7 +283,7 @@ input { cursor:text; }
    The temperature overlays the glyph inside a dark rounded pill (surface token) for legibility. */
 .tray-weather { flex-direction:column; position:relative; }
 .tray-weather-overlay { position:absolute; left:0px; top:0px; width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
-.tray-weather-temp { height:14px; padding:0px 5px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:7px; background:var(--surface); font-size:var(--font-xs); color:var(--text); }
+.tray-weather-temp { height:14px; padding:1px 6px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:8px; background:var(--weather-pill); font-size:var(--font-xs); color:var(--text); }
 
 /* Top-center application launcher: Start's search field, rows and surface tokens only. */
 .launcher-popup { position:absolute; left:0px; top:0px; width:600px; padding:var(--space-md); box-sizing:border-box; display:flex; flex-direction:column; background:var(--surface); color:var(--text); border:1px solid var(--rim); border-radius:18px; }
@@ -325,7 +326,8 @@ input { cursor:text; }
 /* Dock surface. Rects are written by the shell (crates/flamewm-shell/src/dock.rs). */
 .dock-body { background:transparent; }
 .dock { position:absolute; left:0px; top:0px; width:100%; height:100%; }
-.dock-bar { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:1px solid var(--rim); background:var(--dock-fill); border-radius:var(--radius-xl); }
+.dock-bar { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:1px solid transparent; background:transparent; border-radius:var(--radius-xl); }
+.dock-highlight { position:absolute; left:0px; top:0px; width:0px; height:0px; background:transparent; }
 .dock-slot { position:absolute; left:0px; top:0px; width:0px; height:0px; padding:0px; border:0px; background:transparent; border-radius:var(--radius-lg); cursor:default; }
 .dock-slot:hover { background:var(--hover-fill); }
 .dock-icon { position:absolute; left:0px; top:0px; width:0px; height:0px; }

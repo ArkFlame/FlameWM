@@ -385,6 +385,27 @@ fn rect_to_css(rect: Rect) -> (f32, f32, f32, f32) {
     (rect.x, rect.y, rect.w, rect.h)
 }
 
+/// Inner highlight of the pill: a 1 px line just inside the bar's top edge (its left edge when the
+/// bar is vertical), inset by the rounded ends so it follows the curve.
+fn highlight_css(bar: Rect) -> (f32, f32, f32, f32) {
+    let radius = bar.w.min(bar.h) / 2.0;
+    if bar.w >= bar.h {
+        (
+            bar.x + radius,
+            bar.y + 1.0,
+            (bar.w - 2.0 * radius).max(0.0),
+            1.0,
+        )
+    } else {
+        (
+            bar.x + 1.0,
+            bar.y + radius,
+            1.0,
+            (bar.h - 2.0 * radius).max(0.0),
+        )
+    }
+}
+
 /// Writes one frame into `dock.html`. Hover labels are separate popups (`sync_dock_label`).
 pub fn project_dock(document: &mut impl UiDocumentAccess, frame: &DockFrame) -> Result<(), String> {
     for i in 0..MAX_SLOTS {
@@ -422,7 +443,11 @@ pub fn project_dock(document: &mut impl UiDocumentAccess, frame: &DockFrame) -> 
     let (bx, by, bw, bh) = rect_to_css(frame.bar);
     document.position("dock-bar", bx, by)?;
     document.size("dock-bar", bw, bh)?;
-    document.corner_radius("dock-bar", frame.bar.w.min(frame.bar.h) / 2.0)?;
+    let radius = frame.bar.w.min(frame.bar.h) / 2.0;
+    document.corner_radius("dock-bar", radius)?;
+    let (hx, hy, hw, hh) = highlight_css(frame.bar);
+    document.position("dock-highlight", hx, hy)?;
+    document.size("dock-highlight", hw, hh)?;
     match frame.separator {
         Some(sep) => {
             let (x, y, w, h) = rect_to_css(sep);
@@ -469,6 +494,44 @@ mod tests {
         assert_eq!(frame.height, 3.0 * 50.0 + 12.0);
         assert_eq!(frame.slots[2].y, PAD + 100.0);
         assert!(frame.labels.iter().all(|l| l.w == 0.0));
+    }
+
+    #[test]
+    fn dock_css_takes_no_hardcoded_colour() {
+        const CSS: &str = include_str!("../../../ui/shell/flamewm.css");
+        for selector in [".dock-bar {", ".dock-highlight {"] {
+            let start = CSS
+                .find(selector)
+                .unwrap_or_else(|| panic!("{selector} rule"));
+            let rule = &CSS[start..start + CSS[start..].find('}').expect("rule end")];
+            assert!(
+                !rule.contains('#'),
+                "{selector} must not hardcode colour: {rule}"
+            );
+            assert!(
+                !rule.contains("var(--dock-"),
+                "{selector} must use shared tokens: {rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlight_follows_the_pill_top_edge_inside_the_rim() {
+        let horizontal = Rect {
+            x: 100.0,
+            y: 700.0,
+            w: 300.0,
+            h: 60.0,
+        };
+        // Top line, 1 px inside the rim, inset by the 30 px rounded ends.
+        assert_eq!(highlight_css(horizontal), (130.0, 701.0, 240.0, 1.0));
+        let vertical = Rect {
+            x: 8.0,
+            y: 100.0,
+            w: 60.0,
+            h: 300.0,
+        };
+        assert_eq!(highlight_css(vertical), (9.0, 130.0, 1.0, 240.0));
     }
 
     #[test]

@@ -27,6 +27,9 @@ pub(crate) struct DockDrag {
 }
 
 /// Last projected dock state; an identical state skips the document write.
+/// Device rect, opacity and blur of the backdrop installed on the Dock surface.
+type DockBackdropKey = ((i32, i32, u32, u32), u8, u8);
+
 pub(crate) type DockSync = (
     dock::DockFrame,
     (i32, i32, u32, u32),
@@ -46,6 +49,8 @@ pub(crate) struct DockStage {
     /// `(dock mapped, reveal mapped)`.
     mapped: Option<(bool, bool)>,
     strut: Option<((i32, i32, u32, u32), bool)>,
+    /// Backdrop last installed as `(device rect, opacity, blur)`; a recapture happens only when one changes.
+    backdrop: Option<DockBackdropKey>,
     /// Hover label popup, created on first hover and hidden otherwise.
     pub(crate) label: Option<flamewm_ui_x11::SurfaceHandle>,
 }
@@ -170,6 +175,16 @@ impl ShellLoop {
             None => match flamewm_shell::runtime::create_dock_surface(runtime, placed, scale) {
                 Ok(surface) => {
                     self.dock_surface = Some(surface);
+                    // A freshly created Dock paints the current taskbar material and outline at once.
+                    if let Some(settings) = self.settings_cache.as_ref() {
+                        let _ = runtime.with_document(surface, |document| {
+                            crate::entry::settings_projection::project(
+                                document,
+                                settings,
+                                crate::entry::settings_projection::SurfaceKind::Dock,
+                            )
+                        });
+                    }
                     surface
                 }
                 Err(error) => {
@@ -212,20 +227,22 @@ impl ShellLoop {
                 })
                 .collect();
             async_projection::bump_dock_view_epoch();
-            if let Some(loader) = self.icon_loader.as_mut() {
-                for (index, name) in icon_names.iter().enumerate() {
-                    let target = IconTarget::DockSlot(index as u8);
-                    let generation = loader.generation();
-                    loader.request(target, name, icon_px, icon_px);
-                    async_projection::bind_icon_request(target, name, icon_px, icon_px, generation);
-                }
-            }
+            let icon_loader = &mut self.icon_loader;
             if let Err(error) = runtime.with_document(surface, |document| {
                 dock::project_dock(document, &frame)?;
-                for index in 0..icon_names.len() {
-                    async_projection::apply_cached_binding(
+                // Same miss policy as the taskbar and launcher: a cached raster, else the transparent
+                // placeholder plus one worker request. The dock's default glyph never shows for a miss.
+                for (index, name) in icon_names.iter().enumerate() {
+                    let target = IconTarget::DockSlot(index as u8);
+                    let icon_id = async_projection::icon_node_id_for_target(target);
+                    let mut loader = icon_loader.as_mut();
+                    async_projection::schedule_visible(
                         document,
-                        IconTarget::DockSlot(index as u8),
+                        &icon_id,
+                        &mut loader,
+                        target,
+                        name,
+                        icon_px,
                         icon_px,
                     )?;
                 }
@@ -329,6 +346,12 @@ impl ShellLoop {
             let _ = runtime.move_resize(surface, moved.0, moved.1, moved.2, moved.3);
             self.dock_stage.placed = Some(moved);
         }
+        // Only a shown dock samples the desktop under its pill; hidden, it does no capture work.
+        if shown && !model.is_hidden() {
+            self.apply_dock_backdrop(runtime, surface, moved);
+        } else {
+            self.dock_stage.backdrop = None;
+        }
         let reveal_rect = dock::reveal_rect(placed, output, frame.edge, scale);
         if self.dock_stage.reveal_placed != Some(reveal_rect) {
             let _ = runtime.move_resize(
@@ -384,6 +407,35 @@ impl ShellLoop {
             }
             self.dock_stage.mapped = Some(mapped);
         }
+    }
+
+    /// Installs the taskbar's pseudo-transparency under the dock pill: the same desktop capture,
+    /// opacity and blur as the taskbar, so changing the surface material changes both together.
+    /// Recaptures only when the rect or the material changes.
+    fn apply_dock_backdrop(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        surface: flamewm_ui_x11::SurfaceHandle,
+        rect: (i32, i32, u32, u32),
+    ) {
+        let (opacity, blur) = match self.settings_cache.as_ref() {
+            Some(settings) => {
+                crate::entry::settings_projection::taskbar_backdrop_percents(settings)
+            }
+            None => return,
+        };
+        let key = (rect, opacity, blur);
+        if self.dock_stage.backdrop == Some(key) {
+            return;
+        }
+        self.dock_stage.backdrop = Some(key);
+        let words = (rect.2 > 0 && rect.3 > 0)
+            .then(|| runtime.desktop_backdrop(rect, opacity, blur))
+            .flatten();
+        let _ = match words {
+            Some(words) => runtime.set_surface_backdrop(surface, Some((&words, rect.2, rect.3))),
+            None => runtime.set_surface_backdrop(surface, None),
+        };
     }
 
     /// Pointer over the dock or its reveal strip; keeps the dock shown or starts its hide delay.

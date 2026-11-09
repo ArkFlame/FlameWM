@@ -17,6 +17,7 @@ pub fn project(
         SurfaceKind::TaskMenu => "task-menu",
         SurfaceKind::Media => "media-popup",
         SurfaceKind::Osd => "osd",
+        SurfaceKind::Dock => "dock-bar",
     };
     let accent = accent_color(snapshot);
     let font_family = text_setting(snapshot, "fontFamily", DEFAULT_FONT_FAMILY);
@@ -46,13 +47,7 @@ pub fn project(
         SurfaceKind::Panel => {
             // Taskbar capsule fill is the Dock material (Blur Only / Inherit / Custom Tint), not the
             // generic surface pair; reduceTransparency makes it the opaque Dock solid.
-            let dock = flamewm_ui_core::surface::dock_fill(snapshot);
-            let fill = UiColor {
-                r: (dock.rgb >> 16) as u8,
-                g: (dock.rgb >> 8) as u8,
-                b: dock.rgb as u8,
-                a: dock.alpha,
-            };
+            let fill = taskbar_fill(snapshot);
             crate::projection::set_taskbar_surface(fill);
             crate::projection::set_taskbar_border(flamewm_ui_x11::surface_style::surface_outline(
                 snapshot,
@@ -133,8 +128,32 @@ pub fn project(
             // Volume OSD card: the shared surface fill; its outline and pill radius stay in osd.html.
             document.background(root, surface_background(snapshot))?;
         }
+        SurfaceKind::Dock => {
+            // Pill fill is the taskbar material; the outline comes from project_surface_outline above.
+            // The top highlight is the same outline colour at half alpha, so it never drifts from it.
+            document.background(root, taskbar_fill(snapshot))?;
+            let outline = flamewm_ui_x11::surface_style::surface_outline(snapshot);
+            document.background(
+                "dock-highlight",
+                UiColor {
+                    a: outline.a / 2,
+                    ..outline
+                },
+            )?;
+        }
     }
     Ok(())
+}
+
+/// The taskbar fill from the Dock material (`dock_fill`). The Dock pill paints the same colour.
+pub(super) fn taskbar_fill(snapshot: &SettingsSnapshot) -> UiColor {
+    let dock = flamewm_ui_core::surface::dock_fill(snapshot);
+    UiColor {
+        r: (dock.rgb >> 16) as u8,
+        g: (dock.rgb >> 8) as u8,
+        b: dock.rgb as u8,
+        a: dock.alpha,
+    }
 }
 
 /// Gradient taskbar fill (`taskbar.fill=gradient`): the bar background goes transparent here.

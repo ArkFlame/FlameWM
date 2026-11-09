@@ -226,6 +226,20 @@ mod tests {
     }
 
     #[test]
+    fn turning_auto_hide_off_while_hidden_brings_the_dock_back() {
+        let t0 = Instant::now();
+        let mut m = AutoHide::new(true, t0);
+        let t = settle(&mut m, t0, HIDE_DELAY + SLIDE);
+        assert!(m.is_hidden(), "precondition: the dock slid away");
+        // dock.autoHide=false applied live: the dock must slide back to shown, not stay parked.
+        m.set_auto_hide(false, t);
+        let t = settle(&mut m, t, SLIDE);
+        assert!(!m.is_hidden());
+        assert_eq!(m.offset(), 0.0);
+        assert!(!m.wants_hidden(t));
+    }
+
+    #[test]
     fn offset_is_monotonic_and_bounded() {
         let t0 = Instant::now();
         let mut m = AutoHide::new(false, t0);

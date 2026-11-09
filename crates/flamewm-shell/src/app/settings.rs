@@ -182,6 +182,16 @@ impl ShellLoop {
                 crate::entry::settings_projection::project(document, snapshot, kind)
             })?;
         }
+        // The Dock follows the taskbar material and outline: a settings change re-projects it too.
+        if let Some(dock) = self.dock_surface {
+            runtime.with_document(dock, |document| {
+                crate::entry::settings_projection::project(
+                    document,
+                    snapshot,
+                    crate::entry::settings_projection::SurfaceKind::Dock,
+                )
+            })?;
+        }
         // The focused task underline takes its colour from the settings accent; re-project the task slots
         // now so a settings change (or a first settings arrival after the last task update) cannot leave it stale.
         let shell_snapshot = self.shell.snapshot();

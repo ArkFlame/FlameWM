@@ -568,6 +568,26 @@ fn start_backdrop_percents_read_flat_keys_with_defaults() {
     assert_eq!(start_backdrop_percents(&snapshot), (50, 30));
 }
 
+#[test]
+fn dock_pill_follows_the_taskbar_material_and_outline() {
+    let blur_only = snapshot_with("taskbarMaterialMode", "blur-only");
+    let mut doc = RecordingUiDoc::default();
+    project(&mut doc, &blur_only, SurfaceKind::Dock).expect("dock projection");
+    let fill = taskbar_fill(&blur_only);
+    assert_eq!(fill.a, 20, "Blur Only is the Dock material alpha");
+    assert_eq!(doc.backgrounds["dock-bar"], fill);
+    let outline = flamewm_ui_x11::surface_style::surface_outline(&blur_only);
+    assert_eq!(doc.borders["dock-bar"], outline);
+    assert_eq!(doc.backgrounds["dock-highlight"].a, outline.a / 2);
+
+    // The same setting moves the pill: changing the taskbar material re-tints the Dock.
+    let inherit = snapshot_with("taskbarMaterialMode", "inherit");
+    let mut doc = RecordingUiDoc::default();
+    project(&mut doc, &inherit, SurfaceKind::Dock).expect("dock projection");
+    assert_eq!(doc.backgrounds["dock-bar"], taskbar_fill(&inherit));
+    assert_ne!(taskbar_fill(&inherit), fill);
+}
+
 fn snapshot_with(key: &str, value: &str) -> SettingsSnapshot {
     let mut snapshot = SettingsSnapshot::new(1);
     snapshot
@@ -1000,6 +1020,7 @@ fn start_slide_clamps_speed_to_supported_range() {
 fn icon_theme_name_prefers_snapshot_then_product_default() {
     let set = snapshot_with("iconTheme", "ThemeX");
     assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
-    assert_eq!(icon_theme_name(None), "MacTahoe");
-    assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "MacTahoe");
+    let default = flamewm_platform::settings::icon_theme::DEFAULT_ICON_THEME;
+    assert_eq!(icon_theme_name(None), default);
+    assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), default);
 }

@@ -38,6 +38,8 @@ pub enum SurfaceKind {
     TaskMenu,
     Media,
     Osd,
+    /// The auto-hide Dock pill: takes the taskbar material and outline, never its own colours.
+    Dock,
 }
 
 mod project;
