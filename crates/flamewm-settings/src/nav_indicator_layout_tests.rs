@@ -35,3 +35,18 @@ fn indicator_top_matches_css_row_layout_for_every_page() {
         assert_eq!(nav_top(index), expected, "indicator for row {index}");
     }
 }
+
+/// Body of the first CSS rule whose selector starts with `selector` (e.g. `.nav-row {`).
+fn rule_body(selector: &str) -> &'static str {
+    let start = CSS.find(selector).expect("selector in settings.css");
+    let body = &CSS[start..];
+    &body[..body.find('}').expect("rule end")]
+}
+
+// REGRESSION: the sidebar overflowed its window with no scroll container, so the last rows
+// (ARK AI, About) were unreachable. The nav must scroll and its rows must not shrink.
+#[test]
+fn sidebar_scrolls_and_rows_keep_their_height() {
+    assert!(rule_body(".nav-scroll {").contains("overflow-y:auto"));
+    assert!(rule_body(".settings-brand {").contains("height:72px"));
+}
