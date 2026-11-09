@@ -1011,6 +1011,7 @@ name = "flamewm-render-core"
 version = "0.1.7"
 dependencies = [
  "flamewm-image-core",
+ "flamewm-render-compiler",
  "fontdue",
 ]
 

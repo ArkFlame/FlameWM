@@ -12,3 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 flamewm-image-core = { path = "../flamewm-image-core" }
 fontdue = "=0.9.5"
+
+[dev-dependencies]
+# Integration tests only (tests/): compiles the shipped ui/ pages. The compiler depends on this crate.
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
