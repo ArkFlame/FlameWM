@@ -267,3 +267,25 @@ new layout pair, which the take site does not hold.
 
 **Scope.** The 98% comes from the planner's bounding box and the full-width text bounds, both in
 `render-x11` `damage_plan.rs`. It is inside this work's scope, so this is not a stop.
+
+### 11.1 Result of the multi-rect attempt (item C blocked)
+
+Tried a disjoint row-local rect list (per-command text bounds, rows joined within 12 px centre
+distance and a 160 px x-gap). Measured on the task manager, `FLAMEWM_RENDER_REGION=1`, display
+`:101`, 10 s, union of the planned rects (sweep over edges, no double counting):
+
+| Frame sample | Sum of rect areas | Union area | Share of viewport (944000) | Rects | Reason |
+|---|---|---|---|---|---|
+| 1 | 1743949 | 739466 | 78.3% | 81 | `region_too_large` |
+| 2 | 1590922 | 649734 | 68.8% | 87 | `region_too_large` |
+| 3 | 1294028 | 569051 | 60.3% | 81 | `region_too_large` |
+| 4 | 1377566 | 613714 | 65.0% | 83 | `region_too_large` |
+| 5 | 1321598 | 591812 | 62.7% | 81 | `region_too_large` |
+
+Every sample is over the 50% threshold, so the task manager still falls back to Full. Enabling
+region paint for that role now would only add the cost of the rect loop. Gaps from 24 to 160 px were
+tried; 24 px gives too many rects (159 to 192, above the 96 cap), and 160 px gives the area above.
+The code change was reverted. Item C is blocked on the 1 Hz row text itself: each row's CPU, memory
+and virtual size change every second, so the changed cells cover about 60% to 80% of the table.
+Next options, none done: a per-cell diff that tracks digits only, a larger threshold (a policy
+change), or a single-pass multi-clip paint (a larger Xft clipping change).
