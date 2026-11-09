@@ -213,3 +213,57 @@ Findings:
   interaction-driven Region frame was produced in a real UI. The Region checks above come from scripted
   harness events, which compare against Full by construction. Dock, settings, terminal and desktop
   roles were not run.
+
+## 11. Item A: why the task-manager 1 Hz diff covers 98% of the viewport
+
+Measured 2026-11-09 on private Xvfb `:101`, debug build (`cargo build -p flamewm-task-manager`),
+window 1180x800 (viewport 944,000 px), `FLAMEWM_DEBUG_PLAN=1 FLAMEWM_RENDER_REGION=1`, 14 s run.
+Instrumentation was a local, uncommitted patch (planner dump plus `touch*` logging); not committed.
+Log: `/tmp/claude-1000/h1/tm.log` (scratch, not a report).
+
+**Result.** The planner decides `region_too_large` on every 1 Hz repaint with a single
+bounding rect `1180x784+0+4` (area 925,120 = 98.0%). Seven such frames; 241 to 307 changed
+paint commands per frame: 104 to 134 `Text`, the same number of `TextShadow`, 30 to 36 `FillRect`,
+3 `Image`. Changed commands span y 4..724 and x 0..1180.
+
+**Mechanism (code).**
+1. `plan_region_paint` (`damage_plan.rs`) takes one union rect over all changed commands
+   (`diff_region`) and compares its area with the viewport.
+2. `command_bounds` gives `Text` and `TextShadow` the full viewport width (`viewport.0 + size`),
+   so every changed text is a full-width strip.
+3. Each visible process row rewrites its CPU, memory and virtual-size text every second
+   (`task-manager/src/lib.rs` `paint_table`), so changed rows run from the top to the bottom of the
+   table. The union is therefore the whole table height, whatever the text width.
+
+**Numbers (analytic from the log; text width estimated as 0.6 em per visible character).**
+
+| Model of the damage rect | Frame 1 | Frame 2 | Frame 3 | Frame 4 |
+|---|---|---|---|---|
+| Planner: one bounding rect | 98.0% | 98.0% | 98.0% | 98.0% |
+| Exact union, full-width text bounds | 85.5% | 86.5% | 89.7% | n/a |
+| Exact union, text-width bounds | 28.7% | 29.9% | 29.4% | 34.4% |
+| Touching-merged rect list, text-width bounds | 32.2% (65 rects) | 33.8% (63) | 34.1% (58) | 38.1% (66) |
+
+Conclusion: a single rect cannot fix it, and tight text bounds alone cannot either, because the
+bounding box still spans the table. A disjoint rect list with tight text bounds does bring the
+area under 50%, which is the planner's threshold.
+
+**Document-side mutations (`touch*` log, same run, 1731 writes in ~14 s, ~10 frames).**
+
+| Mutation | Count | Path |
+|---|---|---|
+| Text node write, `layout=true` | 1148 | `touch_node(Text)`, not isolated, so layout recomputes |
+| Paint node write (heat backgrounds) | 332 | `touch_node(Paint)` |
+| Isolated geometry (`set_visible` on absolute boxes) | 110 | `touch_isolated_box(Geometry)` |
+| Untracked full touch | 137 | `touch()`; the caller was not identified |
+| Paint-wide touch | 4 | `touch_paint` (theme) |
+
+**Finding on node damage (item B).** The planner never reads the document's `SurfaceDamage`. In
+`render/frame.rs`, `redraw_if_dirty` uses the document damage only for emptiness and the skip gate.
+`explicit_full` is taken from the X11 side before the merge. So resolving node damage in
+`take_damage` cannot change which region is painted. The region comes from the paint-command diff,
+which is already exact to the painted commands. `take_incremental_damage` also needs the old and
+new layout pair, which the take site does not hold.
+
+**Scope.** The 98% comes from the planner's bounding box and the full-width text bounds, both in
+`render-x11` `damage_plan.rs`. It is inside this work's scope, so this is not a stop.
