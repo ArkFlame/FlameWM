@@ -574,7 +574,10 @@ fn toplevel_facts(surface: &ToplevelSurface) -> ToplevelFacts {
             .data_map
             .get::<XdgToplevelSurfaceData>()
             .map(|data| {
-                let data = data.lock().unwrap();
+                // A poisoned role lock still holds valid title/app_id data; never panic the compositor on it.
+                let data = data
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 ToplevelFacts {
                     title: data.title.clone().unwrap_or_default(),
                     app_id: data.app_id.clone().unwrap_or_default(),
