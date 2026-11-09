@@ -1,6 +1,6 @@
 # Agent playbook: state, rules and backing information
 
-Status: 2026-11-08, origin/main `83ea76ad` plus the CI fix in this commit. Audience: every CODER worker on FlameWM. Read this before starting or resuming work. It is short on purpose; links go to the owning documents.
+Status: 2026-11-08, written against origin/main `cd19f519`; section 7 holds this session's lessons. Audience: every CODER worker on FlameWM. Read this before starting or resuming work. It is short on purpose; links go to the owning documents.
 
 ## 1. State of the work
 
@@ -53,12 +53,18 @@ CI failed from `e98e63e5` onward: `cargo clippy --workspace --all-targets --all-
 
 ## 3. Quality bar and design contracts
 
+Design rules from the user (apply to every change):
+- Animations are opt-in, default off.
+- No new glass, blur or shadow effects.
+- CPU and memory reductions are always welcome.
+- Licences: code stays LGPL-2.0-only. GPL-3 code is reimplemented in your own words. MIT or Apache-2.0 code may be ported with a `THIRD_PARTY_NOTICES.md` entry. GPL-3 theme data ships as a separate aggregate with its own licence text, never linked into code.
+
 - **Memory and CPU:** default `cpu` path allocates nothing new and loads no GPU library; idle wakeups unchanged; session baseline 23.8 MiB PSS (nested Xephyr, 2026-10-30). New features must show PSS before and after (`/proc/<pid>/smaps_rollup`, field `Pss`) or state that they are unmeasured.
 - **Look:** blur, surface and outline effects are frozen. Do not change their parameters or layering. Visual changes need screenshots viewed, not assumed.
 - **Settings conventions:** camelCase keys; a default value is never serialized; each new key has a round-trip test and an invalid-value test; new settings live in a new small module with a one-line hook (`flamewm-platform/src/settings.rs` is 54 KB and being split).
 - **Architecture:** one owner per mechanism, typed facades, `flamewm-reactor` owns native event sources, UI never becomes WM authority. `python3 -I tools/architecture_guard.py` must exit 0 with no new violations. Exceptions are explicit path entries in `docs/ARCHITECTURE_EXCEPTIONS.toml`.
 - **Licences:** `.vendor/**` is read-only reference. Vela is GPL-3.0; xfwm4, xfdesktop and KDE Plasma are GPL. Port ideas only, never code.
-- **Isolation for runtime tests:** own Xvfb or Xephyr, `pgrep -a Xvfb Xephyr` first, free display in 97..119, explicit `DISPLAY`, never `:0` or `wayland-0`, kill only your own PID. No computer-use or remote control.
+- **Isolation for runtime tests:** own Xvfb or Xephyr, `pgrep -a Xvfb Xephyr` first, free display in 101..119, explicit `DISPLAY`, never `:0` or `wayland-0`, kill only your own PID. No computer-use or remote control.
 - **Dock design contract** (`docs/DOCK_DESIGN.md`): always rounded floating pill, movable to four edges, one display, auto-hide with a 3 px reveal strip, hides for fullscreen, no idle timer when hidden (unmapped, deadline None).
 - **Weather design contract:** icon and temperature vertically centred; temperature on a small dark rounded pill so it reads over a bright sun; tint option `weatherTint`, default on, sun yellow, rain blue and so on; stateless colour mapping in `flamewm-weather/src/weather_tint.rs`.
 
@@ -89,3 +95,15 @@ CI failed from `e98e63e5` onward: `cargo clippy --workspace --all-targets --all-
 | Cold target directories | 16 min builds, disk | shared `target-shared`, `target-clippy189` |
 | Idle while queued | wasted wall time | prepare next step in the queue gap |
 | Workspace `--all-features` clippy queued early | blocks small jobs | once, at the end, via `scripts/lint` |
+
+## 7. Lessons from this session (2026-11-08)
+
+1. **Toolchain.** Gates need `FLAMEWM_TOOLCHAIN_BIN=/run/media/linsaftw/SDD/rust189/bin`. The default `cargo` has no clippy, and 1.88 gives false greens. Check `cargo --version` reads 1.89.0 before trusting a result.
+2. **Shared-target rlib hazard.** Stale rlibs in the shared target can mislead a build. Use private `GATE_TARGET` and `GATE_CLIPPY_TARGET` for your own gate. Never run `cargo clean` on the shared target.
+3. **Disjoint-rebase push rule.** If the gate ended `GATE_DONE all=0` and the incoming origin commits touch none of your files, push without re-gating. The pre-push hook still runs. If any incoming commit touches your files, re-gate.
+4. **Verify package names before use.** The window manager package is `flamewm-wm`, not `flamewm`. Check with `cargo metadata --no-deps` or `grep '^name' crates/*/Cargo.toml`.
+5. **Kill only your own PIDs.** Never kill another worker's waiter, gate or cargo process. Find yours by the log file or the PID you started.
+6. **One bounded wait per gate.** Use one `timeout 580 bash -c 'until grep -q GATE_DONE <log>; do sleep 15; done'`. No re-armed monitors and no polling loops.
+7. **Licence rule.** See section 3, Design rules.
+8. **Design rules.** See section 3, Design rules. Commit trailer exactly `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+9. **Isolated Xvfb.** Run `pgrep -a Xvfb` first, pick a free display in 101..119, set `DISPLAY` explicitly on every command, and kill only the PID you started.

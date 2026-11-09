@@ -126,3 +126,17 @@ a separate compositor, not a second mode of `flamewm-wm-x11`:
 Ownership rules for the Wayland path are recorded in
 [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md), together with the diagnostics and the unverified items.
 
+
+## 9. Compile-time scorecard and next refactor targets
+
+Source: cold dev build report `cargo-timing.html` (433 units, measured 2026-11-08 under lock contention; see `docs/BUILD_TIMES.md`). Unit durations are wall time under contention and are used for ranking only.
+
+| Rank | Unit | Seconds | Owner | Next action |
+|---|---|---|---|---|
+| 1 | `syn 2.0.119` | 156.5 | external (proc-macro via thiserror 1, num-derive, profiling) | Unify with `syn 3` only after smithay/winit upgrade. Not a FlameWM refactor target. |
+| 2 | `flamewm-wm-wayland` | 62.8 | workspace | Refactor target: split the largest modules (`handlers.rs`, `state.rs`) into a separate crate boundary only where the public API is stable; measure again. |
+| 3 | `x11rb-protocol 0.13.2` | 62.1 | external (smithay and winit pin) | Not actionable until smithay/winit upgrade. |
+| 4 | `smithay 0.7.0` | 57.3 | external | Keep features minimal; no FlameWM action. |
+| 5 | `usvg 0.48.1` | 53.9 | external (resvg, via flamewm-image-core) | Check whether `flamewm-image-core` needs the full SVG path; drop unused resvg features if any. |
+
+Actionable inside this repo: rank 2 only. The other four are upstream pins; reducing them needs dependency upgrades, tracked in `docs/BUILD_TIMES.md`.
