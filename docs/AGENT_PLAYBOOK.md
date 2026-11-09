@@ -127,7 +127,9 @@ Reuse this instead of rediscovering it. Found in `scripts/perf/settings_session.
 - Screenshot: `DISPLAY=:N xwd -root -silent | convert xwd:- out.png`.
 - Input: python-Xlib with XTEST (`Xlib.ext.xtest.fake_input`), warping the pointer first.
   Root coordinates are the Xvfb screen, not the nested output.
-- Known so far (2026-11-09): a maximized client kept stale pixels on its right side (repaint or damage
-  issue, not reserve). With `dock.autoHide=false`, the dock was not drawn and the settings window did not map
-  in one run. Both are unverified; start there next time.
+- Known so far (2026-11-09): the nested `flamewm-wayland` default is 1350x641, which clipped the right side
+  and drew a black band against Xvfb 1280x800. Set `FLAMEWM_WAYLAND_WIDTH=1280 FLAMEWM_WAYLAND_HEIGHT=800`
+  to match. At 1280x800 with `dock.enabled=true`, the dock draws with autoHide on and off, and the maximized
+  reserve differs by 140 px (on 721 px vs off 581 px client height). The earlier stale-pixel symptom was seen
+  only at 1350 wide; re-check at 1280 before treating it as a repaint bug.
 - Cleanup: kill only the PIDs you recorded (`wm.pid`, `xvfb.pid`) and their process group.
