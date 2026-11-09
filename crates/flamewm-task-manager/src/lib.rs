@@ -181,8 +181,9 @@ impl Application {
             let a = &self.snapshot.processes[ai];
             let b = &self.snapshot.processes[bi];
             let order = match self.sort {
-                Sort::Cpu => a.cpu.total_cmp(&b.cpu),
-                Sort::Memory => a.rss_kib.cmp(&b.rss_kib),
+                // Keys are the displayed values, so a row only moves when its shown number moves.
+                Sort::Cpu => a.cpu.round().total_cmp(&b.cpu.round()),
+                Sort::Memory => (a.rss_kib / 1024).cmp(&(b.rss_kib / 1024)),
                 Sort::Pid => a.pid.cmp(&b.pid),
                 Sort::Name => lower_names[ai].cmp(&lower_names[bi]),
             };
@@ -430,18 +431,20 @@ impl Application {
             doc.text(&id("threads"), p.threads.to_string())?;
             doc.text(&id("pri"), p.priority.to_string())?;
             doc.text(&id("nice"), p.nice.to_string())?;
+            // Values are quantised to what is shown, and the document skips unchanged text, so a
+            // row only rewrites a cell when the displayed value really changes.
             doc.text(&id("virt"), memory_text(p.virt_kib))?;
-            doc.text(&id("cpu"), format!("{:.1}%", p.cpu))?;
+            doc.text(&id("cpu"), format!("{:.0}%", p.cpu))?;
             doc.text(&id("mem"), memory_text(p.rss_kib))?;
             doc.text_ref(&id("cmd"), &p.command)?;
             let memory_share = 100.0 * p.rss_kib as f64 / total as f64;
             doc.background(
                 &id("cpu"),
-                UiColor::from_rgb(HEAT_RGB, heat_alpha(p.cpu / 50.0)),
+                UiColor::from_rgb(HEAT_RGB, heat_alpha(heat_step(p.cpu / 50.0))),
             )?;
             doc.background(
                 &id("mem"),
-                UiColor::from_rgb(HEAT_RGB, heat_alpha(memory_share / 10.0)),
+                UiColor::from_rgb(HEAT_RGB, heat_alpha(heat_step(memory_share / 10.0))),
             )?;
             let row = format!("row-{slot}");
             if self.selected == Some((p.pid, p.start)) {
@@ -718,7 +721,7 @@ fn memory_text(kib: u64) -> String {
     if kib >= 1024 * 1024 {
         format!("{:.2} GB", kib as f64 / 1_048_576.0)
     } else {
-        format!("{:.1} MB", kib as f64 / 1024.0)
+        format!("{:.0} MB", kib as f64 / 1024.0)
     }
 }
 fn rate(bytes_per_second: f64) -> String {
@@ -771,6 +774,10 @@ fn load_color(percent: f64) -> u32 {
     let t = (value - low_at) / (high_at - low_at);
     let channel = |index: usize| (low[index] + (high[index] - low[index]) * t).round() as u32;
     channel(0) << 16 | channel(1) << 8 | channel(2)
+}
+/// Snaps a heat fraction to eighths so a small CPU or memory wobble keeps the same cell tint.
+fn heat_step(fraction: f64) -> f64 {
+    (fraction * 8.0).round() / 8.0
 }
 /// Windows 11-style heat cell: a faint tint at rest that deepens with the share in `fraction`.
 fn heat_alpha(fraction: f64) -> u8 {
@@ -1077,9 +1084,143 @@ mod tests {
         assert_eq!(rate(512.0), "512 B/s");
         assert_eq!(rate(2048.0), "2.0 KiB/s");
         assert_eq!(rate(3.0 * 1_048_576.0), "3.0 MiB/s");
-        assert_eq!(memory_text(2048), "2.0 MB");
+        assert_eq!(memory_text(2048), "2 MB");
         assert_eq!(memory_text(3 * 1024 * 1024), "3.00 GB");
     }
+    /// Counts the writes that would change a node: a text, visibility or colour write whose value
+    /// differs from the last value written to the same node.
+    #[derive(Default)]
+    struct ChangeLog {
+        last: std::collections::HashMap<String, String>,
+        changed: Vec<String>,
+        writes: usize,
+    }
+    impl ChangeLog {
+        fn put(&mut self, key: String, value: String) {
+            self.writes += 1;
+            let key_dbg = key.clone();
+            if self.last.insert(key, value.clone()).as_deref() != Some(value.as_str()) {
+                self.changed.push(key_dbg);
+            }
+        }
+    }
+    impl UiDocumentAccess for ChangeLog {
+        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            self.put(format!("text:{id}"), text);
+            Ok(())
+        }
+        fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
+            self.put(format!("visible:{id}"), visible.to_string());
+            Ok(())
+        }
+        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.put(format!("bg:{id}"), format!("{color:?}"));
+            Ok(())
+        }
+        fn background_clear(&mut self, id: &str) -> Result<(), String> {
+            self.put(format!("bg:{id}"), "clear".into());
+            Ok(())
+        }
+        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn border_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
+            Ok(())
+        }
+        fn overflow(
+            &mut self,
+            _: &str,
+            _: flamewm_ui_document::Overflow,
+            _: flamewm_ui_document::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn layer(&mut self, _: &str, _: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn identical_formatted_rows_produce_no_node_changes() {
+        let proc = |pid: u32, cpu: f64, rss_kib: u64| {
+            let mut p = model::Process::default();
+            p.pid = pid;
+            p.name = format!("proc{pid}");
+            p.cpu = cpu;
+            p.rss_kib = rss_kib;
+            p.virt_kib = rss_kib * 2;
+            p
+        };
+        let snapshot = |cpu: f64, rss: u64| model::Snapshot {
+            processes: vec![
+                proc(1, cpu, rss),
+                proc(2, cpu, rss + 512),
+                proc(3, 0.0, 4096),
+            ],
+            mem_total: 1 << 24,
+            ..model::Snapshot::default()
+        };
+        let (actions, _rx) = std::sync::mpsc::sync_channel(1);
+        let mut app = Application::new(SettingsSnapshot::new(0), actions);
+        app.viewport = 3;
+        app.accept(snapshot(12.31, 100_000));
+        let mut log = ChangeLog::default();
+        app.paint_table(&mut log, 0x0033_66ff).expect("first paint");
+        assert!(log.writes > 0, "the first paint must write the rows");
+
+        // Raw values move inside the displayed quantum: CPU 12.31 to 12.34 shows "12%" and RSS
+        // 100000 to 100010 KiB shows "98 MB" (virt "195 MB") either way, so the second paint changes nothing.
+        app.accept(snapshot(12.34, 100_010));
+        // Same log, so the second paint compares against what the first one wrote.
+        log.writes = 0;
+        log.changed.clear();
+        app.paint_table(&mut log, 0x0033_66ff)
+            .expect("second paint");
+        assert!(log.writes > 0, "the second paint still writes the rows");
+        assert!(
+            log.changed.is_empty(),
+            "identical formatted rows changed nodes: {:?}",
+            log.changed
+        );
+
+        // Control: a displayed CPU change is a real change.
+        app.accept(snapshot(40.0, 100_010));
+        log.changed.clear();
+
+        app.paint_table(&mut log, 0x0033_66ff).expect("third paint");
+        assert!(
+            !log.changed.is_empty(),
+            "a displayed CPU change must reach the document"
+        );
+    }
+
     #[test]
     fn default_rows_fit_without_clipping_and_resize_is_bounded() {
         assert_eq!(visible_rows(HEIGHT), 15);
