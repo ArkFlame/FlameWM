@@ -203,3 +203,33 @@ pub(super) fn resolve_dock(
 ) -> Option<(i32, i32, u32, u32)> {
     local.or(external)
 }
+
+#[cfg(test)]
+mod dock_corner_tests {
+    use crate::xshape::rounded_mask_spans;
+
+    /// A pixel is in the mask when some span of its row covers its column.
+    fn covered(spans: &[(u32, u32, u32)], x: u32, y: u32) -> bool {
+        spans
+            .iter()
+            .any(|&(row, start, end)| row == y && x >= start && x < end)
+    }
+
+    #[test]
+    fn rounded_dock_pill_leaves_corner_pixels_outside_the_radius_empty() {
+        let (w, h, r) = (40, 20, 10);
+        let spans = rounded_mask_spans(w, h, r);
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert!(!covered(&spans, x, y), "corner ({x},{y}) must be clipped");
+        }
+        for (x, y) in [
+            (w / 2, 0),
+            (0, h / 2),
+            (w - 1, h / 2),
+            (w / 2, h - 1),
+            (w / 2, h / 2),
+        ] {
+            assert!(covered(&spans, x, y), "edge/centre ({x},{y}) must stay");
+        }
+    }
+}
