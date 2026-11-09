@@ -34,6 +34,7 @@ pub fn eval_calc(input: &str) -> Result<CalcValue, String> {
     let mut parser = Parser {
         tokens: &tokens,
         cursor: 0,
+        depth: 0,
     };
     let value = parser.expr()?;
     if parser.cursor != tokens.len() {
@@ -121,9 +122,13 @@ fn expects_operand(previous: Option<&Token>) -> bool {
     matches!(previous, None | Some(Token::Op(_)) | Some(Token::Open))
 }
 
+/// Deepest `(` nesting accepted in one calc(); deeper input is rejected, not recursed into.
+const MAX_CALC_DEPTH: usize = 64;
+
 struct Parser<'a> {
     tokens: &'a [Token],
     cursor: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -158,8 +163,13 @@ impl Parser<'_> {
                 Ok(value)
             }
             Some(Token::Open) => {
+                if self.depth == MAX_CALC_DEPTH {
+                    return Err(format!("calc() nests deeper than {MAX_CALC_DEPTH} levels"));
+                }
                 self.cursor += 1;
+                self.depth += 1;
                 let value = self.expr()?;
+                self.depth -= 1;
                 if self.peek() != Some(Token::Close) {
                     return Err("calc() has an unclosed '('".to_string());
                 }

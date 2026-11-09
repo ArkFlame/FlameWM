@@ -1,5 +1,8 @@
 use super::*;
 
+/// Deepest element nesting the compiler recurses into; deeper pages are rejected with an error.
+const MAX_DOM_DEPTH: usize = 128;
+
 pub(super) struct Compiler<'a> {
     pub(super) html: &'a ParsedHtml,
     pub(super) rules: &'a [Rule],
@@ -20,7 +23,13 @@ impl<'a> Compiler<'a> {
         source_index: usize,
         parent: Option<u32>,
         inherited: &Style,
+        depth: usize,
     ) -> Result<u32, String> {
+        if depth > MAX_DOM_DEPTH {
+            return Err(format!(
+                "HTML elements nest deeper than {MAX_DOM_DEPTH} levels"
+            ));
+        }
         let source = &self.html.nodes[source_index];
         let node_index = self.nodes.len() as u32;
 
@@ -118,7 +127,7 @@ impl<'a> Compiler<'a> {
             if should_skip_tag(&self.html.nodes[*child_source].tag) {
                 continue;
             }
-            let child = self.compile_subtree(*child_source, Some(node_index), &base)?;
+            let child = self.compile_subtree(*child_source, Some(node_index), &base, depth + 1)?;
             if first_child.is_none() {
                 first_child = Some(child);
             }

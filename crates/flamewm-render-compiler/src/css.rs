@@ -69,7 +69,7 @@ pub fn parse_stylesheet(input: &str) -> Result<Vec<Rule>, String> {
                     ));
                 }
                 let selectors = resolve_selectors(prelude, None)?;
-                emit_rule_block(&selectors, body, &mut rules, &mut order)?;
+                emit_rule_block(&selectors, body, &mut rules, &mut order, 0)?;
             }
         }
     }
@@ -108,13 +108,20 @@ fn split_items(source: &str) -> Result<Vec<Item<'_>>, String> {
     Ok(items)
 }
 
+/// Deepest rule nesting accepted in a stylesheet.
+const MAX_NESTING: usize = 32;
+
 /// Emits one rule per selector alternative for `body`, then recurses into its nested blocks.
 fn emit_rule_block(
     selectors: &[String],
     body: &str,
     rules: &mut Vec<Rule>,
     order: &mut u32,
+    depth: usize,
 ) -> Result<(), String> {
+    if depth > MAX_NESTING {
+        return Err(format!("CSS rules nest deeper than {MAX_NESTING} levels"));
+    }
     let mut declarations = Vec::new();
     let mut nested = Vec::new();
     for item in split_items(body)? {
@@ -144,7 +151,7 @@ fn emit_rule_block(
     }
     for (prelude, inner) in nested {
         let child = resolve_selectors(prelude, Some(selectors))?;
-        emit_rule_block(&child, inner, rules, order)?;
+        emit_rule_block(&child, inner, rules, order, depth + 1)?;
     }
     Ok(())
 }
@@ -518,7 +525,7 @@ fn parse_compound(input: &str) -> Result<ParsedCompound, String> {
                     _ => return Err(format!("unsupported pseudo-class ':{value}'")),
                 };
             }
-            _ => unreachable!(),
+            _ => return Err(format!("invalid selector '{input}'")),
         }
     }
 
