@@ -43,6 +43,8 @@ pub struct RecordingUiDoc {
     pub backgrounds: HashMap<String, UiColor>,
     pub borders: HashMap<String, UiColor>,
     pub foregrounds: HashMap<String, UiColor>,
+    /// Foregrounds bound to a colour custom property, by node id.
+    pub foreground_variables: HashMap<String, String>,
     pub variables: HashMap<String, UiColor>,
     pub positions: HashMap<String, (f32, f32)>,
     pub sizes: HashMap<String, (f32, f32)>,
@@ -102,6 +104,11 @@ impl UiDocumentAccess for RecordingUiDoc {
     }
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
         self.foregrounds.insert(id.to_owned(), color);
+        Ok(())
+    }
+    fn foreground_variable(&mut self, id: &str, name: &str) -> Result<(), String> {
+        self.foreground_variables
+            .insert(id.to_owned(), name.to_owned());
         Ok(())
     }
     fn background_clear(&mut self, id: &str) -> Result<(), String> {

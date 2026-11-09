@@ -224,6 +224,11 @@ pub trait UiDocumentAccess {
     fn color_variable(&mut self, _name: &str, _color: UiColor) -> Result<(), String> {
         Err("color variable projection is unsupported by this document access".to_string())
     }
+    /// Foreground read from colour custom property `name` (e.g. `--weather-sun`), so the value
+    /// follows the stylesheet `:root` and `color_variable`.
+    fn foreground_variable(&mut self, _id: &str, _name: &str) -> Result<(), String> {
+        Err("foreground variable projection is unsupported by this document access".to_string())
+    }
     fn overflow(
         &mut self,
         id: &str,
@@ -364,6 +369,10 @@ impl UiDocument {
             .set_foreground_color(id, flamewm_render_core::ColorValue::Literal(color.into()))
     }
 
+    pub fn foreground_variable(&mut self, id: &str, name: &str) -> Result<(), String> {
+        self.document.set_foreground_variable(id, name)
+    }
+
     pub fn background_clear(&mut self, id: &str) -> Result<(), String> {
         self.document.clear_background_color(id)
     }
@@ -481,6 +490,10 @@ macro_rules! document_access_methods {
         fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
             self.document
                 .set_foreground_color(id, flamewm_render_core::ColorValue::Literal(color.into()))
+        }
+
+        fn foreground_variable(&mut self, id: &str, name: &str) -> Result<(), String> {
+            self.document.set_foreground_variable(id, name)
         }
 
         fn background_clear(&mut self, id: &str) -> Result<(), String> {
@@ -1124,6 +1137,40 @@ mod tests {
             .expect("font family projection");
         assert_eq!(doc.document.ui_font_family(), "Noto Sans");
         assert!(doc.font_family(String::new()).is_err());
+    }
+
+    // OBSERVABLE: a foreground can bind to a declared variable, unknown names are refused, and a
+    // `color_variable` update changes the variable the binding reads. MUTATION: accepting an
+    // unknown name fails here.
+    #[test]
+    fn foreground_variable_follows_color_variable_updates() {
+        let default = flamewm_render_core::Color::rgb(0xff, 0xc8, 0x3d);
+        let mut doc = make_doc(
+            Vec::new(),
+            vec![ColorVariable {
+                name: "--weather-sun".to_string().into(),
+                default,
+            }],
+            vec![el_color("glyph", None, default)],
+        );
+        UiDocumentAccess::foreground_variable(&mut doc, "glyph", "--weather-sun")
+            .expect("bind foreground");
+        assert!(UiDocumentAccess::foreground_variable(&mut doc, "glyph", "--missing").is_err());
+        UiDocumentAccess::color_variable(
+            &mut doc,
+            "--weather-sun",
+            UiColor {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 255,
+            },
+        )
+        .expect("variable projection");
+        assert_eq!(
+            doc.document.variable_values[0],
+            flamewm_render_core::Color::rgb(1, 2, 3)
+        );
     }
 
     #[test]

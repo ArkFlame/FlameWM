@@ -119,6 +119,14 @@ impl RuntimeDocument {
         Ok(())
     }
 
+    /// Foreground taken from the named colour custom property, so it follows `set_color_variable`.
+    pub fn set_foreground_variable(&mut self, id: &str, name: &str) -> Result<(), String> {
+        let index = self
+            .variable_by_name(name)
+            .ok_or_else(|| format!("no color variable named '{name}'"))?;
+        self.set_foreground_color(id, ColorValue::Variable(index))
+    }
+
     pub fn clear_foreground_color(&mut self, id: &str) -> Result<(), String> {
         let index = self.require_node(id)?;
         let changed = self

@@ -3,7 +3,7 @@
 //! No UI types here; projections only write the strings and visibility these return.
 
 use crate::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
-use crate::weather_tint::{Rgba, icon_tint};
+use crate::weather_tint::icon_tint_variable;
 
 /// Rows in the popup forecast list.
 pub const WEATHER_DAY_ROWS: usize = 7;
@@ -47,8 +47,9 @@ pub struct WeatherTrayView {
     pub visible: bool,
     pub condition: WeatherCondition,
     pub temperature: String,
-    /// Glyph colour; `None` when tinting is off or the condition has no tint.
-    pub tint: Option<Rgba>,
+    /// Glyph colour as a `--weather-*` custom property; `None` when tinting is off or the
+    /// condition has no tint.
+    pub tint: Option<&'static str>,
 }
 
 /// Tray entry: shown when `taskbarShowWeather` is on and weather is enabled. Enabled
@@ -68,7 +69,7 @@ pub fn tray_view(
             condition: snapshot.condition,
             temperature: format!("{}\u{b0}", units.convert_c(snapshot.temperature_c)),
             tint: tint
-                .then(|| icon_tint(snapshot.condition, snapshot.is_day))
+                .then(|| icon_tint_variable(snapshot.condition, snapshot.is_day))
                 .flatten(),
         },
         _ => WeatherTrayView {

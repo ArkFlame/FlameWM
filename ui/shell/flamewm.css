@@ -13,6 +13,7 @@
   --c-ff9c9f:#ff9c9f;
   --c-ffffff:#ffffff; --c-000000:#000000;
   --weather-pill:#00000066;
+  --weather-sun:#ffc83d; --weather-clear-night:#d6e4ff; --weather-few-clouds:#d6be62; --weather-overcast:#8fa3b8; --weather-fog:#c8cdd2; --weather-drizzle:#6eb2f0; --weather-rain:#3c7fe0; --weather-snow:#b5eef7; --weather-storm:#a77af0;
 }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; background:transparent; color:var(--text); font-size:var(--font-md); position:relative; overflow:hidden; }

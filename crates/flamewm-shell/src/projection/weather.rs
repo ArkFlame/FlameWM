@@ -7,7 +7,6 @@
 use super::*;
 use crate::weather_host::{LocationSearch, SearchStatus};
 use flamewm_weather::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
-use flamewm_weather::weather_tint::Rgba;
 pub use flamewm_weather::weather_view::{
     condition_label, place_name, popup_view, tray_view, WEATHER_DAY_ROWS,
 };
@@ -50,16 +49,17 @@ fn set_icons(
     Ok(())
 }
 
-/// Only the active icon carries a tint. `None` clears it, so the glyph inherits the bar colour.
+/// Only the active icon carries a tint: its foreground is bound to the `--weather-*` variable
+/// (colours live in `:root` of the shell sheet). `None` clears it, so the glyph inherits the bar colour.
 fn set_icon_tints(
     document: &mut impl UiDocumentAccess,
     active: WeatherCondition,
-    tint: Option<Rgba>,
+    tint: Option<&'static str>,
 ) -> Result<(), String> {
     for condition in WEATHER_CONDITIONS {
         let id = format!("tray-weather-{}", icon_suffix(condition));
         match tint.filter(|_| condition == active) {
-            Some([r, g, b, a]) => document.foreground(&id, UiColor { r, g, b, a })?,
+            Some(name) => document.foreground_variable(&id, name)?,
             None => document.foreground_clear(&id)?,
         }
     }
@@ -487,8 +487,8 @@ mod panel_tray_tests {
         }
     }
 
-    // OBSERVABLE: with tinting on only the active condition glyph gets the table colour;
-    // tinting off and unknown data write no foreground at all.
+    // OBSERVABLE: with tinting on only the active condition glyph binds its `--weather-*`
+    // variable; tinting off and unknown data bind nothing (they clear the foreground instead).
     // MUTATION: tinting every icon, or tinting Unknown, fails here.
     #[test]
     fn tint_is_written_to_the_active_glyph_only() {
@@ -501,19 +501,19 @@ mod panel_tray_tests {
         });
         let mut on = flamewm_ui_x11::test_support::RecordingUiDoc::default();
         project_weather_tray(&mut on, &rain, TemperatureUnit::Celsius, true, true).unwrap();
-        assert_eq!(on.foregrounds.len(), 1, "{:?}", on.foregrounds.keys());
         assert_eq!(
-            on.foregrounds["tray-weather-showers"],
-            UiColor {
-                r: 60,
-                g: 127,
-                b: 224,
-                a: 255
-            }
+            on.foreground_variables.keys().collect::<Vec<_>>(),
+            vec!["tray-weather-showers"]
         );
+        assert_eq!(
+            on.foreground_variables["tray-weather-showers"],
+            "--weather-rain"
+        );
+        assert!(on.foregrounds.is_empty());
 
         let mut off = flamewm_ui_x11::test_support::RecordingUiDoc::default();
         project_weather_tray(&mut off, &rain, TemperatureUnit::Celsius, true, false).unwrap();
+        assert!(off.foreground_variables.is_empty());
         assert!(off.foregrounds.is_empty());
 
         let mut unknown = flamewm_ui_x11::test_support::RecordingUiDoc::default();

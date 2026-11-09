@@ -1,25 +1,13 @@
-//! Taskbar weather glyph tint: the one table mapping a condition (and day or night) to the
-//! icon colour. Pure data; the shell writes the result as the glyph's foreground when the
-//! `weatherTint` setting is on, and clears it otherwise.
+//! Taskbar weather glyph tint: the one table mapping a condition (and day or night) to the CSS
+//! custom property that colours the glyph. The colours live in `:root` of `ui/shell/flamewm.css`,
+//! so a theme restyles them there. The shell selects the variable by name when the `weatherTint`
+//! setting is on, and clears the glyph colour otherwise.
 
 use crate::weather::WeatherCondition;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
-/// Straight-alpha RGBA, one byte per channel.
-pub type Rgba = [u8; 4];
-
 /// Setting key that enables condition tints (default on; absent means on).
 pub const TINT_SETTINGS_KEY: &str = "weatherTint";
-
-const CLEAR_DAY: [u8; 3] = [255, 200, 61];
-const CLEAR_NIGHT: [u8; 3] = [214, 228, 255];
-const FEW_CLOUDS: [u8; 3] = [214, 190, 98];
-const OVERCAST: [u8; 3] = [143, 163, 184];
-const FOG: [u8; 3] = [200, 205, 210];
-const DRIZZLE: [u8; 3] = [110, 178, 240];
-const RAIN: [u8; 3] = [60, 127, 224];
-const SNOW: [u8; 3] = [181, 238, 247];
-const STORM: [u8; 3] = [167, 122, 240];
 
 /// Whether `weatherTint` is on. An absent key (no snapshot yet, or the default) is on; only an
 /// explicit `false` turns tinting off.
@@ -31,23 +19,22 @@ pub fn tint_enabled(snapshot: Option<&SettingsSnapshot>) -> bool {
     )
 }
 
-/// Tint for the glyph of `condition`. `None` keeps the inherited foreground, which is the
-/// unknown-data icon; `is_day` only changes the clear-sky tint.
+/// CSS custom property of the glyph colour for `condition`. `None` keeps the inherited foreground,
+/// which is the unknown-data icon; `is_day` only changes the clear-sky variable.
 #[must_use]
-pub fn icon_tint(condition: WeatherCondition, is_day: bool) -> Option<Rgba> {
-    let [r, g, b] = match condition {
-        WeatherCondition::Clear if is_day => CLEAR_DAY,
-        WeatherCondition::Clear => CLEAR_NIGHT,
-        WeatherCondition::FewClouds => FEW_CLOUDS,
-        WeatherCondition::Overcast => OVERCAST,
-        WeatherCondition::Fog => FOG,
-        WeatherCondition::Drizzle => DRIZZLE,
-        WeatherCondition::Rain => RAIN,
-        WeatherCondition::Snow => SNOW,
-        WeatherCondition::Storm => STORM,
+pub fn icon_tint_variable(condition: WeatherCondition, is_day: bool) -> Option<&'static str> {
+    Some(match condition {
+        WeatherCondition::Clear if is_day => "--weather-sun",
+        WeatherCondition::Clear => "--weather-clear-night",
+        WeatherCondition::FewClouds => "--weather-few-clouds",
+        WeatherCondition::Overcast => "--weather-overcast",
+        WeatherCondition::Fog => "--weather-fog",
+        WeatherCondition::Drizzle => "--weather-drizzle",
+        WeatherCondition::Rain => "--weather-rain",
+        WeatherCondition::Snow => "--weather-snow",
+        WeatherCondition::Storm => "--weather-storm",
         WeatherCondition::Unknown => return None,
-    };
-    Some([r, g, b, 0xff])
+    })
 }
 
 #[cfg(test)]
@@ -66,23 +53,65 @@ mod tests {
         WeatherCondition::Unknown,
     ];
 
-    fn rgb(condition: WeatherCondition, is_day: bool) -> [u8; 3] {
-        let [r, g, b, _] = icon_tint(condition, is_day).expect("tinted");
-        [r, g, b]
+    const SHELL_CSS: &str = include_str!("../../../ui/shell/flamewm.css");
+
+    /// Body of the shell sheet's `:root` block.
+    fn root_block() -> &'static str {
+        SHELL_CSS
+            .split(":root {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("shell sheet has a :root block")
     }
 
-    // OBSERVABLE: every known condition has an opaque tint; only Unknown has none.
-    // MUTATION: returning Some for Unknown or a transparent alpha fails here.
+    /// RGB of colour custom property `name` as declared in the shell sheet's `:root`.
+    fn css_rgb(name: &str) -> [u8; 3] {
+        let marker = format!("{name}:#");
+        let start = root_block()
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{name} not declared in :root"))
+            + marker.len();
+        let hex = &root_block()[start..start + 6];
+        [0, 2, 4].map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex channel"))
+    }
+
+    fn rgb(condition: WeatherCondition, is_day: bool) -> [u8; 3] {
+        css_rgb(icon_tint_variable(condition, is_day).expect("tinted"))
+    }
+
+    // OBSERVABLE: every known condition maps to a custom property declared in `:root`; only
+    // Unknown maps to none. MUTATION: a typo'd name, or a tint for Unknown, fails here.
     #[test]
-    fn every_known_condition_is_opaque_and_unknown_is_untinted() {
+    fn every_known_condition_maps_to_a_root_variable_and_unknown_to_none() {
         for condition in ALL {
-            let tint = icon_tint(condition, true);
-            if condition == WeatherCondition::Unknown {
-                assert_eq!(tint, None);
-            } else {
-                assert_eq!(tint.map(|c| c[3]), Some(0xff), "{condition:?}");
+            for is_day in [true, false] {
+                match icon_tint_variable(condition, is_day) {
+                    None => assert_eq!(condition, WeatherCondition::Unknown),
+                    Some(name) => {
+                        assert!(name.starts_with("--weather-"), "{name}");
+                        assert!(
+                            root_block().contains(&format!("{name}:#")),
+                            "{condition:?} -> {name} is not declared in :root"
+                        );
+                    }
+                }
             }
         }
+    }
+
+    // OBSERVABLE: the default palette in `:root` is the previous Rust table, so the default
+    // visuals do not change. MUTATION: editing a default colour fails here.
+    #[test]
+    fn default_palette_matches_the_previous_literals() {
+        assert_eq!(css_rgb("--weather-sun"), [255, 200, 61]);
+        assert_eq!(css_rgb("--weather-clear-night"), [214, 228, 255]);
+        assert_eq!(css_rgb("--weather-few-clouds"), [214, 190, 98]);
+        assert_eq!(css_rgb("--weather-overcast"), [143, 163, 184]);
+        assert_eq!(css_rgb("--weather-fog"), [200, 205, 210]);
+        assert_eq!(css_rgb("--weather-drizzle"), [110, 178, 240]);
+        assert_eq!(css_rgb("--weather-rain"), [60, 127, 224]);
+        assert_eq!(css_rgb("--weather-snow"), [181, 238, 247]);
+        assert_eq!(css_rgb("--weather-storm"), [167, 122, 240]);
     }
 
     // OBSERVABLE: the setting is on without a snapshot or a stored key, and off only for an
@@ -126,7 +155,10 @@ mod tests {
     fn night_flag_only_changes_clear_sky() {
         for condition in ALL {
             if condition != WeatherCondition::Clear {
-                assert_eq!(icon_tint(condition, true), icon_tint(condition, false));
+                assert_eq!(
+                    icon_tint_variable(condition, true),
+                    icon_tint_variable(condition, false)
+                );
             }
         }
         assert_ne!(
