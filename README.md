@@ -45,6 +45,7 @@ Status key: **Shipped** is in the current source and used in the screenshots. **
 | Desktop | Icons, context menus, wallpapers | Shipped |
 | Panel | Taskbar, Start menu, status popovers, Dock (pill layout) | Shipped; Dock is partial, see [`docs/DOCK_DESIGN.md`](docs/DOCK_DESIGN.md) |
 | Widgets | Clock, CPU, memory, media | Shipped |
+| Notifications | `org.freedesktop.Notifications` server, history centre grouped by app, popup suppression | Shipped; Do Not Disturb works in the backend, its toggle is not yet in the centre UI |
 | Settings | Settings application | Shipped |
 | Lock screen | PAM authentication (X11) | Shipped on X11; not on Wayland |
 | Screenshots | Full screen, monitor, window, region, annotation, clipboard, optional `ffmpeg` recording | Shipped; see [`docs/SCREENSHOT.md`](docs/SCREENSHOT.md) |
