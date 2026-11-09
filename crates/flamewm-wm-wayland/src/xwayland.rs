@@ -52,6 +52,8 @@ pub struct Props {
     desktop: Atom,
     strut: Atom,
     strut_partial: Atom,
+    /// Stadium corner radius (device px) the Dock publishes for its own shell-drawn pill.
+    corner_radius: Atom,
     net_wm_state: Atom,
     fullscreen: Atom,
     net_wm_name: Atom,
@@ -73,6 +75,7 @@ impl Props {
             desktop: atom("_NET_WM_WINDOW_TYPE_DESKTOP")?,
             strut: atom("_NET_WM_STRUT")?,
             strut_partial: atom("_NET_WM_STRUT_PARTIAL")?,
+            corner_radius: atom("_FLAMEWM_DOCK_CORNER_RADIUS")?,
             net_wm_state: atom("_NET_WM_STATE")?,
             fullscreen: atom("_NET_WM_STATE_FULLSCREEN")?,
             net_wm_name: atom("_NET_WM_NAME")?,
@@ -139,7 +142,8 @@ impl Props {
         while let Some(event) = self.conn.poll_for_event()? {
             if let X11Event::PropertyNotify(event) = event
                 && self.watched_docks.contains(&event.window)
-                && is_strut_property(event.atom, self.strut, self.strut_partial)
+                && (is_strut_property(event.atom, self.strut, self.strut_partial)
+                    || event.atom == self.corner_radius)
             {
                 affected.insert(event.window);
             }
@@ -225,6 +229,14 @@ impl Props {
             .contains(&self.fullscreen)
     }
 
+    /// Stadium corner radius the Dock published, in device px; zero when it is square or unset.
+    pub fn corner_radius(&self, window: X11Window) -> u32 {
+        self.read32(window, self.corner_radius, AtomEnum::CARDINAL)
+            .first()
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub fn kind(&self, window: X11Window) -> Kind {
         let types = self.read32(window, self.window_type, AtomEnum::ATOM);
         if types.contains(&self.dock) {
@@ -264,6 +276,8 @@ pub struct Unmanaged {
     /// Drawn beneath managed windows (desktop background) instead of above them.
     pub below: bool,
     pub strut: Option<[i32; 4]>,
+    /// Published `_FLAMEWM_DOCK_CORNER_RADIUS` (device px) of a Dock; zero for every other window.
+    pub corner_radius: u32,
 }
 
 /// Replaces one cached Dock reservation and reports whether layout inputs changed.
@@ -458,6 +472,10 @@ impl State {
         let strut = (kind == Kind::Dock)
             .then(|| self.props.as_ref().and_then(|props| props.strut(wid)))
             .flatten();
+        let corner_radius = match self.props.as_ref() {
+            Some(props) if kind == Kind::Dock => props.corner_radius(wid),
+            _ => 0,
+        };
         self.unmanaged
             .retain(|entry| entry.surface.window_id() != wid);
         self.unmanaged.push(Unmanaged {
@@ -465,6 +483,7 @@ impl State {
             kind,
             below: kind == Kind::Desktop,
             strut,
+            corner_radius,
         });
         self.reflow_if_work_area_changed();
         // XWayland routes buttons by X stacking rather than Wayland's pointer focus. Reapply the
@@ -503,20 +522,25 @@ impl State {
         };
         let updates: Vec<_> = docks
             .into_iter()
-            .map(|xid| (xid, props.strut(xid)))
+            .map(|xid| (xid, props.strut(xid), props.corner_radius(xid)))
             .collect();
         let mut changed = false;
-        for (xid, strut) in updates {
+        let mut repaint = false;
+        for (xid, strut, corner_radius) in updates {
             if let Some(entry) = self
                 .unmanaged
                 .iter_mut()
                 .find(|entry| entry.kind == Kind::Dock && entry.surface.window_id() == xid)
             {
                 changed |= replace_strut(&mut entry.strut, strut);
+                repaint |=
+                    std::mem::replace(&mut entry.corner_radius, corner_radius) != corner_radius;
             }
         }
         if changed {
             self.reflow_if_work_area_changed();
+        }
+        if changed || repaint {
             self.request_redraw();
         }
     }

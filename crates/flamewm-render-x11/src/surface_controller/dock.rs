@@ -77,6 +77,27 @@ pub(super) fn apply_dock_mask(instance: &SurfaceInstance, w: u32, h: u32, mask: 
     }
 }
 
+/// Publishes the stadium corner radius (device px) as `_FLAMEWM_DOCK_CORNER_RADIUS` on the window.
+/// The compositor clips the pill with it: an XShape mask does not reach the composited output, and
+/// the client's XRGB buffer has no alpha for the corners.
+fn publish_dock_corner_radius(display: *mut Display, window: Window, radius: u32) {
+    // SAFETY: the buffer holds one 32-bit property unit, matching format 32 (c_long items).
+    unsafe {
+        let atom = XInternAtom(display, c"_FLAMEWM_DOCK_CORNER_RADIUS".as_ptr(), 0);
+        let value: [std::os::raw::c_long; 1] = [radius as std::os::raw::c_long];
+        XChangeProperty(
+            display,
+            window,
+            atom,
+            XA_CARDINAL,
+            32,
+            PROP_MODE_REPLACE,
+            value.as_ptr().cast(),
+            1,
+        );
+    }
+}
+
 impl SurfaceController {
     /// Publishes the dock frame: `Some(edge)` reserves that root edge and clips the window to
     /// `corner_radius` (window px). `bar` is the bar thickness on that edge (window px); `None`
@@ -106,6 +127,7 @@ impl SurfaceController {
         instance.dock_bar = bar;
         instance.dock_radius = corner_radius;
         instance.app.dock_corner_radius = corner_radius;
+        publish_dock_corner_radius(display, instance.app.window, corner_radius);
         let (x, y) = instance.origin;
         let (w, h) = (instance.app.width, instance.app.height);
         crate::app::apply_dock_strut(

@@ -157,7 +157,6 @@ pub(crate) fn physical_point(x: i32, y: i32, scale: f64) -> Point<i32, Physical>
 fn physical_radius(radius: u8, scale: f64) -> u8 {
     (f64::from(radius) * scale).round().min(f64::from(u8::MAX)) as u8
 }
-
 fn surface_elements(
     renderer: &mut GlowRenderer,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -203,13 +202,31 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
                 };
                 if let Some(surface) = entry.surface.wl_surface() {
                     let geometry = entry.surface.geometry();
-                    out.extend(surface_elements(
-                        renderer,
-                        &surface,
-                        geometry.loc.x,
-                        geometry.loc.y,
-                        scale,
-                    ));
+                    let elements =
+                        surface_elements(renderer, &surface, geometry.loc.x, geometry.loc.y, scale);
+                    // A Dock's published pill radius clips its corners in the shader. The X11 buffer
+                    // may be XRGB (software XWayland), whose corner pixels carry no alpha and would
+                    // otherwise composite as opaque black.
+                    let radius = u8::try_from(entry.corner_radius).unwrap_or(u8::MAX);
+                    let program = (radius > 0)
+                        .then(|| decorations.clip_program(renderer))
+                        .flatten();
+                    out.extend(
+                        elements
+                            .into_iter()
+                            .map(|element| match (element, &program) {
+                                (Elem::Surface(inner), Some(program))
+                                    if RoundedSurfaceElement::clippable(&inner) =>
+                                {
+                                    Elem::Rounded(RoundedSurfaceElement::new(
+                                        inner,
+                                        program,
+                                        [radius; 4],
+                                    ))
+                                }
+                                (element, _) => element,
+                            }),
+                    );
                     // Translucent X11 menus and tooltips blur the desktop beneath them. Docks
                     // (struts) are excluded: they are not glass and the taskbar is opaque.
                     if !entry.below && entry.strut.is_none() && !glass_flat() {
