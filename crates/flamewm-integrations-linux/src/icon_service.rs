@@ -909,11 +909,11 @@ fn emit_apply(result: &IconResult, wake_to_apply: std::time::Duration) {
         .as_ref()
         .ok()
         .and_then(|raster| raster.fallback_reason.as_ref());
-    if fallback.is_some() {
+    if let Some(reason) = fallback {
         flamewm_debug::emit(
             flamewm_debug::ICON_FALLBACK,
             flamewm_debug::ICON_FALLBACK_COOLDOWN,
-            || format!("apply key={:?} reason={}", result.key, fallback.unwrap()),
+            || format!("apply key={:?} reason={reason}", result.key),
         );
     }
     flamewm_debug::emit(
