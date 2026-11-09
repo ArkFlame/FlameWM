@@ -7,7 +7,7 @@ use flamewm_api::PanelEdge;
 use crate::notification_center::is_escape_key;
 use flamewm_shell::dock::{self, DockSettings};
 use flamewm_shell::icon_loader::IconTarget;
-use flamewm_shell_core::autohide::AutoHide;
+use flamewm_shell_core::autohide::{AutoHide, PointerSurface};
 use flamewm_shell_core::dock::{
     drag_off_removes, hover_scaled_rect, move_pinned, slot_at, Edge, HOVER_SCALE, TRASH_SLOT_ID,
 };
@@ -55,6 +55,9 @@ pub(crate) struct DockStage {
     backdrop: Option<DockBackdropKey>,
     /// Hover label popup, created on first hover and hidden otherwise.
     pub(crate) label: Option<flamewm_ui_x11::SurfaceHandle>,
+    /// Text and root position the label popup last showed; `None` while hidden. A tick with the
+    /// same label writes nothing, so the popup is not re-mapped and repainted every frame.
+    label_shown: Option<(String, (i32, i32))>,
 }
 
 /// Inputs to one placement pass, grouped to keep the call readable.
@@ -322,13 +325,20 @@ impl ShellLoop {
             _ => None,
         };
         let Some((name, placed, label)) = shown else {
-            if let Some(popup) = self.dock_stage.label {
-                let _ = runtime.hide(popup);
+            if self.dock_stage.label_shown.take().is_some() {
+                if let Some(popup) = self.dock_stage.label {
+                    let _ = runtime.hide(popup);
+                }
             }
             return;
         };
         let x = placed.0 + label.x.round() as i32;
         let y = placed.1 + label.y.round() as i32;
+        // Unchanged text and place: the popup already shows it, so skip the per-tick re-map and
+        // repaint that made the label flicker over window content.
+        if self.dock_stage.label_shown.as_ref() == Some(&(name.clone(), (x, y))) {
+            return;
+        }
         let popup = match self.dock_stage.label {
             Some(popup) => popup,
             None => match flamewm_shell::runtime::create_dock_label_surface(
@@ -351,6 +361,7 @@ impl ShellLoop {
         });
         let _ = runtime.show(popup);
         let _ = runtime.redraw(popup);
+        self.dock_stage.label_shown = Some((name, (x, y)));
     }
 
     /// Moves the dock and reveal strip, keeps the work-area strut in step with auto-hide, and maps
@@ -472,10 +483,15 @@ impl ShellLoop {
     /// Pointer over the dock or its reveal strip; keeps the dock shown or starts its hide delay.
     /// Applies the hold at once: the event path does not tick, so this syncs the slide and
     /// republishes the hide deadline itself.
-    pub(crate) fn dock_pointer(&mut self, runtime: &mut SurfaceRuntime, inside: bool) {
+    pub(crate) fn dock_pointer(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        surface: PointerSurface,
+        inside: bool,
+    ) {
         let now = std::time::Instant::now();
         if let Some(mut model) = self.dock_stage.autohide {
-            model.set_pointer(inside, now);
+            model.set_pointer(surface, inside, now);
             self.dock_stage.autohide = Some(model);
         }
         self.sync_dock(runtime);
@@ -489,7 +505,7 @@ impl ShellLoop {
                 // Revealing is the only time the Trash folder is re-read; a change forces a rebuild.
                 self.refresh_dock_trash();
             }
-            self.dock_pointer(runtime, event.action.inside);
+            self.dock_pointer(runtime, PointerSurface::Reveal, event.action.inside);
         }
     }
 
@@ -604,7 +620,7 @@ impl ShellLoop {
             .and_then(|n| n.parse::<usize>().ok());
         let (x, y) = (event.action.x, event.action.y);
         if event.action.phase == ActionPhase::Hover {
-            self.dock_pointer(runtime, event.action.inside);
+            self.dock_pointer(runtime, PointerSurface::Dock, event.action.inside);
         }
         let pinned_count = self.dock_entries.iter().take_while(|e| e.pinned).count();
         match event.action.phase {
@@ -656,9 +672,18 @@ impl ShellLoop {
         }
         if event.action.phase == ActionPhase::Hover {
             // The open menu owns the space above the bar, so no hover label shows.
-            let hovered = slot
+            // Hit-test the un-magnified slot rects, not the document node under the pointer: a
+            // hover-grown icon can extend past its slot, and a hit on that overhang would
+            // un-hover the slot, shrink the icon, and re-hover it on the next event.
+            let hovered = self
+                .dock_last
+                .as_ref()
+                .and_then(|state| {
+                    let rects: Vec<(f32, f32, f32, f32)> =
+                        state.0.slots.iter().map(|r| (r.x, r.y, r.w, r.h)).collect();
+                    flamewm_shell_core::dock::hover_slot(x, y, &rects)
+                })
                 .filter(|_| event.action.inside && self.dock_menu_slot.is_none())
-                .map(|n| n - 1)
                 .filter(|index| *index < self.dock_entries.len())
                 // A slot with no name would paint an empty label box above the bar.
                 .filter(|index| {

@@ -133,6 +133,15 @@ pub fn slot_at(along: f32, slot_extent: f32, count: usize) -> usize {
     ((along / slot_extent) as usize).min(count - 1)
 }
 
+/// Index of the slot whose un-magnified rect `(x, y, w, h)` contains the pointer. Hit-tests the
+/// layout rects, so a hover grow of the icon never moves the hit region.
+#[must_use]
+pub fn hover_slot(x: f32, y: f32, slots: &[(f32, f32, f32, f32)]) -> Option<usize> {
+    slots
+        .iter()
+        .position(|&(sx, sy, sw, sh)| x >= sx && x < sx + sw && y >= sy && y < sy + sh)
+}
+
 /// Whether a pinned icon released at `cross` px from the dock's inner edge
 /// should be unpinned (dragged off the bar). The bar is removed when the
 /// pointer leaves it by more than `threshold` px on the cross axis.
@@ -329,6 +338,26 @@ mod tests {
     fn merge_no_separator_without_both_groups() {
         assert_eq!(merge_dock(&[], &s(&["mail"]), true).separator_after, None);
         assert_eq!(merge_dock(&s(&["term"]), &[], true).separator_after, None);
+    }
+
+    #[test]
+    fn hover_slot_uses_unmagnified_rects() {
+        let slots = [(6.0, 6.0, 50.0, 50.0), (59.0, 6.0, 50.0, 50.0)];
+        assert_eq!(hover_slot(10.0, 10.0, &slots), Some(0));
+        // The gap between slots and the far edge are outside.
+        assert_eq!(hover_slot(56.5, 10.0, &slots), None);
+        assert_eq!(hover_slot(108.9, 10.0, &slots), Some(1));
+        assert_eq!(
+            hover_slot(109.0, 10.0, &slots),
+            None,
+            "right edge is exclusive"
+        );
+        assert_eq!(
+            hover_slot(7.0, 2.0, &slots),
+            None,
+            "above the bar is outside"
+        );
+        assert_eq!(hover_slot(10.0, 10.0, &[]), None);
     }
 
     #[test]
