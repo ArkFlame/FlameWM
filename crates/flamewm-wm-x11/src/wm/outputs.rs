@@ -1,6 +1,7 @@
 //! Output and work-area bookkeeping for the Wm.
 use super::*;
 use flamewm_window_core::dock_reserve::{ReserveEdge, reserve_edge};
+use flamewm_window_core::strut::sanitize_strut;
 
 /// Cuts the Dock from a work area. The taskbar strut is already out of `work_area`, so a Dock on
 /// the same edge stacks beyond it.
@@ -121,6 +122,18 @@ impl<C: Connection> Wm<'_, C> {
             .dock_struts
             .values()
             .fold([0_u32; 4], |mut strut, dock| {
+                // Reject a dock whose reservation would leave under a quarter of the output.
+                let as_i32 = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+                let ranges = [[4, 5], [6, 7], [8, 9], [10, 11]]
+                    .map(|[start, end]| [as_i32(dock[start]), as_i32(dock[end])]);
+                let extents = [0, 1, 2, 3].map(|index| as_i32(dock[index]));
+                let size = (
+                    as_i32(self.screen_rect.width),
+                    as_i32(self.screen_rect.height),
+                );
+                if sanitize_strut(extents, Some(ranges), size).is_none() {
+                    return strut;
+                }
                 for (edge, (extent, start, end, limit)) in edges.into_iter().enumerate() {
                     if dock[extent] > 0 && dock[end] >= dock[start] && dock[start] < limit {
                         strut[edge] = strut[edge].max(dock[extent]);

@@ -13,6 +13,7 @@ pub const CORNER_THRESHOLD: i32 = 2 * EDGE_THRESHOLD;
 pub mod dock_reserve;
 pub mod geometry_memory;
 pub mod keyboard_tile;
+pub mod strut;
 pub mod window_rules;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

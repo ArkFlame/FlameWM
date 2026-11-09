@@ -31,6 +31,17 @@ geometry on a reachable path; Low = invariant panic or no reachable path found.
 | `crates/flamewm-wm-x11/src/runtime.rs:158` | `sync_channel(32)` for audio | Low | Already bounded; no action |
 | `crates/flamewm-reactor/src` | All `unwrap`/`expect` sit in `#[cfg(test)]` | None | No action |
 
+## Struts and output changes (R4, R5)
+
+- R4 (done): `flamewm_window_core::strut::sanitize_strut` rejects negative, oversize, collapsed (under a
+  quarter of the output) and backwards-partial struts. Wired into the X11 dock fold
+  (`wm/outputs.rs`) and the Wayland `work_area()` unmanaged-strut path (`state.rs`). The `XWayland` strut
+  read drops partial ranges, so the backwards check only applies on X11.
+- R5 (not changed): output-change call sites exist. Wayland `reflow_if_work_area_changed` runs
+  `clamp_floating_into` (full clamp into the current output). X11 `keep_on_outputs` keeps a quarter of
+  each axis visible, so windows 64 to 255 px wide can show under 64 px. Changing it moves every X11
+  drag, so it needs an owner decision.
+
 ## Coverage gaps
 
 - Slice indexing (about 177 scan hits) and `as` casts (about 300 hits) were scanned but not each read.

@@ -716,7 +716,12 @@ impl State {
         let mut map = layer_map_for_output(&self.output);
         map.arrange();
         let zone: Rectangle<i32, Logical> = map.non_exclusive_zone();
-        let struts = self.unmanaged.iter().filter_map(|entry| entry.strut);
+        let size = (self.output_size.w, self.output_size.h);
+        let struts = self
+            .unmanaged
+            .iter()
+            .filter_map(|entry| entry.strut)
+            .filter_map(|strut| flamewm_window_core::strut::sanitize_strut(strut, None, size));
         let work = reserve_struts(
             Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h),
             struts,
