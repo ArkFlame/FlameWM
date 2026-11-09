@@ -16,7 +16,9 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::{Backend, select_backend};
 
@@ -298,10 +300,7 @@ fn bool_value(raw: &str) -> Option<bool> {
 
 /// One line about the session manager the native backend depends on.
 fn session_services(report: &mut Report) {
-    let service = Command::new("systemctl")
-        .args(["is-active", "systemd-logind"])
-        .output()
-        .ok()
+    let service = output_bounded("systemctl", &["is-active", "systemd-logind"], PROBE_TIMEOUT)
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .filter(|state| !state.is_empty())
         .unwrap_or_else(|| "unknown".to_owned());
@@ -458,7 +457,7 @@ fn libraries(report: &mut Report, backend: Backend) {
 
 fn ldconfig_cache() -> Option<String> {
     ["/usr/sbin/ldconfig", "ldconfig"].iter().find_map(|tool| {
-        let output = Command::new(tool).arg("-p").output().ok()?;
+        let output = output_bounded(tool, &["-p"], PROBE_TIMEOUT)?;
         output
             .status
             .success()
@@ -466,14 +465,32 @@ fn ldconfig_cache() -> Option<String> {
     })
 }
 
+/// Upper bound for one probe subprocess; a hung session service must not hang the probe.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Runs a probe command with stdin closed and output captured. `None` on spawn failure,
+/// non-zero is left to the caller, and on timeout the caller stops waiting. The waiter thread
+/// still reaps the child if it exits later.
+fn output_bounded(program: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    receiver.recv_timeout(timeout).ok()?.ok()
+}
+
 /// Runs `busctl --system` with a bounded timeout; `None` on any failure.
 fn busctl(args: &[&str]) -> Option<String> {
-    let output = Command::new("busctl")
-        .arg("--system")
-        .arg("--timeout=3")
-        .args(args)
-        .output()
-        .ok()?;
+    let mut full = vec!["--system", "--timeout=3"];
+    full.extend_from_slice(args);
+    let output = output_bounded("busctl", &full, PROBE_TIMEOUT)?;
     output
         .status
         .success()
@@ -515,9 +532,25 @@ fn find_in_path(program: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LIBRARIES, Need, last_quoted, list_names, required_sonames};
+    use super::{LIBRARIES, Need, last_quoted, list_names, output_bounded, required_sonames};
     use crate::Backend;
     use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn output_bounded_returns_output_and_gives_up_on_hung_commands() {
+        let ok = output_bounded("true", &[], Duration::from_secs(5)).expect("true runs");
+        assert!(ok.status.success());
+        let started = Instant::now();
+        assert!(output_bounded("sleep", &["30"], Duration::from_millis(100)).is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "probe waited past its bound"
+        );
+        assert!(
+            output_bounded("/nonexistent/flamewm-probe", &[], Duration::from_secs(1)).is_none()
+        );
+    }
 
     #[test]
     fn libseat_is_never_required() {

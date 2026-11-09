@@ -739,11 +739,7 @@ impl ApplicationPort for X11Desktop {
         self.catalog.launch(app, options)
     }
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()> {
-        Command::new("xdg-open")
-            .arg(uri)
-            .spawn()
-            .map(|_| ())
-            .map_err(FlameError::io)
+        flamewm_applications::spawn_reaped(Command::new("xdg-open").arg(uri)).map(|_| ())
     }
 }
 
@@ -778,15 +774,9 @@ impl SessionPort for X11Desktop {
             SessionAction::Reboot => ("systemctl", &["reboot"]),
             SessionAction::Shutdown => ("systemctl", &["poweroff"]),
         };
-        Command::new(program)
-            .args(args)
-            .status()
-            .map_err(FlameError::io)?
-            .success()
-            .then_some(())
-            .ok_or_else(|| {
-                FlameError::new(ErrorCode::PermissionDenied, "session action command failed")
-            })
+        // `systemctl suspend|reboot|poweroff` can block for the whole power transition, so it
+        // runs reaped and off the WM loop; only a spawn failure is reported to the caller.
+        flamewm_applications::spawn_reaped(Command::new(program).args(args)).map(|_| ())
     }
 }
 

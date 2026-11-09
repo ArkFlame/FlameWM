@@ -606,6 +606,12 @@ fn spawn_with_startup(
 /// handle does not help because callers discard it. `SIGCHLD = SIG_IGN` would
 /// reap globally and disturb the WM's own children. One blocked-in-`waitpid`
 /// thread per launched application exits as soon as that application exits.
+/// Spawns `command` for a caller that keeps no `Child` handle, reaping it when it exits.
+/// Use this for every WM-side spawn; a dropped `Child` otherwise stays a zombie until the WM exits.
+pub fn spawn_reaped(command: &mut Command) -> FlameResult<u32> {
+    spawn_reaped_with_id(command, None)
+}
+
 fn spawn_reaped_with_id(command: &mut Command, startup_id: Option<String>) -> FlameResult<u32> {
     let mut child = command.spawn().map_err(|error| {
         FlameError::new(ErrorCode::IoFailure, format!("launch application: {error}"))
@@ -821,6 +827,18 @@ fn try_exec_is_available(value: Option<&String>) -> bool {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn spawn_reaped_leaves_no_zombie_after_the_child_exits() {
+        let pid = spawn_reaped(&mut Command::new("true")).expect("spawn true");
+        let proc_entry = PathBuf::from(format!("/proc/{pid}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // The waiter thread reaps the child, so its /proc entry disappears; a zombie would stay.
+        while proc_entry.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!proc_entry.exists(), "child {pid} was not reaped");
+    }
 
     fn fixture() -> PathBuf {
         let path = std::env::temp_dir().join(format!(

@@ -156,27 +156,35 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_OPEN_FILES_SUPER | ACTION_OPEN_FILES_CTRL_ALT => {
                 let home = std::env::var_os("HOME")
                     .map_or_else(|| std::path::PathBuf::from("/"), std::path::PathBuf::from);
-                if let Err(error) = std::process::Command::new("xdg-open").arg(home).spawn() {
-                    eprintln!("flamewm: file explorer shortcut failed: {error}");
+                if let Err(error) = flamewm_applications::spawn_reaped(
+                    std::process::Command::new("xdg-open").arg(home),
+                ) {
+                    eprintln!("flamewm: file explorer shortcut failed: {error:?}");
                 }
             }
             // The finder toggles: a second press stops the open window (see flamewm-finder).
             ACTION_OPEN_FINDER | ACTION_OPEN_FINDER_CTRL_ALT => {
-                if let Err(error) = std::process::Command::new("flamewm-finder").spawn() {
-                    eprintln!("flamewm: finder shortcut failed: {error}");
+                if let Err(error) = flamewm_applications::spawn_reaped(
+                    &mut std::process::Command::new("flamewm-finder"),
+                ) {
+                    eprintln!("flamewm: finder shortcut failed: {error:?}");
                 }
             }
             // The assistant binary toggles its own window; a missing binary is logged here, once.
             ACTION_OPEN_ASSISTANT_SUPER | ACTION_OPEN_ASSISTANT_CTRL_ALT => {
-                if let Err(error) = std::process::Command::new("flamewm-assistant").spawn() {
-                    eprintln!("flamewm: assistant shortcut failed: {error}");
+                if let Err(error) = flamewm_applications::spawn_reaped(
+                    &mut std::process::Command::new("flamewm-assistant"),
+                ) {
+                    eprintln!("flamewm: assistant shortcut failed: {error:?}");
                 }
             }
             ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
                 // The resolver owns the choice: `defaultTerminal` override, else FlameWM Terminal.
                 let program = flamewm_applications::terminal::terminal_program();
-                if let Err(error) = std::process::Command::new(&program).spawn() {
-                    eprintln!("flamewm: terminal shortcut failed: {program}: {error}");
+                if let Err(error) =
+                    flamewm_applications::spawn_reaped(&mut std::process::Command::new(&program))
+                {
+                    eprintln!("flamewm: terminal shortcut failed: {program}: {error:?}");
                 }
             }
             ACTION_SCREENSHOT_FULL | ACTION_SCREENSHOT_REGION | ACTION_SCREENSHOT_WINDOW => {
@@ -187,11 +195,10 @@ impl<C: Connection> Wm<'_, C> {
                     ACTION_SCREENSHOT_REGION => &["--region", "--annotate", "--copy"],
                     _ => &["--active", "--copy"],
                 };
-                if let Err(error) = std::process::Command::new("flamewm-screenshot")
-                    .args(options)
-                    .spawn()
-                {
-                    eprintln!("flamewm: screenshot shortcut failed: {error}");
+                if let Err(error) = flamewm_applications::spawn_reaped(
+                    std::process::Command::new("flamewm-screenshot").args(options),
+                ) {
+                    eprintln!("flamewm: screenshot shortcut failed: {error:?}");
                 }
             }
             ACTION_SESSION_LOCK => {
