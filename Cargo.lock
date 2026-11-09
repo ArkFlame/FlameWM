@@ -1237,6 +1237,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-integrations-linux",
  "flamewm-session-core",
  "flamewm-wm-x11",
  "flamewm-xsettings",

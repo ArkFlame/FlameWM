@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use flamewm_api::repeat_log::RepeatLog;
 use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
+use flamewm_integrations_linux::icons::resolve_icon_theme;
 use flamewm_session_core::{
     AppearancePlan, AppearanceProbe, SessionPaths, build_launch_plan_with_appearance,
     default_paths_from_home, gtk3_theme_name, kde_platform_theme_installed,
@@ -274,9 +275,9 @@ fn xsettings_input_with_cursor_env(
     if let Some(appearance) = text_value(snapshot, "appearance").and_then(AppearanceMode::parse) {
         input.appearance = appearance;
     }
-    if let Some(icon_theme) = text_value(snapshot, "iconTheme") {
-        icon_theme.clone_into(&mut input.icon_theme);
-    }
+    // Publish the resolved family (empty = Breeze, dark/light by appearance), never the raw setting.
+    let configured_icon = text_value(snapshot, "iconTheme").unwrap_or_default();
+    input.icon_theme = resolve_icon_theme(configured_icon, input.appearance.as_str());
     if let Some(font_family) = text_value(snapshot, "fontFamily") {
         font_family.clone_into(&mut input.font_family);
     }
@@ -547,6 +548,17 @@ mod tests {
         let input = xsettings_input_from_snapshot(&blank);
         assert_eq!(input.icon_theme, XSettingsInput::default().icon_theme);
         assert_eq!(input.font_family, XSettingsInput::default().font_family);
+    }
+
+    #[test]
+    fn published_icon_theme_is_resolved_not_raw() {
+        let blank = snapshot_with(&[("iconTheme", text("")), ("appearance", text("light"))]);
+        let published = flamewm_xsettings::string_table(&xsettings_input_from_snapshot(&blank));
+        assert_eq!(published["Net/IconThemeName"], "breeze");
+
+        let dark = snapshot_with(&[("iconTheme", text("breeze")), ("appearance", text("dark"))]);
+        let published = flamewm_xsettings::string_table(&xsettings_input_from_snapshot(&dark));
+        assert_eq!(published["Net/IconThemeName"], "breeze-dark");
     }
 
     #[test]

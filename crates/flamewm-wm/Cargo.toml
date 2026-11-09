@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 flamewm-wm-x11 = { path = "../flamewm-wm-x11" }
 flamewm-api = { path = "../flamewm-api" }
+flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-xsettings = { path = "../flamewm-xsettings" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
