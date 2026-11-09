@@ -50,7 +50,7 @@ class Pass26Tests(unittest.TestCase):
         # that the token opt-out test exists.
         css = read('ui/desktop/desktop.css')
         self.assertNotRegex(css, r'\.desktop-label[^{]*\{[^}]*text-shadow')
-        self.assertIn('root_text_shadow_token_overrides_default_and_none_opts_out', read('crates/flamewm-render-compiler/src/compile.rs'))
+        self.assertIn('root_text_shadow_token_overrides_default_and_none_opts_out', read('crates/flamewm-render-compiler/src/compile/tests.rs'))
 
 
 if __name__ == '__main__':
