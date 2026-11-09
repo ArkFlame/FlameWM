@@ -89,6 +89,7 @@ fn parse_page(value: &str) -> Option<(SettingsPage, AppearanceTab)> {
         "screensaver" => appearance(AppearanceTab::Screensaver),
         "desktop" => Some((SettingsPage::Desktop, AppearanceTab::Theme)),
         "taskbar" => Some((SettingsPage::Taskbar, AppearanceTab::Theme)),
+        "dock" => Some((SettingsPage::Dock, AppearanceTab::Theme)),
         "displays" => Some((SettingsPage::Displays, AppearanceTab::Theme)),
         "fonts" => Some((SettingsPage::Fonts, AppearanceTab::Theme)),
         "accessibility" => Some((SettingsPage::Accessibility, AppearanceTab::Theme)),
@@ -144,6 +145,7 @@ mod tests {
     fn parser_keeps_non_appearance_pages_and_rejects_unknown_names() {
         for (value, page) in [
             ("taskbar", SettingsPage::Taskbar),
+            ("dock", SettingsPage::Dock),
             ("displays", SettingsPage::Displays),
             ("fonts", SettingsPage::Fonts),
             ("accessibility", SettingsPage::Accessibility),

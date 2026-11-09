@@ -7,7 +7,7 @@ pub(crate) const NAV_ROW_PITCH_PX: f32 = 30.0;
 /// Search field block (30 px field plus 6 px bottom margin) between the brand and the rows.
 pub(crate) const NAV_SEARCH_BLOCK_PX: f32 = 36.0;
 /// Sidebar pages in row order, with the labels the search filters on.
-pub(crate) const NAV_PAGES: [(&str, &str); 16] = [
+pub(crate) const NAV_PAGES: [(&str, &str); 17] = [
     ("theme", "Theme"),
     ("start-menu", "Start Menu"),
     ("surfaces", "Surfaces"),
@@ -16,6 +16,7 @@ pub(crate) const NAV_PAGES: [(&str, &str); 16] = [
     ("screensaver", "Screensaver"),
     ("desktop", "Desktop"),
     ("taskbar", "Taskbar"),
+    ("dock", "Dock"),
     ("displays", "Displays"),
     ("fonts", "Fonts"),
     ("accessibility", "Accessibility"),

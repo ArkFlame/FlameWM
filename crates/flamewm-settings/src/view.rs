@@ -146,6 +146,7 @@ mod tests {
         "screensaver",
         "desktop",
         "taskbar",
+        "dock",
         "displays",
         "fonts",
         "accessibility",
@@ -289,6 +290,51 @@ mod tests {
         assert!(!HTML.contains("settings.taskbar-blur"));
         assert!(!HTML.contains("settings.taskbar-opacity"));
         assert_eq!(HTML.matches("id=\"color-surface-wheel\"").count(), 1);
+    }
+
+    #[test]
+    fn dock_controls_live_on_their_own_page_behind_the_enable_switch() {
+        let dock = page_between(HTML, "page-dock", "page-displays");
+        let taskbar = page_between(HTML, "page-taskbar", "page-dock");
+        assert!(
+            !taskbar.contains("dock-"),
+            "dock options must leave Taskbar"
+        );
+        let options = dock
+            .split_once("id=\"dock-options\"")
+            .map_or("", |(_, rest)| rest);
+        assert!(options.contains("id=\"dock-autohide-on\""));
+        assert!(options.contains("id=\"dock-reserve-row\""));
+        assert!(options.contains("id=\"dock-corner-squared\""));
+        assert!(options.contains("id=\"dock-surface-custom-on\""));
+        assert!(options.contains("id=\"dock-surface-body\""));
+        assert!(
+            dock.contains("id=\"dock-enabled-on\""),
+            "Enable dock switch must sit before dependent options"
+        );
+        assert!(
+            dock.find("id=\"dock-enabled-on\"") < dock.find("id=\"dock-options\""),
+            "dependent options must follow the Enable dock switch"
+        );
+        assert!(HTML.contains("data-action=\"settings.page.dock\""));
+        assert!(HTML.contains("id=\"nav-dock\""));
+    }
+
+    #[test]
+    fn settings_sidebar_scrolls_so_the_last_page_stays_reachable() {
+        let scroll = css_rule(CSS, ".nav-scroll");
+        assert_eq!(css_value(scroll, "overflow-y"), Some("auto"));
+        let nav = css_rule(CSS, ".settings-nav");
+        assert_eq!(css_value(nav, "overflow"), Some("hidden"));
+        let wrapper = HTML
+            .split_once("class=\"nav-scroll\"")
+            .map_or("", |(_, rest)| rest);
+        let end = wrapper.find("</nav>").unwrap_or(wrapper.len());
+        let rows = wrapper[..end].matches("class=\"nav-row\"").count();
+        assert_eq!(
+            rows, 17,
+            "every settings page row must sit inside the scroll wrapper"
+        );
     }
 
     #[test]

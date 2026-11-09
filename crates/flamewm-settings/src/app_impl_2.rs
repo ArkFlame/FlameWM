@@ -709,6 +709,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for (name, page) in [
             ("desktop", SettingsPage::Desktop),
             ("taskbar", SettingsPage::Taskbar),
+            ("dock", SettingsPage::Dock),
             ("displays", SettingsPage::Displays),
             ("fonts", SettingsPage::Fonts),
             ("accessibility", SettingsPage::Accessibility),

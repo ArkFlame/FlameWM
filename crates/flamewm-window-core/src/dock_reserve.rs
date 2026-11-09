@@ -23,7 +23,7 @@ pub const DOCK_GAP: i32 = 3;
 /// Gap between the bar and its screen edge. Mirrors `DOCK_MARGIN` in `crates/flamewm-shell/src/dock.rs`.
 pub const DOCK_MARGIN: i32 = 8;
 /// Default `dock.iconSize` (the settings default).
-pub const DEFAULT_ICON_SIZE: i32 = 44;
+pub const DEFAULT_ICON_SIZE: i32 = 32;
 
 /// Thickness the Dock reserves on its edge: icon plus gap and padding on both sides, plus the
 /// floating margin. The hover label room is an overlay and is not reserved.
@@ -54,12 +54,13 @@ pub fn reserve_edge(work: Rect, edge: ReserveEdge, extent: i32) -> Rect {
     }
 }
 
-/// `(edge, extent)` the Dock reserves, or `None` when `dock.enabled` is not true or `dock.autoHide`
-/// is on (an auto-hidden Dock leaves the work area alone and only overlaps it while revealed).
+/// `(edge, extent)` the Dock reserves, or `None` when `dock.enabled` is not true, when
+/// `dock.reserveSpace` is not true (default off: windows may overlap the dock), or when
+/// `dock.autoHide` is on (an auto-hidden Dock never reserves; it only overlaps while revealed).
 ///
-/// Missing or ill-typed values keep the settings defaults. An unknown `dock.position` falls back to
-/// bottom, and an out-of-range `dock.iconSize` falls back to the default, so a hand-edited file
-/// cannot move the reserve off the screen.
+/// Missing or ill-typed values keep the settings defaults (`autoHide` off, `reserveSpace` off). An
+/// unknown `dock.position` falls back to bottom, and an out-of-range `dock.iconSize` falls back to
+/// the default, so a hand-edited file cannot move the reserve off the screen.
 #[must_use]
 pub fn dock_reserve_from_snapshot(snapshot: &SettingsSnapshot) -> Option<(ReserveEdge, i32)> {
     if !matches!(
@@ -69,8 +70,14 @@ pub fn dock_reserve_from_snapshot(snapshot: &SettingsSnapshot) -> Option<(Reserv
         return None;
     }
     if !matches!(
+        snapshot.values.get("dock.reserveSpace"),
+        Some(SettingValue::Boolean(true))
+    ) {
+        return None;
+    }
+    if matches!(
         snapshot.values.get("dock.autoHide"),
-        Some(SettingValue::Boolean(false))
+        Some(SettingValue::Boolean(true))
     ) {
         return None;
     }
@@ -158,13 +165,44 @@ mod tests {
         assert_eq!(dock_extent(96), 122);
     }
 
+    fn reserved(position: &str, extra: &[(&str, SettingValue)]) -> Option<(ReserveEdge, i32)> {
+        let mut entries = vec![
+            ("dock.enabled", SettingValue::Boolean(true)),
+            ("dock.reserveSpace", SettingValue::Boolean(true)),
+            ("dock.position", SettingValue::Text(position.into())),
+        ];
+        entries.extend(extra.iter().cloned());
+        dock_reserve_from_snapshot(&snapshot(&entries))
+    }
+
     #[test]
     fn disabled_or_missing_dock_reserves_nothing() {
         assert_eq!(dock_reserve_from_snapshot(&snapshot(&[])), None);
         assert_eq!(
             dock_reserve_from_snapshot(&snapshot(&[
                 ("dock.enabled", SettingValue::Boolean(false)),
+                ("dock.reserveSpace", SettingValue::Boolean(true)),
                 ("dock.position", SettingValue::Text("left".into())),
+            ])),
+            None
+        );
+    }
+
+    #[test]
+    fn reserve_space_defaults_off_so_windows_may_overlap_the_dock() {
+        assert_eq!(
+            dock_reserve_from_snapshot(&snapshot(&[
+                ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.position", SettingValue::Text("bottom".into())),
+            ])),
+            None,
+            "a missing dock.reserveSpace means the default (off)"
+        );
+        assert_eq!(
+            dock_reserve_from_snapshot(&snapshot(&[
+                ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.reserveSpace", SettingValue::Boolean(false)),
+                ("dock.autoHide", SettingValue::Boolean(false)),
             ])),
             None
         );
@@ -173,12 +211,13 @@ mod tests {
     #[test]
     fn enabled_dock_reads_position_and_icon_size() {
         assert_eq!(
-            dock_reserve_from_snapshot(&snapshot(&[
-                ("dock.enabled", SettingValue::Boolean(true)),
-                ("dock.autoHide", SettingValue::Boolean(false)),
-                ("dock.position", SettingValue::Text("right".into())),
-                ("dock.iconSize", SettingValue::Integer(64)),
-            ])),
+            reserved(
+                "right",
+                &[
+                    ("dock.autoHide", SettingValue::Boolean(false)),
+                    ("dock.iconSize", SettingValue::Integer(64)),
+                ]
+            ),
             Some((ReserveEdge::Right, dock_extent(64)))
         );
     }
@@ -186,14 +225,21 @@ mod tests {
     #[test]
     fn invalid_position_and_icon_size_fall_back_to_defaults() {
         assert_eq!(
-            dock_reserve_from_snapshot(&snapshot(&[
-                ("dock.enabled", SettingValue::Boolean(true)),
-                ("dock.autoHide", SettingValue::Boolean(false)),
-                ("dock.position", SettingValue::Text("sideways".into())),
-                ("dock.iconSize", SettingValue::Integer(500)),
-            ])),
+            reserved(
+                "sideways",
+                &[
+                    ("dock.autoHide", SettingValue::Boolean(false)),
+                    ("dock.iconSize", SettingValue::Integer(500)),
+                ]
+            ),
             Some((ReserveEdge::Bottom, dock_extent(DEFAULT_ICON_SIZE)))
         );
+    }
+
+    #[test]
+    fn default_icon_size_is_32() {
+        assert_eq!(DEFAULT_ICON_SIZE, 32);
+        assert_eq!(dock_extent(DEFAULT_ICON_SIZE), 32 + 2 * (6 + 3) + 8);
     }
 
     /// The four edges with their reserve side, for per-edge rules.
@@ -208,11 +254,7 @@ mod tests {
     fn auto_hide_on_reserves_nothing_on_every_edge() {
         for (position, _) in EDGES {
             assert_eq!(
-                dock_reserve_from_snapshot(&snapshot(&[
-                    ("dock.enabled", SettingValue::Boolean(true)),
-                    ("dock.autoHide", SettingValue::Boolean(true)),
-                    ("dock.position", SettingValue::Text(position.into())),
-                ])),
+                reserved(position, &[("dock.autoHide", SettingValue::Boolean(true))]),
                 None,
                 "auto-hide on, {position}"
             );
@@ -220,14 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_hide_off_reserves_the_extent_on_every_edge() {
+    fn auto_hide_off_with_reserve_reserves_the_extent_on_every_edge() {
         for (position, edge) in EDGES {
             assert_eq!(
-                dock_reserve_from_snapshot(&snapshot(&[
-                    ("dock.enabled", SettingValue::Boolean(true)),
-                    ("dock.autoHide", SettingValue::Boolean(false)),
-                    ("dock.position", SettingValue::Text(position.into())),
-                ])),
+                reserved(position, &[("dock.autoHide", SettingValue::Boolean(false))]),
                 Some((edge, dock_extent(DEFAULT_ICON_SIZE))),
                 "auto-hide off, {position}"
             );
@@ -235,18 +273,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_hidden_dock_reserves_nothing() {
+    fn missing_auto_hide_is_off_so_a_reserved_dock_reserves() {
         assert_eq!(
-            dock_reserve_from_snapshot(&snapshot(&[
-                ("dock.enabled", SettingValue::Boolean(true)),
-                ("dock.position", SettingValue::Text("bottom".into())),
-            ])),
-            None,
-            "a missing dock.autoHide means the default (on)"
+            reserved("bottom", &[]),
+            Some((ReserveEdge::Bottom, dock_extent(DEFAULT_ICON_SIZE))),
+            "a missing dock.autoHide means the default (off)"
         );
         assert_eq!(
             dock_reserve_from_snapshot(&snapshot(&[
                 ("dock.enabled", SettingValue::Boolean(true)),
+                ("dock.reserveSpace", SettingValue::Boolean(true)),
                 ("dock.autoHide", SettingValue::Boolean(true)),
             ])),
             None

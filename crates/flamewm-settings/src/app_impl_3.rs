@@ -9,14 +9,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Appearance => self.appearance_tab as usize,
             SettingsPage::Desktop => 6,
             SettingsPage::Taskbar => 7,
-            SettingsPage::Displays => 8,
-            SettingsPage::Fonts => 9,
-            SettingsPage::Accessibility => 10,
-            SettingsPage::Hotkeys => 11,
-            SettingsPage::Startup => 12,
-            SettingsPage::Defaults => 13,
-            SettingsPage::Assistant => 14,
-            SettingsPage::About => 15,
+            SettingsPage::Dock => 8,
+            SettingsPage::Displays => 9,
+            SettingsPage::Fonts => 10,
+            SettingsPage::Accessibility => 11,
+            SettingsPage::Hotkeys => 12,
+            SettingsPage::Startup => 13,
+            SettingsPage::Defaults => 14,
+            SettingsPage::Assistant => 15,
+            SettingsPage::About => 16,
         }
     }
 
@@ -87,6 +88,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for (key, id) in [
             ("surfaceBlurPercent", "surface-blur-value"),
             ("surfaceSaturationPercent", "surface-saturation-value"),
+            ("dock.surfaceBlurPercent", "dock-surface-blur-value"),
+            ("dock.surfaceOutlineOpacity", "dock-outline-opacity-value"),
             ("accentOpacity", "accent-opacity-value"),
         ] {
             if let Ok(value) = self.percent_setting(key) {
@@ -394,6 +397,23 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Ok(size) = self.integer_setting("dock.iconSize") {
             document.text("dock-icon-size-value", format!("{size} px"))?;
         }
+        highlight_options(
+            document,
+            self.text_setting("dock.cornerStyle").ok().as_deref(),
+            &[
+                ("rounded", "dock-corner-rounded"),
+                ("squared", "dock-corner-squared"),
+            ],
+            accent,
+        )?;
+        let dock = crate::dock_page::dock_rows(
+            self.bool_setting("dock.enabled"),
+            self.bool_setting("dock.autoHide"),
+            self.bool_setting("dock.surfaceCustom"),
+        );
+        document.visible("dock-options", dock.options)?;
+        document.visible("dock-reserve-row", dock.reserve_space)?;
+        document.visible("dock-surface-body", dock.surface_controls)?;
         let pinned = self.text_setting("dock.pinned").unwrap_or_default();
         let count = pinned.split(',').filter(|id| !id.trim().is_empty()).count();
         document.text("dock-pinned-value", format!("{count} pinned"))?;
@@ -668,6 +688,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         document.text_ref("file-manager-value", &self.file_manager_label)?;
         if let Some(value) = percent("surfaceOpacity") {
             document.text("surface-opacity-value", format!("{value}%"))?;
+        }
+        if let Some(value) = percent("dock.surfaceOpacity") {
+            document.text("dock-surface-opacity-value", format!("{value}%"))?;
         }
         if let Some(value) = percent("surfaceOutlineOpacity") {
             document.text("surface-outline-opacity-value", format!("{value}%"))?;

@@ -21,7 +21,24 @@ fn sidebar_row_opens_the_accessibility_page_only() {
     assert!(document.visible["page-accessibility"]);
     assert!(!document.visible["page-fonts"]);
     assert!(!document.visible["page-hotkeys"]);
-    assert_eq!(application.nav_index(), 10);
+    assert_eq!(application.nav_index(), 11);
+}
+
+#[test]
+fn sidebar_row_opens_the_dock_page_only() {
+    let (_requests, mut transport) = recording_transport();
+    transport
+        .responses
+        .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(1))));
+    let mut application = settings_application(transport);
+    let mut document = ProbeDocument::default();
+    application
+        .handle_action(&release("settings.page.dock"), &mut document)
+        .expect("open dock page");
+    application.sync(&mut document).expect("sync page");
+    assert!(document.visible["page-dock"]);
+    assert!(!document.visible["page-taskbar"]);
+    assert!(!document.visible["page-displays"]);
 }
 
 #[test]

@@ -42,6 +42,7 @@ mod app_impl_2;
 mod app_impl_3;
 mod consts;
 mod default_apps_page;
+mod dock_page;
 mod hotkeys;
 mod input;
 mod labels;

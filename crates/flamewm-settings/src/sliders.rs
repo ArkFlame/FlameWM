@@ -103,9 +103,17 @@ pub(crate) fn animation_speed_from_slider(text: &str) -> Result<i64, String> {
     Ok(snapped.clamp(ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX))
 }
 
-/// Surface glass steppers: action prefix and the percent key each one moves.
-pub(crate) const GLASS_STEP_KEYS: [(&str, &str); 1] =
-    [("settings.surface-saturation.", "surfaceSaturationPercent")];
+/// Surface glass steppers: action prefix and the percent key each one moves. The dock surface
+/// overrides (`dock.surface*`) use the same stepper pattern.
+pub(crate) const GLASS_STEP_KEYS: [(&str, &str); 4] = [
+    ("settings.surface-saturation.", "surfaceSaturationPercent"),
+    ("settings.dock-surface-opacity.", "dock.surfaceOpacity"),
+    ("settings.dock-surface-blur.", "dock.surfaceBlurPercent"),
+    (
+        "settings.dock-outline-opacity.",
+        "dock.surfaceOutlineOpacity",
+    ),
+];
 
 pub(crate) fn step(value: &str) -> Option<i8> {
     match value {

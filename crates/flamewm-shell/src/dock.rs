@@ -30,6 +30,9 @@ pub struct DockSettings {
     pub launch_bounce: bool,
     /// `dock.autoHide`: the dock slides away when idle and reveals at its edge.
     pub auto_hide: bool,
+    /// `dock.cornerStyle` is `squared`: the dock pill takes zero corner radius. Read-only here; the
+    /// radius is chosen in `pill_corner_radius` and the bar's `corner_radius` document call.
+    pub squared_corners: bool,
 }
 
 #[must_use]
@@ -38,14 +41,15 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         return DockSettings {
             enabled: false,
             edge: Edge::Bottom,
-            icon_size: 44.0,
+            icon_size: 32.0,
             pinned: Vec::new(),
             show_running: true,
             show_trash: true,
             hover_scale: false,
             auto_hide_covered: false,
             launch_bounce: false,
-            auto_hide: true,
+            auto_hide: false,
+            squared_corners: false,
         };
     };
     let text = |key: &str| match snapshot.values.get(key) {
@@ -84,12 +88,14 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     };
     let icon_size = match snapshot.values.get("dock.iconSize") {
         Some(SettingValue::Integer(px)) => (*px).clamp(24, 96) as f32,
-        _ => 44.0,
+        _ => 32.0,
     };
-    let auto_hide = !matches!(
+    // Missing `dock.autoHide` is the default (off); the settings file always writes the key.
+    let auto_hide = matches!(
         snapshot.values.get("dock.autoHide"),
-        Some(SettingValue::Boolean(false))
+        Some(SettingValue::Boolean(true))
     );
+    let squared_corners = text("dock.cornerStyle") == Some("squared");
     let mut pinned: Vec<String> = Vec::new();
     for id in text("dock.pinned").unwrap_or("").split(',').map(str::trim) {
         if !id.is_empty()
@@ -111,6 +117,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         auto_hide_covered,
         launch_bounce,
         auto_hide,
+        squared_corners,
     }
 }
 
@@ -543,6 +550,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dock_defaults_are_32_px_without_auto_hide_and_rounded() {
+        let defaults = dock_settings(None);
+        assert_eq!(defaults.icon_size, 32.0);
+        assert!(!defaults.auto_hide);
+        assert!(!defaults.squared_corners);
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "dock.cornerStyle".into(),
+            SettingValue::Text("squared".into()),
+        );
+        let squared = dock_settings(Some(&snapshot));
+        assert!(squared.squared_corners);
+        assert!(!squared.auto_hide, "a missing dock.autoHide is off");
+        assert_eq!(squared.icon_size, 32.0);
+    }
+
+    #[test]
     fn trash_slot_is_last_after_a_separator_and_follows_the_setting() {
         let mut settings = DockSettings {
             enabled: true,
@@ -555,6 +579,7 @@ mod tests {
             auto_hide_covered: false,
             launch_bounce: false,
             auto_hide: false,
+            squared_corners: false,
         };
         let layout = layout_for(&settings, &[]);
         let ids: Vec<&str> = layout.entries.iter().map(|e| e.app_id.as_str()).collect();

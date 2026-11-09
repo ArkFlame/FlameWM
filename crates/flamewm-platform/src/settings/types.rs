@@ -95,6 +95,15 @@ pub enum DockPosition {
 
 wire_enum!(DockPosition { Bottom => "bottom", Left => "left", Right => "right", Top => "top" });
 
+/// Dock corner shape (`dock.cornerStyle`). `Squared` draws the dock pill with zero radius.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockCornerStyle {
+    Rounded,
+    Squared,
+}
+
+wire_enum!(DockCornerStyle { Rounded => "rounded", Squared => "squared" });
+
 /// Maximum pinned dock apps (`dock.pinned`).
 pub const DOCK_PINNED_MAX: usize = 32;
 

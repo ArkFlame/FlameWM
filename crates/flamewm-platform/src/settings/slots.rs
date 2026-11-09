@@ -145,6 +145,7 @@ text_enum_slot!(
     TaskbarFill,
     TaskbarGradientEdge,
     DockPosition,
+    DockCornerStyle,
     BackgroundMode,
     WallpaperFit,
     ScreensaverMode,

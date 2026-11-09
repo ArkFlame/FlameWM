@@ -3,9 +3,11 @@
 use super::*;
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-pub(crate) const COLOR_TARGETS: [(&str, &str); 6] = [
+pub(crate) const COLOR_TARGETS: [(&str, &str); 8] = [
     ("border", "surfaceOutlineColor"),
     ("surface", "surfaceColor"),
+    ("dockSurface", "dock.surfaceColor"),
+    ("dockOutline", "dock.surfaceOutlineColor"),
     ("accent", "accent"),
     ("lockbackground", "lockBackgroundColor"),
     ("taskbarTint", "taskbarCustomTint"),
@@ -43,7 +45,14 @@ pub(crate) struct IntegerStepper {
     pub(crate) maximum: i64,
 }
 
-pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 15] = [
+pub(crate) const INTEGER_STEPPERS: [IntegerStepper; 16] = [
+    IntegerStepper {
+        slug: "dock-surface-outline-width",
+        key: "dock.surfaceOutlineWidth",
+        step: 1,
+        minimum: 1,
+        maximum: 4,
+    },
     IntegerStepper {
         slug: "text-scale",
         key: "textScalePercent",

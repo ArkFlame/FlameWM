@@ -1,7 +1,11 @@
 :root { --rim:#ffffff7f; --hover-fill:#ffffff40; --pressed-fill:#ffffff26; --nav-hover:#ffffff12; --nav-pressed:#ffffff1f; --accent:#3daee9; --on-accent:#181b1e; --accent-soft:#3daee938; --card:#00000033; --line:#ffffff1a; --line-soft:#ffffff14; --control:#ffffff14; --control-edge:#00000000; --track:#ffffff47; --text:#f7f9ff; --muted:#aeb9cc;--text-secondary:#f7f9ffd9; --quiet:#8492aa; }
 body { width:100%; height:100%; margin:0; display:flex; overflow:hidden; color:var(--text); font-size:var(--font-md); }
 button { padding:0; border-width:0; border-color:transparent; background:transparent; color:var(--text); font-size:var(--font-md); cursor:default; }
-.settings-nav { width:187px; height:100%; flex-grow:0; display:flex; flex-direction:column; position:relative; padding:0; }
+.settings-nav { width:187px; height:100%; flex-grow:0; display:flex; flex-direction:column; position:relative; padding:0; overflow:hidden; }
+/* The whole sidebar scrolls as one column, so the last pages stay reachable on short windows. The
+   selection indicator sits inside it, so nav_top() offsets stay valid at scroll 0. */
+.nav-scroll { width:187px; flex-grow:1; min-height:0; display:flex; flex-direction:column; position:relative; overflow-y:auto; overflow-x:hidden; }
+.dock-options { width:100%; display:flex; flex-direction:column; gap:16px; }
 .settings-brand { width:187px; height:72px; display:flex; align-items:center; justify-content:center; }
 .settings-brand img { width:146px; height:48px; }
 .nav-selection { position:absolute; left:8px; width:171px; height:30px; border-radius:var(--radius-xl); }

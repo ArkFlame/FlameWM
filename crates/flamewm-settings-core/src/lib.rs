@@ -28,6 +28,7 @@ pub enum SettingsPage {
     Appearance,
     Desktop,
     Taskbar,
+    Dock,
     Displays,
     Fonts,
     Accessibility,

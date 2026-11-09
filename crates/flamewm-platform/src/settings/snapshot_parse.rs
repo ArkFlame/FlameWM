@@ -122,6 +122,14 @@ impl ConfigStore {
                 )?;
             }
         }
+        // Legacy files (no `dock.autoHide` key) meant auto-hide on, and reserved the Dock's strip
+        // exactly when auto-hide was off. Current files always write both keys (see stable.rs).
+        if !seen_keys.contains("dock.autoHide") {
+            snapshot.dock_auto_hide = true;
+        }
+        if !seen_keys.contains("dock.reserveSpace") {
+            snapshot.dock_reserve_space = !snapshot.dock_auto_hide;
+        }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
         }

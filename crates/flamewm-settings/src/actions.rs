@@ -199,6 +199,7 @@ pub(crate) fn page(value: &str) -> Option<SettingsPage> {
         "appearance" => Some(SettingsPage::Appearance),
         "desktop" => Some(SettingsPage::Desktop),
         "taskbar" => Some(SettingsPage::Taskbar),
+        "dock" => Some(SettingsPage::Dock),
         "displays" => Some(SettingsPage::Displays),
         "fonts" => Some(SettingsPage::Fonts),
         "accessibility" => Some(SettingsPage::Accessibility),
@@ -294,9 +295,11 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 67] = [
+pub(crate) const TOGGLE_KEYS: [&str; 69] = [
     "taskbar.enabled",
     "dock.enabled",
+    "dock.reserveSpace",
+    "dock.surfaceCustom",
     "dock.showRunning",
     "dock.showTrash",
     "dock.hoverScale",
@@ -700,6 +703,14 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.taskbar.gradient-edge.right" => Ok(SettingsAction::TextSelect {
             key: "taskbar.gradientEdge",
             value: "right",
+        }),
+        "settings.dock.corner.rounded" => Ok(SettingsAction::TextSelect {
+            key: "dock.cornerStyle",
+            value: "rounded",
+        }),
+        "settings.dock.corner.squared" => Ok(SettingsAction::TextSelect {
+            key: "dock.cornerStyle",
+            value: "squared",
         }),
         "settings.dock.position.bottom" => Ok(SettingsAction::TextSelect {
             key: "dock.position",

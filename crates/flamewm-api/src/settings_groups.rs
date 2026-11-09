@@ -201,6 +201,32 @@ pub fn member_default(key: &str) -> Option<SettingValue> {
         .map(|(_, default)| default.to_value())
 }
 
+/// Global surface key -> per-dock override key. The dock paints each global key through
+/// [`dock_surface_value`]: the override while `dock.surfaceCustom` is on, otherwise the global value.
+pub const DOCK_SURFACE_OVERRIDES: &[(&str, &str)] = &[
+    ("surfaceColor", "dock.surfaceColor"),
+    ("surfaceOpacity", "dock.surfaceOpacity"),
+    ("surfaceBlurPercent", "dock.surfaceBlurPercent"),
+    ("surfaceOutlineColor", "dock.surfaceOutlineColor"),
+    ("surfaceOutlineOpacity", "dock.surfaceOutlineOpacity"),
+    ("surfaceOutlineWidth", "dock.surfaceOutlineWidth"),
+];
+
+/// The value the dock paints a surface key with. `global_key` is one of [`DOCK_SURFACE_OVERRIDES`]'
+/// global keys. While `dock.surfaceCustom` is on, the dock's own key applies; while it is off, or
+/// when the dock key is absent, the global value applies. `None` for keys outside the table.
+#[must_use]
+pub fn dock_surface_value(snapshot: &SettingsSnapshot, global_key: &str) -> Option<SettingValue> {
+    let (_, dock_key) = DOCK_SURFACE_OVERRIDES
+        .iter()
+        .find(|(global, _)| *global == global_key)?;
+    let custom = switch_on(snapshot, "dock.surfaceCustom");
+    if custom && let Some(value) = snapshot.values.get(*dock_key) {
+        return Some(value.clone());
+    }
+    snapshot.values.get(global_key).cloned()
+}
+
 /// True when the group's switch is on. An absent switch is off; an unknown group is off.
 #[must_use]
 pub fn is_group_custom(snapshot: &SettingsSnapshot, group: &str) -> bool {
@@ -331,5 +357,30 @@ mod translucent_default_tests {
             effective_value(&snapshot, "surfaceOpacity"),
             Some(SettingValue::Percent(75))
         );
+    }
+
+    #[test]
+    fn dock_surface_value_follows_global_until_the_dock_switch_is_on() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceOpacity".into(), SettingValue::Percent(60));
+        snapshot
+            .values
+            .insert("dock.surfaceOpacity".into(), SettingValue::Percent(20));
+        assert_eq!(
+            dock_surface_value(&snapshot, "surfaceOpacity"),
+            Some(SettingValue::Percent(60)),
+            "switch absent: global applies"
+        );
+        snapshot
+            .values
+            .insert("dock.surfaceCustom".into(), SettingValue::Boolean(true));
+        assert_eq!(
+            dock_surface_value(&snapshot, "surfaceOpacity"),
+            Some(SettingValue::Percent(20)),
+            "switch on: dock override applies"
+        );
+        assert_eq!(dock_surface_value(&snapshot, "accent"), None);
     }
 }

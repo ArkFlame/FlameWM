@@ -60,6 +60,21 @@ impl ProductSettings {
         if self.taskbar_opacity > 100 {
             return invalid("taskbarOpacity must be 0..100");
         }
+        validate_color(&self.dock_surface_color, false, "dock.surfaceColor")?;
+        validate_color(
+            &self.dock_surface_outline_color,
+            false,
+            "dock.surfaceOutlineColor",
+        )?;
+        if self.dock_surface_opacity > 100 || self.dock_surface_outline_opacity > 100 {
+            return invalid("dock surface opacity values must be 0..100");
+        }
+        if self.dock_surface_blur_percent > 100 {
+            return invalid("dock.surfaceBlurPercent must be 0..100");
+        }
+        if !(1..=4).contains(&self.dock_surface_outline_width) {
+            return invalid("dock.surfaceOutlineWidth must be 1..4");
+        }
         if !(24..=96).contains(&self.dock_icon_size) {
             return invalid("dock.iconSize must be 24..96");
         }
