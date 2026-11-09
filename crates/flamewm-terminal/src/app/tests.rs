@@ -1,7 +1,7 @@
 //! Unit tests for the app module and its submodules.
 
 use super::grid::overlay;
-use super::layout::{Axis, DIVIDER, Rect, SPLIT_RATIO, split_fits, split_rect};
+use super::layout::{Axis, DIVIDER, Rect, SPLIT_RATIO, move_divider, split_fits, split_rect};
 use super::overlay::{BANNER, BANNER_ART_ROWS};
 use super::pointer::{mouse_report, mouse_report_raw};
 use super::selection::{next_click_count, word_bounds};
@@ -1134,4 +1134,38 @@ fn alt_c_toggles_match_case_in_the_find_bar() {
     app.key(&alt_c);
     assert!(!search(&app).match_case);
     assert_eq!(search(&app).matches.len(), 2);
+}
+
+#[test]
+fn a_divider_moves_one_cell_and_stops_at_both_minimums() {
+    // 10 usable cells split 5|5. One step moves the divider one cell; the first pane never drops below 2 cells
+    // and the second never drops below 2 cells, however many steps are taken.
+    assert_eq!(move_divider(0.5, 10, 1, 2), 0.6);
+    assert_eq!(move_divider(0.5, 10, -1, 2), 0.4);
+    assert_eq!(
+        move_divider(0.5, 10, 100, 2),
+        0.8,
+        "second pane keeps 2 cells"
+    );
+    assert_eq!(
+        move_divider(0.5, 10, -100, 2),
+        0.2,
+        "first pane keeps 2 cells"
+    );
+    assert_eq!(
+        move_divider(0.8, 10, 1, 2),
+        0.8,
+        "already at the far minimum"
+    );
+    assert_eq!(
+        move_divider(0.2, 10, -1, 2),
+        0.2,
+        "already at the near minimum"
+    );
+}
+
+#[test]
+fn a_divider_is_left_alone_when_the_split_cannot_hold_two_minimum_panes() {
+    assert_eq!(move_divider(0.5, 3, 1, 2), 0.5);
+    assert_eq!(move_divider(0.5, 3, -1, 2), 0.5);
 }

@@ -168,6 +168,7 @@ impl App {
             Shortcut::FontLarger => self.change_font_size(1),
             Shortcut::FontSmaller => self.change_font_size(-1),
             Shortcut::Find => self.open_find(),
+            Shortcut::MoveDivider { axis, step } => self.move_divider(axis, step),
         }
     }
 

@@ -183,6 +183,36 @@ impl PaneNode {
         }
     }
 
+    /// Moves the divider of the nearest split along `axis` that holds leaf `id`. Returns false when there is none.
+    fn move_divider(&mut self, id: u64, rect: Rect, axis: Axis, step: isize) -> bool {
+        let PaneNode::Split {
+            axis: at,
+            ratio,
+            a,
+            b,
+        } = self
+        else {
+            return false;
+        };
+        let (first, second) = split_rect(rect, *at, *ratio);
+        let child = if a.contains(id) {
+            a.move_divider(id, first, axis, step)
+        } else if b.contains(id) {
+            b.move_divider(id, second, axis, step)
+        } else {
+            return false;
+        };
+        if child || *at != axis {
+            return child;
+        }
+        let (usable, min) = match axis {
+            Axis::Columns => (rect.cols.saturating_sub(DIVIDER), MIN_PANE_COLS),
+            Axis::Rows => (rect.rows.saturating_sub(DIVIDER), MIN_PANE_ROWS),
+        };
+        *ratio = move_divider(*ratio, usable, step, min);
+        true
+    }
+
     /// Removes the leaf `id`, collapsing its parent onto the surviving sibling. A node that held only that leaf is
     /// left `Vacant` for its own parent to collapse, so the caller must check the root afterwards.
     fn remove_leaf(&mut self, id: u64) -> Option<Removed> {
@@ -273,6 +303,19 @@ fn first_part(usable: usize, ratio: f32, min: usize) -> usize {
         return usable / 2;
     }
     (((usable as f32) * ratio).round() as usize).clamp(min, usable - min)
+}
+
+/// New share of a split after its divider moves `step` cells, with both halves kept at least `min` cells.
+/// `usable` is the split's cells less the divider. The result is clamped at both ends, and unchanged when
+/// `usable` cannot hold two minimum panes.
+#[must_use]
+pub(super) fn move_divider(ratio: f32, usable: usize, step: isize, min: usize) -> f32 {
+    if usable < 2 * min {
+        return ratio;
+    }
+    let first = first_part(usable, ratio, min) as isize;
+    let next = (first + step).clamp(min as isize, (usable - min) as isize) as usize;
+    next as f32 / usable as f32
 }
 
 /// Whether a split at `rect` leaves both halves a usable pane.
@@ -406,6 +449,21 @@ impl App {
             .and_then(|pane| pane.session.working_directory())
             .filter(|dir| dir.is_dir())
             .or_else(home_dir)
+    }
+
+    /// Moves the divider nearest the focused pane along `axis` by `step` cells, then re-sizes the PTYs.
+    pub(super) fn move_divider(&mut self, axis: Axis, step: isize) {
+        let Some(id) = self.focused_id() else {
+            return;
+        };
+        let grid = self.grid_rect();
+        let moved = self
+            .tabs
+            .get_mut(self.active)
+            .is_some_and(|tab| tab.root.move_divider(id, grid, axis, step));
+        if moved {
+            self.relayout();
+        }
     }
 
     /// Closes the focused pane; the last pane of a tab closes the tab.

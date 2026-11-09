@@ -1,4 +1,5 @@
 //! Key events to the bytes a terminal child expects. Pure: the caller supplies the current cursor-key mode.
+use crate::app::Axis;
 use flamewm_ui_x11::UiKeyEvent;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -41,15 +42,39 @@ pub enum Shortcut {
     FontLarger,
     FontSmaller,
     Find,
+    /// Moves the focused split's divider one cell along `axis`; `step` is -1 or +1.
+    MoveDivider {
+        axis: Axis,
+        step: isize,
+    },
 }
 
 #[must_use]
 pub fn shortcut(key: &str, mods: Mods) -> Option<Shortcut> {
-    // Alt is a meta prefix for the child (AltGr arrives with it too), so an Alt combination is never a shortcut.
-    if mods.alt {
-        return None;
-    }
     let name = key.to_ascii_lowercase();
+    // Alt is a meta prefix for the child (AltGr arrives with it too), so an Alt combination is never a shortcut
+    // except Ctrl+Shift+Alt+Arrow, which moves a divider.
+    if mods.alt {
+        return match (mods.ctrl, mods.shift, name.as_str()) {
+            (true, true, "left") => Some(Shortcut::MoveDivider {
+                axis: Axis::Columns,
+                step: -1,
+            }),
+            (true, true, "right") => Some(Shortcut::MoveDivider {
+                axis: Axis::Columns,
+                step: 1,
+            }),
+            (true, true, "up") => Some(Shortcut::MoveDivider {
+                axis: Axis::Rows,
+                step: -1,
+            }),
+            (true, true, "down") => Some(Shortcut::MoveDivider {
+                axis: Axis::Rows,
+                step: 1,
+            }),
+            _ => None,
+        };
+    }
     match (mods.ctrl, mods.shift, name.as_str()) {
         (true, true, "c") => Some(Shortcut::Copy),
         (true, true, "v") => Some(Shortcut::Paste),
@@ -342,6 +367,39 @@ mod tests {
             encode(&key("home", &[], None), true),
             Some(b"\x1bOH".to_vec())
         );
+    }
+
+    #[test]
+    fn ctrl_shift_alt_arrows_move_a_divider() {
+        let mods = Mods {
+            shift: true,
+            alt: true,
+            ctrl: true,
+        };
+        assert_eq!(
+            shortcut("left", mods),
+            Some(Shortcut::MoveDivider {
+                axis: Axis::Columns,
+                step: -1
+            })
+        );
+        assert_eq!(
+            shortcut("down", mods),
+            Some(Shortcut::MoveDivider {
+                axis: Axis::Rows,
+                step: 1
+            })
+        );
+        let alt_only = Mods {
+            alt: true,
+            ..Mods::default()
+        };
+        assert_eq!(
+            shortcut("left", alt_only),
+            None,
+            "Alt+Arrow reaches the child"
+        );
+        assert_eq!(shortcut("c", mods), None);
     }
 
     #[test]
