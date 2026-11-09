@@ -81,6 +81,18 @@ pub(crate) fn backdrop_replacement(
     (installed != requested.as_ref()).then_some(requested)
 }
 
+/// Whether a composed snapshot repeats the retained one: same root position, size and pixels.
+/// Only then may the upload be skipped; the generation stays put, so a region paint can reuse the
+/// backbuffer.
+pub(crate) fn snapshot_unchanged(
+    old: &CapturedSnapshot,
+    words: &[u32],
+    size: (u32, u32),
+    root: (i32, i32),
+) -> bool {
+    old.root == root && (old.width, old.height) == size && old.words == words
+}
+
 /// Loop wake-up for a recapture deferred behind queued events: due at once (the loop drains the
 /// queue, then recaptures), or sooner if an earlier wake-up is already pending.
 pub(crate) fn deferred_recapture_deadline(
@@ -244,9 +256,13 @@ impl X11App {
                     .window_backdrop
                     .as_mut()
                     .ok_or("window backdrop: no spec")?;
+                // Same root, size and canvas: the uploaded crop is still the desktop under the window.
+                let epoch = state.canvas_epoch;
                 if pixmap_fits
                     && state.captured.as_ref().is_some_and(|old| {
-                        old.root == (rx, ry) && (old.width, old.height) == (width, height)
+                        old.root == (rx, ry)
+                            && (old.width, old.height) == (width, height)
+                            && old.canvas_epoch == Some(epoch)
                     })
                 {
                     return Ok(());
@@ -254,7 +270,6 @@ impl X11App {
                 let (_, canvas) = state.canvas.as_ref().ok_or("window backdrop: no canvas")?;
                 let _crop_span = flamewm_profiler::start("render.backdrop.crop");
                 // A moved window shows the same canvas shifted: reuse the overlap of the last crop.
-                let epoch = state.canvas_epoch;
                 let words = match state.captured.as_ref().filter(|old| {
                     old.canvas_epoch == Some(epoch) && (old.width, old.height) == (width, height)
                 }) {
@@ -266,6 +281,19 @@ impl X11App {
         };
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
+        }
+        // Identical pixels at the same root and size: the uploaded snapshot already holds them.
+        let unchanged = self
+            .window_backdrop_pixmap
+            .as_ref()
+            .is_some_and(|old| (old.width, old.height) == (width, height))
+            && self
+                .window_backdrop
+                .as_ref()
+                .and_then(|state| state.captured.as_ref())
+                .is_some_and(|old| snapshot_unchanged(old, &words, (width, height), (rx, ry)));
+        if unchanged {
+            return Ok(());
         }
         self.drop_mirror_fill();
         let upload_span = flamewm_profiler::start("render.backdrop.upload");
@@ -439,6 +467,25 @@ mod tests {
             .flat_map(|value| [value, value, value, 0xff])
             .collect();
         BlurredCanvas::new(4, 3, pixels, 0, 0)
+    }
+
+    fn snapshot(words: Vec<u32>, root: (i32, i32), epoch: Option<u64>) -> CapturedSnapshot {
+        CapturedSnapshot {
+            words,
+            width: 2,
+            height: 2,
+            root,
+            canvas_epoch: epoch,
+        }
+    }
+
+    #[test]
+    fn repeated_snapshot_is_unchanged_only_for_same_root_size_and_pixels() {
+        let kept = snapshot(vec![1, 2, 3, 4], (10, 20), Some(1));
+        assert!(snapshot_unchanged(&kept, &[1, 2, 3, 4], (2, 2), (10, 20)));
+        assert!(!snapshot_unchanged(&kept, &[1, 2, 3, 5], (2, 2), (10, 20)));
+        assert!(!snapshot_unchanged(&kept, &[1, 2, 3, 4], (2, 2), (11, 20)));
+        assert!(!snapshot_unchanged(&kept, &[1, 2, 3, 4], (1, 4), (10, 20)));
     }
 
     #[test]

@@ -226,7 +226,8 @@ impl SurfaceController {
         let radius = popup_backdrop_radius_px(&instance.document, width, height);
         round_backdrop_words(&mut words, width, height, radius);
         // SAFETY: the popup's display and backbuffer are live and the window is still unmapped.
-        let installed = unsafe { instance.app.set_surface_backdrop(&words, width, height) };
+        let installed =
+            unsafe { instance.app.set_surface_backdrop(&words, width, height) }.map(|_changed| ());
         if installed.is_err() {
             instance.app.clear_surface_backdrop();
         }
@@ -244,10 +245,20 @@ impl SurfaceController {
         {
             let instance = self.instance_mut(id)?;
             match backdrop {
-                Some((argb, width, height)) => unsafe {
-                    instance.app.set_surface_backdrop(argb, width, height)?
-                },
-                None => instance.app.clear_surface_backdrop(),
+                Some((argb, width, height)) => {
+                    // Identical pixels: the retained backdrop already paints this scene.
+                    let changed =
+                        unsafe { instance.app.set_surface_backdrop(argb, width, height)? };
+                    if !changed {
+                        return Ok(());
+                    }
+                }
+                None => {
+                    if instance.app.surface_backdrop.is_none() {
+                        return Ok(());
+                    }
+                    instance.app.clear_surface_backdrop();
+                }
             }
         }
         self.redraw(id)

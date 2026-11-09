@@ -24,6 +24,27 @@ fn trace_paint(message: impl FnOnce() -> String) {
     }
 }
 
+/// `[r, g, b, a]` bytes per pixel of ARGB words: the layout kept in [`SurfaceBackdrop::rgba`].
+pub(crate) fn argb_to_rgba(argb: &[u32]) -> Vec<u8> {
+    let mut rgba = vec![0u8; argb.len() * 4];
+    for (dst, &w) in rgba.chunks_exact_mut(4).zip(argb) {
+        dst.copy_from_slice(&[(w >> 16) as u8, (w >> 8) as u8, w as u8, (w >> 24) as u8]);
+    }
+    rgba
+}
+
+/// Whether `installed` already holds exactly these pixels (`rgba`, from [`argb_to_rgba`]) at this size.
+pub(crate) fn snapshot_matches(
+    installed: &SurfaceBackdrop,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> bool {
+    installed.width == width
+        && installed.height == height
+        && installed.rgba.as_deref() == Some(rgba)
+}
+
 /// Retained server pixmap holding one ARGB32 backdrop snapshot.
 #[derive(Debug, Clone)]
 pub(crate) struct SurfaceBackdrop {
@@ -37,7 +58,9 @@ pub(crate) struct SurfaceBackdrop {
 
 impl X11App {
     /// Replaces the retained backdrop with `argb` (row-major 0xAARRGGBB, `width * height`
-    /// words). The previous pixmap is freed only after the replacement is uploaded.
+    /// words). The previous pixmap is freed only after the replacement is uploaded. Identical
+    /// pixels at the same size keep the retained pixmap and upload nothing. Returns whether the
+    /// retained backdrop changed.
     ///
     /// # Safety
     ///
@@ -47,23 +70,27 @@ impl X11App {
         argb: &[u32],
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if width == 0 || height == 0 || argb.len() != width as usize * height as usize {
             return Err("surface backdrop: pixel count does not match size".to_string());
         }
+        let rgba = argb_to_rgba(argb);
+        if self
+            .surface_backdrop
+            .as_ref()
+            .is_some_and(|installed| snapshot_matches(installed, width, height, &rgba))
+        {
+            return Ok(false);
+        }
         let pixmap = unsafe { self.upload_argb_pixmap(argb, width, height)? };
         self.clear_surface_backdrop();
-        let mut rgba = vec![0u8; argb.len() * 4];
-        for (dst, &w) in rgba.chunks_exact_mut(4).zip(argb) {
-            dst.copy_from_slice(&[(w >> 16) as u8, (w >> 8) as u8, w as u8, (w >> 24) as u8]);
-        }
         self.surface_backdrop = Some(SurfaceBackdrop {
             pixmap,
             width,
             height,
             rgba: Some(rgba),
         });
-        Ok(())
+        Ok(true)
     }
 
     /// Uploads `argb` (0xAARRGGBB words, `width * height`) into a new 32-bit server pixmap.
@@ -621,5 +648,71 @@ mod tests {
         assert_eq!(cache.hit(1, key(80), &[0]), Some(11));
         assert_eq!(cache.finish_frame(), &[12]);
         assert_eq!(cache.hit(2, key(80), &[0]), None);
+    }
+
+    fn installed(argb: &[u32], width: u32, height: u32) -> SurfaceBackdrop {
+        SurfaceBackdrop {
+            pixmap: 1,
+            width,
+            height,
+            rgba: Some(argb_to_rgba(argb)),
+        }
+    }
+
+    #[test]
+    fn argb_to_rgba_keeps_channel_order_and_alpha() {
+        assert_eq!(argb_to_rgba(&[0x80_11_22_33]), vec![0x11, 0x22, 0x33, 0x80]);
+    }
+
+    #[test]
+    fn identical_snapshot_matches_and_any_change_does_not() {
+        let argb = [0xff_10_20_30, 0x80_40_50_60, 0xff_00_00_00, 0x00_00_00_00];
+        let kept = installed(&argb, 2, 2);
+        let same = argb_to_rgba(&argb);
+        assert!(
+            snapshot_matches(&kept, 2, 2, &same),
+            "repeat installs nothing"
+        );
+
+        let mut one_pixel = argb;
+        one_pixel[3] = 0x01_00_00_00;
+        assert!(!snapshot_matches(&kept, 2, 2, &argb_to_rgba(&one_pixel)));
+        assert!(
+            !snapshot_matches(&kept, 4, 1, &same),
+            "size change installs"
+        );
+        assert!(!snapshot_matches(
+            &SurfaceBackdrop { rgba: None, ..kept },
+            2,
+            2,
+            &same
+        ));
+    }
+
+    /// Scripted sequence of backdrop requests for one surface: each request either repeats the
+    /// installed pixels or changes them. Counts the installs (pixmap uploads) it performs.
+    #[test]
+    fn repeated_backdrop_requests_install_once_per_change() {
+        let frames: [[u32; 4]; 6] = [
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [9, 2, 3, 4],
+            [9, 2, 3, 4],
+            [1, 2, 3, 4],
+        ];
+        let mut retained: Option<SurfaceBackdrop> = None;
+        let mut installs = 0;
+        for words in frames {
+            let rgba = argb_to_rgba(&words);
+            let unchanged = retained
+                .as_ref()
+                .is_some_and(|kept| snapshot_matches(kept, 2, 2, &rgba));
+            if !unchanged {
+                installs += 1;
+                retained = Some(installed(&words, 2, 2));
+            }
+        }
+        assert_eq!(installs, 3, "one install per distinct consecutive snapshot");
     }
 }
