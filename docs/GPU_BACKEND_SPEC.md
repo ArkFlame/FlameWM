@@ -224,6 +224,7 @@ All backends implement `PixelBackend` [src]. CPU is the reference. Blur radius t
 
 - No GPU library is linked. EGL/GLES and Vulkan are `dlopen`ed on first GPU op [src for GLES, decision for Vulkan]. `cpu` never loads them.
 - Slots hold the only GPU allocations. Dropping a slot calls the backend `Drop` (destroy context or device, free buffers). Because glibc `dlclose` of GPU drivers is unreliable, the freed-memory budget in 1 is verified by PSS measurement, not assumed; if drivers leave more than 5 MiB resident after drop, the fallback design is to run GPU work in a helper process (`flamewm-gpu-helper`, shm frame in, shm frame out) so the driver dies with it. That is only built if 8.3 fails. [assumed: confirm with the measurement]
+- Measured (PSS probe `crates/flamewm-render-x11/examples/gpu_switch_pss.rs`, RTX 3050 Ti, NVIDIA driver): cpu baseline 8509 KiB, opengl active 143733 KiB, back to cpu 65369 KiB (65405 KiB after work). Slot memory is freed but about 57 MiB (56.9 MiB) of driver memory stays resident after `dlclose`. The 5 MiB gate FAILS; the helper-process fallback is triggered per this section, pending the cheaper mitigations in section 11.
 - Scratch retention for the CPU path stays capped at `CPU_SCRATCH_RETAIN_BUDGET_BYTES = 4 MiB` [src].
 - GPU frame buffers are capped at 3840x2160x4 bytes (about 33 MB); larger frames use the CPU path. [decision]
 
@@ -253,6 +254,8 @@ On an own Xvfb or Xephyr (`pgrep -a Xvfb Xephyr` first, pick a free `:N` in 97..
 2. Set `renderBackend=opengl` via the settings IPC, drive a blur-heavy action, wait 10 s, record `P_gl`. Expect `P_gl - P_cpu` near +143 MB on a real GPU [meas].
 3. Set `renderBackend=cpu`, wait 2 s, record `P_back`. Gate: `P_back - P_cpu <= 5 MiB`. Failure triggers the helper-process fallback in 7.
 4. Repeat for `vulkan` when the feature is built.
+
+Result (probe example, not the live Xvfb session): P_cpu 8509 KiB, P_gl 143733 KiB (+135 MiB), P_back 65369 KiB (+56.9 MiB vs P_cpu). Gate FAILED (limit 5 MiB).
 
 `pixel_bench` (`crates/flamewm-render-x11/examples/pixel_bench.rs`) gains `--backend cpu|opengl|vulkan` and prints the same table as `GPU_FRAME_PAINT.md`; results are appended to that file with the GPU model.
 
