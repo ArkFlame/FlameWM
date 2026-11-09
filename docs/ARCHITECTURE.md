@@ -140,3 +140,48 @@ Source: cold dev build report `cargo-timing.html` (433 units, measured 2026-11-0
 | 5 | `usvg 0.48.1` | 53.9 | external (resvg, via flamewm-image-core) | Check whether `flamewm-image-core` needs the full SVG path; drop unused resvg features if any. |
 
 Actionable inside this repo: rank 2 only. The other four are upstream pins; reducing them needs dependency upgrades, tracked in `docs/BUILD_TIMES.md`.
+
+## 9. Measured inventory
+
+Measured at `2c7a33d8`, 2026-11-09. Re-measure with the commands below; do not edit these numbers by hand.
+
+| Measure | Value | Command |
+|---|---|---|
+| Workspace crates | 57 | `ls -d crates/*/ \| wc -l` |
+| Path-level architecture exceptions | 76 | `grep -c '^\[\[exception\]\]' docs/ARCHITECTURE_EXCEPTIONS.toml` |
+| Production source files | 1013 | script below (excludes test-named files) |
+| Production files over 600 lines | 49 | script below |
+
+Largest production files (`source_loc`: non-test, non-comment lines, the guard's own count):
+
+| Lines | Path |
+|---|---|
+| 1832 | `crates/flamewm-x11-canary/src/scenarios/interaction_regressions.rs` |
+| 1321 | `crates/flamewm-x11-canary/src/scenarios/t15_t18.rs` |
+| 1295 | `crates/flamewm-desktop/src/widgets/mod.rs` |
+| 1130 | `crates/flamewm-lock/src/run.rs` |
+| 1068 | `crates/flamewm-integrations-linux/src/icons/mod.rs` |
+
+The two x11-canary scenario files are test harness code without test-style names; they stay in the count.
+
+Command (run from the repository root):
+
+```sh
+python3 -I - <<'PY'
+import sys, pathlib, re
+sys.path.insert(0, "tools")
+import architecture_guard as g
+root = pathlib.Path(".").resolve()
+files = []
+for p in sorted((root / "crates").glob("*/src/**/*.rs")):
+    rel = p.relative_to(root).as_posix()
+    if re.search(r"(^|/)tests?(/|\.rs$)|_tests\.rs$|/tests_", rel):
+        continue
+    files.append((g.source_loc([p]), rel))
+files.sort(reverse=True)
+print("production files", len(files))
+print("over 600", sum(1 for n, _ in files if n > 600))
+for n, f in files[:5]:
+    print(n, f)
+PY
+```
