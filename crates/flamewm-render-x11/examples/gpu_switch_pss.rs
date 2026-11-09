@@ -49,7 +49,31 @@ fn gpu_work(frame: &mut [u8], passes: usize) {
 }
 
 fn main() {
+    if std::env::var_os("FLAMEWM_PSS_CHILD").is_some() {
+        // Helper role: all GPU work happens here, and the process exits, taking the driver with it.
+        set_render_acceleration(RenderAcceleration::Gpu);
+        let mut frame = vec![128_u8; (WIDTH * HEIGHT * 4) as usize];
+        gpu_work(&mut frame, 5);
+        report("child_gpu");
+        return;
+    }
     let mode = std::env::var("FLAMEWM_PSS_MODE").unwrap_or_else(|_| "base".to_owned());
+    if mode == "child" {
+        let mut frame = vec![128_u8; (WIDTH * HEIGHT * 4) as usize];
+        set_render_acceleration(RenderAcceleration::Cpu);
+        for _ in 0..3 {
+            blur_rgba(&mut frame, WIDTH, HEIGHT, 12.0);
+        }
+        report("cpu");
+        let exe = std::env::current_exe().expect("current_exe");
+        let status = std::process::Command::new(exe)
+            .env("FLAMEWM_PSS_CHILD", "1")
+            .status()
+            .expect("spawn child");
+        println!("child_exit={status}");
+        report("parent_after_child");
+        return;
+    }
     let mut frame = vec![128_u8; (WIDTH * HEIGHT * 4) as usize];
     set_render_acceleration(RenderAcceleration::Cpu);
     for _ in 0..3 {
