@@ -181,8 +181,10 @@ impl App {
     /// Find-bar keys: text edits the query, Enter steps to the next match, Shift+Enter to the previous one,
     /// Escape closes the bar. Every other key is dropped while the bar is open.
     fn find_key(&mut self, event: &UiKeyEvent) {
-        let shift = event.modifiers.iter().any(|m| m == "shift");
-        if event.modifiers.iter().any(|m| m == "alt") && event.key.eq_ignore_ascii_case("c") {
+        // The X11 layer names modifiers "Alt"/"Shift"; `Mods` lower-cases them and also accepts "mod1".
+        let mods = Mods::from_names(event.modifiers.iter());
+        let shift = mods.shift;
+        if mods.alt && event.key.eq_ignore_ascii_case("c") {
             self.find_toggle_case();
             return;
         }

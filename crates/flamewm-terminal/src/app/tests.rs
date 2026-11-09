@@ -1136,6 +1136,67 @@ fn alt_c_toggles_match_case_in_the_find_bar() {
     assert_eq!(search(&app).matches.len(), 2);
 }
 
+/// The X11 layer names Alt "Alt" and Shift "Shift" (`render-x11` `normalized_modifiers`); `mod1` is the raw
+/// X name. The find bar must read them all as Alt and Shift, not only the lower-case literals.
+#[test]
+fn find_bar_reads_x11_modifier_names() {
+    for alt_name in ["alt", "Alt", "mod1"] {
+        let mut app = test_app();
+        app.open_tab(cat()).expect("tab");
+        {
+            let pane = app.focused_pane_mut().expect("pane");
+            crate::parser::Parser::new()
+                .advance(b"alpha needle\r\nbeta NEEDLE\r\n", &mut pane.session.screen);
+        }
+        app.key(&UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: vec!["Ctrl".to_owned(), "Shift".to_owned()],
+            key: "f".to_owned(),
+            text: None,
+        });
+        for ch in "needle".chars() {
+            let text = ch.to_string();
+            app.key(&UiKeyEvent {
+                phase: UiKeyPhase::Press,
+                modifiers: Vec::new(),
+                key: text.clone(),
+                text: Some(text),
+            });
+        }
+        app.key(&UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: Vec::new(),
+            key: "return".to_owned(),
+            text: None,
+        });
+        app.key(&UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: vec!["Shift".to_owned()],
+            key: "return".to_owned(),
+            text: None,
+        });
+        assert_eq!(
+            app.focused_pane().unwrap().search.as_ref().unwrap().current,
+            0,
+            "Enter steps to the second match, Shift+Enter steps back"
+        );
+        app.key(&UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: vec![alt_name.to_owned()],
+            key: "c".to_owned(),
+            text: Some("c".to_owned()),
+        });
+        let search = app.focused_pane().unwrap().search.clone().unwrap();
+        assert!(search.match_case, "{alt_name}+C toggles match-case");
+        assert_eq!(search.query, "needle", "{alt_name}+C is not typed");
+        assert_eq!(
+            search.matches.len(),
+            1,
+            "{alt_name}+C narrows to exact case"
+        );
+    }
+}
+
 #[test]
 fn a_divider_moves_one_cell_and_stops_at_both_minimums() {
     // 10 usable cells split 5|5. One step moves the divider one cell; the first pane never drops below 2 cells
