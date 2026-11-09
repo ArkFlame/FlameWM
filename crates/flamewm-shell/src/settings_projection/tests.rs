@@ -133,6 +133,30 @@ fn start_projection_applies_background_and_accent_tokens() {
     assert_eq!(doc.variables["--accent-strong"].a, 110);
 }
 
+// OBSERVABLE: the Start root requests node backdrop blur equal to the shared surfaceBlurPercent
+// when it is > 0; at 0 it requests a zero blur (renderer: no blur), the same as desktop menus.
+// MUTATION: dropping the node_backdrop call from the Start projection leaves `backdrops` empty.
+#[test]
+fn start_root_requests_surface_blur_backdrop_only_when_blur_is_set() {
+    for (blur, expected) in [(40_u8, Some(40_u8)), (0, Some(0))] {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "reduceTransparency".to_owned(),
+            SettingValue::Boolean(false),
+        );
+        snapshot
+            .values
+            .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(blur));
+        let mut doc = RecordingUiDoc::default();
+        project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
+        assert_eq!(
+            doc.backdrops.get("start-menu"),
+            Some(&expected),
+            "surfaceBlurPercent={blur}"
+        );
+    }
+}
+
 #[test]
 fn start_projection_search_field_does_not_reapply_surface_opacity() {
     let mut snapshot = SettingsSnapshot::new(1);

@@ -51,11 +51,17 @@ pub struct RecordingUiDoc {
     pub images: HashMap<String, (u32, u32)>,
     pub radii: HashMap<String, f32>,
     pub opacities: HashMap<String, f32>,
+    /// Ids whose latest node backdrop request was recorded (`None` clears it).
+    pub backdrops: HashMap<String, Option<u8>>,
     /// Ids whose background was cleared, in call order. Also removes the entry from `backgrounds`.
     pub cleared: Vec<String>,
 }
 
 impl UiDocumentAccess for RecordingUiDoc {
+    fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+        self.backdrops.insert(id.to_owned(), blur_percent);
+        Ok(())
+    }
     fn text(&mut self, id: &str, text: String) -> Result<(), String> {
         self.texts.insert(id.to_owned(), text);
         Ok(())

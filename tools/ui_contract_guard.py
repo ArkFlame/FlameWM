@@ -173,7 +173,7 @@ RIM_LITERAL_RE = re.compile(
 )
 RIM_DECL_RE = re.compile(r"--rim\s*:\s*([^;}]+)")
 RIM_PERCENT_RE = re.compile(r"pub const RIM_PERCENT:\s*u8\s*=\s*(\d+)")
-PLATFORM_OPACITY_RE = re.compile(r"surface_outline_opacity:\s*(\d+)")
+PLATFORM_OPACITY_RE = re.compile(r"\bsurface_outline_opacity:\s*(\d+)")
 
 
 FOCUSABLE_TAG_RE = re.compile(r"<(?P<tag>\w+)\b[^>]*\bdata-action=\"[^\"]+\"[^>]*>")
@@ -242,7 +242,7 @@ def check_rim_tokens(root, errors):
         for rel, value in values.items():
             if value.lower() != expected:
                 errors.append(f"{rel}: --rim {value} != RIM_PERCENT colour {expected}")
-        opacity = PLATFORM_OPACITY_RE.search((root / "crates/flamewm-platform/src/settings.rs").read_text())
+        opacity = PLATFORM_OPACITY_RE.search((root / "crates/flamewm-platform/src/settings/product.rs").read_text())
         if not opacity or opacity.group(1) != percent.group(1):
             errors.append("platform surface_outline_opacity default != RIM_PERCENT")
 

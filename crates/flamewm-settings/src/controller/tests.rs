@@ -20,6 +20,7 @@ mod appearance;
 mod color_picker;
 mod display_modes;
 mod display_paging;
+mod dock_page;
 mod hotkey_seams;
 mod hotkeys;
 mod keyboard_capture;

@@ -451,39 +451,104 @@ mod panel_tray_tests {
         })
     }
 
-    // REGRESSION: the tray temperature text must be written into the compiled
-    // panel template and lay out with a non-zero rect inside the 30x44 tray button.
-    // Viewport 1080x72 is the live 125% panel CSS viewport.
-    // OBSERVABLE: text '--' without data, '21°' with data; span rect > 0 and inside the button.
-    // MUTATION: drop the tray-weather-temp node from panel.html and the write is refused.
-    #[test]
-    fn tray_temperature_text_lays_out_inside_button_in_real_panel() {
+    const PANEL_VERTICAL_ARTIFACT: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel-vertical.rwr"));
+
+    // OBSERVABLE, per compiled panel (horizontal 1080x72, vertical 44x1080 CSS viewport): the
+    // temperature text is written and its pill has non-zero size; the visible glyph is centred on
+    // the entry (centre y equal within 0.01); the pill top is at or below the glyph bottom (zero
+    // overlap); the pill bottom sits exactly 1px above the entry bottom.
+    // MUTATION: restoring the 8px margin-top, a 17px glyph, or dropping the vertical overlay
+    // wrapper (pill in flow under the glyph) fails here.
+    fn assert_weather_entry_clears_glyph(
+        artifact: &'static [u8],
+        viewport: (f32, f32),
+        panel: &str,
+    ) {
         let cases = [
-            (WeatherState::Unconfigured, "--"),
-            (ready_21c(), "21\u{b0}"),
+            (
+                WeatherState::Unconfigured,
+                "--",
+                "tray-weather-none-available",
+            ),
+            (ready_21c(), "21\u{b0}", "tray-weather-clear"),
         ];
-        for (state, expected) in cases {
+        for (state, expected, glyph_id) in cases {
             let mut recorder = RecordingUiDoc::default();
             project_weather_tray(&mut recorder, &state, TemperatureUnit::Celsius, true, true)
                 .unwrap();
             assert_eq!(recorder.texts["tray-weather-temp"], expected);
 
-            let mut doc = flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel decodes");
+            let mut doc = flamewm_ui_x11::decode_document(artifact).expect("panel decodes");
             project_weather_tray(&mut doc, &state, TemperatureUnit::Celsius, true, true)
-                .unwrap_or_else(|error| panic!("tray projection refused: {error}"));
-            let viewport = (1080.0, 72.0);
+                .unwrap_or_else(|error| panic!("{panel} tray projection refused: {error}"));
             let button = doc
                 .layout_box_by_id("tray-weather", viewport)
                 .expect("button");
             let span = doc
                 .layout_box_by_id("tray-weather-temp", viewport)
                 .expect("span");
-            assert!(span.2 > 0.0 && span.3 > 0.0, "zero-size temp span {span:?}");
+            let glyph = doc.layout_box_by_id(glyph_id, viewport).expect("glyph");
+            assert!(
+                span.2 > 0.0 && span.3 > 0.0,
+                "{panel}: zero-size pill {span:?}"
+            );
             let inside = span.0 >= button.0
                 && span.1 >= button.1
                 && span.0 + span.2 <= button.0 + button.2 + 0.5
                 && span.1 + span.3 <= button.1 + button.3 + 0.5;
-            assert!(inside, "temp span {span:?} outside button {button:?}");
+            assert!(inside, "{panel}: pill {span:?} outside entry {button:?}");
+            let glyph_centre = glyph.1 + glyph.3 / 2.0;
+            let entry_centre = button.1 + button.3 / 2.0;
+            assert!(
+                (glyph_centre - entry_centre).abs() < 0.01,
+                "{panel}: glyph centre {glyph_centre} != entry centre {entry_centre} ({glyph:?} in {button:?})"
+            );
+            let glyph_bottom = glyph.1 + glyph.3;
+            assert!(
+                span.1 >= glyph_bottom - 0.01,
+                "{panel}: pill top {} overlaps glyph bottom {glyph_bottom} ({span:?} vs {glyph:?})",
+                span.1
+            );
+            let entry_bottom = button.1 + button.3;
+            assert!(
+                (span.1 + span.3 - (entry_bottom - 1.0)).abs() < 0.5,
+                "{panel}: pill bottom {} not 1px above entry bottom {entry_bottom}",
+                span.1 + span.3
+            );
+        }
+    }
+
+    // REGRESSION: the tray temperature text must be written into the compiled panel templates and
+    // lay out clear of the weather glyph in both horizontal and vertical panels.
+    #[test]
+    fn tray_temperature_clears_glyph_in_horizontal_and_vertical_panels() {
+        assert_weather_entry_clears_glyph(PANEL_ARTIFACT, (1080.0, 72.0), "horizontal");
+        assert_weather_entry_clears_glyph(PANEL_VERTICAL_ARTIFACT, (44.0, 1080.0), "vertical");
+    }
+
+    // OBSERVABLE: both compiled panels paint a full RGBA frame through the software chain with the
+    // weather entry projected. Set FLAMEWM_WEATHER_SHOT_DIR to dump `<panel>.rgba` for inspection.
+    #[test]
+    fn tray_weather_entry_paints_in_horizontal_and_vertical_panels() {
+        let dump_dir = std::env::var("FLAMEWM_WEATHER_SHOT_DIR").ok();
+        for (panel, artifact, viewport) in [
+            ("horizontal", PANEL_ARTIFACT, (1080.0_f32, 72.0_f32)),
+            ("vertical", PANEL_VERTICAL_ARTIFACT, (44.0_f32, 1080.0_f32)),
+        ] {
+            let mut doc = flamewm_ui_x11::decode_document(artifact).expect("panel decodes");
+            project_weather_tray(&mut doc, &ready_21c(), TemperatureUnit::Celsius, true, true)
+                .unwrap_or_else(|error| panic!("{panel} tray projection refused: {error}"));
+            let pixels = flamewm_ui_x11::test_support::paint_popup_software(
+                doc,
+                viewport,
+                [30, 40, 60, 255],
+            );
+            let expected = viewport.0 as usize * viewport.1 as usize * 4;
+            assert_eq!(pixels.len(), expected, "{panel} frame size");
+            if let Some(dir) = &dump_dir {
+                std::fs::write(format!("{dir}/{panel}.rgba"), &pixels).expect("write frame");
+            }
         }
     }
 
@@ -550,14 +615,18 @@ mod panel_tray_tests {
             .expect("pill");
         let centre_y = button.1 + button.3 / 2.0;
         let glyph_dy = glyph.1 + glyph.3 / 2.0 - centre_y;
-        let pill_dy = pill.1 + pill.3 / 2.0 - centre_y;
         assert!(
-            glyph_dy.abs() <= 0.5,
+            glyph_dy.abs() <= 0.01,
             "glyph {glyph:?} off centre {button:?}"
         );
+        // The pill sits in the lower part of the entry, below the glyph, 1px above its bottom.
         assert!(
-            (pill_dy - 4.0).abs() <= 0.5,
-            "pill offset {pill_dy} not 4px: {pill:?}"
+            pill.1 >= glyph.1 + glyph.3 - 0.01,
+            "pill {pill:?} overlaps glyph {glyph:?}"
+        );
+        assert!(
+            (pill.1 + pill.3 - (button.1 + button.3 - 1.0)).abs() <= 0.5,
+            "pill {pill:?} not anchored 1px above entry bottom {button:?}"
         );
         assert!(pill.2 > 0.0 && pill.3 > 0.0, "zero-size pill {pill:?}");
     }

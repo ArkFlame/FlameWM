@@ -26,7 +26,10 @@ const CLOCK_TIME_FONT: f32 = 14.0;
 const CLOCK_DATE_FONT: f32 = 10.0;
 /// `.workspace-button` and `.tray-weather-temp` font sizes in CSS px.
 const PAGER_CELL_FONT: f32 = 9.0;
-const TRAY_WEATHER_FONT: f32 = 10.0;
+const TRAY_WEATHER_FONT: f32 = 9.0;
+/// Weather condition glyph edge in CSS px (`.tray-weather img`); smaller than the other tray
+/// glyphs so the temperature pill fits below it inside the entry.
+const TRAY_WEATHER_GLYPH_PX: f32 = 14.0;
 /// Tray glyph nodes (the `img` children of tray buttons) that share `.tray-button img` sizing.
 const TRAY_GLYPH_IDS: &[&str] = &[
     "tray-play-icon",
@@ -34,15 +37,6 @@ const TRAY_GLYPH_IDS: &[&str] = &[
     "tray-volume-icon",
     "tray-volume-muted-icon",
     "tray-wifi",
-    "tray-weather-clear",
-    "tray-weather-few-clouds",
-    "tray-weather-fog",
-    "tray-weather-none-available",
-    "tray-weather-overcast",
-    "tray-weather-showers",
-    "tray-weather-showers-scattered",
-    "tray-weather-snow",
-    "tray-weather-storm",
     "tray-battery-caution",
     "tray-battery-caution-charging",
     "tray-battery-020",
@@ -63,6 +57,18 @@ const TRAY_GLYPH_IDS: &[&str] = &[
     "tray-battery-090-charging",
     "tray-battery-100",
     "tray-battery-100-charging",
+];
+/// Weather condition glyph nodes; sized by `TRAY_WEATHER_GLYPH_PX`, not `TRAY_ICON_LOGICAL_PX`.
+const TRAY_WEATHER_GLYPH_IDS: &[&str] = &[
+    "tray-weather-clear",
+    "tray-weather-few-clouds",
+    "tray-weather-fog",
+    "tray-weather-none-available",
+    "tray-weather-overcast",
+    "tray-weather-showers",
+    "tray-weather-showers-scattered",
+    "tray-weather-snow",
+    "tray-weather-storm",
 ];
 
 /// Taskbar task icon raster edge in device pixels. The icon node is laid out
@@ -526,6 +532,10 @@ fn project_taskbar_metrics(
     let glyph = scaled(TRAY_ICON_LOGICAL_PX);
     for id in TRAY_GLYPH_IDS {
         document.size(id, glyph, glyph)?;
+    }
+    let weather_glyph = scaled(TRAY_WEATHER_GLYPH_PX);
+    for id in TRAY_WEATHER_GLYPH_IDS {
+        document.size(id, weather_glyph, weather_glyph)?;
     }
     Ok(())
 }
