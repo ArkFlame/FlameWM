@@ -355,6 +355,44 @@ pub fn composite_cpu(
     Ok(())
 }
 
+/// True when `ops` can run in place on a `frame_len`-byte frame with no error possible: the frame
+/// matches `width` x `height`, and every op is a rounded fill or a blend whose source length
+/// matches its rectangle. Both fill backends fail only on a frame-length mismatch, so these checks
+/// are exactly the ones that could otherwise return `Err` mid-batch. Anything else keeps the
+/// copy-based path, which restores the frame on error.
+fn paints_in_place(frame_len: usize, width: u32, height: u32, ops: &[PixelOp<'_>]) -> bool {
+    let Some(expected) = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return false;
+    };
+    if frame_len != expected {
+        return false;
+    }
+    ops.iter().all(|op| match *op {
+        PixelOp::FillRoundedRect { .. } => true,
+        PixelOp::BlendMask {
+            width,
+            height,
+            mask,
+            ..
+        } => (width as usize).checked_mul(height as usize) == Some(mask.len()),
+        PixelOp::BlendImage {
+            width,
+            height,
+            rgba,
+            ..
+        } => {
+            (width as usize)
+                .checked_mul(height as usize)
+                .and_then(|pixels| pixels.checked_mul(4))
+                == Some(rgba.len())
+        }
+        _ => false,
+    })
+}
+
 /// Integer `round(t / 255)` for `t <= 255 * 255`, exact for every input in that range.
 #[inline]
 fn div255(t: u32) -> u32 {
@@ -443,6 +481,22 @@ pub trait PixelBackend {
         height: u32,
         ops: &[PixelOp<'_>],
     ) -> Result<(), String> {
+        if paints_in_place(pixels.len(), width, height, ops) {
+            // Only fills and blends with valid sizes, and none of them can fail here, so the
+            // batch runs directly on `pixels` and needs no full-frame copy for atomicity.
+            for op in ops {
+                match *op {
+                    PixelOp::FillRoundedRect { outer, hole, color } => {
+                        self.fill_rounded_rect(pixels, width, height, outer, hole, color)?;
+                    }
+                    blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
+                        composite_cpu(pixels, width, height, blend)?;
+                    }
+                    _ => unreachable!("paints_in_place admits only fills and blends"),
+                }
+            }
+            return Ok(());
+        }
         let mut scratch = pixels.to_vec();
         for op in ops {
             match *op {
