@@ -23,7 +23,7 @@ class Pass26Tests(unittest.TestCase):
         self.assertIn('let logical_radius = radius as f32 / panel_ui_scale(', code)
         self.assertIn('document.corner_radius("taskbar", logical_radius)', code)
         self.assertIn('set_dock_frame(record.panel, edge, radius)', code)
-        self.assertIn('if entry.border_radius != Some(radius)', read('crates/flamewm-render-core/src/model/style.rs'))
+        self.assertIn('if entry.border_radius != Some(radius)', read('crates/flamewm-render-core/src/model/style/runtime.rs'))
         renderer = read('crates/flamewm-render-x11/src/app/render.rs')
         self.assertIn('crate::xrender_aa::fill_rounded_rect(', renderer)
         self.assertIn('crate::xrender_aa::stroke_rounded_rect(', renderer)

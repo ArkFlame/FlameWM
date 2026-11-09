@@ -431,7 +431,8 @@ J6_CHROME_FILE = "crates/flamewm-wm-x11/src/chrome.rs"
 J6_ICONS_FILE = "crates/flamewm-integrations-linux/src/icons/mod.rs"
 J6_MODEL_FILES = (
     "crates/flamewm-render-core/src/model/mod.rs",
-    "crates/flamewm-render-core/src/model/style.rs",
+    "crates/flamewm-render-core/src/model/style/mod.rs",
+    "crates/flamewm-render-core/src/model/style/runtime.rs",
     "crates/flamewm-render-core/src/model/document.rs",
 )
 J6_SHELL_MAIN = "crates/flamewm-shell/src/main.rs"
