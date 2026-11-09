@@ -98,7 +98,16 @@ fn compile_file_in(
             .map_err(|error| format!("failed to read stylesheet {}: {error}", path.display()))?;
         css.push_str(&expand_imports(path, &source)?);
     }
-    let key = cache_dir.and_then(|_| cache_key(&html_source, &css, base, &html, options));
+    let key = cache_dir.and_then(|_| {
+        cache_key(
+            &html_source,
+            &css,
+            base,
+            &html,
+            options,
+            crate::utilities::UTILITIES_REVISION,
+        )
+    });
     if let (Some(dir), Some(key)) = (cache_dir, key) {
         if let Some(document) = cache::load(dir, key) {
             return Ok(CompileOutput {
@@ -116,18 +125,21 @@ fn compile_file_in(
     Ok(output)
 }
 
-/// Hashes every input that changes the compiled output: compiler version, options, page HTML,
-/// expanded CSS, and the bytes of each `src` image. `None` when an image cannot be read, so the
-/// compile reports that error rather than caching around it.
+/// Hashes every input that changes the compiled output: compiler version, utility table revision,
+/// options, page HTML, expanded CSS, and the bytes of each `src` image. `None` when an image cannot
+/// be read, so the compile reports that error rather than caching around it.
 fn cache_key(
     html_source: &str,
     css: &str,
     base: &Path,
     html: &ParsedHtml,
     options: CompileOptions,
+    utilities_revision: u64,
 ) -> Option<u64> {
     let mut input = Vec::with_capacity(html_source.len() + css.len() + 64);
     input.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
+    input.push(0);
+    input.extend_from_slice(&utilities_revision.to_le_bytes());
     input.push(0);
     input.push(options.strict as u8);
     input.push(0);

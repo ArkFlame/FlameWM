@@ -212,30 +212,147 @@ fn valid_length(inner: &str, percent: bool) -> bool {
     }
 }
 
+/// Longest token considered a utility. Longer tokens are component classes and are never looked up.
+const MAX_TOKEN_LEN: usize = 128;
+
+/// Variant prefixes accepted by `lookup`. Kept in step with its match arms (checked by a test).
+const VARIANTS: [&str; 3] = ["hover", "focus", "active"];
+
+/// One bit per two-byte prefix (65536 bits): set when a utility, scaled family or variant starts with it.
+/// A scaled family `h` is keyed as `h-`, so every prefix a utility can start with is covered.
+const BIGRAMS: [u64; 1024] = bigrams();
+
+const fn bigrams() -> [u64; 1024] {
+    let mut mask = [0u64; 1024];
+    let mut i = 0;
+    while i < UTILITIES.len() {
+        mark_bigram(&mut mask, UTILITIES[i].0, b'\0');
+        i += 1;
+    }
+    i = 0;
+    while i < SCALED.len() {
+        mark_bigram(&mut mask, SCALED[i].0, b'-');
+        i += 1;
+    }
+    i = 0;
+    while i < VARIANTS.len() {
+        mark_bigram(&mut mask, VARIANTS[i], b'\0');
+        i += 1;
+    }
+    mask
+}
+
+/// Sets the bit for the first two bytes of `name`; `after_short` stands in for the second byte of a one-byte name.
+const fn mark_bigram(mask: &mut [u64; 1024], name: &str, after_short: u8) {
+    let bytes = name.as_bytes();
+    let second = if bytes.len() > 1 {
+        bytes[1]
+    } else {
+        after_short
+    };
+    let key = ((bytes[0] as usize) << 8) | second as usize;
+    mask[key >> 6] |= 1u64 << (key & 63);
+}
+
+/// Cheap reject before `lookup`: length bound, then two-byte mask. Never rejects a token `lookup` accepts.
+fn is_candidate(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    if bytes.len() < 2 || bytes.len() > MAX_TOKEN_LEN {
+        return false;
+    }
+    let key = ((bytes[0] as usize) << 8) | bytes[1] as usize;
+    BIGRAMS[key >> 6] & (1u64 << (key & 63)) != 0
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0100_0000_01b3;
+
+const fn fnv_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    let mut i = 0;
+    while i < bytes.len() {
+        hash ^= bytes[i] as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+        i += 1;
+    }
+    hash
+}
+
+/// FNV-1a over every name, declaration and scaled-family field, with separators so field edits cannot collide.
+const fn table_hash(fixed: &[(&str, &[(&str, &str)])], scaled: &[(&str, &[&str], bool)]) -> u64 {
+    let mut hash = FNV_OFFSET;
+    let mut i = 0;
+    while i < fixed.len() {
+        let (name, pairs) = fixed[i];
+        hash = fnv_bytes(hash, name.as_bytes());
+        hash = fnv_bytes(hash, &[0u8]);
+        let mut j = 0;
+        while j < pairs.len() {
+            let (property, value) = pairs[j];
+            hash = fnv_bytes(hash, property.as_bytes());
+            hash = fnv_bytes(hash, &[0u8]);
+            hash = fnv_bytes(hash, value.as_bytes());
+            hash = fnv_bytes(hash, &[0u8]);
+            j += 1;
+        }
+        hash = fnv_bytes(hash, &[1u8]);
+        i += 1;
+    }
+    i = 0;
+    while i < scaled.len() {
+        let (family, properties, percent) = scaled[i];
+        hash = fnv_bytes(hash, family.as_bytes());
+        hash = fnv_bytes(hash, &[0u8]);
+        let mut j = 0;
+        while j < properties.len() {
+            hash = fnv_bytes(hash, properties[j].as_bytes());
+            hash = fnv_bytes(hash, &[0u8]);
+            j += 1;
+        }
+        hash = fnv_bytes(hash, &[percent as u8, 1u8]);
+        i += 1;
+    }
+    hash
+}
+
+/// Changes whenever the table changes. Part of the compile cache key, so an edit cannot serve stale output.
+pub(crate) const UTILITIES_REVISION: u64 = table_hash(UTILITIES, SCALED);
+
 /// Synthetic rules for the utility tokens one document uses: one per distinct token, in name order.
 /// Rules start at `first_order`, after every linked sheet, so a utility overrides a component class.
+/// Candidates are filtered cheaply, then deduplicated, so `lookup` runs once per distinct token.
 pub(crate) fn rules_for(html: &ParsedHtml, first_order: u32) -> Vec<Rule> {
-    let mut used: Vec<&str> = html
-        .nodes
-        .iter()
-        .filter_map(|node| node.attrs.get("class"))
-        .flat_map(|class| class.split_ascii_whitespace())
-        .filter(|token| lookup(token).is_some())
-        .collect();
+    // Most tokens are component classes: the two-byte mask rejects them with no lookup. Survivors are
+    // looked up in place; only the (few) matches are sorted, so the common page never sorts its tokens.
+    let mut used: Vec<&str> = Vec::new();
+    for node in &html.nodes {
+        let Some(class) = node.attrs.get("class") else {
+            continue;
+        };
+        for token in class.split_ascii_whitespace() {
+            if is_candidate(token) && lookup(token).is_some() {
+                used.push(token);
+            }
+        }
+    }
+    if used.is_empty() {
+        return Vec::new();
+    }
     used.sort_unstable();
     used.dedup();
-    used.iter()
-        .zip(first_order..)
-        .filter_map(|(token, order)| {
-            let resolved = lookup(token)?;
-            Some(class_rule(
+    let mut rules = Vec::new();
+    let mut order = first_order;
+    for token in used {
+        if let Some(resolved) = lookup(token) {
+            rules.push(class_rule(
                 token.to_string(),
                 resolved.state,
                 order,
                 resolved.declarations(),
-            ))
-        })
-        .collect()
+            ));
+            order += 1;
+        }
+    }
+    rules
 }
 
 #[cfg(test)]
@@ -581,5 +698,75 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod prefilter_and_revision_tests {
+    use super::*;
+
+    #[test]
+    fn prefilter_never_rejects_a_token_lookup_accepts() {
+        let mut samples: Vec<String> = Vec::new();
+        for (name, _) in UTILITIES {
+            samples.push(name.to_string());
+            for variant in VARIANTS {
+                samples.push(format!("{variant}:{name}"));
+            }
+        }
+        for (family, _, _) in SCALED {
+            for step in ["0", "12", "2.5", "px", "[10px]", "[var(--x)]"] {
+                samples.push(format!("{family}-{step}"));
+                samples.push(format!("hover:{family}-{step}"));
+            }
+        }
+        let accepted: Vec<&String> = samples
+            .iter()
+            .filter(|token| lookup(token).is_some())
+            .collect();
+        assert!(accepted.len() > UTILITIES.len());
+        for token in accepted {
+            assert!(
+                is_candidate(token),
+                "{token} is accepted by lookup but rejected by the prefilter"
+            );
+        }
+    }
+
+    #[test]
+    fn variants_are_exactly_the_lookup_prefixes() {
+        for variant in VARIANTS {
+            assert!(lookup(&format!("{variant}:flex")).is_some(), "{variant}");
+        }
+        assert!(lookup("active:flex").is_some());
+        assert!(lookup("visited:flex").is_none());
+    }
+
+    #[test]
+    fn prefilter_rejects_empty_long_and_unmasked_tokens() {
+        assert!(!is_candidate(""));
+        assert!(!is_candidate("x"));
+        assert!(UTILITIES.iter().all(|(name, _)| name.len() >= 2));
+        assert!(!is_candidate(&format!("w-[{}]", "1".repeat(MAX_TOKEN_LEN))));
+        assert!(!is_candidate("Zebra"));
+        assert!(is_candidate("flex"));
+    }
+
+    #[test]
+    fn revision_matches_the_table_and_changes_with_each_field() {
+        let base = table_hash(UTILITIES, SCALED);
+        assert_eq!(base, UTILITIES_REVISION);
+        assert_ne!(base, table_hash(&UTILITIES[1..], SCALED));
+        assert_ne!(base, table_hash(UTILITIES, &SCALED[1..]));
+        let renamed: &[(&str, &[(&str, &str)])] = &[("flex", &[("display", "grid")])];
+        assert_ne!(
+            table_hash(renamed, &[]),
+            table_hash(&[("flex", &[("display", "flex")])], &[])
+        );
+        let percent: &[(&str, &[&str], bool)] = &[("w", &["width"], false)];
+        assert_ne!(
+            table_hash(&[], percent),
+            table_hash(&[], &[("w", &["width"], true)])
+        );
     }
 }

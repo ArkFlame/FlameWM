@@ -492,3 +492,23 @@ fn zero_width_seed_keeps_runtime_text_slot_mutable() {
         .expect("zero-width seed must compile to a text child");
     assert_eq!(output.document.nodes[child as usize].kind, NodeKind::Text);
 }
+
+#[test]
+fn cache_key_changes_with_utilities_revision() {
+    let source = "<p class=\"flex\"></p>";
+    let html = crate::html::parse_html(source).unwrap();
+    let key = |revision: u64| {
+        cache_key(
+            source,
+            "",
+            std::path::Path::new("."),
+            &html,
+            CompileOptions::default(),
+            revision,
+        )
+    };
+    assert!(key(1).is_some());
+    assert_eq!(key(1), key(1));
+    assert_ne!(key(1), key(2));
+    assert_ne!(key(crate::utilities::UTILITIES_REVISION), key(0));
+}
