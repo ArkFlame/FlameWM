@@ -166,7 +166,23 @@ impl ShellLoop {
             .dock_stage
             .autohide
             .unwrap_or_else(|| AutoHide::new(settings.auto_hide, now));
-        model.set_auto_hide(settings.auto_hide, now);
+        // Covered mode (`dock.autoHideCovered`): hide only while a visible window on this output overlaps the dock.
+        let covered = snapshot.windows.iter().any(|window| {
+            window.is_visible()
+                && !window.skip_taskbar
+                && window.output == panel.output
+                && flamewm_shell_core::dock::rect_overlaps(
+                    (
+                        window.outer_geometry.x,
+                        window.outer_geometry.y,
+                        window.outer_geometry.width,
+                        window.outer_geometry.height,
+                    ),
+                    placed,
+                )
+        });
+        let hide = settings.auto_hide && (!settings.auto_hide_covered || covered);
+        model.set_auto_hide(hide, now);
         model.set_fullscreen(snapshot.windows.iter().any(|window| {
             window.state == flamewm_api::window::WindowState::Fullscreen
                 && window.output == panel.output

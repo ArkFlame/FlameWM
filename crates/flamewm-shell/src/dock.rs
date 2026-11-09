@@ -24,6 +24,8 @@ pub struct DockSettings {
     pub show_trash: bool,
     /// `dock.hoverScale`: the hovered icon grows by `HOVER_SCALE` (subtle mode).
     pub hover_scale: bool,
+    /// `dock.autoHideCovered`: with auto-hide on, hide only while a window covers the dock.
+    pub auto_hide_covered: bool,
     /// `dock.autoHide`: the dock slides away when idle and reveals at its edge.
     pub auto_hide: bool,
 }
@@ -39,6 +41,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
             show_running: true,
             show_trash: true,
             hover_scale: false,
+            auto_hide_covered: false,
             auto_hide: true,
         };
     };
@@ -60,6 +63,10 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     );
     let hover_scale = matches!(
         snapshot.values.get("dock.hoverScale"),
+        Some(SettingValue::Boolean(true))
+    );
+    let auto_hide_covered = matches!(
+        snapshot.values.get("dock.autoHideCovered"),
         Some(SettingValue::Boolean(true))
     );
     let edge = match text("dock.position") {
@@ -94,6 +101,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         show_running,
         show_trash,
         hover_scale,
+        auto_hide_covered,
         auto_hide,
     }
 }
@@ -528,6 +536,7 @@ mod tests {
             show_running: false,
             show_trash: true,
             hover_scale: false,
+            auto_hide_covered: false,
             auto_hide: false,
         };
         let layout = layout_for(&settings, &[]);

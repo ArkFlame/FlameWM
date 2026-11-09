@@ -229,6 +229,15 @@ pub fn hover_scaled_rect(
     }
 }
 
+/// True when the window rect `(x, y, width, height)` overlaps the dock rect `(x, y, w, h)`.
+/// Touching edges do not count as overlap.
+#[must_use]
+pub fn rect_overlaps(window: (i32, i32, i32, i32), dock: (i32, i32, u32, u32)) -> bool {
+    let (wx, wy, ww, wh) = window;
+    let (dx, dy, dw, dh) = dock;
+    wx < dx + dw as i32 && dx < wx + ww && wy < dy + dh as i32 && dy < wy + wh
+}
+
 /// Reserved slot id of the Trash slot. Never a desktop app id, so it is never pinned or launched as one.
 pub const TRASH_SLOT_ID: &str = "flamewm:trash";
 
@@ -420,6 +429,24 @@ mod tests {
         assert_eq!(
             hover_scaled_rect((1.0, 2.0, 3.0, 4.0), 1.0, Edge::Left),
             (1.0, 2.0, 3.0, 4.0)
+        );
+    }
+
+    #[test]
+    fn rect_overlap_ignores_touching_edges() {
+        let dock = (0, 100, 50, 20);
+        assert!(rect_overlaps((10, 90, 30, 20), dock), "partial overlap");
+        assert!(
+            !rect_overlaps((0, 0, 50, 100), dock),
+            "window ends on the dock top edge"
+        );
+        assert!(
+            !rect_overlaps((50, 100, 10, 10), dock),
+            "window starts on the dock right edge"
+        );
+        assert!(
+            rect_overlaps((-10, 100, 100, 5), dock),
+            "wide window across the dock"
         );
     }
 }

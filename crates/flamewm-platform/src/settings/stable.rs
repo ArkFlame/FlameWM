@@ -81,6 +81,7 @@ stable_settings! {
     (false, dock, "dock.showRunning", dock_show_running),
     (false, dock, "dock.showTrash", dock_show_trash),
     (false, dock, "dock.hoverScale", dock_hover_scale),
+    (false, dock, "dock.autoHideCovered", dock_auto_hide_covered),
     (false, dock, "dock.autoHide", dock_auto_hide),
     (false, taskbar, "taskbarFloatingMargin", taskbar_floating_margin),
     (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),
