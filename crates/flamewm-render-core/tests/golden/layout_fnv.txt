@@ -25,9 +25,9 @@ lock/lock.html 320x240 nodes=51 fnv=20b489df97ed4bb9
 shell/calendar.html 1280x800 nodes=225 fnv=c8c2cd3d8ddf98bc
 shell/calendar.html 701x438 nodes=225 fnv=479f195bf5dac0a8
 shell/calendar.html 320x240 nodes=225 fnv=44ffa34692249f5f
-shell/dock-label.html 1280x800 nodes=4 fnv=741867f18c337d17
-shell/dock-label.html 701x438 nodes=4 fnv=3fd4f06522f4ad2b
-shell/dock-label.html 320x240 nodes=4 fnv=d3df0ef9f7dd97a7
+shell/dock-label.html 1280x800 nodes=3 fnv=8e5dd8f136022ce5
+shell/dock-label.html 701x438 nodes=3 fnv=0435d6506011aca9
+shell/dock-label.html 320x240 nodes=3 fnv=06965682ca8bae85
 shell/dock-menu.html 1280x800 nodes=14 fnv=cc447662afbeb1b6
 shell/dock-menu.html 701x438 nodes=14 fnv=3e1bd98c6b747f66
 shell/dock-menu.html 320x240 nodes=14 fnv=3109968416b99e7f
