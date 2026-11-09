@@ -107,3 +107,27 @@ Design rules from the user (apply to every change):
 7. **Licence rule.** See section 3, Design rules.
 8. **Design rules.** See section 3, Design rules. Commit trailer exactly `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 9. **Isolated Xvfb.** Run `pgrep -a Xvfb` first, pick a free display in 101..119, set `DISPLAY` explicitly on every command, and kill only the PID you started.
+
+## 8. Headless runtime harness (private Xvfb, nested flamewm)
+
+Reuse this instead of rediscovering it. Found in `scripts/perf/settings_session.sh` and
+`scripts/perf/startup.sh`; no separate canary is needed for a visual check.
+
+- Build: `cargo build -p flamewm-wm-wayland -p flamewm-desktop -p flamewm-shell -p flamewm-settings --bins`
+  (debug binaries land in `$CARGO_TARGET_DIR/debug/`).
+- Display: pick a `:N` with no live server (`ps -C Xvfb -o args= | grep " :N "`). Never `:0`, and do
+  not signal PIDs you did not start. `/tmp/.X11-unix/XN` sockets are often stale and are not a signal.
+- Settings: `$XDG_CONFIG_HOME/flamewm/settings.toml` (or `$HOME/.config/flamewm/`), flat lines
+  such as `dock.autoHide=false`. Parser: `crates/flamewm-platform/src/settings/snapshot_parse.rs`.
+- Start: Xvfb `:N -screen 0 1280x800x24 -nolisten tcp -noreset -ac`, then `env -u WAYLAND_DISPLAY`
+  with a private `HOME`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `FLAMEWM_WAYLAND_BACKEND=winit`,
+  `FLAMEWM_WAYLAND_AUTOSTART=<desktop>:<shell>:<settings>`, and `setsid dbus-run-session -- flamewm-wayland`.
+  The Wayland socket is `$XDG_RUNTIME_DIR/wayland-flame`.
+- Extra clients: run the binary with `WAYLAND_DISPLAY=wayland-flame` and the same private env.
+- Screenshot: `DISPLAY=:N xwd -root -silent | convert xwd:- out.png`.
+- Input: python-Xlib with XTEST (`Xlib.ext.xtest.fake_input`), warping the pointer first.
+  Root coordinates are the Xvfb screen, not the nested output.
+- Known so far (2026-11-09): a maximized client kept stale pixels on its right side (repaint or damage
+  issue, not reserve). With `dock.autoHide=false`, the dock was not drawn and the settings window did not map
+  in one run. Both are unverified; start there next time.
+- Cleanup: kill only the PIDs you recorded (`wm.pid`, `xvfb.pid`) and their process group.
