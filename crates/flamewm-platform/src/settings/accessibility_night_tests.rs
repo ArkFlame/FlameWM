@@ -30,7 +30,8 @@ fn accessibility_rows_form_their_own_reset_section() {
             "reducedMotion",
             "textScalePercent",
             "stickyKeys",
-            "slowKeys"
+            "slowKeys",
+            "shakeToLocate"
         ]
     );
 }

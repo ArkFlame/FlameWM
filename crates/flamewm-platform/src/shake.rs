@@ -81,6 +81,161 @@ impl ShakeDetector {
     }
 }
 
+/// How long the cursor stays enlarged after a shake, in milliseconds.
+pub const ENLARGE_MS: u64 = 1000;
+/// Upper bound for the enlarged nominal cursor size, in pixels.
+pub const MAX_ENLARGED_CURSOR_PX: u32 = 128;
+
+/// Result of one motion sample on [`ShakeLocate`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShakeEvent {
+    /// No shake completed, or the sample was ignored.
+    Idle,
+    /// A shake started an enlarge: the caller applies the enlarged cursor size once.
+    Enlarged,
+    /// A shake while already enlarged: the caller does nothing, the window restarts.
+    Extended,
+}
+
+/// Enlarge/restore state for shake-to-locate. Pure: the caller supplies the motion sample and a
+/// monotonic clock in milliseconds. It owns no timer; [`ShakeLocate::deadline_ms`] tells the
+/// caller when to wake, and the restore happens only when [`ShakeLocate::restore_due`] says so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShakeLocate {
+    detector: ShakeDetector,
+    /// Restore deadline while enlarged; `None` while the nominal size is in effect.
+    restore_at_ms: Option<u64>,
+}
+
+impl ShakeLocate {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            detector: ShakeDetector::new(),
+            restore_at_ms: None,
+        }
+    }
+
+    /// Feeds one horizontal motion sample at server time `t_ms`, with `now_ms` on the caller's clock.
+    pub fn feed_motion(&mut self, t_ms: u32, dx: i32, now_ms: u64) -> ShakeEvent {
+        if !self.detector.feed(t_ms, dx) {
+            return ShakeEvent::Idle;
+        }
+        let was_enlarged = self.restore_at_ms.is_some();
+        self.restore_at_ms = Some(now_ms.saturating_add(ENLARGE_MS));
+        if was_enlarged {
+            ShakeEvent::Extended
+        } else {
+            ShakeEvent::Enlarged
+        }
+    }
+
+    /// Wake-up for the pending restore, on the caller's clock. `None` while nominal.
+    #[must_use]
+    pub const fn deadline_ms(&self) -> Option<u64> {
+        self.restore_at_ms
+    }
+
+    /// True when the caller must restore the nominal cursor size now. Also true when the feature
+    /// was switched off while enlarged. Clears the state; a disabled feature keeps no detector
+    /// history.
+    pub fn restore_due(&mut self, now_ms: u64, enabled: bool) -> bool {
+        if !enabled {
+            let was_enlarged = self.restore_at_ms.is_some();
+            *self = Self::new();
+            return was_enlarged;
+        }
+        match self.restore_at_ms {
+            Some(at) if now_ms >= at => {
+                self.restore_at_ms = None;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Enlarged cursor size for a nominal size: twice nominal, capped, never below nominal.
+#[must_use]
+pub fn enlarged_cursor_size(nominal: u32) -> u32 {
+    nominal
+        .saturating_mul(2)
+        .min(MAX_ENLARGED_CURSOR_PX)
+        .max(nominal)
+}
+
+#[cfg(test)]
+mod locate_tests {
+    use super::*;
+
+    /// Shake samples from the detector tests: four reversals of 40 px inside 300 ms.
+    const SHAKE: [(u32, i32); 5] = [(0, 40), (75, -40), (150, 40), (225, -40), (300, 40)];
+
+    fn shake_at(state: &mut ShakeLocate, base_ms: u64) -> ShakeEvent {
+        let mut last = ShakeEvent::Idle;
+        for (t, dx) in SHAKE {
+            last = state.feed_motion(t, dx, base_ms + u64::from(t));
+        }
+        last
+    }
+
+    #[test]
+    fn shake_enlarges_once_then_extends_while_enlarged() {
+        let mut state = ShakeLocate::new();
+        assert_eq!(shake_at(&mut state, 0), ShakeEvent::Enlarged);
+        assert_eq!(state.deadline_ms(), Some(300 + ENLARGE_MS));
+        assert_eq!(shake_at(&mut state, 400), ShakeEvent::Extended);
+        assert_eq!(state.deadline_ms(), Some(700 + ENLARGE_MS));
+    }
+
+    #[test]
+    fn restore_fires_exactly_at_the_deadline() {
+        let mut state = ShakeLocate::new();
+        shake_at(&mut state, 0);
+        let deadline = state.deadline_ms().expect("enlarged");
+        assert!(!state.restore_due(deadline - 1, true));
+        assert!(state.restore_due(deadline, true));
+        assert_eq!(state.deadline_ms(), None, "no timer after restore");
+        assert!(!state.restore_due(deadline + 5_000, true), "restores once");
+    }
+
+    #[test]
+    fn idle_state_has_no_deadline_and_never_restores() {
+        let mut state = ShakeLocate::new();
+        assert_eq!(state.deadline_ms(), None);
+        assert!(!state.restore_due(u64::MAX, true));
+        assert_eq!(state.feed_motion(0, 3, 0), ShakeEvent::Idle);
+    }
+
+    #[test]
+    fn switching_off_while_enlarged_requests_restore_and_clears_history() {
+        let mut state = ShakeLocate::new();
+        shake_at(&mut state, 0);
+        assert!(state.restore_due(10, false), "restore on disable");
+        assert_eq!(state, ShakeLocate::new());
+        assert!(!state.restore_due(10, false), "nothing left to restore");
+    }
+
+    #[test]
+    fn disabled_feature_keeps_no_detector_history() {
+        let mut state = ShakeLocate::new();
+        for &(t, dx) in &SHAKE[..4] {
+            state.feed_motion(t, dx, u64::from(t));
+        }
+        assert!(!state.restore_due(0, false));
+        assert_eq!(state, ShakeLocate::new(), "partial shake forgotten");
+    }
+
+    #[test]
+    fn enlarged_size_doubles_nominal_and_caps() {
+        assert_eq!(enlarged_cursor_size(24), 48);
+        assert_eq!(enlarged_cursor_size(32), 64);
+        assert_eq!(enlarged_cursor_size(64), 128);
+        assert_eq!(enlarged_cursor_size(100), 128);
+        assert_eq!(enlarged_cursor_size(0), 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

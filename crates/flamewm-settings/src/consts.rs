@@ -21,6 +21,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "a11y-reduced-motion-on",
     "a11y-sticky-keys-on",
     "a11y-slow-keys-on",
+    "a11y-shake-locate-on",
     "anim-start-on",
     "anim-window-on",
     "anim-minimize-on",
@@ -96,6 +97,12 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         false,
     ),
     ("slowKeys", "a11y-slow-keys-on", "a11y-slow-keys-off", false),
+    (
+        "shakeToLocate",
+        "a11y-shake-locate-on",
+        "a11y-shake-locate-off",
+        false,
+    ),
     (
         "shareWallpaper",
         "wallpaper-share-on",

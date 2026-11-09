@@ -509,6 +509,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     resize_probe: Option<ResizeProbe>,
     edge_drag: Option<EdgeDragPending>,
     hot_corner: hot_corner::HotCornerState,
+    /// shake-to-locate enlarge/restore state; no timer unless the cursor is enlarged.
+    shake_locate: shake_locate::ShakeState,
     mouse_workspace_cooldowns: MouseWorkspaceCooldowns,
     /// Client whose titlebar repaint is paced to the frame interval during a move.
     chrome_deferred: Option<Window>,
@@ -543,6 +545,7 @@ mod publish;
 mod raw_keys;
 mod rects;
 mod release;
+mod shake_locate;
 mod show_desktop;
 mod stack_layer;
 mod super_tap;

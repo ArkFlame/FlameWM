@@ -58,6 +58,21 @@ pub(crate) fn sticky_keys_enabled() -> bool {
     STICKY_KEYS.load(Ordering::Relaxed)
 }
 
+/// `shakeToLocate`: a pointer shake enlarges the cursor. Off by default, so no motion feed.
+static SHAKE_TO_LOCATE: AtomicBool = AtomicBool::new(false);
+/// `cursorSize` nominal pixels, the size restored after a shake enlarges the cursor.
+static CURSOR_SIZE: AtomicU32 = AtomicU32::new(24);
+
+/// Live `shakeToLocate` switch read on every raw motion record.
+pub(crate) fn shake_to_locate_enabled() -> bool {
+    SHAKE_TO_LOCATE.load(Ordering::Relaxed)
+}
+
+/// Live nominal cursor size, in pixels.
+pub(crate) fn cursor_size() -> u32 {
+    CURSOR_SIZE.load(Ordering::Relaxed)
+}
+
 /// Live volume cap for the media keys, from the shared "raise maximum volume" value.
 pub(crate) fn volume_cap_percent() -> u8 {
     flamewm_platform::system::volume_cap_percent(AUDIO_RAISE_MAXIMUM.load(Ordering::Relaxed))
@@ -65,6 +80,17 @@ pub(crate) fn volume_cap_percent() -> u8 {
 
 const fn pack_rgb((r, g, b): (u8, u8, u8)) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
+}
+
+/// Nominal `cursorSize` from the snapshot, 24 when absent or not a positive integer.
+fn cursor_size_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
+    match snapshot.values.get("cursorSize") {
+        Some(SettingValue::Integer(value)) => u32::try_from(*value)
+            .ok()
+            .filter(|size| *size > 0)
+            .unwrap_or(24),
+        _ => 24,
+    }
 }
 
 fn boolean_setting(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
@@ -226,6 +252,11 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
         boolean_setting(snapshot, "stickyKeys", false),
         Ordering::Relaxed,
     );
+    SHAKE_TO_LOCATE.store(
+        boolean_setting(snapshot, "shakeToLocate", false),
+        Ordering::Relaxed,
+    );
+    CURSOR_SIZE.store(cursor_size_from_snapshot(snapshot), Ordering::Relaxed);
     flamewm_render_x11::apply_render_backend_setting(snapshot);
     flamewm_applications::terminal::set_configured_terminal(&terminal_from_snapshot(snapshot));
 }

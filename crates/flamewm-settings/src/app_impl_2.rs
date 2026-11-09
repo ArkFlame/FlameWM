@@ -837,6 +837,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ),
             ("stickyKeys", "a11y-sticky-keys-on", "a11y-sticky-keys-off"),
             ("slowKeys", "a11y-slow-keys-on", "a11y-slow-keys-off"),
+            (
+                "shakeToLocate",
+                "a11y-shake-locate-on",
+                "a11y-shake-locate-off",
+            ),
             ("animationsEnabled", "anim-global-on", "anim-global-off"),
             ("startAnimationEnabled", "anim-start-on", "anim-start-off"),
             (

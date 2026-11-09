@@ -135,6 +135,8 @@ pub struct ProductSettings {
     pub sticky_keys: bool,
     /// `slowKeys`: keys must be held briefly before they register. Default off.
     pub slow_keys: bool,
+    /// `shakeToLocate`: a fast left-right pointer shake enlarges the cursor for a moment. Default off.
+    pub shake_to_locate: bool,
     pub surface_outline_color: String,
     pub surface_outline_opacity: u8,
     /// `surfaceOutlineWidth` in px (1..=4); default 1.
@@ -326,6 +328,7 @@ impl Default for ProductSettings {
             text_scale_percent: 100,
             sticky_keys: false,
             slow_keys: false,
+            shake_to_locate: false,
             surface_outline_color: "#999999".to_owned(),
             surface_outline_opacity: 50,
             surface_outline_width: 1,

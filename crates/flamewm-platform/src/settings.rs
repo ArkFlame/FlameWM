@@ -259,6 +259,8 @@ mod dock_settings_tests;
 #[cfg(test)]
 mod edge_hot_corner_tests;
 #[cfg(test)]
+mod shake_settings_tests;
+#[cfg(test)]
 mod switch_contract_tests;
 #[cfg(test)]
 mod switch_group_tests;

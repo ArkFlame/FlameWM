@@ -26,7 +26,13 @@ fn sidebar_row_opens_the_accessibility_page_only() {
 
 #[test]
 fn accessibility_toggles_write_booleans() {
-    for key in ["highContrast", "reducedMotion", "stickyKeys", "slowKeys"] {
+    for key in [
+        "highContrast",
+        "reducedMotion",
+        "stickyKeys",
+        "slowKeys",
+        "shakeToLocate",
+    ] {
         let (requests, mut transport) = recording_transport();
         transport.responses.extend([
             Ok(ControlResponse::Settings(accessibility_snapshot(

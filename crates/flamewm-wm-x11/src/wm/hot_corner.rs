@@ -22,8 +22,10 @@ pub(super) struct HotCornerState {
     epoch: Instant,
     /// Wake-up for a pending dwell. `None` while no dwell is pending.
     pub(super) deadline: Option<Instant>,
-    /// Whether the root currently selects `XI_RawMotion` (hot corners configured).
+    /// Whether the root currently selects `XI_RawMotion` (hot corners or shake-to-locate).
     pub(super) root_motion: bool,
+    /// Whether hot corners are configured, so raw motion samples the pointer for dwell.
+    pub(super) corners: bool,
 }
 
 impl HotCornerState {
@@ -33,6 +35,7 @@ impl HotCornerState {
             epoch: Instant::now(),
             deadline: None,
             root_motion: false,
+            corners: false,
         }
     }
 }
@@ -70,6 +73,11 @@ pub(super) fn hot_corner_wait(
     Some(wait.map_or(remaining, |other| other.min(remaining)))
 }
 
+/// Raw motion is selected while either feature needs it, and dropped when neither does.
+pub(super) fn raw_motion_selected(corners: bool, shake: bool) -> bool {
+    corners || shake
+}
+
 /// Root event mask. Pointer motion is not in it: hot corners read raw motion instead.
 pub(super) fn root_event_mask() -> EventMask {
     EventMask::SUBSTRUCTURE_REDIRECT
@@ -83,7 +91,7 @@ impl<C: Connection> Wm<'_, C> {
     /// Samples the pointer and updates the dwell for the corner under it. Runs on every raw
     /// motion record and on a due dwell, since a resting pointer sends no motion.
     pub(super) fn hot_corner_sample(&mut self) -> Result<(), ReplyError> {
-        if !self.hot_corner.root_motion {
+        if !self.hot_corner.corners {
             return Ok(());
         }
         let reply = self.conn.query_pointer(self.screen().root)?.reply()?;
@@ -99,15 +107,19 @@ impl<C: Connection> Wm<'_, C> {
 
     /// Per-turn upkeep: follow `hotCorner.*` changes and collect a due dwell.
     pub(super) fn tick_hot_corner(&mut self) -> Result<(), ReplyError> {
-        let enabled = live_settings::hot_corners_enabled();
-        if enabled != self.hot_corner.root_motion {
-            self.hot_corner.root_motion = enabled;
-            if !enabled {
-                self.hot_corner = HotCornerState::new();
-            }
+        let corners = live_settings::hot_corners_enabled();
+        let shake = live_settings::shake_to_locate_enabled();
+        if !corners && self.hot_corner.corners {
+            // Turning corners off drops any pending dwell; the reset clears the selection too.
+            self.hot_corner = HotCornerState::new();
+        }
+        self.hot_corner.corners = corners;
+        let motion = raw_motion_selected(corners, shake);
+        if motion != self.hot_corner.root_motion {
+            self.hot_corner.root_motion = motion;
             // Without XInput there is no raw feed, and hot corners stay inert.
             if let Some(opcode) = self.raw_keys.as_ref().map(|raw| raw.opcode) {
-                self.send_root_xi_select(opcode, enabled)?;
+                self.send_root_xi_select(opcode, motion)?;
             }
         }
         let due = self
@@ -200,6 +212,14 @@ mod tests {
             hot_corner_wait(Some(now + ten), now, Some(hundred)),
             Some(ten)
         );
+    }
+
+    #[test]
+    fn raw_motion_is_selected_while_either_feature_needs_it() {
+        assert!(raw_motion_selected(true, false), "hot corners alone");
+        assert!(raw_motion_selected(false, true), "shake alone");
+        assert!(raw_motion_selected(true, true), "both");
+        assert!(!raw_motion_selected(false, false), "neither: deselected");
     }
 
     #[test]

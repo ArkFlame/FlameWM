@@ -44,6 +44,29 @@ pub(crate) fn is_raw_motion(bytes: &[u8], opcode: u8) -> bool {
         && u16::from_ne_bytes([bytes[8], bytes[9]]) == XI_RAW_MOTION
 }
 
+/// Horizontal delta and server time of an `XIRawMotion` record. `None` for other records, and for
+/// records that carry no valuator 0 (the X axis). Layout: the 32-byte fixed header (time at 12,
+/// valuator word count at 22), then the valuator mask, then one `FP3232` (integral i32, fraction
+/// u32) per set bit. Only the integral part is used; sub-pixel travel is dropped.
+pub(crate) fn raw_motion_dx(bytes: &[u8], opcode: u8) -> Option<(u32, i32)> {
+    if !is_raw_motion(bytes, opcode) || bytes.len() < 32 {
+        return None;
+    }
+    let words = usize::from(u16::from_ne_bytes([bytes[22], bytes[23]]));
+    let values_at = 32 + 4 * words;
+    if words == 0 || bytes.len() < values_at + 8 || bytes[32] & 1 == 0 {
+        return None;
+    }
+    let time = u32::from_ne_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+    let dx = i32::from_ne_bytes([
+        bytes[values_at],
+        bytes[values_at + 1],
+        bytes[values_at + 2],
+        bytes[values_at + 3],
+    ]);
+    Some((time, dx))
+}
+
 /// Parses an `XInput2` `XIRawKeyPress`/`XIRawKeyRelease` `GenericEvent`. `opcode` is the `XInput`
 /// major opcode from `QueryExtension`; anything else returns `None`.
 pub(crate) fn parse_raw_key(bytes: &[u8], opcode: u8) -> Option<RawKey> {
@@ -291,7 +314,12 @@ impl<C: Connection> Wm<'_, C> {
         // No XIQueryVersion: a client that negotiates XI2 this way stops receiving raw key
         // records while another client holds a keyboard grab (verified live in Xephyr).
 
-        self.send_root_xi_select(opcode, self.hot_corner.root_motion)?;
+        let motion = super::hot_corner::raw_motion_selected(
+            live_settings::hot_corners_enabled(),
+            live_settings::shake_to_locate_enabled(),
+        );
+        self.hot_corner.root_motion = motion;
+        self.send_root_xi_select(opcode, motion)?;
 
         if super::key_diag_enabled() {
             eprintln!("flamewm: raw keys selected opcode={opcode}");
@@ -315,7 +343,7 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     /// Replaces the root's raw selection on all master devices: key press/release always, raw
-    /// motion when `motion`. `XISelectEvents` replaces the mask per client, so every caller sends
+    /// motion when `motion` (hot corners or shake-to-locate need it). `XISelectEvents` replaces the mask per client, so every caller sends
     /// the full set.
     pub(super) fn send_root_xi_select(&self, opcode: u8, motion: bool) -> Result<(), ReplyError> {
         let mut mask = (1u32 << XI_RAW_KEY_PRESS) | (1u32 << XI_RAW_KEY_RELEASE);
@@ -336,14 +364,17 @@ impl<C: Connection> Wm<'_, C> {
         Ok(())
     }
 
-    /// Handles one raw record. Raw motion feeds the hot corner; key press records that resolve
-    /// to an escape chord dispatch.
+    /// Handles one raw record. Raw motion feeds shake-to-locate and the hot corner; key press
+    /// records that resolve to an escape chord dispatch.
     pub(super) fn handle_raw_event(&mut self, bytes: &[u8]) -> Result<(), ReplyError> {
         let root = self.screen().root;
         let Some(opcode) = self.raw_keys.as_ref().map(|raw| raw.opcode) else {
             return Ok(());
         };
         if is_raw_motion(bytes, opcode) {
+            if live_settings::shake_to_locate_enabled() {
+                self.shake_feed(bytes, opcode);
+            }
             return self.hot_corner_sample();
         }
         let Some(raw) = self.raw_keys.as_mut() else {

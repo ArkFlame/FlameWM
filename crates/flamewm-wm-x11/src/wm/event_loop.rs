@@ -95,6 +95,7 @@ where
         wm.commit_super_tap();
         wm.tick_edge_drag()?;
         wm.tick_hot_corner()?;
+        wm.tick_shake_locate();
         // Drain once per reactor turn: semantic owners marked facets above;
         // the hook flushes them to snapshots/signals exactly once.
         wm.expire_pings(std::time::Instant::now());
@@ -115,6 +116,11 @@ where
         let wait = wm.deferred_chrome_wait(wait);
         let wait =
             hot_corner::hot_corner_wait(wm.hot_corner.deadline, std::time::Instant::now(), wait);
+        let wait = hot_corner::hot_corner_wait(
+            wm.shake_locate.deadline(),
+            std::time::Instant::now(),
+            wait,
+        );
         let wait = drag_edge_wait(
             wm.edge_drag,
             wm.mouse_workspace_cooldowns,

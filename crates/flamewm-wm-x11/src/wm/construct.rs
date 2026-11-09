@@ -144,6 +144,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             resize_probe: None,
             edge_drag: None,
             hot_corner: super::hot_corner::HotCornerState::new(),
+            shake_locate: super::shake_locate::ShakeState::new(),
             mouse_workspace_cooldowns: MouseWorkspaceCooldowns::default(),
             chrome_deferred: None,
             chrome_paint_at: None,
