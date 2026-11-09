@@ -8,7 +8,9 @@ use crate::notification_center::is_escape_key;
 use flamewm_shell::dock::{self, DockSettings};
 use flamewm_shell::icon_loader::IconTarget;
 use flamewm_shell_core::autohide::AutoHide;
-use flamewm_shell_core::dock::{drag_off_removes, move_pinned, slot_at, Edge, TRASH_SLOT_ID};
+use flamewm_shell_core::dock::{
+    drag_off_removes, hover_scaled_rect, move_pinned, slot_at, Edge, HOVER_SCALE, TRASH_SLOT_ID,
+};
 use flamewm_ui_document::UiDocumentAccess;
 use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
 
@@ -649,6 +651,7 @@ impl ShellLoop {
                         .is_some_and(|name| !name.is_empty())
                 });
             if hovered != self.dock_hover {
+                self.set_dock_hover_scale(runtime, hovered);
                 self.dock_hover = hovered;
                 self.sync_dock_label(runtime);
             }
@@ -679,6 +682,45 @@ impl ShellLoop {
 }
 
 impl ShellLoop {
+    /// Subtle hover scale (`dock.hoverScale`): grows the hovered icon and returns the previous one
+    /// to rest. Only two icon nodes are written, so the repaint stays inside the dock.
+    fn set_dock_hover_scale(&mut self, runtime: &mut SurfaceRuntime, hovered: Option<usize>) {
+        if !dock::dock_settings(self.settings_cache.as_ref()).hover_scale {
+            return;
+        }
+        let (Some((frame, ..)), Some(surface)) = (self.dock_last.as_ref(), self.dock_surface)
+        else {
+            return;
+        };
+        let mut writes = Vec::new();
+        for (index, scaled) in [(self.dock_hover, false), (hovered, true)] {
+            let Some(i) = index else { continue };
+            let (Some(slot), Some(icon)) = (frame.slots.get(i), frame.icons.get(i)) else {
+                continue;
+            };
+            let base = (icon.x - slot.x, icon.y - slot.y, icon.w, icon.h);
+            let rect = if scaled {
+                hover_scaled_rect(base, HOVER_SCALE, frame.edge)
+            } else {
+                base
+            };
+            writes.push((format!("dock-slot-{}-icon", i + 1), rect));
+        }
+        if writes.is_empty() {
+            return;
+        }
+        let result = runtime.with_document(surface, |document| {
+            for (id, (x, y, w, h)) in &writes {
+                document.position(id, *x, *y)?;
+                document.size(id, *w, *h)?;
+            }
+            Ok::<(), String>(())
+        });
+        if let Err(error) = result {
+            eprintln!("flamewm-shell: dock hover scale failed: {error:?}");
+        }
+    }
+
     /// Re-reads the Trash folder. A changed state drops the cached dock so the next sync rebuilds the icon.
     pub(crate) fn refresh_dock_trash(&mut self) {
         let full = flamewm_shell_core::dock::trash_has_items(&dock::trash_data_home());
@@ -775,6 +817,7 @@ impl ShellLoop {
         }
         self.dock_menu_slot = Some(index);
         if let Some(dock_surface) = self.dock_surface {
+            self.set_dock_hover_scale(runtime, None);
             self.dock_hover = None;
             let _ = runtime.redraw(dock_surface);
             self.sync_dock_label(runtime);

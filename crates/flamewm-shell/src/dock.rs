@@ -22,6 +22,8 @@ pub struct DockSettings {
     pub show_running: bool,
     /// `dock.showTrash`: the Trash slot after the dock apps.
     pub show_trash: bool,
+    /// `dock.hoverScale`: the hovered icon grows by `HOVER_SCALE` (subtle mode).
+    pub hover_scale: bool,
     /// `dock.autoHide`: the dock slides away when idle and reveals at its edge.
     pub auto_hide: bool,
 }
@@ -36,6 +38,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
             pinned: Vec::new(),
             show_running: true,
             show_trash: true,
+            hover_scale: false,
             auto_hide: true,
         };
     };
@@ -54,6 +57,10 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     let show_trash = !matches!(
         snapshot.values.get("dock.showTrash"),
         Some(SettingValue::Boolean(false))
+    );
+    let hover_scale = matches!(
+        snapshot.values.get("dock.hoverScale"),
+        Some(SettingValue::Boolean(true))
     );
     let edge = match text("dock.position") {
         Some("left") => Edge::Left,
@@ -86,6 +93,7 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
         pinned,
         show_running,
         show_trash,
+        hover_scale,
         auto_hide,
     }
 }
@@ -519,6 +527,7 @@ mod tests {
             pinned: vec!["term".to_owned()],
             show_running: false,
             show_trash: true,
+            hover_scale: false,
             auto_hide: false,
         };
         let layout = layout_for(&settings, &[]);

@@ -207,6 +207,28 @@ pub fn drag_preview_origin(
     }
 }
 
+/// Factor of the subtle hover scale on a dock icon (`dock.hoverScale`).
+pub const HOVER_SCALE: f32 = 1.15;
+
+/// Icon rect `(x, y, w, h)` grown by `factor`, anchored on the bar side so the icon rises away
+/// from the screen edge and keeps its centre on the cross axis.
+#[must_use]
+pub fn hover_scaled_rect(
+    rect: (f32, f32, f32, f32),
+    factor: f32,
+    edge: Edge,
+) -> (f32, f32, f32, f32) {
+    let (x, y, w, h) = rect;
+    let (nw, nh) = (w * factor, h * factor);
+    let (dx, dy) = (nw - w, nh - h);
+    match edge {
+        Edge::Bottom => (x - dx / 2.0, y - dy, nw, nh),
+        Edge::Top => (x - dx / 2.0, y, nw, nh),
+        Edge::Left => (x, y - dy / 2.0, nw, nh),
+        Edge::Right => (x - dx, y - dy / 2.0, nw, nh),
+    }
+}
+
 /// Reserved slot id of the Trash slot. Never a desktop app id, so it is never pinned or launched as one.
 pub const TRASH_SLOT_ID: &str = "flamewm:trash";
 
@@ -381,6 +403,23 @@ mod tests {
         assert_eq!(
             drag_preview_origin((10.0, 4.0), (50.0, 20.0), (65.0, 90.0), true),
             (10.0, 74.0)
+        );
+    }
+
+    #[test]
+    fn hover_scale_grows_away_from_the_edge_and_keeps_the_centre() {
+        // 40x40 icon at (10,10) on a bottom bar: grows upward, centred horizontally.
+        let (x, y, w, h) = hover_scaled_rect((10.0, 10.0, 40.0, 40.0), HOVER_SCALE, Edge::Bottom);
+        assert!((w - 46.0).abs() < 1e-3 && (h - 46.0).abs() < 1e-3);
+        assert!((x - 7.0).abs() < 1e-3, "centre x kept: {x}");
+        assert!((y - 4.0).abs() < 1e-3, "bottom anchored: {y}");
+        // Top bar grows downward (top anchored).
+        let (_, ty, _, _) = hover_scaled_rect((10.0, 10.0, 40.0, 40.0), HOVER_SCALE, Edge::Top);
+        assert!((ty - 10.0).abs() < 1e-3);
+        // Factor 1 is the rest rect.
+        assert_eq!(
+            hover_scaled_rect((1.0, 2.0, 3.0, 4.0), 1.0, Edge::Left),
+            (1.0, 2.0, 3.0, 4.0)
         );
     }
 }
