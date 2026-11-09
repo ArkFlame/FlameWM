@@ -210,9 +210,18 @@ pub fn solve_grid(
     if columns <= 0 {
         return Vec::new();
     }
-    let inner_width = (bounds.width - options.padding.left - options.padding.right).max(0);
-    let inner_height = (bounds.height - options.padding.top - options.padding.bottom).max(0);
-    let cell_width = ((inner_width - (columns - 1) * options.gap) / columns).max(0);
+    let inner_width = bounds
+        .width
+        .saturating_sub(options.padding.left)
+        .saturating_sub(options.padding.right)
+        .max(0);
+    let inner_height = bounds
+        .height
+        .saturating_sub(options.padding.top)
+        .saturating_sub(options.padding.bottom)
+        .max(0);
+    let cell_width =
+        (inner_width.saturating_sub((columns - 1).saturating_mul(options.gap)) / columns).max(0);
 
     let mut positions = vec![None; grid.items.len()];
     let mut row_use = vec![0_i32];
@@ -222,7 +231,8 @@ pub fn solve_grid(
         }
         let span = item.span.max(1).min(columns);
         let mut row = row_use.len() - 1;
-        while row_use[row] + span > columns {
+        // span <= columns, so `columns - span` is exact; a saturating sum would accept a full row.
+        while row_use[row] > columns - span {
             row += 1;
             if row == row_use.len() {
                 row_use.push(0);
@@ -236,7 +246,7 @@ pub fn solve_grid(
     let cell_height = if rows == 0 {
         0
     } else {
-        ((inner_height - (rows - 1) * options.gap) / rows).max(0)
+        (inner_height.saturating_sub((rows - 1).saturating_mul(options.gap)) / rows).max(0)
     };
 
     grid.items
@@ -251,9 +261,17 @@ pub fn solve_grid(
                 };
             };
             let span = item.span.max(1).min(columns - column);
-            let cell_x = bounds.x + options.padding.left + column * (cell_width + options.gap);
-            let cell_y = bounds.y + options.padding.top + row * (cell_height + options.gap);
-            let cell_extent = cell_width * span + options.gap * (span - 1);
+            let cell_x = bounds
+                .x
+                .saturating_add(options.padding.left)
+                .saturating_add(column.saturating_mul(cell_width.saturating_add(options.gap)));
+            let cell_y = bounds
+                .y
+                .saturating_add(options.padding.top)
+                .saturating_add(row.saturating_mul(cell_height.saturating_add(options.gap)));
+            let cell_extent = cell_width
+                .saturating_mul(span)
+                .saturating_add(options.gap.saturating_mul(span - 1));
             let horizontal = resolve_alignment(options.horizontal, item.spec.horizontal);
             let vertical = resolve_alignment(options.vertical, item.spec.vertical);
             let width = if horizontal == Alignment::Stretch {
@@ -269,8 +287,8 @@ pub fn solve_grid(
             LayoutResult {
                 id: item.id.clone(),
                 rect: Rect::new(
-                    cell_x + aligned_offset(cell_extent, width, horizontal),
-                    cell_y + aligned_offset(cell_height, height, vertical),
+                    cell_x.saturating_add(aligned_offset(cell_extent, width, horizontal)),
+                    cell_y.saturating_add(aligned_offset(cell_height, height, vertical)),
                     width,
                     height,
                 ),
@@ -288,37 +306,43 @@ fn solve_linear(
 ) -> Vec<LayoutResult> {
     let origin = pick(
         horizontal,
-        bounds.x + options.padding.left,
-        bounds.y + options.padding.top,
+        bounds.x.saturating_add(options.padding.left),
+        bounds.y.saturating_add(options.padding.top),
     );
     let cross_origin = pick(
         horizontal,
-        bounds.y + options.padding.top,
-        bounds.x + options.padding.left,
+        bounds.y.saturating_add(options.padding.top),
+        bounds.x.saturating_add(options.padding.left),
     );
-    let inner_width = bounds.width - options.padding.left - options.padding.right;
-    let inner_height = bounds.height - options.padding.top - options.padding.bottom;
+    let inner_width = bounds
+        .width
+        .saturating_sub(options.padding.left)
+        .saturating_sub(options.padding.right);
+    let inner_height = bounds
+        .height
+        .saturating_sub(options.padding.top)
+        .saturating_sub(options.padding.bottom);
     let available = pick(horizontal, inner_width, inner_height).max(0);
     let cross = pick(horizontal, inner_height, inner_width).max(0);
 
-    let mut sizes = vec![0; items.len()];
-    let mut used = 0;
-    let mut flex_weight = 0;
-    let mut visible_count = 0;
+    let mut sizes = vec![0_i32; items.len()];
+    let mut used: i32 = 0;
+    let mut flex_weight: i32 = 0;
+    let mut visible_count: i32 = 0;
     for (index, item) in items.iter().enumerate() {
         if !item.spec.visible {
             continue;
         }
         sizes[index] = basis(item, horizontal);
-        used += sizes[index];
+        used = used.saturating_add(sizes[index]);
         let measure = pick(horizontal, item.spec.width, item.spec.height);
         if measure.mode == MeasureMode::Flex {
-            flex_weight += measure.value.max(1);
+            flex_weight = flex_weight.saturating_add(measure.value.max(1));
         }
         visible_count += 1;
     }
-    used += (visible_count - 1).max(0) * options.gap;
-    let extra = available - used;
+    used = used.saturating_add((visible_count - 1).max(0).saturating_mul(options.gap));
+    let extra = available.saturating_sub(used);
     if extra > 0 && flex_weight > 0 {
         for (index, item) in items.iter().enumerate() {
             if !item.spec.visible {
@@ -326,8 +350,11 @@ fn solve_linear(
             }
             let measure = pick(horizontal, item.spec.width, item.spec.height);
             if measure.mode == MeasureMode::Flex {
-                let part = extra * measure.value.max(1) / flex_weight;
-                sizes[index] = clamp_measure(sizes[index] + part, measure);
+                // Widened: `extra * weight` can exceed i32 before the division by the weight sum.
+                let part =
+                    i64::from(extra) * i64::from(measure.value.max(1)) / i64::from(flex_weight);
+                let part = i32::try_from(part).unwrap_or(i32::MAX);
+                sizes[index] = clamp_measure(sizes[index].saturating_add(part), measure);
             }
         }
     }
@@ -336,11 +363,11 @@ fn solve_linear(
         .iter()
         .zip(items)
         .filter(|(_, item)| item.spec.visible)
-        .map(|(size, _)| *size)
-        .sum::<i32>()
-        + (visible_count - 1).max(0) * options.gap;
+        .fold(0_i32, |sum, (size, _)| sum.saturating_add(*size))
+        .saturating_add((visible_count - 1).max(0).saturating_mul(options.gap));
     let main_alignment = pick(horizontal, options.horizontal, options.vertical);
-    let mut cursor = origin + aligned_offset(available, content_extent, main_alignment);
+    let mut cursor =
+        origin.saturating_add(aligned_offset(available, content_extent, main_alignment));
     let mut result = Vec::with_capacity(items.len());
 
     for (index, item) in items.iter().enumerate() {
@@ -367,17 +394,18 @@ fn solve_linear(
             cross_size = clamp_measure(cross, cross_measure);
         }
         let offset = aligned_offset(cross, cross_size, cross_alignment);
+        let cross_at = cross_origin.saturating_add(offset);
         let rect = if horizontal {
-            Rect::new(cursor, cross_origin + offset, sizes[index], cross_size)
+            Rect::new(cursor, cross_at, sizes[index], cross_size)
         } else {
-            Rect::new(cross_origin + offset, cursor, cross_size, sizes[index])
+            Rect::new(cross_at, cursor, cross_size, sizes[index])
         };
         result.push(LayoutResult {
             id: item.id.clone(),
             rect,
             visible: true,
         });
-        cursor += sizes[index] + options.gap;
+        cursor = cursor.saturating_add(sizes[index].saturating_add(options.gap));
     }
     result
 }
@@ -422,8 +450,8 @@ fn clamp_measure(value: i32, measure: Measure) -> i32 {
 
 fn aligned_offset(available: i32, size: i32, alignment: Alignment) -> i32 {
     match alignment {
-        Alignment::Center => (available - size) / 2,
-        Alignment::End => available - size,
+        Alignment::Center => available.saturating_sub(size) / 2,
+        Alignment::End => available.saturating_sub(size),
         Alignment::Start | Alignment::Stretch => 0,
     }
 }
@@ -492,5 +520,120 @@ mod tests {
         let result = solve_grid(&grid, Rect::new(0, 0, 100, 40), 2, LayoutOptions::default());
         assert!(!result[0].visible);
         assert_eq!(result[1].rect.x, 0);
+    }
+
+    /// Malformed or huge geometry must never panic (debug builds trap i32 overflow).
+    #[test]
+    fn huge_grid_inputs_saturate_instead_of_overflowing() {
+        let grid = Grid {
+            items: vec![
+                LayoutItem::content("a").with_span(i32::MAX),
+                LayoutItem::fill("b"),
+                LayoutItem::content("c").with_span(-4),
+            ],
+        };
+        let options = LayoutOptions {
+            gap: i32::MAX,
+            padding: Insets::all(i32::MAX),
+            ..LayoutOptions::default()
+        };
+        let result = solve_grid(
+            &grid,
+            Rect::new(i32::MIN, i32::MAX, i32::MAX, i32::MAX),
+            3,
+            options,
+        );
+        assert_eq!(result.len(), 3);
+        assert!(
+            result
+                .iter()
+                .all(|entry| entry.rect.width >= 0 && entry.rect.height >= 0)
+        );
+        let result = solve_grid(
+            &grid,
+            Rect::new(0, 0, i32::MAX, i32::MAX),
+            i32::MAX,
+            options,
+        );
+        assert!(
+            result
+                .iter()
+                .all(|entry| entry.rect.width >= 0 && entry.rect.height >= 0)
+        );
+    }
+
+    #[test]
+    fn huge_linear_inputs_saturate_instead_of_overflowing() {
+        let flex = |id: &str, weight: i32| LayoutItem {
+            id: id.to_string(),
+            span: 1,
+            spec: LayoutSpec {
+                width: Measure::flex(weight),
+                height: Measure::flex(weight),
+                ..LayoutSpec::default()
+            },
+        };
+        let fixed = LayoutItem {
+            id: "fixed".to_string(),
+            span: 1,
+            spec: LayoutSpec {
+                width: Measure::fixed(i32::MAX),
+                height: Measure::fixed(i32::MAX),
+                ..LayoutSpec::default()
+            },
+        };
+        let stack = Stack {
+            direction: StackDirection::Horizontal,
+            items: vec![
+                fixed,
+                flex("a", i32::MAX),
+                flex("b", i32::MAX),
+                flex("c", 1),
+            ],
+        };
+        let options = LayoutOptions {
+            gap: i32::MAX,
+            padding: Insets::all(1),
+            ..LayoutOptions::default()
+        };
+        let result = solve_stack(
+            &stack,
+            Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX),
+            options,
+        );
+        assert_eq!(result.len(), 4);
+        assert!(
+            result
+                .iter()
+                .all(|entry| entry.rect.width >= 0 && entry.rect.height >= 0)
+        );
+    }
+
+    /// A flex share is `extra * weight / total`; the product must be exact past i32. Basis is the
+    /// weight itself, so `extra` is what the two weights leave: `2e9 - (1 + 1e9) = 999_999_999`.
+    #[test]
+    fn flex_share_is_exact_when_product_exceeds_i32() {
+        let flex = |id: &str, weight: i32| LayoutItem {
+            id: id.to_string(),
+            span: 1,
+            spec: LayoutSpec {
+                width: Measure::flex(weight),
+                height: Measure::flex(1),
+                ..LayoutSpec::default()
+            },
+        };
+        let stack = Stack {
+            direction: StackDirection::Horizontal,
+            items: vec![flex("a", 1), flex("b", 1_000_000_000)],
+        };
+        let result = solve_stack(
+            &stack,
+            Rect::new(0, 0, 2_000_000_000, 10),
+            LayoutOptions::default(),
+        );
+        // a = 1 + 999_999_999 * 1 / 1_000_000_001 = 1; b = 1e9 + 999_999_999 * 1e9 / 1_000_000_001.
+        assert_eq!(result[0].rect.width, 1);
+        assert_eq!(result[1].rect.x, 1);
+        assert_eq!(result[1].rect.width, 1_999_999_998);
     }
 }
