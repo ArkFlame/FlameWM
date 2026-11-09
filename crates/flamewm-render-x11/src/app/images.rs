@@ -79,6 +79,19 @@ fn copy_argb32_rows(
     stride: usize,
     destination: &mut [u32],
 ) -> Result<(), String> {
+    copy_argb32_rows_with(source, width, height, stride, destination, |word| word)
+}
+
+/// Copies `width`x`height` words into `destination` rows of `stride` words, mapping each word
+/// through `pixel` on the way. Shared by the plain and the depth-24 packed upload paths.
+fn copy_argb32_rows_with(
+    source: &[u32],
+    width: usize,
+    height: usize,
+    stride: usize,
+    destination: &mut [u32],
+    pixel: impl Fn(u32) -> u32,
+) -> Result<(), String> {
     let expected = width
         .checked_mul(height)
         .ok_or_else(|| "ARGB32 upload size overflow".to_string())?;
@@ -97,7 +110,12 @@ fn copy_argb32_rows(
     for y in 0..height {
         let dst = y * stride;
         let src = y * width;
-        destination[dst..dst + width].copy_from_slice(&source[src..src + width]);
+        for (out, &word) in destination[dst..dst + width]
+            .iter_mut()
+            .zip(&source[src..src + width])
+        {
+            *out = pixel(word);
+        }
     }
     Ok(())
 }
@@ -167,6 +185,21 @@ pub(crate) unsafe fn upload_words_image(
     Ok(())
 }
 
+/// Row stride in words when an XImage stores one native-order 32-bit word per pixel with the
+/// standard 0xRRGGBB channel layout. For opaque pixels `word & 0x00ff_ffff` then equals what
+/// `XPutPixel` would store through `rgb_to_pixel`. `None` keeps the per-pixel fallback.
+fn packed_rgb_stride(head: &XImageHead) -> Option<usize> {
+    let host_order = if cfg!(target_endian = "little") { 0 } else { 1 };
+    let standard =
+        head.red_mask == 0xff_0000 && head.green_mask == 0xff_00 && head.blue_mask == 0xff;
+    let stride_bytes = usize::try_from(head.bytes_per_line).ok()?;
+    (standard
+        && head.bits_per_pixel == 32
+        && head.byte_order == host_order
+        && stride_bytes % std::mem::size_of::<u32>() == 0)
+        .then_some(stride_bytes / std::mem::size_of::<u32>())
+}
+
 /// Upload a fully opaque ARGB32 image into a pixmap matching its X11 target depth.
 /// Core X11 cannot blend, and XCopyArea requires source/destination depths to match.
 /// The caller checks alpha before reaching this path.
@@ -202,7 +235,7 @@ pub(crate) unsafe fn upload_opaque_argb32_image(
     if visual.is_null() {
         return Err(format!("no usable visual for core X11 depth {depth}"));
     }
-    let (ximage, _) = unsafe {
+    let (ximage, total) = unsafe {
         create_zeroed_ximage(
             display,
             visual,
@@ -213,23 +246,37 @@ pub(crate) unsafe fn upload_opaque_argb32_image(
         )?
     };
     let head = unsafe { &*(ximage as *const XImageHead) };
-    for (index, &word) in argb.iter().enumerate() {
-        let color = rgb_to_pixel(
-            ((word >> 16) & 255) as u8,
-            ((word >> 8) & 255) as u8,
-            (word & 255) as u8,
-            head.red_mask as u64,
-            head.green_mask as u64,
-            head.blue_mask as u64,
-        );
-        unsafe {
-            XPutPixel(
-                ximage,
-                (index % width as usize) as i32,
-                (index / width as usize) as i32,
-                color as _,
-            )
-        };
+    if let Some(stride) = packed_rgb_stride(head) {
+        // SAFETY: create_zeroed_ximage owns `total` bytes at `head.data`, word-aligned by the
+        // stride check above.
+        let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
+        if let Err(error) =
+            copy_argb32_rows_with(argb, width as usize, height as usize, stride, raw, |word| {
+                word & 0x00ff_ffff
+            })
+        {
+            unsafe { XDestroyImage(ximage) };
+            return Err(format!("core X11 opaque upload: {error}"));
+        }
+    } else {
+        for (index, &word) in argb.iter().enumerate() {
+            let color = rgb_to_pixel(
+                ((word >> 16) & 255) as u8,
+                ((word >> 8) & 255) as u8,
+                (word & 255) as u8,
+                head.red_mask as u64,
+                head.green_mask as u64,
+                head.blue_mask as u64,
+            );
+            unsafe {
+                XPutPixel(
+                    ximage,
+                    (index % width as usize) as i32,
+                    (index / width as usize) as i32,
+                    color as _,
+                )
+            };
+        }
     }
     let gc = unsafe { XCreateGC(display, pixmap, 0, ptr::null_mut()) };
     if gc.is_null() {
@@ -648,6 +695,68 @@ mod tests {
                 0xdead_beef
             ]
         );
+    }
+
+    #[test]
+    fn packed_opaque_rows_match_per_pixel_rgb_pack_for_standard_masks() {
+        let (width, height, stride) = (3usize, 2usize, 4usize);
+        let source: Vec<u32> = (0..(width * height) as u32)
+            .map(|index| 0xff00_0000 | index.wrapping_mul(0x0102_0407) & 0x00ff_ffff)
+            .collect();
+        let mut packed = vec![0xdead_beefu32; stride * height];
+
+        copy_argb32_rows_with(&source, width, height, stride, &mut packed, |word| {
+            word & 0x00ff_ffff
+        })
+        .unwrap();
+
+        for y in 0..height {
+            for x in 0..width {
+                let word = source[y * width + x];
+                let expected = rgb_to_pixel(
+                    ((word >> 16) & 255) as u8,
+                    ((word >> 8) & 255) as u8,
+                    (word & 255) as u8,
+                    0xff_0000,
+                    0xff_00,
+                    0xff,
+                ) as u32;
+                assert_eq!(packed[y * stride + x], expected, "pixel ({x},{y})");
+            }
+            assert_eq!(
+                packed[y * stride + width],
+                0xdead_beef,
+                "row {y} padding untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_path_gates_on_standard_32bit_host_order_layout() {
+        let host_order = if cfg!(target_endian = "little") { 0 } else { 1 };
+        // Builds a standard 32-bit host-order head, then applies one mutation per case.
+        let head_with = |mutate: &dyn Fn(&mut XImageHead)| {
+            // SAFETY: XImageHead is plain old data; the all-zero bit pattern is valid and `data`
+            // is never dereferenced by `packed_rgb_stride`.
+            let mut head: XImageHead = unsafe { std::mem::zeroed() };
+            head.red_mask = 0xff_0000;
+            head.green_mask = 0xff_00;
+            head.blue_mask = 0xff;
+            head.bits_per_pixel = 32;
+            head.byte_order = host_order;
+            head.bytes_per_line = 4 * 5;
+            mutate(&mut head);
+            head
+        };
+        assert_eq!(packed_rgb_stride(&head_with(&|_| {})), Some(5));
+        let bgr = head_with(&|h| h.red_mask = 0xff);
+        assert_eq!(packed_rgb_stride(&bgr), None, "non-standard channel order");
+        let sixteen = head_with(&|h| h.bits_per_pixel = 16);
+        assert_eq!(packed_rgb_stride(&sixteen), None, "16-bit XImage");
+        let swapped = head_with(&|h| h.byte_order = 1 - host_order);
+        assert_eq!(packed_rgb_stride(&swapped), None, "foreign byte order");
+        let odd = head_with(&|h| h.bytes_per_line = 18);
+        assert_eq!(packed_rgb_stride(&odd), None, "stride not word-aligned");
     }
 
     #[test]
