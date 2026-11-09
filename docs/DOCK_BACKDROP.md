@@ -99,3 +99,11 @@ Known limits:
 - Gate: `FLAMEWM_TOOLCHAIN_BIN=/run/media/linsaftw/SDD/rust189/bin scripts/gate <crates>`.
 - Runtime (X11): Xvfb with `flamewm-wm-x11`, a window beneath the dock, dock translucent. Compare
   screenshots with and without the change. Not done unless recorded in the report.
+- Wayland unit tests: `cargo test -p flamewm-wm-wayland dock_backdrop` (5 pure-logic tests: material gate,
+  cache key, corner coverage, dock sites, recapture policy).
+- Wayland runtime (nested winit, 2026-11-09): the Dock resolves to `opacity 75, blur 70` (translucent), two
+  Dock sites are found, and `capture_dock` runs on damage. Captures of a white window beneath the Dock measured
+  mean RGB about 200 (blurred), so the capture path works. The final composite showed no haze because the WM
+  clamps the test window to the work area (white rows end at y=596, the Dock top is y=597), so no bright
+  pixel lay beneath the Dock in the dump. Compositing over a bright window beneath the Dock is therefore
+  UNVERIFIED at runtime. Needs a window that can sit under the Dock (or a bright wallpaper) to close.
