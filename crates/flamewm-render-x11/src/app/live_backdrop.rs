@@ -122,6 +122,37 @@ pub(crate) struct LiveScene {
     /// Root rect the last refresh was composed for.
     rect: (i32, i32, u32, u32),
     pub(crate) last_refresh: Option<Instant>,
+    /// Key of the last composed image: hash of the sampled pixels, their size, the root rect and
+    /// the blur strength. An equal key means the snapshot already on the window is current.
+    last_small: Option<SmallKey>,
+}
+
+/// Identity of one composed live image; see [`LiveScene::last_small`].
+type SmallKey = (u64, (u32, u32), (i32, i32, u32, u32), u8);
+
+/// Result of one live composition.
+pub(crate) enum LiveFrame {
+    /// Same sampled pixels, size and rect as the last composition: the snapshot is current.
+    Unchanged,
+    /// Blurred ARGB words of the window's size.
+    Pixels(Vec<u32>),
+}
+
+/// FNV-1a over the sampled pixel bytes. Collisions only cost one stale frame.
+fn hash_pixels(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// Records `key` as the composed image and reports whether it equalled the previous one, so the
+/// blur and upload can be skipped.
+fn is_unchanged(last: &mut Option<SmallKey>, key: SmallKey) -> bool {
+    if *last == Some(key) {
+        return true;
+    }
+    *last = Some(key);
+    false
 }
 
 /// Whether two root rects overlap.
@@ -280,6 +311,7 @@ impl LiveScene {
             frames: Vec::new(),
             rect: (0, 0, 0, 0),
             last_refresh: None,
+            last_small: None,
         })
     }
 
@@ -310,7 +342,7 @@ impl LiveScene {
         window: Window,
         rect: (i32, i32, u32, u32),
         blur_percent: u8,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<LiveFrame> {
         let frames = unsafe { self.redirected_frames(display) }?;
         let (width, height) = (rect.2, rect.3);
         if width == 0 || height == 0 {
@@ -352,18 +384,24 @@ impl LiveScene {
         let small =
             crate::backdrop::capture_drawable_rect(display, pixmap as u64, (0, 0, size.0, size.1))
                 .ok()?;
+        let key = (hash_pixels(&small.pixels), size, rect, blur_percent);
+        if is_unchanged(&mut self.last_small, key) {
+            return Some(LiveFrame::Unchanged);
+        }
         if factor == 1 {
-            return Some(blurred_argb_words(
+            return Some(LiveFrame::Pixels(blurred_argb_words(
                 width,
                 height,
                 small.pixels,
                 0,
                 blur_percent,
-            ));
+            )));
         }
         let mut pixels = small.pixels;
         blur_in_place_slice(&mut pixels, size.0, size.1, radius / factor as f32);
-        Some(BlurredCanvas::from_scaled(width, height, pixels)?.crop((0, 0), (width, height)))
+        Some(LiveFrame::Pixels(
+            BlurredCanvas::from_scaled(width, height, pixels)?.crop((0, 0), (width, height)),
+        ))
     }
 
     /// Frames the WM redirects, from the root property; `None` without one.
@@ -714,6 +752,7 @@ impl LiveScene {
             XSelectInput(display, self.root, 0);
         }
         self.behind.clear();
+        self.last_small = None;
     }
 }
 
@@ -826,5 +865,46 @@ mod tests {
         assert!(overlaps((0, 0, 10, 10), (9, 9, 5, 5)));
         assert!(!overlaps((0, 0, 10, 10), (10, 0, 5, 5)));
         assert!(!overlaps((0, 0, 10, 10), (0, 10, 5, 5)));
+    }
+
+    #[test]
+    fn unchanged_composition_is_skipped_only_when_every_input_matches() {
+        let pixels = vec![0x20_u8; 256];
+        let key =
+            |bytes: &[u8], size: (u32, u32), rect, blur| (hash_pixels(bytes), size, rect, blur);
+        let mut last = None;
+        let base = key(&pixels, (8, 8), (0, 0, 100, 80), 40);
+        assert!(
+            !is_unchanged(&mut last, base),
+            "first composition is never skipped"
+        );
+        assert!(is_unchanged(&mut last, base), "zero damage is a no-op");
+        let mut moved = pixels.clone();
+        moved[0] ^= 0x01;
+        assert!(!is_unchanged(
+            &mut last,
+            key(&moved, (8, 8), (0, 0, 100, 80), 40)
+        ));
+        assert!(!is_unchanged(
+            &mut last,
+            key(&moved, (8, 8), (1, 0, 100, 80), 40)
+        ));
+        assert!(!is_unchanged(
+            &mut last,
+            key(&moved, (8, 8), (1, 0, 100, 80), 41)
+        ));
+        assert!(!is_unchanged(
+            &mut last,
+            key(&moved, (8, 9), (1, 0, 100, 80), 41)
+        ));
+    }
+
+    #[test]
+    fn hash_changes_with_any_sampled_byte_and_not_otherwise() {
+        let base = vec![0x20_u8; 256];
+        let mut changed = base.clone();
+        changed[255] ^= 1;
+        assert_eq!(hash_pixels(&base), hash_pixels(&base.clone()));
+        assert_ne!(hash_pixels(&base), hash_pixels(&changed));
     }
 }

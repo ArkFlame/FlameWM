@@ -11,7 +11,7 @@
 //! half a megabyte at 1080p, cached on disk across processes), and a move only crops it.
 
 use super::X11App;
-use super::live_backdrop::{LIVE_INTERVAL, LiveScene};
+use super::live_backdrop::{LIVE_INTERVAL, LiveFrame, LiveScene};
 use crate::backdrop::{BlurredCanvas, WindowBackdrop, recapture_due};
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
@@ -216,7 +216,9 @@ impl X11App {
         let (width, height) = (self.width, self.height);
         let live = unsafe { self.compose_live_backdrop((rx, ry, width, height)) };
         let (words, canvas_epoch) = match live {
-            Some(words) => (words, None),
+            // What lies behind the window is unchanged since the snapshot on it was uploaded.
+            Some(LiveFrame::Unchanged) => return Ok(()),
+            Some(LiveFrame::Pixels(words)) => (words, None),
             None => {
                 let state = self
                     .window_backdrop
@@ -312,7 +314,7 @@ impl X11App {
 
     /// What lies behind the window at root `rect`, composed live from the desktop and the frames
     /// below it; `None` keeps the desktop layer (no redirected frames, or no Composite/Damage).
-    unsafe fn compose_live_backdrop(&mut self, rect: (i32, i32, u32, u32)) -> Option<Vec<u32>> {
+    unsafe fn compose_live_backdrop(&mut self, rect: (i32, i32, u32, u32)) -> Option<LiveFrame> {
         let (display, screen, window) = (self.display, self.screen, self.window);
         let state = self.window_backdrop.as_mut()?;
         let blur_percent = state.spec.blur_percent;
