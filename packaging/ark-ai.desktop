@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=FlameWM Assistant
+Name=ARK AI
 GenericName=AI Chat
 Comment=Chat with ARK AI or the local Hermes proxy
 Exec=flamewm-assistant

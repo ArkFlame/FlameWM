@@ -451,7 +451,7 @@ impl Assistant {
     /// Mic press: start recording, or stop and transcribe. Downloads the STT model first if absent.
     fn toggle_mic(&mut self) {
         if !self.speech_in {
-            self.notice = "Speech input is off. Enable it in Settings > Assistant.".into();
+            self.notice = "Speech input is off. Enable it in Settings > ARK AI.".into();
             return;
         }
         if let Some(recording) = self.recording.take() {
@@ -710,8 +710,7 @@ impl Assistant {
                         self.stop_speech();
                     }
                 } else {
-                    self.notice =
-                        "Text-to-speech is off. Enable it in Settings > Assistant.".into();
+                    self.notice = "Text-to-speech is off. Enable it in Settings > ARK AI.".into();
                 }
             }
             "assistant.speak-stop" => self.stop_speech(),
@@ -1099,7 +1098,7 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
                 height: HEIGHT,
                 x: centred(root_size, WIDTH, 0),
                 y: centred(root_size, HEIGHT, 1),
-                title: "FlameWM Assistant".into(),
+                title: "ARK AI".into(),
                 identity: Some(identity),
             },
             UiWindowRole::Normal,
@@ -1116,7 +1115,7 @@ fn show(state_dir: PathBuf, anchor: Option<popover::Anchor>) -> Result<(), Strin
                     height: window_height,
                     x,
                     y,
-                    title: "FlameWM Assistant".into(),
+                    title: "ARK AI".into(),
                     identity: Some(identity),
                 },
                 UiWindowRole::PopupMenu,

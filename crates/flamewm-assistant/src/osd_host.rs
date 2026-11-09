@@ -129,7 +129,7 @@ pub fn run_host() -> Result<(), String> {
             SurfaceConfig {
                 width: osd::WIDTH,
                 height: osd::HEIGHT,
-                title: "FlameWM Assistant OSD".into(),
+                title: "ARK AI OSD".into(),
                 role: SurfaceRole::Overlay,
                 input: SurfaceInputMode::Interactive,
                 initially_visible: false,

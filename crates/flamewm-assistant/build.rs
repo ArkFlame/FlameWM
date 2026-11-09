@@ -26,7 +26,7 @@ fn main() {
         ("osd.html", "flamewm-assistant-osd.rwr"),
     ] {
         let result = compile_file(&src.join(html), &[], CompileOptions::default())
-            .unwrap_or_else(|error| panic!("FlameWM Assistant UI {html}: {error}"));
+            .unwrap_or_else(|error| panic!("ARK AI UI {html}: {error}"));
         fs::write(
             Path::new(&out).join(name),
             encode(&result.document).expect("encode UI"),

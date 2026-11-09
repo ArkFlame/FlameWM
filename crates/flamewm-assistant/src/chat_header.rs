@@ -26,13 +26,13 @@ pub fn working_text(phase: u32) -> String {
     format!("{verb}{}", &"..."[..dots])
 }
 
-/// Subtitle under the window title: the working status during a turn, otherwise "Assistant".
+/// Subtitle under the window title: the working status during a turn, otherwise "ARK AI".
 /// Nothing is probed at open, so there is no online or offline state to show.
 #[must_use]
 pub fn subtitle(working: Option<u32>) -> String {
     match working {
         Some(phase) => working_text(phase),
-        None => "Assistant".to_owned(),
+        None => "ARK AI".to_owned(),
     }
 }
 
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn subtitle_is_assistant_when_idle_and_working_text_during_a_turn() {
-        assert_eq!(subtitle(None), "Assistant");
+        assert_eq!(subtitle(None), "ARK AI");
         assert_eq!(subtitle(Some(0)), "Thinking");
     }
 

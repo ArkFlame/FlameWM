@@ -32,7 +32,7 @@ pub fn launch(runtime: &SurfaceRuntime, panel: SurfaceHandle) -> Result<(), Stri
         .args(launch_args(anchor))
         .spawn()
         .map(drop)
-        .map_err(|error| format!("could not open the assistant: {error}"))
+        .map_err(|error| format!("could not open ARK AI: {error}"))
 }
 
 #[cfg(test)]

@@ -568,7 +568,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::AssistantOpen => {
                 std::process::Command::new("flamewm-assistant")
                     .spawn()
-                    .map_err(|error| format!("Could not open the assistant: {error}"))?;
+                    .map_err(|error| format!("Could not open ARK AI: {error}"))?;
             }
             SettingsAction::ColorPickerOpen(key) => {
                 self.color_picker = Some(ColorPicker {

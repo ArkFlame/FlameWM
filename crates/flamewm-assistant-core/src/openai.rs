@@ -460,7 +460,7 @@ fn http_error(status: u16, body: &[u8]) -> AssistantError {
 fn spawn_error(error: std::io::Error) -> AssistantError {
     match error.kind() {
         std::io::ErrorKind::NotFound => AssistantError::NotConfigured(
-            "curl is required to reach the assistant. Install curl and retry.".into(),
+            "curl is required to reach ARK AI. Install curl and retry.".into(),
         ),
         _ => AssistantError::Io(format!("curl: {error}")),
     }
@@ -480,7 +480,7 @@ pub fn human_error(error: &AssistantError, label: &str) -> String {
     match error {
         AssistantError::Http {
             status: 401 | 403, ..
-        } => "API key rejected. Check the key in Settings > Assistant.".into(),
+        } => "API key rejected. Check the key in Settings > ARK AI.".into(),
         AssistantError::Http { status: 429, .. } => {
             format!("{label} is busy (rate limited). Try again shortly.")
         }
@@ -586,7 +586,7 @@ mod tests {
         );
         assert_eq!(
             human_error(&error, "ARK AI"),
-            "API key rejected. Check the key in Settings > Assistant."
+            "API key rejected. Check the key in Settings > ARK AI."
         );
         server.join().unwrap();
     }

@@ -1,6 +1,6 @@
-# Assistant: providers
+# ARK AI: providers
 
-The assistant window chats with two OpenAI-compatible providers. Both use one client,
+The ARK AI window chats with two OpenAI-compatible providers. Both use one client,
 `crates/flamewm-assistant-core/src/openai.rs`, which runs HTTP through `curl` and reads SSE.
 
 ## Providers
@@ -45,10 +45,10 @@ The assistant window chats with two OpenAI-compatible providers. Both use one cl
 
 ## Taskbar button and popover
 
-- `assistant.taskbarIcon` (default on) shows a white brain button in the taskbar, next to the
-  tray items. It shows only while `assistant.enabled` is also on. Settings > Assistant >
+- `assistant.taskbarIcon` (default on) shows a white ARK AI button in the taskbar, next to the
+  tray items. It shows only while `assistant.enabled` is also on. Settings > ARK AI >
   "Show assistant in taskbar" flips it.
-- The button (`tray-assistant`, `ui/shell/panel.html`, icon `assets/web/breeze/assistant-brain.svg`)
+- The button (`tray-assistant`, `ui/shell/panel.html`, icon `assets/web/breeze/ark-ai.svg`)
   sends `assistant.open`. The shell resolves the button rect and runs
   `flamewm-assistant --popover X Y WIDTH HEIGHT` with device pixels.
 - Choice: the popover reuses the assistant binary, not the shell's in-process popup machinery. The

@@ -51,7 +51,7 @@ Status key: **Shipped** is in the current source and used in the screenshots. **
 | Audio | Volume on-screen display for XF86 audio keys | Shipped |
 | Apps | Task manager, terminal, file explorer, finder | Shipped |
 | Weather | Open-Meteo popup | Shipped; off by default, needs network |
-| Assistant | Optional ARK AI chat window | Shipped; off by default, see [FlameWM Assistant](#flamewm-assistant) |
+| ARK AI | Optional ARK AI chat window | Shipped; off by default, see [ARK AI](#ark-ai) |
 | Wayland | Compositor on Smithay, runs native Wayland and XWayland clients | Partial; see [Wayland known issues](#wayland-known-issues) |
 | Wayland | DRM/KMS backend | Partial; no successful native login on record |
 | Wayland | Nested development backend | Shipped |
@@ -90,12 +90,12 @@ tail -n 200 ~/.cache/flamewm/wayland-session.log
 
 The full status is in [`docs/WAYLAND_PLAN.md`](docs/WAYLAND_PLAN.md).
 
-## FlameWM Assistant
+## ARK AI
 
-The assistant is an optional ARK AI chat window. It is off by default.
+The ARK AI assistant is an optional chat window. It is off by default.
 
-1. Open **Settings > Assistant** and enable it. Super+C and Ctrl+Alt+C are grabbed only while it is enabled.
-2. Press Super+C or Ctrl+Alt+C. The assistant uses the shared public ARK AI key by default. Set your own key (starts with `ark_`) in Settings > Assistant.
+1. Open **Settings > ARK AI** and enable it. Super+C and Ctrl+Alt+C are grabbed only while it is enabled.
+2. Press Super+C or Ctrl+Alt+C. The assistant uses the shared public ARK AI key by default. Set your own key (starts with `ark_`) in Settings > ARK AI.
 3. Optional: a Hermes model proxy on `127.0.0.1:8645` is detected automatically and listed as its own group in the model menu. FlameWM does not install or start it.
 
 Voice is optional. The assistant window can run a one-click setup that creates a private Python virtual environment and downloads the speech models. See [`docs/INSTALL.md`](docs/INSTALL.md#assistant-speech-optional) and [the proxy provider](docs/ASSISTANT.md).
@@ -107,7 +107,7 @@ Defaults come from `crates/flamewm-platform/src/shortcuts.rs`. All bindings can 
 | Action | Default |
 | --- | --- |
 | Toggle Start menu | `Super_L` (bare tap) |
-| Open assistant | `Super+C` or `Ctrl+Alt+C` (only when enabled) |
+| Open ARK AI | `Super+C` or `Ctrl+Alt+C` (only when enabled) |
 | Switch workspace left / right | `Ctrl+Super+Left` / `Ctrl+Super+Right` |
 | Switch workspace up / down | `Ctrl+Super+Up` / `Ctrl+Super+Down` |
 | Close window | `Alt+F4` |

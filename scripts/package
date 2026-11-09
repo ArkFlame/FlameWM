@@ -92,7 +92,7 @@ for source in \
     "$ROOT/packaging/flamewm-imageviewer.desktop" \
     "$ROOT/packaging/flamewm-archiver.desktop" \
     "$ROOT/packaging/flamewm-mimeapps.list" \
-    "$ROOT/packaging/flamewm-assistant.desktop" \
+    "$ROOT/packaging/ark-ai.desktop" \
     "$ROOT/packaging/icons/flamewm-finder.svg" \
     "$ROOT/packaging/icons/flamewm-imageviewer.svg" \
     "$ROOT/packaging/icons/flamewm-archiver.svg" \
@@ -142,7 +142,7 @@ install -m 0644 "$ROOT/packaging/flamewm-finder.desktop" "$STAGE/usr/share/appli
 install -m 0644 "$ROOT/packaging/flamewm-imageviewer.desktop" "$STAGE/usr/share/applications/flamewm-imageviewer.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-archiver.desktop" "$STAGE/usr/share/applications/flamewm-archiver.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-mimeapps.list" "$STAGE/usr/share/applications/mimeapps.list"
-install -m 0644 "$ROOT/packaging/flamewm-assistant.desktop" "$STAGE/usr/share/applications/flamewm-assistant.desktop"
+install -m 0644 "$ROOT/packaging/ark-ai.desktop" "$STAGE/usr/share/applications/ark-ai.desktop"
 install -d -m 0755 "$STAGE/usr/share/icons/hicolor/scalable/apps"
 install -m 0644 "$ROOT/packaging/icons/flamewm-finder.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/flamewm-finder.svg"
 install -m 0644 "$ROOT/packaging/icons/flamewm-imageviewer.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/flamewm-imageviewer.svg"

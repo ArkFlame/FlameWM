@@ -22,7 +22,7 @@ pub(crate) const NAV_PAGES: [(&str, &str); 16] = [
     ("hotkeys", "Hotkeys"),
     ("startup", "Startup Applications"),
     ("defaults", "Default Applications"),
-    ("assistant", "Assistant"),
+    ("assistant", "ARK AI"),
     ("about", "About"),
 ];
 
@@ -39,4 +39,18 @@ pub(crate) fn nav_has_matches(query: &str) -> bool {
 /// Top of the active-row indicator for sidebar index `index`, from the same layout as the CSS rows.
 pub(crate) fn nav_top(index: usize) -> f32 {
     NAV_BRAND_HEIGHT_PX + NAV_SEARCH_BLOCK_PX + index as f32 * NAV_ROW_PITCH_PX
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NAV_PAGES;
+
+    #[test]
+    fn assistant_sidebar_label_is_ark_ai() {
+        let label = NAV_PAGES
+            .iter()
+            .find(|(id, _)| *id == "assistant")
+            .map(|(_, label)| *label);
+        assert_eq!(label, Some("ARK AI"));
+    }
 }

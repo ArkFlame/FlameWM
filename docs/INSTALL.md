@@ -154,7 +154,7 @@ not install or start Hermes. Speech input and output are off until enabled in Se
 
 ## Assistant speech (optional)
 
-Speech is off by default. Turning on speech to text or text to speech in Settings > Assistant starts
+Speech is off by default. Turning on speech to text or text to speech in Settings > ARK AI starts
 **Set up voice** in the background (`flamewm-assistant --voice-setup`), which does the whole setup in
 one step. It retries up to three times (60 s apart) and records progress and the final state, or the
 reason for a failure, in `voice/status`. Pressing the mic or reading a reply aloud before it finishes

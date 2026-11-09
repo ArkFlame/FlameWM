@@ -724,3 +724,18 @@ fn empty_means_default_family_and_other_themes_pass_through() {
     assert_eq!(resolve_icon_theme("MacTahoe", "dark"), "MacTahoe");
     assert_eq!(resolve_icon_theme("Papirus", "light"), "Papirus");
 }
+
+#[test]
+fn ark_ai_svg_rasterises_at_taskbar_sizes() {
+    let path = workspace_root().join("assets/web/breeze/ark-ai.svg");
+    for size in [16_u32, 24, 32] {
+        let raster = rasterize_path(&path, IconSize::new(size, size)).expect("ARK AI SVG");
+        assert_eq!((raster.width, raster.height), (size, size));
+        let opaque_white = raster
+            .pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[3] == 255 && pixel[..3] == [255, 255, 255])
+            .count();
+        assert!(opaque_white > 0, "ARK AI glyph is empty at {size}px");
+    }
+}

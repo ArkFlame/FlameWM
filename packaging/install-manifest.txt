@@ -38,7 +38,7 @@ packaging/flamewm-finder.desktop          usr/share/applications/flamewm-finder.
 packaging/flamewm-imageviewer.desktop    usr/share/applications/flamewm-imageviewer.desktop
 packaging/flamewm-archiver.desktop        usr/share/applications/flamewm-archiver.desktop
 packaging/flamewm-mimeapps.list           usr/share/applications/mimeapps.list
-packaging/flamewm-assistant.desktop        usr/share/applications/flamewm-assistant.desktop
+packaging/ark-ai.desktop        usr/share/applications/ark-ai.desktop
 packaging/icons/flamewm-finder.svg        usr/share/icons/hicolor/scalable/apps/flamewm-finder.svg
 packaging/icons/flamewm-imageviewer.svg   usr/share/icons/hicolor/scalable/apps/flamewm-imageviewer.svg
 packaging/icons/flamewm-archiver.svg      usr/share/icons/hicolor/scalable/apps/flamewm-archiver.svg
