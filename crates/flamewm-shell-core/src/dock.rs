@@ -190,6 +190,23 @@ pub fn gradient_ramp(rgb: [u8; 3], alpha: u8, steps: usize, from_start: bool) ->
     pixels
 }
 
+/// Live drag preview of a pinned slot: the origin follows the pointer on the strip axis only.
+/// `base` is the slot's rest origin, `start` the press point, `pos` the current pointer.
+#[must_use]
+pub fn drag_preview_origin(
+    base: (f32, f32),
+    start: (f32, f32),
+    pos: (f32, f32),
+    vertical: bool,
+) -> (f32, f32) {
+    let (dx, dy) = (pos.0 - start.0, pos.1 - start.1);
+    if vertical {
+        (base.0, base.1 + dy)
+    } else {
+        (base.0 + dx, base.1)
+    }
+}
+
 /// Reserved slot id of the Trash slot. Never a desktop app id, so it is never pinned or launched as one.
 pub const TRASH_SLOT_ID: &str = "flamewm:trash";
 
@@ -353,5 +370,17 @@ mod tests {
     fn trash_icon_swaps_between_empty_and_full() {
         assert_eq!(trash_icon_name(false), "user-trash");
         assert_eq!(trash_icon_name(true), "user-trash-full");
+    }
+
+    #[test]
+    fn drag_preview_moves_only_along_the_strip_axis() {
+        assert_eq!(
+            drag_preview_origin((10.0, 4.0), (50.0, 20.0), (65.0, 90.0), false),
+            (25.0, 4.0)
+        );
+        assert_eq!(
+            drag_preview_origin((10.0, 4.0), (50.0, 20.0), (65.0, 90.0), true),
+            (10.0, 74.0)
+        );
     }
 }

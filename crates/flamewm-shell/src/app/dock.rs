@@ -15,7 +15,7 @@ use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
 /// Pointer distance (surface px) before a pressed pinned slot becomes a drag.
 const DRAG_START_PX: f32 = 6.0;
 /// Pointer distance off the bar (surface px) that unpins a dragged slot.
-const DRAG_OFF_PX: f32 = 40.0;
+const DRAG_OFF_PX: f32 = 48.0;
 
 /// A pinned slot pressed with the primary button; becomes a drag past `DRAG_START_PX`.
 #[derive(Clone, Copy, Debug)]
@@ -489,10 +489,48 @@ impl ShellLoop {
     }
 
     /// Reorders or unpins the dragged pinned slot, then persists the new list.
-    fn finish_dock_drag(&mut self, drag: DockDrag) {
+    /// Live preview: moves the dragged slot with the pointer (`position` only, no relayout) and
+    /// dims it while it sits past the unpin distance. The next rebuild restores its rest place.
+    fn preview_dock_drag(&mut self, runtime: &mut SurfaceRuntime, drag: DockDrag) {
         let Some((frame, ..)) = self.dock_last.as_ref() else {
             return;
         };
+        let (Some(base), Some(surface)) = (frame.slots.get(drag.from).copied(), self.dock_surface)
+        else {
+            return;
+        };
+        let vertical = dock::dock_settings(self.settings_cache.as_ref())
+            .edge
+            .is_vertical();
+        let (origin_x, origin_y) = flamewm_shell_core::dock::drag_preview_origin(
+            (base.x, base.y),
+            drag.start,
+            drag.pos,
+            vertical,
+        );
+        let (cross, bar_extent) = if vertical {
+            (drag.pos.0 - frame.bar.x, frame.bar.w)
+        } else {
+            (drag.pos.1 - frame.bar.y, frame.bar.h)
+        };
+        let off_bar = drag_off_removes(cross, bar_extent, DRAG_OFF_PX);
+        let slot_id = format!("dock-slot-{}", drag.from + 1);
+        let result = runtime.with_document(surface, |document| {
+            document.position(&slot_id, origin_x, origin_y)?;
+            document.opacity(&slot_id, if off_bar { 0.4 } else { 1.0 })
+        });
+        if let Err(error) = result {
+            eprintln!("flamewm-shell: dock drag preview failed: {error:?}");
+        }
+    }
+
+    fn finish_dock_drag(&mut self, drag: DockDrag) {
+        // Taking the cached state forces the next sync to rebuild on every exit below, which
+        // restores the preview's slot place and opacity.
+        let Some(state) = self.dock_last.take() else {
+            return;
+        };
+        let frame = state.0;
         let Some(strip) = frame.slots.first().copied() else {
             return;
         };
@@ -570,6 +608,9 @@ impl ShellLoop {
                     if dx * dx + dy * dy >= DRAG_START_PX * DRAG_START_PX {
                         drag.active = true;
                     }
+                }
+                if let Some(drag) = self.dock_drag.filter(|drag| drag.active) {
+                    self.preview_dock_drag(runtime, drag);
                 }
                 return Ok(());
             }
