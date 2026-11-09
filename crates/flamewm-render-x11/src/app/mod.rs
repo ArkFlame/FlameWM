@@ -53,7 +53,7 @@ mod xdnd;
 pub(crate) use images::{upload_argb32_image, upload_opaque_argb32_image};
 mod input;
 mod layout_helpers;
-mod live_backdrop;
+pub(crate) mod live_backdrop;
 mod primitives;
 mod raw_press;
 mod render;

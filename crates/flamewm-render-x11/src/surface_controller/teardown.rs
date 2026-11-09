@@ -36,6 +36,11 @@ impl Drop for SurfaceController {
             std::mem::forget(deferred);
             return;
         }
+        if let Some(Some(scene)) = self.live_scene.as_mut() {
+            // SAFETY: the display owner has verified a live connection; the scene's pictures and
+            // damage objects are freed on this display before it closes.
+            unsafe { scene.release(self.display) };
+        }
         let mut deferred_native = std::mem::take(&mut self.deferred_native_libraries);
         for instance in self.surfaces.values_mut() {
             // SAFETY: the display owner has verified a live connection, and

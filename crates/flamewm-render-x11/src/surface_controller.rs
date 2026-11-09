@@ -185,6 +185,11 @@ pub struct SurfaceController {
     raw_press_observations: Vec<RawPressObservation>,
     /// Desktop layer translucent popups and panels blend over; `None` keeps them solid.
     desktop: Option<crate::backdrop::DesktopLayer>,
+    /// Live desktop-plus-windows composition for translucent surfaces. `None`: not probed yet;
+    /// `Some(None)`: unavailable (no picture transform), the desktop-only path is used.
+    live_scene: Option<Option<crate::app::live_backdrop::LiveScene>>,
+    /// The last live backdrop request composed from the redirected frames (not the desktop-only path).
+    live_in_use: bool,
 }
 
 impl SurfaceController {

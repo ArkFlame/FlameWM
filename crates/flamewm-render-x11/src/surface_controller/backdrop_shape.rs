@@ -1,4 +1,5 @@
 use super::*;
+use crate::backdrop::LiveSurfaceFrame;
 
 /// Device-px corner radius of a popup, the same value the retained shape mask uses
 /// (`app::render::backdrop_corner_radius_px`, duplicated here because that module is private).
@@ -128,6 +129,46 @@ impl SurfaceController {
         // SAFETY: the controller owns a live display.
         let outputs = unsafe { crate::backdrop::published_wallpaper_outputs(self.display) };
         Some(desktop.crop(root, &outputs, rect, opacity, blur))
+    }
+
+    /// Live pseudo-transparency for surface `id` under root `rect`: the desktop and every redirected
+    /// frame stacked below its window, composed on the server. `Ok(None)` when the WM publishes no
+    /// redirected frames, so the caller keeps the desktop-only backdrop.
+    pub fn live_backdrop(
+        &mut self,
+        id: SurfaceId,
+        rect: (i32, i32, u32, u32),
+        blur: u8,
+    ) -> Result<Option<LiveSurfaceFrame>, String> {
+        let window = self.instance_mut(id)?.app.window;
+        let (display, screen) = (self.display, self.screen);
+        if self.live_scene.is_none() {
+            // SAFETY: the controller owns a live display.
+            let scene = unsafe { crate::app::live_backdrop::LiveScene::new(display, screen) };
+            if scene.is_some() {
+                // LiveScene selects SubstructureNotify on the root, which replaces this client's root
+                // mask. Restore the root watch so root child changes still reach `take_root_changed`.
+                self.watch_root_changes();
+            }
+            self.live_scene = Some(scene);
+        }
+        let Some(Some(scene)) = self.live_scene.as_mut() else {
+            self.live_in_use = false;
+            return Ok(None);
+        };
+        // SAFETY: the display is live and `window` is this controller's surface window on it.
+        let frame = unsafe { scene.compose(display, screen, window, rect, blur) };
+        self.live_in_use = frame.is_some();
+        Ok(frame.map(|frame| match frame {
+            crate::app::live_backdrop::LiveFrame::Unchanged => LiveSurfaceFrame::Unchanged,
+            crate::app::live_backdrop::LiveFrame::Pixels(words) => LiveSurfaceFrame::Pixels(words),
+        }))
+    }
+
+    /// Whether the last live backdrop request was composed from the redirected frames.
+    #[must_use]
+    pub fn live_backdrop_in_use(&self) -> bool {
+        self.live_in_use
     }
 
     /// One root readback of the popup rect, only on first show. `capture_drawable_rect` allocates

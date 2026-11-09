@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::os::fd::RawFd;
 
 use flamewm_render_core::RuntimeDocument;
+use flamewm_render_x11::backdrop::LiveSurfaceFrame;
 use flamewm_render_x11::{
     GeometryTrace, RawPressObservation, SurfaceConfig as RenderSurfaceConfig, SurfaceController,
     SurfaceId,
@@ -225,6 +226,25 @@ impl SurfaceRuntime {
         source: Option<flamewm_render_x11::backdrop::DesktopSource>,
     ) {
         self.controller.set_desktop_source(source);
+    }
+
+    /// Live backdrop under root `rect` for `surface`: the desktop and the windows stacked below it.
+    /// `None` when the WM publishes no redirected frames; the caller then uses `desktop_backdrop`.
+    pub fn live_backdrop(
+        &mut self,
+        surface: SurfaceHandle,
+        rect: (i32, i32, u32, u32),
+        blur: u8,
+    ) -> Result<Option<LiveSurfaceFrame>, UiBackendError> {
+        self.controller
+            .live_backdrop(surface.0, rect, blur)
+            .map_err(Into::into)
+    }
+
+    /// Whether the last live backdrop request was composed from the windows beneath.
+    #[must_use]
+    pub fn live_backdrop_in_use(&self) -> bool {
+        self.controller.live_backdrop_in_use()
     }
 
     /// Opaque ARGB32 desktop-layer words under the root-space `rect` for a surface at `opacity`

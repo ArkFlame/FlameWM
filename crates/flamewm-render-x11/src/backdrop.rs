@@ -12,6 +12,7 @@ mod capture;
 mod decode;
 mod desktop;
 mod extend;
+mod surface_live;
 
 pub use self::blur::*;
 pub use self::canvas::*;
@@ -19,6 +20,7 @@ pub use self::capture::*;
 pub use self::decode::*;
 pub use self::desktop::*;
 pub use self::extend::*;
+pub use self::surface_live::*;
 
 use crate::xlib::*;
 

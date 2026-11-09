@@ -451,9 +451,11 @@ impl ShellLoop {
         }
     }
 
-    /// Installs the taskbar's pseudo-transparency under the dock pill: the same desktop capture,
-    /// opacity and blur as the taskbar, so changing the surface material changes both together.
-    /// Recaptures only when the rect or the material changes.
+    /// Installs the dock's pseudo-transparency: what lies beneath the pill, opacity and blur from
+    /// the taskbar material, so changing the surface material changes both together. With windows
+    /// beneath (X11 window manager) the live composition shows them; otherwise the desktop layer.
+    /// Recomposes on a rect or material change, and on root child changes while the live path is
+    /// in use. An opaque material takes no capture.
     fn apply_dock_backdrop(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -466,14 +468,40 @@ impl ShellLoop {
             }
             None => return,
         };
+        // Opaque material hides whatever lies beneath: drop any backdrop and capture nothing.
+        if !flamewm_ui_x11::backdrop::backdrop_needed(opacity, blur) {
+            if self.dock_stage.backdrop.take().is_some() {
+                let _ = runtime.set_surface_backdrop(surface, None);
+            }
+            return;
+        }
         let key = (rect, opacity, blur);
-        if self.dock_stage.backdrop == Some(key) {
+        let root_changed = runtime.take_root_changed();
+        let live_active = runtime.live_backdrop_in_use();
+        if !flamewm_ui_x11::backdrop::recompose_needed(
+            self.dock_stage.backdrop.as_ref(),
+            &key,
+            root_changed,
+            live_active,
+        ) {
             return;
         }
         self.dock_stage.backdrop = Some(key);
-        let words = (rect.2 > 0 && rect.3 > 0)
-            .then(|| runtime.desktop_backdrop(rect, opacity, blur))
-            .flatten();
+        if rect.2 == 0 || rect.3 == 0 {
+            let _ = runtime.set_surface_backdrop(surface, None);
+            return;
+        }
+        match runtime.live_backdrop(surface, rect, blur) {
+            // The pixels beneath are unchanged: the snapshot already on the dock is current.
+            Ok(Some(flamewm_ui_x11::backdrop::LiveSurfaceFrame::Unchanged)) => return,
+            Ok(Some(flamewm_ui_x11::backdrop::LiveSurfaceFrame::Pixels(words))) => {
+                let _ = runtime.set_surface_backdrop(surface, Some((&words, rect.2, rect.3)));
+                return;
+            }
+            // No redirected frames (no window manager redirect): the desktop layer alone.
+            Ok(None) | Err(_) => {}
+        }
+        let words = runtime.desktop_backdrop(rect, opacity, blur);
         let _ = match words {
             Some(words) => runtime.set_surface_backdrop(surface, Some((&words, rect.2, rect.3))),
             None => runtime.set_surface_backdrop(surface, None),

@@ -29,6 +29,8 @@ impl SurfaceController {
                 external_dock: None,
                 root_changed: false,
                 root_geometry_changed: None,
+                live_scene: None,
+                live_in_use: false,
                 press_selection: RawPressSelection::new(press_opcode),
                 press_observer_armed: false,
                 raw_press_observations: Vec::new(),
