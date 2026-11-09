@@ -265,7 +265,8 @@ fn settings_with(values: &[(&str, flamewm_api::settings::SettingValue)]) -> Sett
 
 #[test]
 fn inheriting_card_takes_the_global_surface_fill_blur_and_radius() {
-    let widget = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
+    let mut widget = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
+    assert!(widget.set_value("surface", 1));
     let surface = widget_surface(&widget, &SettingsSnapshot::new(1));
     // Translucent default: black at 75% with the regular glass blur (70%).
     assert_eq!(
@@ -284,6 +285,7 @@ fn inheriting_card_takes_the_global_surface_fill_blur_and_radius() {
 #[test]
 fn card_without_custom_surface_ignores_its_own_colour_and_opacity() {
     let mut widget = Widget::new(1, WidgetKind::Memory, Point::new(0, 0));
+    assert!(widget.set_value("surface", 1));
     assert!(widget.inherits_surface());
     assert!(widget.set_value("backgroundOpacity", 90));
     let inherited = widget_surface(&widget, &SettingsSnapshot::new(1));
@@ -298,6 +300,7 @@ fn card_without_custom_surface_ignores_its_own_colour_and_opacity() {
 #[test]
 fn custom_surface_uses_its_own_colour_and_opacity_with_global_blur() {
     let mut widget = Widget::new(1, WidgetKind::Cpu, Point::new(0, 0));
+    assert!(widget.set_value("surface", 1));
     assert!(widget.set_value("customSurface", 1));
     assert!(widget.set_value("background", 0));
     assert!(widget.set_value("backgroundOpacity", 70));
@@ -322,7 +325,8 @@ fn custom_surface_uses_its_own_colour_and_opacity_with_global_blur() {
 
 #[test]
 fn reduce_transparency_makes_inheriting_cards_opaque_without_blur() {
-    let widget = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
+    let mut widget = Widget::new(1, WidgetKind::Clock, Point::new(0, 0));
+    assert!(widget.set_value("surface", 1));
     let reduced = settings_with(&[(
         "reduceTransparency",
         flamewm_api::settings::SettingValue::Boolean(true),
@@ -330,6 +334,24 @@ fn reduce_transparency_makes_inheriting_cards_opaque_without_blur() {
     let surface = widget_surface(&widget, &reduced);
     assert_eq!(surface.fill.a, 255);
     assert_eq!(surface.blur, None);
+}
+
+#[test]
+fn card_without_surface_draws_no_fill_and_requests_no_backdrop() {
+    // Default: no surface, so no fill and no backdrop capture, whatever the global surface is.
+    for kind in WidgetKind::ALL {
+        let widget = Widget::new(1, kind, Point::new(0, 0));
+        assert!(!widget.has_surface(), "{kind:?} defaults to no surface");
+        let surface = widget_surface(&widget, &SettingsSnapshot::new(1));
+        assert_eq!(surface.fill.a, 0, "{kind:?} fill is fully transparent");
+        assert_eq!(surface.blur, None, "{kind:?} requests no backdrop blur");
+    }
+    // Even a custom colour and opacity draw nothing while `surface` is off.
+    let mut custom = Widget::new(1, WidgetKind::Cpu, Point::new(0, 0));
+    assert!(custom.set_value("customSurface", 1));
+    assert!(custom.set_value("backgroundOpacity", 90));
+    let surface = widget_surface(&custom, &SettingsSnapshot::new(1));
+    assert_eq!((surface.fill.a, surface.blur), (0, None));
 }
 
 #[test]
@@ -428,4 +450,18 @@ lo:  500 1 0 0 0 0 0 0  500 1 0 0 0 0 0 0\n\
     push_rate(&mut rates, 50);
     push_rate(&mut rates, 200);
     assert_eq!(scale_rates(&rates), VecDeque::from([25u8, 100]));
+}
+
+#[test]
+fn settings_menu_rows_fit_every_kind_with_all_overrides_on() {
+    // Every override row on: the menu must still fit its fixed row pool.
+    let all_on = std::collections::BTreeMap::from([
+        ("surface".to_owned(), 1),
+        ("customSurface".to_owned(), 1),
+        ("customAccent".to_owned(), 1),
+    ]);
+    for kind in WidgetKind::ALL {
+        let rows = kind.visible_options(&all_on).len();
+        assert!(rows <= CONFIG_ROWS, "{kind:?} needs {rows} rows");
+    }
 }

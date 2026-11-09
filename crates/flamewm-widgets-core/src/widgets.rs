@@ -370,6 +370,13 @@ impl Widget {
         TextAlign::from_index(self.value("align"))
     }
 
+    /// True when the card draws a surface (fill, blur). Off by default: the card then renders
+    /// its content directly on the wallpaper with no backdrop work.
+    #[must_use]
+    pub fn has_surface(&self) -> bool {
+        self.flag("surface")
+    }
+
     /// True when the card takes colour and opacity from the global surface settings
     /// (`customSurface` off, the default).
     #[must_use]
@@ -669,6 +676,54 @@ mod surface_inheritance_tests {
     fn new_cards_inherit_the_global_surface() {
         assert!(card(WidgetKind::Clock).inherits_surface());
         assert!(card(WidgetKind::Cpu).inherits_surface());
+    }
+
+    #[test]
+    fn new_cards_have_no_surface_by_default() {
+        for kind in WidgetKind::ALL {
+            let widget = card(kind);
+            assert!(!widget.has_surface(), "{kind:?}");
+            assert!(
+                widget.stored_values().is_empty(),
+                "{kind:?} persists nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn surface_rows_appear_only_while_surface_is_on() {
+        let keys = |widget: &Widget| {
+            widget
+                .kind
+                .visible_options(widget.stored_values())
+                .iter()
+                .map(|spec| spec.key)
+                .collect::<Vec<_>>()
+        };
+        let mut widget = card(WidgetKind::Custom);
+        assert!(keys(&widget).contains(&"surface"));
+        assert!(!keys(&widget).contains(&"customSurface"));
+        assert!(!keys(&widget).contains(&"background"));
+        assert!(widget.set_value("customSurface", 1));
+        assert!(
+            !keys(&widget).contains(&"background"),
+            "still hidden while surface is off"
+        );
+        assert!(widget.set_value("surface", 1));
+        assert!(keys(&widget).contains(&"customSurface"));
+        assert!(keys(&widget).contains(&"background"));
+        assert!(keys(&widget).contains(&"backgroundOpacity"));
+        assert!(widget.set_value("surface", 0));
+        assert!(!keys(&widget).contains(&"background"));
+    }
+
+    #[test]
+    fn explicit_surface_value_persists_and_absent_key_is_off() {
+        let mut widget = card(WidgetKind::Clock);
+        assert!(widget.set_value("surface", 1));
+        assert_eq!(widget.stored_values().get("surface"), Some(&1));
+        assert!(widget.set_value("surface", 0));
+        assert!(widget.stored_values().is_empty());
     }
 
     #[test]

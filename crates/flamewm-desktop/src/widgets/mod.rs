@@ -366,9 +366,23 @@ pub(crate) struct WidgetSurface {
     pub(crate) radius: f32,
 }
 
-/// Inheriting cards take the global surface fill and blur; others use their own options.
+/// Cards without `surface` (the default) draw no fill and request no backdrop blur, so their
+/// content sits on the wallpaper. Inheriting cards take the global surface fill and blur;
+/// others use their own options.
 pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> WidgetSurface {
     let radius = WIDGET_RADIUS;
+    if !widget.has_surface() {
+        return WidgetSurface {
+            fill: UiColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            blur: None,
+            radius,
+        };
+    }
     let blur = projection::surface_blur_percent(settings);
     let blur = (blur > 0).then_some(blur);
     if widget.inherits_surface() {

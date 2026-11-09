@@ -1,3 +1,8 @@
+## Unreleased — widgets draw no surface by default
+
+- Change: desktop widgets (clock, weather, system and the others) draw their text and graphics directly on the wallpaper. No fill, blur or backdrop is requested unless the card's `surface` option is on. Absent key = off; saved `surface=1` keeps its value.
+- Settings: each widget's settings menu has a `Surface` toggle (off by default). Custom surface, colour and opacity rows appear only while it is on, and then use the shared surface settings as before.
+
 ## Unreleased — configurable titlebar double-click
 
 - Feature: `FLAMEWM_DRAG_MODIFIER=alt` moves windows with Alt+drag and resizes with Ctrl+Alt+right-drag; default `super` is unchanged. Settings: `docs/WM_POINTER_SETTINGS.md`.

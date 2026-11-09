@@ -189,9 +189,11 @@ impl WidgetKind {
                 OptionSpec::toggle("customAccent", "Custom accent", false),
             );
         }
-        // Surface override: colour and opacity rows exist only with `customSurface` on;
-        // off, the card inherits the global surface.
+        // Surface: off by default, so the card draws no fill, blur or backdrop. On, the card
+        // shows the surface. `customSurface` and its colour/opacity rows exist only with `surface`
+        // on; off, the card inherits the global surface.
         options.extend([
+            OptionSpec::toggle("surface", "Surface", false),
             OptionSpec::toggle("customSurface", "Custom surface", false),
             OptionSpec::color(
                 "background",
@@ -212,7 +214,8 @@ impl WidgetKind {
     }
 
     /// Options shown in the widget settings for `widget`'s current values: override rows
-    /// (custom accent, custom surface) appear only while their toggle is on.
+    /// (custom accent, custom surface) appear only while their toggle is on, and every
+    /// surface row only while `surface` is on.
     #[must_use]
     pub fn visible_options(self, values: &BTreeMap<String, i64>) -> Vec<OptionSpec> {
         let on = |key: &str| values.get(key).is_some_and(|value| *value != 0);
@@ -220,7 +223,8 @@ impl WidgetKind {
             .into_iter()
             .filter(|spec| match spec.key {
                 "accentColor" => on("customAccent"),
-                key if SURFACE_OVERRIDE_KEYS.contains(&key) => on("customSurface"),
+                "customSurface" => on("surface"),
+                key if SURFACE_OVERRIDE_KEYS.contains(&key) => on("surface") && on("customSurface"),
                 _ => true,
             })
             .collect()
