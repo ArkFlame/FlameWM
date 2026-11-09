@@ -278,7 +278,33 @@ pub fn parse_declarations(input: &str) -> Result<Vec<Declaration>, String> {
     Ok(result)
 }
 
+/// The index key of a selector's subject (rightmost) compound. A selector can only match an element
+/// that satisfies this key, so rules can be filed under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubjectKey<'a> {
+    Id(&'a str),
+    Class(&'a str),
+    Tag(&'a str),
+    Any,
+}
+
 impl Selector {
+    pub(crate) fn subject_key(&self) -> SubjectKey<'_> {
+        let Some(part) = self.parts.last() else {
+            return SubjectKey::Any;
+        };
+        let compound = &part.compound;
+        if let Some(id) = compound.id.as_deref() {
+            SubjectKey::Id(id)
+        } else if let Some(class) = compound.classes.first() {
+            SubjectKey::Class(class)
+        } else if let Some(tag) = compound.tag.as_deref() {
+            SubjectKey::Tag(tag)
+        } else {
+            SubjectKey::Any
+        }
+    }
+
     pub fn matches(&self, html: &ParsedHtml, node_index: usize) -> bool {
         if self.state == PseudoState::Root {
             return node_index == html.root;

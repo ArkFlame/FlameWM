@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct Compiler<'a> {
     pub(super) html: &'a ParsedHtml,
     pub(super) rules: &'a [Rule],
+    pub(super) rule_index: &'a RuleIndex<'a>,
     pub(super) variable_map: &'a HashMap<String, u16>,
     pub(super) length_map: &'a HashMap<String, String>,
     pub(super) options: CompileOptions,
@@ -43,10 +44,41 @@ impl<'a> Compiler<'a> {
             return Ok(node_index);
         }
 
-        let base = self.compute_style(source_index, inherited, PseudoState::Base)?;
-        let hover = self.compute_style(source_index, inherited, PseudoState::Hover)?;
-        let active = self.compute_style(source_index, inherited, PseudoState::Active)?;
-        let focus = self.compute_style(source_index, inherited, PseudoState::Focus)?;
+        // Selector matching does not depend on the pseudo state, so match once per element and
+        // parse the inline style once; each state then only filters and applies the matches.
+        let matched = self.matching_rules(source_index);
+        let inline = source
+            .attrs
+            .get("style")
+            .map(|text| parse_declarations(text));
+        let base = self.compute_style(
+            source_index,
+            inherited,
+            &matched,
+            inline.as_ref(),
+            PseudoState::Base,
+        )?;
+        let hover = self.compute_style(
+            source_index,
+            inherited,
+            &matched,
+            inline.as_ref(),
+            PseudoState::Hover,
+        )?;
+        let active = self.compute_style(
+            source_index,
+            inherited,
+            &matched,
+            inline.as_ref(),
+            PseudoState::Active,
+        )?;
+        let focus = self.compute_style(
+            source_index,
+            inherited,
+            &matched,
+            inline.as_ref(),
+            PseudoState::Focus,
+        )?;
         let hover_style = (hover != base).then_some(hover);
         let active_style = (active != base).then_some(active);
         let focus_style = (focus != base).then_some(focus);
@@ -164,33 +196,49 @@ impl<'a> Compiler<'a> {
         Ok(index)
     }
 
+    /// Rules whose selector matches the element, in source order. Pseudo state is filtered later.
+    fn matching_rules(&self, source_index: usize) -> Vec<&'a Rule> {
+        let (html, rules) = (self.html, self.rules);
+        self.rule_index
+            .candidates(html, source_index)
+            .into_iter()
+            .map(|position| &rules[position])
+            .filter(|rule| {
+                rule.selector.state != PseudoState::Root
+                    && rule.selector.matches(html, source_index)
+            })
+            .collect()
+    }
+
     pub(super) fn compute_style(
         &mut self,
         source_index: usize,
         inherited: &Style,
+        matched: &[&Rule],
+        inline: Option<&Result<Vec<Declaration>, String>>,
         state: PseudoState,
     ) -> Result<Style, String> {
         let source = &self.html.nodes[source_index];
         let mut style = default_style_for_tag(&source.tag, inherited);
-        let mut matches: Vec<&Rule> = self
-            .rules
+        let mut selected: Vec<&Rule> = matched
             .iter()
-            .filter(|rule| {
-                rule.selector.state != PseudoState::Root
-                    && (rule.selector.state == PseudoState::Base || rule.selector.state == state)
-                    && rule.selector.matches(self.html, source_index)
-            })
+            .copied()
+            .filter(|rule| rule.selector.state == PseudoState::Base || rule.selector.state == state)
             .collect();
-        matches.sort_by_key(|rule| (rule.selector.specificity, rule.order));
-        for rule in matches {
+        selected.sort_by_key(|rule| (rule.selector.specificity, rule.order));
+        for rule in selected {
             for declaration in &rule.declarations {
                 self.apply_declaration(&mut style, declaration)?;
             }
         }
-        if let Some(inline) = source.attrs.get("style") {
-            for declaration in parse_declarations(inline)? {
-                self.apply_declaration(&mut style, &declaration)?;
+        match inline {
+            None => {}
+            Some(Ok(declarations)) => {
+                for declaration in declarations {
+                    self.apply_declaration(&mut style, declaration)?;
+                }
             }
+            Some(Err(error)) => return Err(error.clone()),
         }
         Ok(style)
     }

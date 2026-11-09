@@ -13,6 +13,7 @@ use crate::calc::{eval_calc, CalcUnit};
 use crate::css::{parse_declarations, parse_stylesheet, Declaration, PseudoState, Rule};
 use crate::html::{parse_html, HtmlNodeKind, ParsedHtml};
 use crate::imports::expand_imports;
+use crate::rule_index::RuleIndex;
 
 mod build;
 mod declarations;
@@ -160,9 +161,11 @@ fn compile_parsed(
     fingerprint_input.push(0);
     fingerprint_input.extend_from_slice(css_source.as_bytes());
 
+    let rule_index = RuleIndex::new(&rules);
     let mut context = Compiler {
         html: &html,
         rules: &rules,
+        rule_index: &rule_index,
         variable_map: &variable_map,
         length_map: &length_map,
         options,
