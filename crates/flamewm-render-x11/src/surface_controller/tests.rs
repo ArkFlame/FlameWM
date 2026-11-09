@@ -1101,3 +1101,19 @@ mod raise_targets_tests {
         }
     }
 }
+
+#[test]
+fn own_root_child_map_or_unmap_does_not_mark_root_changed() {
+    use crate::backdrop::recompose_needed;
+    // A dock label or badge mapped by us is a root child: it must not reach the recompose gate.
+    assert!(!is_foreign_root_child_change(ROOT_CHILD_MAP_NOTIFY, true));
+    assert!(!is_foreign_root_child_change(ROOT_CHILD_UNMAP_NOTIFY, true));
+    assert!(is_foreign_root_child_change(ROOT_CHILD_MAP_NOTIFY, false));
+    assert!(is_foreign_root_child_change(
+        ROOT_CHILD_DESTROY_NOTIFY,
+        false
+    ));
+    let key = ((10, 10, 40, 20), 80u8, 40u8);
+    let root_changed = is_foreign_root_child_change(ROOT_CHILD_MAP_NOTIFY, true);
+    assert!(!recompose_needed(Some(&key), &key, root_changed, true));
+}

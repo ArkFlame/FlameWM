@@ -155,6 +155,20 @@ fn is_root_geometry_configure(
     kind == ROOT_CHILD_CONFIGURE_NOTIFY && event_window == root
 }
 
+/// Whether a root-window event reports a foreign root child whose map, unmap, move or destroy can
+/// change what lies beneath pseudo-transparent surfaces. Our own children are excluded: showing or
+/// hiding a surface (a dock label, a launch badge) must not recompose the dock backdrop.
+fn is_foreign_root_child_change(kind: std::os::raw::c_int, is_own: bool) -> bool {
+    !is_own
+        && matches!(
+            kind,
+            ROOT_CHILD_MAP_NOTIFY
+                | ROOT_CHILD_UNMAP_NOTIFY
+                | ROOT_CHILD_CONFIGURE_NOTIFY
+                | ROOT_CHILD_DESTROY_NOTIFY
+        )
+}
+
 pub struct SurfaceController {
     display: *mut Display,
     screen: i32,

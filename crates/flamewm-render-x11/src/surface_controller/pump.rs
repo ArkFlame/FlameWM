@@ -27,8 +27,8 @@ impl SurfaceController {
                 continue;
             }
             if unsafe { event.xany.window } == root {
-                // Other root children coming and going change what lies under a pseudo-transparency
-                // bar. Our own surfaces are excluded: a capture unmaps and remaps them itself.
+                // Foreign root children coming and going change what lies under a pseudo-transparency
+                // bar; our own surfaces are excluded by is_foreign_root_child_change.
                 let kind = unsafe { event.type_ };
                 if is_root_geometry_configure(kind, unsafe { event.xconfigure.window }, root) {
                     self.root_geometry_changed = Some((
@@ -37,13 +37,8 @@ impl SurfaceController {
                     ));
                 }
                 let child = unsafe { event.xmap.window };
-                self.root_changed |= matches!(
-                    kind,
-                    ROOT_CHILD_MAP_NOTIFY
-                        | ROOT_CHILD_UNMAP_NOTIFY
-                        | ROOT_CHILD_CONFIGURE_NOTIFY
-                        | ROOT_CHILD_DESTROY_NOTIFY
-                ) && !self.windows.contains_key(&child);
+                self.root_changed |=
+                    is_foreign_root_child_change(kind, self.windows.contains_key(&child));
                 continue;
             }
             let Some(id) = self.windows.get(&unsafe { event.xany.window }).copied() else {

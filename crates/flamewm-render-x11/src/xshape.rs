@@ -257,6 +257,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rounded_mask_cuts_corner_pixels_on_all_four_corners() {
+        let (w, h, r) = (100u32, 80u32, 12u32);
+        let rects = spans_to_rects(rounded_mask_spans(w, h, r).iter().copied());
+        let covered = |x: u32, y: u32| {
+            rects.iter().any(|rc| {
+                x >= rc.x as u32
+                    && x < rc.x as u32 + rc.width as u32
+                    && y >= rc.y as u32
+                    && y < rc.y as u32 + rc.height as u32
+            })
+        };
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert!(
+                !covered(x, y),
+                "corner pixel ({x},{y}) must be outside the mask"
+            );
+        }
+        // Edge midpoints stay inside: the bar itself is not clipped.
+        for (x, y) in [(w / 2, 0), (0, h / 2), (w - 1, h / 2), (w / 2, h - 1)] {
+            assert!(
+                covered(x, y),
+                "edge pixel ({x},{y}) must stay inside the mask"
+            );
+        }
+    }
+
+    #[test]
     fn coalesced_rectangles_keep_exact_rounded_coverage() {
         let spans = rounded_mask_spans(100, 80, 12);
         let rects = spans_to_rects(spans.iter().copied());
