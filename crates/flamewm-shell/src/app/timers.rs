@@ -213,6 +213,20 @@ impl ShellLoop {
         let target = || active_output_target(&self.surfaces, snapshot);
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
+        let active = snapshot
+            .workspaces
+            .as_ref()
+            .map(|workspaces| workspaces.active_index);
+        let names: &[String] = snapshot
+            .workspaces
+            .as_ref()
+            .map_or(&[], |workspaces| workspaces.names.as_slice());
+        if let Err(error) = self
+            .osd
+            .update_workspace(runtime, active, names, target, settings, now)
+        {
+            eprintln!("flamewm-shell: workspace OSD failed (nonfatal): {error:?}");
+        }
         let updated = self
             .osd
             .update(runtime, volume, brightness, target, settings, now);

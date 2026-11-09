@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use flamewm_api::settings::SettingsSnapshot;
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::Rect;
 use flamewm_ui_x11::{
     decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
@@ -24,6 +24,10 @@ pub const TRACK_W: i32 = 129;
 pub const TRACK_H: i32 = 5;
 pub const HOLD: Duration = Duration::from_millis(1200);
 pub const FADE: Duration = Duration::from_millis(180);
+/// Workspace card hold. With [`FADE`] the card is gone 800 ms after the switch.
+pub const WORKSPACE_HOLD: Duration = Duration::from_millis(620);
+/// Settings key that turns the workspace switch card on. Default off.
+pub const WORKSPACE_OSD_KEY: &str = "workspaceOsd";
 
 /// Which system value the card shows. Each kind keeps its own baseline, so a
 /// volume change never re-shows a stale brightness level and vice versa.
@@ -156,6 +160,8 @@ enum Stage {
 pub struct OsdState {
     /// Last observed level per `OsdKind` slot; the first observation of each kind is a baseline.
     last: [Option<Level>; 2],
+    /// Last observed active workspace index; the first observation is the baseline.
+    last_workspace: Option<usize>,
     stage: Stage,
     deadline: Option<Instant>,
 }
@@ -165,6 +171,7 @@ impl OsdState {
     pub fn new() -> Self {
         Self {
             last: [None, None],
+            last_workspace: None,
             stage: Stage::Hold,
             deadline: None,
         }
@@ -187,6 +194,21 @@ impl OsdState {
         }
         self.stage = Stage::Hold;
         self.deadline = Some(now + HOLD);
+        true
+    }
+
+    /// Records the active workspace index. The first observation is the baseline and never
+    /// shows. A change starts the workspace hold when `show` is set. It is recorded even when
+    /// the setting is off, so enabling it later never replays a stale switch.
+    pub fn observe_workspace(&mut self, index: usize, show: bool, now: Instant) -> bool {
+        let Some(previous) = self.last_workspace.replace(index) else {
+            return false;
+        };
+        if previous == index || !show {
+            return false;
+        }
+        self.stage = Stage::Hold;
+        self.deadline = Some(now + WORKSPACE_HOLD);
         true
     }
 
@@ -231,6 +253,8 @@ impl Default for OsdState {
 pub struct OsdController {
     state: OsdState,
     surface: Option<SurfaceHandle>,
+    /// True while the surface shows the workspace card; that surface is destroyed at hide.
+    workspace_card: bool,
 }
 
 impl OsdController {
@@ -277,13 +301,8 @@ impl OsdController {
         };
         // The output lookup runs only when the card shows, so idle ticks allocate nothing.
         let (work, scale) = target();
-        let surface = if let Some(surface) = self.surface {
-            surface
-        } else {
-            let surface = create(runtime)?;
-            self.surface = Some(surface);
-            surface
-        };
+        let surface = self.ensure_surface(runtime)?;
+        self.workspace_card = false;
         let scale = runtime.apply_output_scale(surface, scale)?;
         let card = placement(work, scale);
         if let Some(settings) = settings {
@@ -305,11 +324,79 @@ impl OsdController {
         runtime.redraw(surface)
     }
 
-    /// Hides the card once the single deadline has fully elapsed.
+    /// Feeds the active workspace index (`None` when the snapshot has no workspaces). A change
+    /// shows the workspace card for [`WORKSPACE_HOLD`] + [`FADE`] when `workspaceOsd` is on. The
+    /// card is flat: no backdrop, so no blur. Call before [`OsdController::update`], which owns
+    /// the shared hide deadline.
+    pub fn update_workspace(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        active: Option<usize>,
+        names: &[String],
+        target: impl FnOnce() -> (Rect, f32),
+        settings: Option<&SettingsSnapshot>,
+        now: Instant,
+    ) -> Result<(), UiBackendError> {
+        let Some(index) = active else {
+            return Ok(());
+        };
+        if !self
+            .state
+            .observe_workspace(index, workspace_osd_enabled(settings), now)
+        {
+            return Ok(());
+        }
+        let label = workspace_label(index, names);
+        let (work, scale) = target();
+        let surface = self.ensure_surface(runtime)?;
+        let scale = runtime.apply_output_scale(surface, scale)?;
+        let card = placement(work, scale);
+        if let Some(settings) = settings {
+            runtime.with_document(surface, |document| {
+                settings_projection::project(document, settings, SurfaceKind::Osd)
+            })?;
+        }
+        runtime.set_popup_backdrop(surface, None)?;
+        runtime.with_document(surface, |document| paint_workspace(document, &label))?;
+        runtime.move_resize(
+            surface,
+            card.x,
+            card.y,
+            card.width as u32,
+            card.height as u32,
+        )?;
+        runtime.show(surface)?;
+        self.workspace_card = true;
+        runtime.redraw(surface)
+    }
+
+    fn ensure_surface(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<SurfaceHandle, UiBackendError> {
+        if let Some(surface) = self.surface {
+            return Ok(surface);
+        }
+        let surface = create(runtime)?;
+        self.surface = Some(surface);
+        Ok(surface)
+    }
+
+    /// Hides the card once the single deadline has fully elapsed. A workspace card destroys its
+    /// surface, so an idle shell keeps no OSD surface after a switch card.
     fn expire(&mut self, runtime: &mut SurfaceRuntime, now: Instant) -> Result<(), UiBackendError> {
-        match self.surface {
-            Some(surface) if self.state.expire(now) => runtime.hide(surface),
-            _ => Ok(()),
+        let Some(surface) = self.surface else {
+            return Ok(());
+        };
+        if !self.state.expire(now) {
+            return Ok(());
+        }
+        if self.workspace_card {
+            self.workspace_card = false;
+            self.surface = None;
+            runtime.destroy(surface)
+        } else {
+            runtime.hide(surface)
         }
     }
 }
@@ -331,6 +418,29 @@ fn create(runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError>
     )
 }
 
+/// Whether `workspaceOsd` is on. Default off: only an explicit `true` shows the card.
+#[must_use]
+pub fn workspace_osd_enabled(settings: Option<&SettingsSnapshot>) -> bool {
+    matches!(
+        settings.and_then(|settings| settings.values.get(WORKSPACE_OSD_KEY)),
+        Some(SettingValue::Boolean(true))
+    )
+}
+
+/// Card text for the 0-based workspace `index`: "N  Name" when named, else "Workspace N".
+#[must_use]
+pub fn workspace_label(index: usize, names: &[String]) -> String {
+    let number = index + 1;
+    match names
+        .get(index)
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => format!("{number}  {name}"),
+        None => format!("Workspace {number}"),
+    }
+}
+
 /// Visible state of the three OSD icons: exactly one of the volume pair, or the
 /// brightness glyph.
 fn icons(kind: OsdKind, muted: bool) -> (bool, bool, bool) {
@@ -340,8 +450,24 @@ fn icons(kind: OsdKind, muted: bool) -> (bool, bool, bool) {
     }
 }
 
+/// Workspace card: the number and name only. The volume icons, track and fill stay hidden.
+fn paint_workspace(document: &mut impl UiDocumentAccess, label: &str) -> Result<(), String> {
+    document.visible("osd-icon-high", false)?;
+    document.visible("osd-icon-muted", false)?;
+    document.visible("osd-icon-brightness", false)?;
+    document.visible("osd-track", false)?;
+    document.visible("osd-fill", false)?;
+    document.visible("osd-text", false)?;
+    document.visible("osd-workspace", true)?;
+    document.text("osd-workspace", label.to_owned())
+}
+
 fn paint(document: &mut impl UiDocumentAccess, level: Level) -> Result<(), String> {
     let (high, muted, brightness) = icons(level.kind, level.muted);
+    document.visible("osd-workspace", false)?;
+    document.visible("osd-track", true)?;
+    document.visible("osd-fill", true)?;
+    document.visible("osd-text", true)?;
     document.visible("osd-icon-high", high)?;
     document.visible("osd-icon-muted", muted)?;
     document.visible("osd-icon-brightness", brightness)?;
@@ -352,9 +478,87 @@ fn paint(document: &mut impl UiDocumentAccess, level: Level) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    fn settings_with_workspace_osd(value: Option<bool>) -> SettingsSnapshot {
+        let mut values = BTreeMap::new();
+        if let Some(value) = value {
+            values.insert(WORKSPACE_OSD_KEY.to_owned(), SettingValue::Boolean(value));
+        }
+        SettingsSnapshot {
+            revision: 1,
+            values,
+        }
+    }
 
     fn work(x: i32, y: i32, width: i32, height: i32) -> Rect {
         Rect::new(x, y, width, height)
+    }
+
+    #[test]
+    fn workspace_osd_is_off_unless_explicitly_on() {
+        assert!(!workspace_osd_enabled(None));
+        assert!(!workspace_osd_enabled(Some(&settings_with_workspace_osd(
+            None
+        ))));
+        assert!(!workspace_osd_enabled(Some(&settings_with_workspace_osd(
+            Some(false)
+        ))));
+        assert!(workspace_osd_enabled(Some(&settings_with_workspace_osd(
+            Some(true)
+        ))));
+    }
+
+    #[test]
+    fn workspace_card_hides_at_800_ms_total() {
+        assert_eq!(WORKSPACE_HOLD + FADE, Duration::from_millis(800));
+    }
+
+    #[test]
+    fn workspace_label_uses_number_and_name_with_fallback() {
+        assert_eq!(workspace_label(0, &[]), "Workspace 1");
+        let names = [String::new(), "  Dev ".to_owned()];
+        assert_eq!(workspace_label(0, &names), "Workspace 1");
+        assert_eq!(workspace_label(1, &names), "2  Dev");
+        assert_eq!(workspace_label(4, &names), "Workspace 5");
+    }
+
+    #[test]
+    fn workspace_first_observation_is_baseline_and_change_shows() {
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        assert!(!state.observe_workspace(0, true, t0));
+        assert_eq!(state.deadline(), None);
+        assert!(state.observe_workspace(1, true, t0));
+        assert_eq!(state.deadline(), Some(t0 + WORKSPACE_HOLD));
+        assert!(!state.observe_workspace(1, true, t0 + Duration::from_millis(100)));
+        assert_eq!(state.deadline(), Some(t0 + WORKSPACE_HOLD));
+    }
+
+    #[test]
+    fn workspace_change_with_setting_off_never_shows_or_replays() {
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        assert!(!state.observe_workspace(0, false, t0));
+        assert!(!state.observe_workspace(2, false, t0));
+        assert_eq!(state.deadline(), None);
+        assert!(
+            !state.observe_workspace(2, true, t0),
+            "re-enabling must not replay a switch"
+        );
+        assert_eq!(state.deadline(), None);
+    }
+
+    #[test]
+    fn workspace_card_fades_then_hides_at_800_ms() {
+        let mut state = OsdState::new();
+        let t0 = Instant::now();
+        state.observe_workspace(0, true, t0);
+        state.observe_workspace(1, true, t0);
+        assert!(!state.expire(t0 + (WORKSPACE_HOLD - Duration::from_millis(1))));
+        assert!(!state.expire(t0 + WORKSPACE_HOLD));
+        assert!(state.expire(t0 + Duration::from_millis(800)));
+        assert_eq!(state.deadline(), None);
     }
 
     #[test]
@@ -568,6 +772,7 @@ mod tests {
     #[test]
     fn osd_document_declares_the_brightness_icon() {
         let source = include_str!("../../../ui/shell/osd.html");
+        assert!(source.contains(r#"id="osd-workspace""#));
         assert!(source.contains(r#"id="osd-icon-brightness""#));
         assert!(source.contains("assets/breeze/video-display-brightness.svg"));
         assert!(source.contains(r"<title>FlameWM OSD</title>"));

@@ -107,6 +107,8 @@ pub struct ProductSettings {
     pub weather_enabled: bool,
     /// `weatherTint`: tint the taskbar weather glyph by condition (default on).
     pub weather_tint: bool,
+    /// `workspaceOsd`: show a brief workspace number/name card on switch (default off).
+    pub workspace_osd: bool,
     /// Encoded weather location (`lat\tlon\tcountry\tname`); empty means unset.
     pub weather_location: String,
     /// `celsius` or `fahrenheit`.
@@ -321,6 +323,7 @@ impl Default for ProductSettings {
             taskbar_separate: false,
             weather_enabled: true,
             weather_tint: true,
+            workspace_osd: false,
             weather_location: String::new(),
             weather_units: "celsius".to_owned(),
             auto_location_enabled: true,

@@ -129,6 +129,7 @@ stable_settings! {
     (false, taskbar, "taskbarShowBattery", taskbar_show_battery),
     (false, taskbar, "taskbarShowClock", taskbar_show_clock),
     (false, taskbar, "taskbarShowWorkspaces", taskbar_show_workspaces),
+    (false, taskbar, "workspaceOsd", workspace_osd),
     (false, taskbar, "taskbarShowDesktopButton", taskbar_show_desktop_button),
     (false, taskbar, "taskbarBatteryOnlyWhenRelevant", taskbar_battery_only_when_relevant),
     (false, taskbar, "taskbarActivities", taskbar_activities),
