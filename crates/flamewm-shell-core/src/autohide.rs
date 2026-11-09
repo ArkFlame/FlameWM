@@ -233,10 +233,16 @@ mod tests {
         assert!(m.is_hidden(), "precondition: the dock slid away");
         // dock.autoHide=false applied live: the dock must slide back to shown, not stay parked.
         m.set_auto_hide(false, t);
+        // Wake contract: the loop must tick at once to run the slide back, not wait for an event.
+        assert_eq!(m.deadline(t), Some(t + FRAME));
         let t = settle(&mut m, t, SLIDE);
         assert!(!m.is_hidden());
         assert_eq!(m.offset(), 0.0);
         assert!(!m.wants_hidden(t));
+        assert!(
+            m.deadline(t).is_none(),
+            "settled and shown: no further wake"
+        );
     }
 
     #[test]
