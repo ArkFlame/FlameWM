@@ -327,12 +327,13 @@ input { cursor:text; }
 /* Dock surface. Rects are written by the shell (crates/flamewm-shell/src/dock.rs). */
 .dock-body { background:transparent; }
 .dock { position:absolute; left:0px; top:0px; width:100%; height:100%; }
-.dock-bar { box-sizing:border-box; border:1px solid transparent; background:transparent; border-radius:var(--radius-xl); }
-.dock-highlight { background:transparent; }
-.dock-slot { padding:0px; border:0px; background:transparent; border-radius:var(--radius-lg); cursor:default; }
+.dock-bar { position:absolute; left:0px; top:0px; width:0px; height:0px; box-sizing:border-box; border:1px solid transparent; background:transparent; border-radius:var(--radius-xl); }
+.dock-highlight { position:absolute; left:0px; top:0px; width:0px; height:0px; background:transparent; }
+.dock-slot { position:absolute; left:0px; top:0px; width:0px; height:0px; padding:0px; border:0px; background:transparent; border-radius:var(--radius-lg); cursor:default; }
 .dock-slot:hover { background:var(--hover-fill); }
-.dock-dot { border-radius:2px; background:var(--accent); }
-.dock-separator { background:var(--rim); }
+.dock-icon { position:absolute; left:0px; top:0px; width:0px; height:0px; }
+.dock-dot { position:absolute; left:0px; top:0px; width:0px; height:0px; border-radius:2px; background:var(--accent); }
+.dock-separator { position:absolute; left:0px; top:0px; width:0px; height:0px; background:var(--rim); }
 
 .dock-menu { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; padding:var(--sp-2); display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--rim); border-radius:var(--radius-md); }
 .dock-menu-item { box-sizing:border-box; width:100%; height:28px; padding:0px 10px; display:flex; align-items:center; background:transparent; border:0px; border-radius:var(--radius-sm); color:var(--text); cursor:default; }
