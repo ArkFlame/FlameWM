@@ -24,6 +24,13 @@ const POLL_STILL: Duration = Duration::from_millis(250);
 const MOTION_WINDOW: Duration = Duration::from_secs(1);
 const BASE_ICON: i32 = 16;
 const BASE_OFFSET: i32 = 13;
+/// The four pending-launch dots from `ui/shell/launch-feedback.html`, in 16px CSS units:
+/// 4x4 circles (`border-radius: 2px`) at these `(left, top)` offsets.
+const DOT_OFFSETS: [(f32, f32); 4] = [(6.0, 0.0), (12.0, 6.0), (6.0, 12.0), (0.0, 6.0)];
+const DOT_SIZE: f32 = 4.0;
+/// `XShape` is 1-bit. An icon pixel with alpha at or above this cutoff is part of the
+/// silhouette; anything below it (antialiased fringe, near-transparent padding) is not drawn.
+const ALPHA_SHAPE_CUTOFF: u8 = 8;
 
 pub struct LaunchFeedback {
     observer: StartupX11Observer,
@@ -40,6 +47,12 @@ pub struct LaunchFeedback {
     last_pointer: Option<(i32, i32)>,
     last_motion: Option<Instant>,
     indicator_frame: Option<usize>,
+    /// Icon decoded fully transparent for `requested`: the badge stays unmapped and costs
+    /// nothing (no pointer query, move or repaint) until the launch or its size changes.
+    concealed: bool,
+    /// Last `(x, y, side)` sent to `move_resize`; unchanged placement sends no request.
+    placed: Option<(i32, i32, u32)>,
+    scale_applied: Option<u32>,
 }
 
 /// Pure cadence rule: fast while the pointer moved within [`MOTION_WINDOW`], slow once still.
@@ -69,6 +82,9 @@ impl LaunchFeedback {
             last_pointer: None,
             last_motion: None,
             indicator_frame: None,
+            concealed: false,
+            placed: None,
+            scale_applied: None,
         })
     }
 
@@ -179,6 +195,18 @@ impl LaunchFeedback {
             self.requested = None;
             self.painted = None;
         }
+        if self.concealed {
+            // Same launch and size: stay unmapped with no pointer work. A new launch key
+            // (or a theme change, which clears `requested`) falls through to a normal frame.
+            let same_launch = self.sequences.visible().is_some_and(|s| {
+                let side = self.requested.as_ref().map_or(0, |r| r.2);
+                updated_launch_key(&s.id, &s.icon, side, self.requested.as_ref()).is_none()
+            });
+            if same_launch {
+                return Ok(self.sequences.next_deadline());
+            }
+            self.concealed = false;
+        }
         // Bounded active-only pointer query; XFixes cursor notifications do not report motion.
         if !should_poll && self.requested.is_some() && self.painted.is_some() {
             return Ok(Some(now + interval));
@@ -209,17 +237,19 @@ impl LaunchFeedback {
         if let Some(key) = replacement {
             self.requested = Some(key);
             self.painted = None;
+            self.concealed = false;
             self.indicator_frame = None;
-            if let Some(surface) = self.surface {
-                runtime.set_surface_shape_mask(surface, None)?;
-                runtime.with_document(surface, |doc| {
-                    for index in 0..4 {
-                        doc.visible(&format!("launch-dot-{index}"), true)?;
-                    }
-                    doc.visible("launch-icon", false)
-                })?;
-                runtime.redraw(surface)?;
-            }
+            // The dot silhouette is the only pixel set while pending. Without an explicit
+            // mask the coverage fallback is the full rounded backdrop square.
+            let surface = self.surface(runtime)?;
+            runtime.set_surface_shape_mask(surface, Some(dot_shape_spans(side)))?;
+            runtime.with_document(surface, |doc| {
+                for index in 0..4 {
+                    doc.visible(&format!("launch-dot-{index}"), true)?;
+                }
+                doc.visible("launch-icon", false)
+            })?;
+            runtime.redraw(surface)?;
             if self.loader.is_none() {
                 self.loader = Some(IconLoader::spawn(
                     self.loader_root.clone(),
@@ -271,9 +301,12 @@ impl LaunchFeedback {
             // XShape clips the 24-bit overlay at real PNG/SVG alpha boundaries, so
             // pixels outside the app glyph reveal the desktop instead of opaque black.
             let Some(shape) = alpha_shape_spans(&image.pixels, image.width, image.height) else {
-                // A missing/fully transparent glyph must not create an opaque black overlay.
-                // Keep the already-visible four-dot animation until the launch completes.
-                continue;
+                // Fully transparent glyph: nothing to draw for this launch. Unmap the badge
+                // rather than keep dots or a square; it stays concealed until the key changes.
+                self.painted = self.requested.clone();
+                self.concealed = true;
+                self.hide(runtime)?;
+                return Ok(self.sequences.next_deadline());
             };
             runtime.set_surface_shape_mask(surface, Some(shape))?;
             runtime.with_document(surface, |doc| {
@@ -335,8 +368,14 @@ impl LaunchFeedback {
             let frame = ((now.saturating_duration_since(started).as_millis() / 140) % 4) as usize;
             y = y.saturating_sub([0, 1, 2, 1][frame]);
         }
-        runtime.apply_output_scale(surface, scale as f32 / 100.0)?;
-        runtime.move_resize(surface, x, y, side, side)?;
+        if self.scale_applied != Some(scale) {
+            runtime.apply_output_scale(surface, scale as f32 / 100.0)?;
+            self.scale_applied = Some(scale);
+        }
+        if placement_changed(self.placed, (x, y, side)) {
+            runtime.move_resize(surface, x, y, side, side)?;
+            self.placed = Some((x, y, side));
+        }
         let was_visible = self.visible;
         if !was_visible {
             runtime.show(surface)?;
@@ -392,6 +431,7 @@ impl LaunchFeedback {
         if !self.sequences.active() {
             self.requested = None;
             self.painted = None;
+            self.concealed = false;
             self.last_poll = None;
             self.last_pointer = None;
             self.last_motion = None;
@@ -413,21 +453,51 @@ fn alpha_shape_spans(pixels: &[u8], width: u32, height: u32) -> Option<Vec<(u32,
     if width == 0 || height == 0 || width > 64 || height > 64 || pixels.len() != len {
         return None;
     }
+    let spans = runs_from_coverage(width, height, |x, y| {
+        pixels[((y * width + x) * 4 + 3) as usize] >= ALPHA_SHAPE_CUTOFF
+    });
+    (!spans.is_empty()).then_some(spans)
+}
+
+/// Row runs `(y, left, right)` of the pixels for which `covered` holds.
+fn runs_from_coverage(
+    width: u32,
+    height: u32,
+    covered: impl Fn(u32, u32) -> bool,
+) -> Vec<(u32, u32, u32)> {
     let mut spans = Vec::new();
     for y in 0..height {
         let mut start = None;
         for x in 0..=width {
-            let covered = x < width && pixels[((y * width + x) * 4 + 3) as usize] >= 8;
-            if covered {
-                if start.is_none() {
-                    start = Some(x);
-                }
+            if x < width && covered(x, y) {
+                start.get_or_insert(x);
             } else if let Some(left) = start.take() {
                 spans.push((y, left, x));
             }
         }
     }
-    (!spans.is_empty()).then_some(spans)
+    spans
+}
+
+/// Device-pixel `XShape` runs for the four pending dots at `side` px. Pixel centres are
+/// sampled against the CSS circles, so the mask scales with the badge and holds no pixel
+/// outside a dot.
+fn dot_shape_spans(side: u32) -> Vec<(u32, u32, u32)> {
+    let css_per_px = BASE_ICON as f32 / side.max(1) as f32;
+    let radius = DOT_SIZE / 2.0;
+    runs_from_coverage(side, side, |x, y| {
+        let u = (x as f32 + 0.5) * css_per_px;
+        let v = (y as f32 + 0.5) * css_per_px;
+        DOT_OFFSETS.iter().any(|&(left, top)| {
+            let (dx, dy) = (u - (left + radius), v - (top + radius));
+            dx * dx + dy * dy <= radius * radius
+        })
+    })
+}
+
+/// Repaint and move only when the placement differs from the last one sent.
+fn placement_changed(last: Option<(i32, i32, u32)>, next: (i32, i32, u32)) -> bool {
+    last != Some(next)
 }
 
 fn updated_launch_key(
@@ -602,6 +672,38 @@ mod tests {
         );
         assert_eq!(alpha_shape_spans(&[], 4, 4), None);
         assert_eq!(alpha_shape_spans(&[0; 16 * 4], 4, 4), None);
+    }
+
+    #[test]
+    fn dot_mask_is_exactly_the_four_circles() {
+        let spans = dot_shape_spans(16);
+        // Four disjoint 4px circles: 2 + 4 + 4 + 2 pixels each.
+        let area: u32 = spans.iter().map(|&(_, l, r)| r - l).sum();
+        assert_eq!(area, 48);
+        let dots = [(6, 0), (12, 6), (6, 12), (0, 6)];
+        for &(y, left, right) in &spans {
+            for x in left..right {
+                let inside_rect = dots
+                    .iter()
+                    .any(|&(dx, dy)| x >= dx && x < dx + 4 && y >= dy && y < dy + 4);
+                assert!(inside_rect, "pixel ({x},{y}) outside every dot rect");
+            }
+        }
+        // Rounded: the top-left corner of the first dot is not drawn.
+        assert!(!spans.contains(&(0, 6, 10)));
+        assert!(spans.contains(&(0, 7, 9)));
+        // Scaled badge keeps the mask inside the window and non-empty.
+        let big = dot_shape_spans(24);
+        assert!(big.iter().all(|&(y, l, r)| y < 24 && l < r && r <= 24));
+        assert!(!big.is_empty());
+    }
+
+    #[test]
+    fn placement_change_gates_move_requests() {
+        assert!(placement_changed(None, (1, 2, 16)));
+        assert!(!placement_changed(Some((1, 2, 16)), (1, 2, 16)));
+        assert!(placement_changed(Some((1, 2, 16)), (1, 3, 16)));
+        assert!(placement_changed(Some((1, 2, 16)), (1, 2, 24)));
     }
 
     #[test]
