@@ -5,6 +5,7 @@
 
 use flamewm_image_core::blur::{BlurScratch, frosted_backdrop_with, gaussian_blur_rgba_with};
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
+use flamewm_image_core::wallpaper::{self, WallpaperFit};
 use flamewm_image_core::{Rect, RgbaImage};
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -58,8 +59,19 @@ fn scale_digest(filter: ScaleFilter, width: u32, height: u32) -> u64 {
     fnv1a(&out.pixels)
 }
 
+fn wallpaper_digest(fit: WallpaperFit) -> u64 {
+    let natural = pattern(37, 23, 5);
+    let out = wallpaper::compose(&natural, 101, 67, fit).expect("non-zero compose");
+    fnv1a(&out.pixels)
+}
+
 fn cases() -> Vec<(&'static str, u64)> {
     vec![
+        ("wallpaper_fill", wallpaper_digest(WallpaperFit::Fill)),
+        ("wallpaper_fit", wallpaper_digest(WallpaperFit::Fit)),
+        ("wallpaper_stretch", wallpaper_digest(WallpaperFit::Stretch)),
+        ("wallpaper_center", wallpaper_digest(WallpaperFit::Center)),
+        ("wallpaper_tile", wallpaper_digest(WallpaperFit::Tile)),
         ("blur_r0.5_33x17", blur_digest(33, 17, 0.5)),
         ("blur_r3_64x48", blur_digest(64, 48, 3.0)),
         ("blur_r12_96x40", blur_digest(96, 40, 12.0)),
@@ -119,6 +131,11 @@ fn cpu_raster_outputs_match_pinned_snapshot() {
     // Digits are kept as captured (no separators) so they can be compared by eye.
     #[allow(clippy::unreadable_literal)]
     let expected: &[(&str, u64)] = &[
+        ("wallpaper_fill", 0x77d53703472ea41d),
+        ("wallpaper_fit", 0xb1cc21fa7dfa19f0),
+        ("wallpaper_stretch", 0x26f01a94b9fd4e4e),
+        ("wallpaper_center", 0x0ce0e0d522587d1c),
+        ("wallpaper_tile", 0xce62a962f7d4402c),
         ("blur_r0.5_33x17", 0x93a11cf02d6aa338),
         ("blur_r3_64x48", 0x8c4acb436519d83e),
         ("blur_r12_96x40", 0xfdc8af69100dcfbb),
@@ -132,9 +149,19 @@ fn cpu_raster_outputs_match_pinned_snapshot() {
         ("scale_area_19x13", 0x7f136691936c5577),
     ];
     let actual = cases();
-    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual.len(), expected.len(), "snapshot case count");
+    let mut changed = Vec::new();
     for ((name, digest), (exp_name, exp_digest)) in actual.iter().zip(expected) {
         assert_eq!(name, exp_name);
-        assert_eq!(digest, exp_digest, "{name} changed");
+        if digest != exp_digest {
+            changed.push(format!(
+                "{name}: got {digest:#018x} want {exp_digest:#018x}"
+            ));
+        }
     }
+    assert!(
+        changed.is_empty(),
+        "snapshot changed:\n{}",
+        changed.join("\n")
+    );
 }
