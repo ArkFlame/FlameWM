@@ -67,7 +67,7 @@ One page for agents: which crate owns what. Authority rules live in
 | --- | --- |
 | `flamewm-render-compiler` | Build-time HTML/CSS compiler for FlameWM Render |
 | `flamewm-render-core` | Dependency-free precompiled runtime: layout, text, measurement |
-| `flamewm-render-x11` | Minimal Xlib/Xft backend (the FFI boundary; unsafe allowed here) |
+| `flamewm-render-x11` | Minimal Xlib/Xft backend (the FFI boundary; unsafe allowed here). Owns the GPU backend: GL runs only in the `flamewm-gpu-helper` child (`src/accel/helper.rs`, length-prefixed pipe protocol), so the parent never holds a driver |
 | `flamewm-ui-document` | Backend-neutral precompiled UI document runtime |
 | `flamewm-ui` / `flamewm-ui-x11` | Typed UI bridge to the X11 renderer |
 | `flamewm-skin` | Renderer-neutral visual tokens and recipes |

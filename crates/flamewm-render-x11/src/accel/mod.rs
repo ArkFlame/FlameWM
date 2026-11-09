@@ -1,7 +1,9 @@
 mod backend;
 mod gles;
+mod helper;
 
 pub use backend::apply_render_backend_setting;
+pub use helper::serve_gpu_helper;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -371,7 +373,7 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
         if matches!(*slot, GpuSlot::Untried) {
             #[cfg(test)]
             INIT_CALLS.with(|calls| calls.set(calls.get() + 1));
-            *slot = match gles::GpuBlur::new() {
+            *slot = match helper::RemoteGpu::spawn() {
                 Ok(gpu) if is_software_renderer(gpu.device()) => {
                     let reason = FallbackReason::SoftwareDevice(gpu.device().to_owned());
                     eprintln!(
