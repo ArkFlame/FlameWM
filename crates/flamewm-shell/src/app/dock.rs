@@ -143,6 +143,7 @@ impl ShellLoop {
         let frame = dock::dock_frame(
             &running,
             layout.separator_after,
+            layout.trash_separator_after,
             settings.icon_size,
             settings.edge,
         );

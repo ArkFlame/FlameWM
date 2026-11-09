@@ -136,10 +136,8 @@ pub fn layout_for(settings: &DockSettings, windows: &[WindowSnapshot]) -> DockLa
         settings.show_running,
     );
     if settings.show_trash {
-        // Trash is the last slot, after a separator when the apps are not already split by one.
-        if layout.separator_after.is_none() && !layout.entries.is_empty() {
-            layout.separator_after = Some(layout.entries.len() - 1);
-        }
+        // Trash is the last slot, after its own separator (drawn in addition to any group separator).
+        layout.trash_separator_after = layout.entries.len().checked_sub(1);
         layout.entries.push(DockEntry {
             app_id: TRASH_SLOT_ID.to_owned(),
             pinned: false,
@@ -225,7 +223,8 @@ pub struct DockFrame {
     pub icons: Vec<Rect>,
     pub dots: Vec<Option<Rect>>,
     pub labels: Vec<Rect>,
-    pub separator: Option<Rect>,
+    /// Group and trash separators, in slot order; at most two.
+    pub separators: Vec<Rect>,
     pub edge: Edge,
 }
 
@@ -235,6 +234,7 @@ pub struct DockFrame {
 pub fn dock_frame(
     running: &[bool],
     separator_after: Option<usize>,
+    trash_separator_after: Option<usize>,
     icon: f32,
     edge: Edge,
 ) -> DockFrame {
@@ -337,7 +337,9 @@ pub fn dock_frame(
             }
         });
     }
-    let separator = separator_after
+    let separators = [separator_after, trash_separator_after]
+        .into_iter()
+        .flatten()
         .filter(|after| *after + 1 < count)
         .map(|after| {
             let at = PAD + (after + 1) as f32 * slot - 0.5;
@@ -356,7 +358,8 @@ pub fn dock_frame(
                     h: cross - 2.0 * (PAD + 4.0),
                 }
             }
-        });
+        })
+        .collect();
     DockFrame {
         width,
         height,
@@ -365,7 +368,7 @@ pub fn dock_frame(
         icons,
         dots,
         labels,
-        separator,
+        separators,
         edge,
     }
 }
@@ -512,14 +515,19 @@ pub fn project_dock(document: &mut impl UiDocumentAccess, frame: &DockFrame) -> 
     let (hx, hy, hw, hh) = highlight_css(frame.bar);
     document.position("dock-highlight", hx, hy)?;
     document.size("dock-highlight", hw, hh)?;
-    match frame.separator {
-        Some(sep) => {
-            let (x, y, w, h) = rect_to_css(sep);
-            document.visible("dock-separator", true)?;
-            document.position("dock-separator", x, y)?;
-            document.size("dock-separator", w, h)?;
+    for (id, sep) in [
+        ("dock-separator", frame.separators.first()),
+        ("dock-separator-2", frame.separators.get(1)),
+    ] {
+        match sep {
+            Some(sep) => {
+                let (x, y, w, h) = rect_to_css(*sep);
+                document.visible(id, true)?;
+                document.position(id, x, y)?;
+                document.size(id, w, h)?;
+            }
+            None => document.visible(id, false)?,
         }
-        None => document.visible("dock-separator", false)?,
     }
     Ok(())
 }
@@ -551,7 +559,8 @@ mod tests {
         let layout = layout_for(&settings, &[]);
         let ids: Vec<&str> = layout.entries.iter().map(|e| e.app_id.as_str()).collect();
         assert_eq!(ids, ["term", TRASH_SLOT_ID]);
-        assert_eq!(layout.separator_after, Some(0));
+        assert_eq!(layout.separator_after, None);
+        assert_eq!(layout.trash_separator_after, Some(0));
         assert!(!layout.entries[1].pinned && !layout.entries[1].running);
         settings.show_trash = false;
         assert_eq!(layout_for(&settings, &[]).entries.len(), 1);
@@ -559,7 +568,7 @@ mod tests {
 
     #[test]
     fn window_is_exactly_the_bar_and_labels_sit_outside_it() {
-        let frame = dock_frame(&[true, false], None, 44.0, Edge::Bottom);
+        let frame = dock_frame(&[true, false], None, None, 44.0, Edge::Bottom);
         // slot = 44 + 2*3 = 50, main = 2*50 + 2*6 = 112, cross = 50 + 12 = 62.
         assert_eq!(frame.width, 112.0);
         assert_eq!(frame.height, 62.0);
@@ -568,7 +577,7 @@ mod tests {
         let label = frame.labels[0];
         assert_eq!(label.y + label.h + LABEL_GAP, frame.bar.y);
         assert!(label.y < 0.0);
-        let top = dock_frame(&[true], None, 44.0, Edge::Top);
+        let top = dock_frame(&[true], None, None, 44.0, Edge::Top);
         assert_eq!(top.labels[0].y, top.bar.y + top.bar.h + LABEL_GAP);
         assert_eq!(frame.slots[1].x, PAD + 50.0);
         assert!(frame.dots[0].is_some() && frame.dots[1].is_none());
@@ -576,7 +585,7 @@ mod tests {
 
     #[test]
     fn vertical_bar_runs_down_the_edge_without_labels() {
-        let frame = dock_frame(&[false, false, false], None, 44.0, Edge::Left);
+        let frame = dock_frame(&[false, false, false], None, None, 44.0, Edge::Left);
         assert_eq!(frame.width, 62.0);
         assert_eq!(frame.height, 3.0 * 50.0 + 12.0);
         assert_eq!(frame.slots[2].y, PAD + 100.0);
@@ -623,39 +632,70 @@ mod tests {
 
     #[test]
     fn separator_sits_on_group_boundary_only() {
-        let split = dock_frame(&[true, true, false], Some(1), 44.0, Edge::Bottom);
-        let sep = split.separator.expect("separator");
+        let split = dock_frame(&[true, true, false], Some(1), None, 44.0, Edge::Bottom);
+        let sep = split.separators.first().copied().expect("separator");
         assert!((sep.x - (PAD + 2.0 * 50.0 - 0.5)).abs() < 1e-3);
-        assert!(dock_frame(&[true], None, 44.0, Edge::Bottom)
-            .separator
-            .is_none());
-        assert!(dock_frame(&[true], Some(0), 44.0, Edge::Bottom)
-            .separator
-            .is_none());
+        assert!(dock_frame(&[true], None, None, 44.0, Edge::Bottom)
+            .separators
+            .is_empty());
+        assert!(dock_frame(&[true], Some(0), None, 44.0, Edge::Bottom)
+            .separators
+            .is_empty());
+    }
+
+    #[test]
+    fn group_and_trash_separators_are_both_drawn() {
+        // Same steps as `layout_for`: merge the pinned and running groups, then append Trash.
+        let mut layout =
+            flamewm_shell_core::dock::merge_dock(&["term".to_owned()], &["mail".to_owned()], true);
+        layout.trash_separator_after = layout.entries.len().checked_sub(1);
+        layout.entries.push(DockEntry {
+            app_id: TRASH_SLOT_ID.to_owned(),
+            pinned: false,
+            running: false,
+        });
+        let ids: Vec<&str> = layout.entries.iter().map(|e| e.app_id.as_str()).collect();
+        assert_eq!(ids, ["term", "mail", TRASH_SLOT_ID]);
+        assert_eq!(layout.separator_after, Some(0));
+        assert_eq!(layout.trash_separator_after, Some(1));
+        let running: Vec<bool> = layout.entries.iter().map(|e| e.running).collect();
+        let frame = dock_frame(
+            &running,
+            layout.separator_after,
+            layout.trash_separator_after,
+            44.0,
+            Edge::Bottom,
+        );
+        assert_eq!(frame.separators.len(), 2);
+        // Group boundary after slot 0, trash boundary after slot 1.
+        assert!((frame.separators[0].x - (PAD + 50.0 - 0.5)).abs() < 1e-3);
+        assert!((frame.separators[1].x - (PAD + 2.0 * 50.0 - 0.5)).abs() < 1e-3);
     }
 
     #[test]
     fn slot_count_is_capped() {
         let running = vec![false; MAX_SLOTS + 5];
         assert_eq!(
-            dock_frame(&running, None, 44.0, Edge::Bottom).slots.len(),
+            dock_frame(&running, None, None, 44.0, Edge::Bottom)
+                .slots
+                .len(),
             MAX_SLOTS
         );
     }
 
     #[test]
     fn placement_floats_margin_from_its_edge() {
-        let frame = dock_frame(&[true], None, 44.0, Edge::Bottom);
+        let frame = dock_frame(&[true], None, None, 44.0, Edge::Bottom);
         let (x, y, w, h) = place(&frame, (0, 0, 1000, 800), 1.0, 44);
         assert_eq!((w, h), (62, 62));
         assert_eq!(x, (1000 - 62) / 2);
         assert_eq!(y, 800 - h as i32 - 44 - DOCK_MARGIN as i32);
-        let vertical = dock_frame(&[true], None, 44.0, Edge::Right);
+        let vertical = dock_frame(&[true], None, None, 44.0, Edge::Right);
         let (vx, _, _, _) = place(&vertical, (0, 0, 1000, 800), 1.0, 0);
         assert_eq!(vx, 1000 - 62 - DOCK_MARGIN as i32);
-        let top = dock_frame(&[true], None, 44.0, Edge::Top);
+        let top = dock_frame(&[true], None, None, 44.0, Edge::Top);
         assert_eq!(place(&top, (0, 0, 1000, 800), 1.0, 0).1, DOCK_MARGIN as i32);
-        let left = dock_frame(&[true], None, 44.0, Edge::Left);
+        let left = dock_frame(&[true], None, None, 44.0, Edge::Left);
         assert_eq!(place(&left, (0, 0, 1000, 800), 2.0, 0).0, 16);
     }
 

@@ -79,6 +79,9 @@ pub struct DockEntry {
 pub struct DockLayout {
     pub entries: Vec<DockEntry>,
     pub separator_after: Option<usize>,
+    /// Separator before the Trash slot, after the last app. Set by the shell
+    /// layout; independent of the group boundary so both can be drawn.
+    pub trash_separator_after: Option<usize>,
 }
 
 /// Builds the dock layout. Running apps that are also pinned are shown once,
@@ -115,6 +118,7 @@ pub fn merge_dock(pinned: &[String], running: &[String], show_running: bool) -> 
     DockLayout {
         entries,
         separator_after,
+        trash_separator_after: None,
     }
 }
 
