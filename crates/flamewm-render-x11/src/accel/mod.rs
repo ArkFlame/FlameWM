@@ -182,6 +182,17 @@ struct ThreadGpu {
     slot: GpuSlot,
 }
 
+impl Drop for ThreadGpu {
+    /// A thread that exits with a live GPU slot frees the device here, so the status must follow.
+    fn drop(&mut self) {
+        let slot = std::mem::replace(&mut self.slot, GpuSlot::Untried);
+        if matches!(slot, GpuSlot::Ready(_)) {
+            drop(slot);
+            record_released();
+        }
+    }
+}
+
 thread_local! {
     static GPU: RefCell<ThreadGpu> = const {
         RefCell::new(ThreadGpu { generation: 0, slot: GpuSlot::Untried })
@@ -254,8 +265,10 @@ pub fn release_if_stale() {
         thread.generation = current;
         Some(std::mem::replace(&mut thread.slot, GpuSlot::Untried))
     });
-    // The device is freed here, outside the thread-local borrow.
-    if let Some(GpuSlot::Ready(_)) = stale {
+    // The device is freed here, outside the thread-local borrow; the trim must follow the free.
+    let released = matches!(stale, Some(GpuSlot::Ready(_)));
+    drop(stale);
+    if released {
         record_released();
     }
 }
@@ -318,7 +331,23 @@ fn record_released() {
         status.active = RenderBackend::Cpu;
         status.device = None;
     }
+    trim_heap();
 }
+
+/// Returns freed driver-side heap pages to the OS. glibc keeps them mapped otherwise.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn trim_heap() {
+    unsafe extern "C" {
+        fn malloc_trim(pad: usize) -> i32;
+    }
+    // SAFETY: malloc_trim takes a pad size and no pointers; it only releases unused heap memory.
+    unsafe {
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn trim_heap() {}
 
 fn record_fallback(reason: FallbackReason) {
     if let Ok(mut status) = STATUS.lock() {

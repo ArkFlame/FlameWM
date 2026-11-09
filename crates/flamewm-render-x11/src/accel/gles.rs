@@ -554,6 +554,7 @@ impl Drop for GpuBlur {
             }
             (self.egl.destroy_context)(self.display, self.context);
             (self.egl.terminate)(self.display);
+            (self.egl.release_thread)();
         }
     }
 }

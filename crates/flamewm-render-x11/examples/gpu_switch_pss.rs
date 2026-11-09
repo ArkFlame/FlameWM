@@ -3,6 +3,10 @@
 //!
 //! Run with `cargo run --release -p flamewm-render-x11 --example gpu_switch_pss`. A GPU step that
 //! prints `status=Cpu` means the GPU could not be used and the numbers prove nothing.
+//!
+//! `FLAMEWM_PSS_MODE` selects the experiment: `base` (GPU work on the main thread), `trim` (base plus
+//! `malloc_trim(0)` after the switch back), `thread` (GPU work on a worker thread that exits
+//! before the switch back, so its thread-local slot is dropped on thread exit).
 
 use flamewm_render_x11::{
     RenderAcceleration, blur_rgba, release_if_stale, render_backend_status, set_render_acceleration,
@@ -10,6 +14,10 @@ use flamewm_render_x11::{
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 500;
+
+unsafe extern "C" {
+    fn malloc_trim(pad: usize) -> i32;
+}
 
 fn pss_kib() -> u64 {
     std::fs::read_to_string("/proc/self/smaps_rollup")
@@ -34,7 +42,14 @@ fn report(label: &str) {
     );
 }
 
+fn gpu_work(frame: &mut [u8], passes: usize) {
+    for _ in 0..passes {
+        blur_rgba(frame, WIDTH, HEIGHT, 12.0);
+    }
+}
+
 fn main() {
+    let mode = std::env::var("FLAMEWM_PSS_MODE").unwrap_or_else(|_| "base".to_owned());
     let mut frame = vec![128_u8; (WIDTH * HEIGHT * 4) as usize];
     set_render_acceleration(RenderAcceleration::Cpu);
     for _ in 0..3 {
@@ -42,15 +57,27 @@ fn main() {
     }
     report("cpu");
     set_render_acceleration(RenderAcceleration::Gpu);
-    for _ in 0..5 {
-        blur_rgba(&mut frame, WIDTH, HEIGHT, 12.0);
+    if mode == "thread" {
+        let mut worker_frame = frame.clone();
+        std::thread::spawn(move || {
+            gpu_work(&mut worker_frame, 5);
+            report("gpu_in_worker");
+        })
+        .join()
+        .expect("worker panicked");
+    } else {
+        gpu_work(&mut frame, 5);
     }
     report("gpu");
     set_render_acceleration(RenderAcceleration::Cpu);
     report("cpu_after_switch");
-    release_if_stale();
-    for _ in 0..3 {
-        blur_rgba(&mut frame, WIDTH, HEIGHT, 12.0);
+    if mode == "trim" {
+        // SAFETY: malloc_trim takes a pad size and has no pointer arguments.
+        let released = unsafe { malloc_trim(0) };
+        println!("malloc_trim returned {released}");
+        report("cpu_after_trim");
     }
+    release_if_stale();
+    gpu_work(&mut frame, 3);
     report("cpu_after_work");
 }

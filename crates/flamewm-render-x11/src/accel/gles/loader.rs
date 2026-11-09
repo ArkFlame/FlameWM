@@ -6,6 +6,7 @@ pub(super) struct Egl {
     pub(super) get_display: unsafe extern "C" fn(*mut c_void) -> EglDisplay,
     pub(super) initialize: unsafe extern "C" fn(EglDisplay, *mut EglInt, *mut EglInt) -> EglBoolean,
     pub(super) terminate: unsafe extern "C" fn(EglDisplay) -> EglBoolean,
+    pub(super) release_thread: unsafe extern "C" fn() -> EglBoolean,
     pub(super) query_string: unsafe extern "C" fn(EglDisplay, EglInt) -> *const c_char,
     pub(super) bind_api: unsafe extern "C" fn(c_uint) -> EglBoolean,
     pub(super) choose_config: unsafe extern "C" fn(
@@ -35,6 +36,7 @@ impl Egl {
                 get_display: library.symbol(b"eglGetDisplay\0")?,
                 initialize: library.symbol(b"eglInitialize\0")?,
                 terminate: library.symbol(b"eglTerminate\0")?,
+                release_thread: library.symbol(b"eglReleaseThread\0")?,
                 query_string: library.symbol(b"eglQueryString\0")?,
                 bind_api: library.symbol(b"eglBindAPI\0")?,
                 choose_config: library.symbol(b"eglChooseConfig\0")?,
