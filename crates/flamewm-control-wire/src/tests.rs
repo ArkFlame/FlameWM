@@ -987,6 +987,19 @@ fn outline_and_blue_light_percent_keys_keep_percent_type_on_the_wire() {
 }
 
 #[test]
+fn dock_surface_percent_keys_keep_percent_type_on_the_wire() {
+    // The shell reads dock.surfaceOpacity as Percent only; an Integer silently falls back to 75.
+    for key in [
+        "dock.surfaceOpacity",
+        "dock.surfaceBlurPercent",
+        "dock.surfaceOutlineOpacity",
+    ] {
+        let value = setting_value_for_key(key, &WireValue::U32(30)).expect("percent key");
+        assert_eq!(value, SettingValue::Percent(30), "{key}");
+    }
+}
+
+#[test]
 fn workspace_snapshot_without_occupancy_key_decodes_as_empty_occupancy() {
     use flamewm_api::workspace::WorkspaceSnapshot;
     let source = WorkspaceSnapshot {
