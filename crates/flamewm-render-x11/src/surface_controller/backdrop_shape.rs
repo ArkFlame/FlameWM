@@ -131,6 +131,13 @@ impl SurfaceController {
         Some(desktop.crop(root, &outputs, rect, opacity, blur))
     }
 
+    /// Drops the shared live-composition key so the next `live_backdrop` resends pixels.
+    pub(super) fn forget_live_composition(&mut self) {
+        if let Some(Some(scene)) = self.live_scene.as_mut() {
+            scene.forget_composed();
+        }
+    }
+
     /// Live pseudo-transparency for surface `id` under root `rect`: the desktop and every redirected
     /// frame stacked below its window, composed on the server. `Ok(None)` when the WM publishes no
     /// redirected frames, so the caller keeps the desktop-only backdrop.
@@ -258,6 +265,7 @@ impl SurfaceController {
                         return Ok(());
                     }
                     instance.app.clear_surface_backdrop();
+                    self.forget_live_composition();
                 }
             }
         }

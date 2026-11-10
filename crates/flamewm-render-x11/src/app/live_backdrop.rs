@@ -147,6 +147,11 @@ fn hash_pixels(bytes: &[u8]) -> u64 {
 
 /// Records `key` as the composed image and reports whether it equalled the previous one, so the
 /// blur and upload can be skipped.
+/// Clears the composed-image key so the next composition is never skipped.
+fn forget_key(last: &mut Option<SmallKey>) {
+    *last = None;
+}
+
 fn is_unchanged(last: &mut Option<SmallKey>, key: SmallKey) -> bool {
     if *last == Some(key) {
         return true;
@@ -335,6 +340,13 @@ impl LiveScene {
     /// # Safety
     ///
     /// `display` must be live; `window` is this app's window on it.
+    /// Forgets the last composed image. A surface whose backdrop was cleared must not get
+    /// `Unchanged` back for pixels another surface's install already covered: its next compose
+    /// sends the pixels again.
+    pub(crate) fn forget_composed(&mut self) {
+        forget_key(&mut self.last_small);
+    }
+
     pub(crate) unsafe fn compose(
         &mut self,
         display: *mut Display,
@@ -857,6 +869,22 @@ mod tests {
         assert_eq!(
             classify_event(&own, ROOT, DAMAGE_BASE, 0, &[], &[], (0, 0, 1, 1)),
             (false, false)
+        );
+    }
+
+    #[test]
+    fn forgotten_composition_is_sent_again() {
+        // Regression: a surface whose backdrop was cleared on hide got `Unchanged` back for the
+        // pixels cached before the clear, so the shown dock never reinstalled its backdrop.
+        let pixels = vec![0x20_u8; 256];
+        let base = (hash_pixels(&pixels), (8, 8), (0, 0, 100, 80), 40);
+        let mut last = None;
+        assert!(!is_unchanged(&mut last, base));
+        assert!(is_unchanged(&mut last, base), "same pixels are skipped");
+        forget_key(&mut last);
+        assert!(
+            !is_unchanged(&mut last, base),
+            "after a forget the same pixels are composed and sent again"
         );
     }
 

@@ -149,7 +149,11 @@ pub fn project(
         SurfaceKind::Dock => {
             // Pill fill is the taskbar material; the outline comes from project_surface_outline above.
             // The top highlight is the same outline colour at half alpha, so it never drifts from it.
-            document.background(root, taskbar_fill(snapshot))?;
+            let mut fill = taskbar_fill(snapshot);
+            if let Some(alpha) = dock_pill_alpha(snapshot) {
+                fill.a = alpha;
+            }
+            document.background(root, fill)?;
             let outline = flamewm_ui_x11::surface_style::surface_outline(snapshot);
             document.background(
                 "dock-highlight",
@@ -164,6 +168,21 @@ pub fn project(
 }
 
 /// The taskbar fill from the Dock material (`dock_fill`). The Dock pill paints the same colour.
+/// Dock pill alpha from `dock.surfaceOpacity` while the Dock paints its own surface. Every taskbar
+/// material reads the global glass or taskbar opacity, which the dock override never reaches (Inherit
+/// read `glassOpacityPercent`, so a dock opacity of 30 painted alpha 109). The pseudo-transparency
+/// beneath is sampled at this same opacity, so the pill uses it too (0 see-through, 100 opaque).
+/// Reduce-transparency keeps its opaque solid.
+pub(super) fn dock_pill_alpha(snapshot: &SettingsSnapshot) -> Option<u8> {
+    if !flamewm_api::settings_groups::dock_surface_custom(snapshot)
+        || super::glass::glass_appearance(snapshot).reduce_transparency
+    {
+        return None;
+    }
+    let (opacity, _) = super::glass::start_backdrop_percents(snapshot);
+    Some((u16::from(opacity.min(100)) * 255).div_ceil(100) as u8)
+}
+
 pub(super) fn taskbar_fill(snapshot: &SettingsSnapshot) -> UiColor {
     let dock = flamewm_ui_core::surface::dock_fill(snapshot);
     UiColor {

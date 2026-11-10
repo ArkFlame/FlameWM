@@ -94,6 +94,7 @@ impl SurfaceController {
         // The snapshot is recaptured on the next show, so a closed popup keeps no stale pixels.
         instance.app.clear_surface_backdrop();
         instance.app.clear_node_backdrops();
+        self.forget_live_composition();
         Ok(())
     }
 

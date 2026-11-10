@@ -680,6 +680,32 @@ fn dock_custom_surface_paints_only_the_dock() {
     );
 }
 
+/// Regression: the pill alpha must follow `dock.surfaceOpacity` (the opacity its backdrop is sampled at)
+/// in a non-Inherit taskbar material, not the global `taskbarOpacityPercent` (default 43 gave alpha 109
+/// at a dock opacity of 30).
+#[test]
+fn dock_pill_alpha_follows_dock_surface_opacity_in_non_inherit_modes() {
+    let pill_alpha = |mode: &str, opacity: u8| {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in [
+            ("taskbarMaterialMode", SettingValue::Text(mode.into())),
+            ("dock.surfaceCustom", SettingValue::Boolean(true)),
+            ("dock.surfaceOpacity", SettingValue::Percent(opacity)),
+        ] {
+            snapshot.values.insert(key.to_owned(), value);
+        }
+        let mut doc = RecordingUiDoc::default();
+        project(&mut doc, &snapshot, SurfaceKind::Dock).expect("dock projection");
+        doc.backgrounds["dock-bar"].a
+    };
+    for mode in ["inherit", "blur-only", "custom-tint"] {
+        assert_eq!(pill_alpha(mode, 0), 0, "{mode} opacity 0");
+        assert_eq!(pill_alpha(mode, 30), 77, "{mode} opacity 30");
+        assert_eq!(pill_alpha(mode, 70), 179, "{mode} opacity 70");
+        assert_eq!(pill_alpha(mode, 100), 255, "{mode} opacity 100");
+    }
+}
+
 #[test]
 fn dock_backdrop_uses_dock_opacity_and_blur_only_while_custom() {
     let mut snapshot = SettingsSnapshot::new(1);
