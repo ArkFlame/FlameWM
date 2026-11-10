@@ -188,6 +188,59 @@ fn left_and_top_edges_move_the_origin_and_clamp_to_minimum() {
 }
 
 #[test]
+fn right_bottom_and_corner_edges_resize_only_the_grabbed_sides() {
+    let start = Rect::new(100, 100, 300, 200);
+    let right = ResizeEdge {
+        left: false,
+        right: true,
+        top: false,
+        bottom: false,
+    };
+    assert_eq!(right.resized(start, 50, 0), Rect::new(100, 100, 350, 200));
+    let bottom = ResizeEdge {
+        left: false,
+        right: false,
+        top: false,
+        bottom: true,
+    };
+    assert_eq!(bottom.resized(start, 0, -30), Rect::new(100, 100, 300, 170));
+    let bottom_right = ResizeEdge {
+        left: false,
+        right: true,
+        top: false,
+        bottom: true,
+    };
+    assert_eq!(
+        bottom_right.resized(start, 20, 10),
+        Rect::new(100, 100, 320, 210)
+    );
+    // Far sides shrinking past the minimum keep the origin fixed.
+    let shrunk = bottom_right.resized(start, -500, -500);
+    assert_eq!((shrunk.x, shrunk.y), (100, 100));
+    assert_eq!((shrunk.w, shrunk.h), (MIN_CLIENT_W, MIN_CLIENT_H));
+}
+
+#[test]
+fn top_left_corner_moves_both_origin_axes_and_keeps_the_far_corner() {
+    let start = Rect::new(100, 100, 300, 200);
+    let top_left = ResizeEdge {
+        left: true,
+        right: false,
+        top: true,
+        bottom: false,
+    };
+    assert_eq!(
+        top_left.resized(start, 10, 10),
+        Rect::new(110, 110, 290, 190)
+    );
+    // Past the minimum on both axes the far corner (400, 300) stays put.
+    let clamped = top_left.resized(start, 500, 500);
+    assert_eq!(clamped.x + clamped.w, start.x + start.w);
+    assert_eq!(clamped.y + clamped.h, start.y + start.h);
+    assert_eq!((clamped.w, clamped.h), (MIN_CLIENT_W, MIN_CLIENT_H));
+}
+
+#[test]
 fn quadrant_picks_the_corner_nearest_the_grab() {
     let rect = Rect::new(0, 0, 200, 100);
     let q = ResizeEdge::quadrant(rect, 150.0, 80.0);

@@ -136,9 +136,9 @@ Manual test procedure (not yet run on real hardware):
 `flamewm-wayland --probe` is an additional read-only advisory report: it never
 takes the seat and never changes the session exit code.
 
-A login that returns to the greeter after showing a text cursor has been
-reported and is still under investigation; no successful hardware login of the
-native backend is on record.
+The native backend's login is owner-reported working on a real laptop. CI and
+the build sandbox have not re-verified it. If a login returns to the greeter,
+read `~/.cache/flamewm/wayland-session.log` and choose `FlameWM` (X11) to recover.
 
 The desktop **Convert** wheel runs ImageMagick (`magick` or `convert`) as an
 optional subprocess. The Debian package suggests `imagemagick`; when it is
@@ -233,8 +233,8 @@ dpkg-deb --contents .target/dist/flamewm_0.1.2_amd64.deb | grep -E '/xsessions/f
 python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.2_amd64.deb
 ```
 
-FlameWM ships an X11 session and a Wayland session. X11 is the default; no
-Wayland login on real hardware is on record yet.
+FlameWM ships an X11 session and a Wayland session. X11 is the default. The
+Wayland session is owner-reported working on a real laptop; CI has not re-verified it.
 
 
 ### Troubleshooting a rejected `.deb`

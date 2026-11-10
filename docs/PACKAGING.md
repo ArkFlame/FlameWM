@@ -177,7 +177,7 @@ libgles2, xwayland`. The full classification (Depends, Recommends, Suggests, and
 the Arch mapping) is in [`DEPENDENCIES.md`](DEPENDENCIES.md). Seat access is implemented against systemd-logind over
 D-Bus, so no seat library (`libseat`) and no `seatd` is packaged or required.
 
-No Wayland login on real hardware is on record yet. See
+The Wayland login is owner-reported working on a real laptop; CI has not re-verified it. See
 [`WAYLAND_PLAN.md`](WAYLAND_PLAN.md) for the implementation, the diagnostics and
 the list of unverified items.
 

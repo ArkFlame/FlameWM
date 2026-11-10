@@ -1,12 +1,12 @@
 # FlameWM Wayland Plan
 
-Status: the compositor runs as a nested window (winit) and as a real tty compositor (crate feature
-`drm`) that takes its seat from systemd-logind over D-Bus. The nested backend and the build, test and
-wrapper chain are exercised on this host. The native backend compiles and is unit-tested; the
-recorded hardware attempt (a LightDM login) did not come up - a text cursor, then back to the greeter
-- and is still under investigation. No successful hardware start is on record, so the X11 session
-stays the default. Nested, native Wayland clients (`foot`, `weston-simple-shm`) and XWayland were
-checked on 2026-10-28 on Xorg's dummy driver with software GL.
+Status: the Wayland session is owner-reported working on a real laptop with real hardware, and the
+owner reports it is usable. That is an owner report, not independently re-verified: CI and this sandbox
+did not run it. The compositor runs as a real tty compositor (crate feature `drm`) that takes its seat
+from systemd-logind over D-Bus, and as a nested window (winit) for testing inside another session. The
+nested backend and the build, test and wrapper chain were exercised on the development host on
+2026-10-28 (Xorg's dummy driver with software GL), and nested native Wayland clients (`foot`,
+`weston-simple-shm`) and XWayland were checked then too. The X11 session remains the default session.
 
 Claims carry their evidence: **code** marks something readable in the sources with no runtime
 evidence behind it; commands that actually produced a result on this host are listed under "Proven
@@ -237,22 +237,28 @@ they drift as the tree changes.
 
 ## Unverified / required hardware validation
 
-No successful real hardware start, VT switch or LightDM login has been validated. A LightDM login
-attempt reached a text cursor and returned to the greeter; the cause is still under investigation,
-and nothing below has been observed working. The required procedure is:
+Owner-reported (real laptop, not re-verified in CI or this sandbox): the native DRM session starts from
+the login screen, the first frame and panel appear, a terminal opens and accepts input, and the pointer
+and keyboard work. Each of these is marked **[owner-reported]** below. Items without the mark were not
+reported and remain unverified. Nothing in this section is CI-proven.
+
+The validation procedure, for re-checking or for a new machine:
 
 1. Install the built `.deb` while logged into an X11 session, so a working session stays available
    for recovery.
 2. `flamewm-wayland --capabilities` must show `drm_compiled=true`.
-3. Log out and select `FlameWM (Wayland)` in LightDM.
+3. Log out and select `FlameWM (Wayland)` in LightDM. **[owner-reported]** the login starts the session.
 4. On failure, read `~/.cache/flamewm/wayland-session.log` (and its `.1` rotation) plus
    `journalctl -b` for the logind and DRM side; the `FLAMEWM-WAYLAND-STARTUP` lines name the stage
    that failed.
-5. On success, verify: first frame on the connector, panel and shell visible, a terminal opens and
-   accepts input, pointer and keyboard work, Ctrl+Alt+Fn VT switch away and back (pause, ack,
-   resume), and a second login after a VT return.
+5. On success, verify: first frame on the connector **[owner-reported]**, panel and shell visible
+   **[owner-reported]**, a terminal opens and accepts input **[owner-reported]**, pointer and keyboard
+   work **[owner-reported]**, Ctrl+Alt+Fn VT switch away and back (pause, ack, resume) not yet reported,
+   and a second login after a VT return not yet reported.
 6. Recover by choosing `FlameWM` (X11) at the login screen; the package still ships that session and
    the Wayland wrapper does not fall back to it by itself.
+
+Known limitations that remain true are listed under "Remaining work".
 
 ## Remaining work
 
@@ -274,8 +280,11 @@ and nothing below has been observed working. The required procedure is:
 6. Launcher settings parity with X11 is partial: the user's accent is applied, but the selection row
    composes with the translucent accent tokens and reads darker than the X11 reference. Not
    compared pixel-for-pixel.
-7. Resize parity (edge-specific `Grab::Resize` edges, Ctrl+Super+drag) and taskbar
-   middle-click have no automated coverage in the current harness.
+7. Resize parity and taskbar middle-click. Unit coverage now exists: the model tests cover every
+   `Grab::Resize` edge and corner geometry (right, bottom, bottom-right, top-left, with minimum
+   clamping), and the shell `event_router` test covers the taskbar middle-click drop. Still not
+   covered: a pointer-driven Ctrl+Super+drag through the compositor input path, and any runtime
+   check of either behaviour.
 8. Native Wayland clients are shared-memory only: `renderer.bind_wl_display` and a
    `zwp_linux_dmabuf_v1` global are not wired (`smithay/use_system_lib` is not enabled), so
    EGL/dmabuf clients fall back to software or SHM. X11 clients through XWayland are unaffected.

@@ -1,3 +1,9 @@
+## Unreleased — Wayland session no longer labelled experimental
+
+- Docs: the README badge, Features and Sessions tables, the Status section and the Wayland known limitations no longer call the Wayland session experimental or in development. The Wayland session is owner-reported working on a real laptop. CI has not re-verified it, and the X11 session stays the default.
+- Docs: `docs/WAYLAND_PLAN.md`, `docs/INSTALL.md` and `docs/PACKAGING.md` replace "no Wayland login on record" with the owner report and mark which validation items are owner-reported.
+- Tests: Wayland model tests cover right, bottom, bottom-right and top-left `Grab::Resize` edges with minimum clamping. A shell event-router test covers the taskbar middle-click drop.
+
 ## Unreleased — widgets draw no surface by default
 
 - Change: desktop widgets (clock, weather, system and the others) draw their text and graphics directly on the wallpaper. No fill, blur or backdrop is requested unless the card's `surface` option is on. Absent key = off; saved `surface=1` keeps its value.

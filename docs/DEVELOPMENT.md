@@ -30,8 +30,8 @@ flamewm-wayland --capabilities                     # build facts only, no seat a
 
 The native build needs the `libinput`, `gbm`, `libdrm` and `libudev` development files plus
 `Xwayland`. Do not present a nested run, a unit test or a successful package build as evidence that
-the native session works: no real hardware login is on record and the X11 session stays the
-default. Docs and commit messages say what was run (nested, unit tests, package build, hardware)
+the native session works: the owner reports a working real-laptop login (not re-verified in CI),
+and the X11 session stays the default. Docs and commit messages say what was run (nested, unit tests, package build, hardware)
 instead of implying a hardware result.
 
 ## Work on the correct owner

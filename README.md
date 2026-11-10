@@ -9,7 +9,7 @@ Extremely efficient. Two sessions: X11 and Wayland.
 [![License: LGPL-2.0-only](https://img.shields.io/badge/license-LGPL--2.0--only-blue)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-workspace-b7410e)
 ![X11](https://img.shields.io/badge/session-X11-4b8bbe)
-![Wayland](https://img.shields.io/badge/session-Wayland%20%28dev%29-f5a623)
+![Wayland](https://img.shields.io/badge/session-Wayland-f5a623)
 
 [Screenshots](#screenshots) · [Features](#features) · [Status](#status) · [Install](#install) · [Build](#build-from-source) · [Architecture](docs/ARCHITECTURE.md) · [Contributing](#contributing)
 
@@ -53,9 +53,9 @@ Status key: **Shipped** is in the current source and used in the screenshots. **
 | Apps | Task manager, terminal, file explorer, finder | Shipped |
 | Weather | Open-Meteo popup | Shipped; off by default, needs network |
 | ARK AI | Optional ARK AI chat window | Shipped; off by default, see [ARK AI](#ark-ai) |
-| Wayland | Compositor on Smithay, runs native Wayland and XWayland clients | Partial; see [Wayland known issues](#wayland-known-issues) |
-| Wayland | DRM/KMS backend | Partial; no successful native login on record |
-| Wayland | Nested development backend | Shipped |
+| Wayland | Compositor on Smithay, runs native Wayland and XWayland clients | Shipped; see [Wayland known limitations](#wayland-known-limitations) |
+| Wayland | DRM/KMS backend | Shipped; owner-reported working on a real laptop, not re-verified in CI |
+| Wayland | Nested window backend, for testing inside another session | Shipped |
 | Displays | Per-output layout and scale | Planned |
 
 Full comparison with another desktop is in [`docs/competitors/`](docs/competitors/README.md).
@@ -64,14 +64,14 @@ Full comparison with another desktop is in [`docs/competitors/`](docs/competitor
 
 FlameWM is a source-level release. It does not claim parity with the historical IceWM or C implementations. Release history is in [`CHANGELOG.md`](CHANGELOG.md). The current version is printed by `./scripts/version`.
 
-No installed session has been accepted on real hardware in this revision. See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
+Both sessions are supported. The Wayland session is owner-reported working on a real laptop; that report is not re-verified by CI or in the build sandbox. See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
 ## Sessions
 
 | Session | Entry | Notes |
 | --- | --- | --- |
 | FlameWM (X11) | `/usr/share/xsessions/flamewm.desktop` | Default. |
-| FlameWM (Wayland) | `/usr/share/wayland-sessions/flamewm-wayland.desktop` | Native DRM/KMS, or a nested window for development. |
+| FlameWM (Wayland) | `/usr/share/wayland-sessions/flamewm-wayland.desktop` | Native DRM/KMS. A nested window backend exists for testing inside another session. |
 
 The Wayland compositor is `crates/flamewm-wm-wayland`, built on Smithay. It runs native Wayland clients and XWayland. The shell, desktop and settings run as XWayland clients. Install from a working X11 session first. If the Wayland session fails, choose **FlameWM** at the login screen. The wrapper does not fall back to X11 by itself.
 
@@ -83,10 +83,12 @@ flamewm-wayland --probe                         # read-only report
 tail -n 200 ~/.cache/flamewm/wayland-session.log
 ```
 
-### Wayland known issues
+### Wayland known limitations
 
-- No successful native DRM login is on record. One reported login fails after the cursor appears.
+- Native Wayland clients are shared-memory only: EGL/dmabuf clients fall back to software or SHM. X11 clients through XWayland are unaffected.
 - No session lock, screenshot portal, per-output layout or per-output scale.
+- Shell, desktop and settings run as XWayland clients, not native Wayland clients.
+- At the default 80% terminal opacity the terminal body renders black. It renders correctly at `background_opacity = 100`.
 - At the default 80% terminal opacity the terminal body renders black. It renders correctly at `background_opacity = 100`.
 
 The full status is in [`docs/WAYLAND_PLAN.md`](docs/WAYLAND_PLAN.md).
@@ -177,7 +179,7 @@ Headless visual checks need `xf86-video-dummy`, `xdotool`, ImageMagick, `xterm` 
 python3 -I tools/flamewm_visual_tests.py --bin-dir .target/release --out .target/visual
 ```
 
-Wayland development:
+Wayland build and nested test:
 
 ```bash
 ./scripts/build-deb                        # release build with DRM support

@@ -227,6 +227,22 @@ fn genuine_outside_release_closes_and_inside_release_is_kept() {
     );
 }
 
+/// Taskbar middle-click: a middle release on a task slot is dropped before task activation, so it
+/// neither activates nor closes the window. Primary releases on the same slot still route.
+#[test]
+fn middle_release_on_a_task_slot_never_activates_the_task() {
+    assert!(non_primary_release_is_dropped(
+        "task.slot.0",
+        true,
+        PointerButton::Middle
+    ));
+    assert!(!non_primary_release_is_dropped(
+        "task.slot.0",
+        true,
+        PointerButton::Primary
+    ));
+}
+
 #[test]
 fn right_button_outside_release_reaches_dismissal_but_other_secondary_releases_drop() {
     assert!(!non_primary_release_is_dropped(
