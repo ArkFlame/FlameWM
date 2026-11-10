@@ -1,6 +1,6 @@
 # Backlog index
 
-Single ranked index of open candidates and recent landings. Detail lives in `docs/backlog/*.md` and `docs/competitors/**`. Snapshot: origin/main `6eef582c`, 2026-11-09. Done rows cite the landing sha. Unknown or unverified status stays `open`. Static evidence only unless a row says otherwise. Rank = order within the table; open rows first.
+Single ranked index of open candidates and recent landings. Detail lives in `docs/backlog/*.md` and `docs/competitors/**`. Snapshot: origin/main `0eaf3888`, 2026-11-10. Done rows cite the landing sha. Unknown or unverified status stays `open`. Static evidence only unless a row says otherwise. Rank = order within the table; open rows first.
 
 Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-rss.md, `look-*` = look.md, `dock-*` = dock-translucency.md, `cmp-*` = compare.md, `gap-*` = docs/competitors/vela/GAP_PLAN.md.
 
@@ -57,4 +57,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `read.md:282` | test maintenance | S | open |
 | read-SIZE | quality | 49 production files over 600 lines; 6 over 1000 | `read.md:258-271`; `desktop/src/widgets/mod.rs` 1307 | split by responsibility | L | open |
 | read-GUARD | quality | Five pending `TODO(J..-PENDING)` guard warnings, 24-62 days old | `tools/architecture_guard.py:440,518,522,851,859` | governance debt | S | open |
-| wl-portal | feature | xdg-desktop-portal Screenshot and ScreenCast for Wayland (zwlr-screencopy covers full-output shm capture only; no portal, no dmabuf, no region/window capture, no video stream) | `wm-wayland/src/screencopy.rs`; `screenshot/src/wayland.rs` | portal integration | L | open |
+| wl-portal | feature | xdg-desktop-portal Screenshot and ScreenCast for Wayland. Landed: zwlr-screencopy full-output shm capture (`bf3af84a`) and Screenshot portal backend `flamewm-screenshot --portal` (`0eaf3888`). Open: ScreenCast; region/window capture on Wayland; Wayland branch of the portal and real xdg-desktop-portal routing unverified | `wm-wayland/src/screencopy.rs`; `screenshot/src/wayland.rs`; `WAYLAND_PLAN.md` item 2 | portal integration | L | partial |
+| wl-dmabuf-resume | reliability | drm resume does not re-run `dmabuf::init`; dmabuf global not re-offered after resume | `WAYLAND_PLAN.md` item 8 (resume note) | no zwp_linux_dmabuf_v1 after resume (hardware path unproven) | S | open |
+| meas-blur-eq | quality | Blur radius 7-8 (2x tier) has no equivalence assertion | `852f81ce` commit body: 2x-only error mean 1.9 and 1.1, max 13; `edd3d8ca` tiers | unasserted render drift | S | open |
+| break-b2 | reliability | WM start logs `XSettings X11 request failed: failed to read whole buffer` | `docs/backlog/break.md:27,45`: 14 of 30 soak runs; WM stays up, claim non-fatal (`crates/flamewm-wm/src/main.rs:165`) | XSettings not claimed in ~47% of runs; root cause open | M | open |

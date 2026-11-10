@@ -264,12 +264,15 @@ Known limitations that remain true are listed under "Remaining work".
 
 1. Layer-shell support exists in the compositor, but the shipped shell, desktop and launcher are
    still X11 clients on XWayland. Native Wayland shell clients are not built.
-2. Screenshot: full-output capture through `zwlr-screencopy-unstable-v1` (shm, full damage) and the
-   shared `ScreenshotFull` action run on native Wayland. Region and window capture on Wayland, and
-   xdg-desktop-portal Screenshot/ScreenCast, are open (`docs/BACKLOG.md` `wl-portal`).
-3. Session lock: `ext-session-lock-v1` is advertised and paints the lock surface. A held lock now
-   blocks WM shortcuts and routes pointer input only to the lock surface. Open: multi-output lock
-   surfaces and outputs added while locked (the compositor drives one output), and no runtime test
+2. Screenshot: full-output capture through `zwlr-screencopy-unstable-v1` (shm, full damage) on native
+   Wayland (`bf3af84a`), and an `org.freedesktop.impl.portal.Screenshot` backend (`flamewm-screenshot
+   --portal`, `0eaf3888`): non-interactive, full output, saves a PNG and returns a `file://` uri;
+   `interactive=true` is refused with response 2. Open: region and window capture on Wayland, and
+   xdg-desktop-portal ScreenCast. Not proven: the Wayland branch of the portal backend and routing
+   through a real xdg-desktop-portal (no run recorded) (`docs/BACKLOG.md` `wl-portal`, partial).
+3. Session lock: `ext-session-lock-v1` is advertised and paints the lock surface. A held lock blocks
+   WM shortcuts and routes pointer input only to the lock surface (`bf3af84a`). Open: multi-output
+   lock surfaces and outputs added while locked (the compositor drives one output). No runtime test
    with a lock client yet.
 4. Native event sources: the compositor drives smithay's `EventLoop<State>` directly.
    `flamewm-reactor` wraps an `EventLoop<()>` whose callbacks take no state, so smithay's sources
@@ -277,11 +280,10 @@ Known limitations that remain true are listed under "Remaining work".
    `ARCHITECTURE_EXCEPTIONS.toml` entry was added: the guard only admits exceptions for capabilities
    it checks, so a calloop entry would be reported as stale. The control bus pump and the logind
    poll are timer-driven for this reason.
-5. Known limitation, owned by the render crate: the terminal body stays black at the default 80%
-   opacity under Wayland, because the translucent fill blends over a backdrop captured from the X
-   root, which never holds the composited desktop or wallpaper. At `background_opacity = 100` the
-   same binary renders its prompt. Either the terminal skips the root backdrop under Wayland or the
-   compositor feeds a wallpaper into the XWayland root.
+5. Terminal body black at the default 80% opacity under Wayland: NOT reproduced on `edd3d8ca`.
+   Measured body luminance 9.5 vs 0.2 x wallpaper 9.5 (match). The backdrop is read from the
+   wallpaper file, not the X root, so the earlier root-capture explanation no longer holds. Owner
+   repro still wanted before this closes. At `background_opacity = 100` the prompt renders.
 6. Launcher settings parity with X11 is partial: the user's accent is applied, but the selection row
    composes with the translucent accent tokens and reads darker than the X11 reference. Not
    compared pixel-for-pixel.
@@ -305,3 +307,5 @@ Known limitations that remain true are listed under "Remaining work".
    are unaffected. NOT proven: dmabuf advertised, a dmabuf client buffer imported and drawn, and the
    native drm backend on hardware. Those need a GPU host with a render node
    (`/dev/dri/renderD*`) and an EGL/dmabuf client.
+   Resume: the `drm` backend resume path does not re-run `dmabuf::init`, so the dmabuf global is not
+   re-offered after a resume (open, not run).
