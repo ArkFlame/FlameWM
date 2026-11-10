@@ -33,6 +33,10 @@ impl Service {
             .borrow_mut()
             .start()
             .map_err(|error| format!("NetworkManager start failed: {error}"))?;
+        // Same shared facade the X11 runtime drives; an absent bus hides the row, never fabricates devices.
+        let bluetooth = Rc::new(RefCell::new(
+            BluetoothDeviceControl::connect().map_err(|error| format!("{error}"))?,
+        ));
         let audio_updates = Arc::new(Mutex::new(Vec::new()));
         let audio_link = match smithay::reexports::calloop::ping::make_ping() {
             Ok((ping, source)) => {
@@ -77,6 +81,7 @@ impl Service {
         }
         let backlight_for_actions = Rc::clone(&backlight);
         let network_for_actions = Rc::clone(&network);
+        let bluetooth_for_actions = Rc::clone(&bluetooth);
         let audio_for_actions = audio_link.as_ref().map(|(helper, _, _)| Rc::clone(helper));
         host.set_system_action_handler(Box::new(move |action, snapshot| match action {
             SystemAction::SetBrightness(action) => backlight_for_actions
@@ -107,6 +112,9 @@ impl Service {
             | SystemAction::CancelNetworkSecret { .. }
             | SystemAction::Disconnect
             | SystemAction::Scan => network_action(&network_for_actions, action, &snapshot),
+            SystemAction::BluetoothDevice(action) => {
+                bluetooth_for_actions.borrow().perform_action(&action)
+            }
             _ => Err(FlameError::unsupported(
                 "the Wayland compositor does not integrate media providers yet",
             )),
@@ -145,6 +153,7 @@ impl Service {
             _audio_ping: audio_ping,
             backlight,
             network,
+            bluetooth,
             workspace_revision: std::cell::Cell::new(1),
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),

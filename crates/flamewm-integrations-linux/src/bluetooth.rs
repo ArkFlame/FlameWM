@@ -459,6 +459,15 @@ impl BluetoothDeviceControl {
             .ok_or_else(|| FlameError::unavailable("system bus unavailable"))?;
         pump.send(device_op_message(op, adapter, address)?)
     }
+
+    /// Shared `SystemAction::BluetoothDevice` seam for every compositor backend.
+    pub fn perform_action(
+        &self,
+        action: &flamewm_api::system::BluetoothDeviceAction,
+    ) -> FlameResult<()> {
+        self.request(action.op, DEFAULT_ADAPTER, &action.address)
+            .map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -789,6 +798,21 @@ mod tests {
         );
         assert_eq!(control.on_ready().expect("drain"), 0);
         assert_eq!(control.snapshot(), BluetoothSnapshot::default());
+    }
+
+    #[test]
+    fn shared_device_action_seam_fails_soft_without_bus() {
+        let (peer, dormant) = UnixStream::pair().expect("pair");
+        let control = BluetoothDeviceControl {
+            pump: None,
+            state: RefCell::new(BluetoothState::new(ADAPTER.to_owned())),
+            dormant,
+            _peer: peer,
+        };
+        let action = flamewm_api::system::BluetoothDeviceAction::new(DeviceOp::Pair, MAC)
+            .expect("valid address");
+        let error = control.perform_action(&action).expect_err("no bus");
+        assert_eq!(error.code, flamewm_api::ErrorCode::Unavailable);
     }
 
     #[test]

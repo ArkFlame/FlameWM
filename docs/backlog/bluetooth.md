@@ -37,3 +37,11 @@ Vela reference: `.vendor/vela-main/bluetooth/` (25 files), as in `docs/backlog/c
 
 - No real BlueZ, adapter or device was used. All checks are pure message-shape tests.
 - No runtime D-Bus round-trip; `bluetoothd` behaviour on Pair/Trust/Remove is from the BlueZ API docs, not run.
+
+## Wayland parity (`bt-wayland`)
+
+- Snapshot push: `crates/flamewm-wm-wayland/src/control/media.rs` `drain_bluetooth` (on each bus-fd wake and once at install) calls `on_ready`, then `update_bluetooth`, same order as X11 `crates/flamewm-wm-x11/src/runtime.rs:476`.
+- Reply drain: `crates/flamewm-wm-wayland/src/control/mod.rs` `install` inserts a level source on `BluetoothDeviceControl::watch().fd`.
+- Action: `crates/flamewm-wm-wayland/src/control/service.rs` routes `SystemAction::BluetoothDevice` to the shared seam `BluetoothDeviceControl::perform_action` (`crates/flamewm-integrations-linux/src/bluetooth.rs`), which X11 `crates/flamewm-integrations-linux/src/lib.rs` also calls.
+- Test: `shared_device_action_seam_fails_soft_without_bus` (no bus, `Unavailable`).
+- Unverified: no nested Wayland run, no BlueZ. The row stays hidden without an adapter (pure wire and projection tests only).

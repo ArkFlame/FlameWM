@@ -110,4 +110,24 @@ impl Service {
             self.publish_system();
         }
     }
+
+    /// Dispatches `BlueZ` replies and signals, then publishes the Bluetooth snapshot when it changed.
+    /// Same drain order as the X11 runtime: reply consumption, then snapshot.
+    pub(super) fn drain_bluetooth(&self) {
+        let snapshot = {
+            let bluetooth = self.bluetooth.borrow();
+            if let Err(error) = bluetooth.on_ready() {
+                eprintln!("flamewm-wayland: bluetooth dispatch failed: {error}");
+            }
+            bluetooth.snapshot()
+        };
+        if self
+            .host
+            .borrow_mut()
+            .system_mut()
+            .update_bluetooth(snapshot)
+        {
+            self.publish_system();
+        }
+    }
 }

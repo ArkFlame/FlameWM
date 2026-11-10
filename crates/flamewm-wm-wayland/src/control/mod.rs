@@ -42,6 +42,7 @@ use flamewm_control_wire::SwitcherEntry;
 use flamewm_integrations_linux::NetworkManagerSlot;
 use flamewm_integrations_linux::audio_helper::AudioHelper;
 use flamewm_integrations_linux::backlight::BacklightProvider;
+use flamewm_integrations_linux::bluetooth::BluetoothDeviceControl;
 use flamewm_platform::host::PlatformHost;
 use flamewm_platform::system::{MediaAudioKey, MediaBrightnessKey};
 use smithay::reexports::calloop::RegistrationToken;
@@ -164,6 +165,8 @@ pub struct Service {
     backlight: Rc<RefCell<BacklightProvider>>,
     /// `NetworkManager` system-bus provider; an absent bus publishes `Unavailable`, never devices.
     network: Rc<RefCell<NetworkManagerSlot>>,
+    /// `BlueZ` facade shared with the action handler and the bus drain (same owner as X11).
+    bluetooth: Rc<RefCell<BluetoothDeviceControl>>,
     /// Monotonic workspace revision. X11 advances one per switch; the shell's pager expects the
     /// same discipline, because the activation it sends is revision-fenced.
     workspace_revision: std::cell::Cell<u64>,
@@ -222,7 +225,18 @@ pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
             Ok(PostAction::Continue)
         },
     )?;
+    let bluetooth = flamewm_reactor::BorrowedRawFd(service.bluetooth.borrow().watch().fd);
+    state.loop_handle.insert_source(
+        Generic::new(bluetooth, Interest::READ, Mode::Level),
+        |_, _, state| {
+            if let Some(service) = state.control.clone() {
+                service.drain_bluetooth();
+            }
+            Ok(PostAction::Continue)
+        },
+    )?;
     // Starts the first reconcile, which publishes the initial network state.
     service.drain_network();
+    service.drain_bluetooth();
     Ok(())
 }

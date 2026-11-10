@@ -238,10 +238,7 @@ impl LinuxIntegrationRuntime {
                 Ok(())
             }
             SystemAction::SetPowerProfile(profile) => self.power_profiles.set_active(profile),
-            SystemAction::BluetoothDevice(action) => self
-                .bluetooth
-                .request(action.op, bluetooth::DEFAULT_ADAPTER, &action.address)
-                .map(|_| ()),
+            SystemAction::BluetoothDevice(action) => self.bluetooth.perform_action(&action),
             SystemAction::BatteryMenuClosed => {
                 self.power.set_battery_menu_open(false);
                 Ok(())
