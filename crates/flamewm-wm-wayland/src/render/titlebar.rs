@@ -1044,3 +1044,35 @@ mod hover_repaint_tests {
         assert_eq!(owned_span(12, 40, 10), None);
     }
 }
+
+#[cfg(test)]
+mod translucent_backdrop_tests {
+    use super::*;
+
+    /// Black glass at 75% over a known wallpaper pixel (240, 0, 15) must composite in channel order,
+    /// giving (60, 0, 4). The bug read the blurred desktop with R and B swapped, so the bar came out
+    /// as (4, 0, 60). Restores the default fill afterwards, as the other glass tests do.
+    #[test]
+    fn translucent_bar_composites_known_wallpaper_in_rgb_order() {
+        let width = 400usize;
+        let h = TITLEBAR_HEIGHT as usize;
+        let backdrop: Vec<u8> = (0..width * h).flat_map(|_| [240u8, 0, 15, 255]).collect();
+        crate::render::set_glass_fill(0x0000_0000, 191, 0, false);
+        let pixels = chrome_pixels_over(
+            width as i32,
+            true,
+            false,
+            false,
+            Feedback {
+                hover: None,
+                pressed: None,
+            },
+            "",
+            Some(&backdrop),
+        );
+        crate::render::set_glass_fill(flamewm_ui_core::glass::STANDARD_RGB, 255, 0, true);
+        // Left of the empty centred title and clear of the controls on the right.
+        let at = ((h / 2) * width + 20) * 4;
+        assert_eq!(&pixels[at..at + 4], &[4, 0, 60, 255]);
+    }
+}

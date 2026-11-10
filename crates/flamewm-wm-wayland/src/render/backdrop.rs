@@ -147,7 +147,11 @@ pub(super) fn read_reduced(
             Point::from((0, y0 as i32)),
             Size::from((dims.0 as i32, rows as i32)),
         );
-        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888)?;
+        // The readback is requested as `Argb8888` (BGRA_EXT). The `Abgr8888` request returned
+        // blue-first bytes on this stack (desktop top-left read as [0,0,255] for a red wallpaper),
+        // which tinted every translucent titlebar with R and B swapped. `downscale_strip` and the
+        // RGBA consumers below expect straight RGBA, so keep this format in step with them.
+        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Argb8888)?;
         clock.split("copy");
         let strip = renderer.map_texture(&mapping)?;
         clock.split("map");

@@ -71,3 +71,22 @@ Cause: the X11 frame-band path (no compositing manager, `outline_overlay_availab
 Decision: intended mechanism difference, not a shared-geometry bug. The 2 px width and 1 px height gap is the band that X11 reserves inside the client; Wayland paints it over the client. Titlebar 31 px, rim 1 px, frame outer rect identical in both. No code change. Re-open only if one backend adopts the other's band model.
 
 Sign inversion (meas-sign, resolved): python-xlib `win.translate_coords(root,0,0)` returns the NEGATED root origin. The correct call is `root.translate_coords(win,0,0)`. Checked against `xwininfo` Absolute upper-left on private Xvfb windows at (-40,-25) and (120,80). The self-test is `tools/test_flamewm_frame_origin.py` (`python3 -I -m unittest discover -s tools -p test_flamewm_frame_origin.py`, 3 tests). The harness `measure.py` is not tracked in the repo; its scratch copies (`/tmp/claude-1000/wl-frame/`, `wl-dock/`) carried the inverted call and were patched to the root-relative form. The frame values in the table above were read with the inverted sign and the table uses the on-screen origin, so they stand. Open item: `flamewm-wm` binaries used were the existing `/run/media/linsaftw/SDD/target-shared/fast` build, not rebuilt from 80c35d0d.
+
+## Translucent titlebar over wallpaper, X11 vs Wayland (fixed: Wayland readback channel order)
+
+Harness: `scripts/`-independent copy of the parity run (`run.sh`, `TRIGGER` unused for term), Xvfb `:290` (X11) and `:296` (Wayland), 1920x1080, terminal opened, `background_opacity = 80`, wallpaper `grad.png` (fill), accent off, dock off. Binaries built from this branch (`flamewm`, `flamewm-wayland`, `flamewm-terminal`, `flamewm-desktop`, `flamewm-shell`).
+
+Measured at the flat titlebar pixel (x=900, one row inside the bar) with the wallpaper beneath it:
+
+| Session | Bar y | Bar RGB (before fix) | Bar RGB (after fix) | Wallpaper under bar (expected) | Predicted `(1-a) * wallpaper`, a = 0.749 |
+|---|---|---|---|---|---|
+| X11 `flamewm` | 33-36 | 64,0,0 | 64,0,0 | about 250,0,5 | 63,0,1 |
+| Wayland `flamewm-wayland` | 63-75 | 4,0,60 | 60,0,4 | about 240,0,15 | 60,0,4 |
+| Wayland `flamewm-wayland` | 79-87 | 5,0,59 | 59,0,5 | about 236,0,19 | 59,0,5 |
+
+- Root cause: the desktop capture is read back with `Fourcc::Abgr8888` (`render/backdrop.rs` `read_reduced`). On this stack the bytes come back blue-first: the top-left of a red wallpaper read as `[0,0,255,255]`. The blurred desktop therefore carried R and B swapped, and every translucent titlebar and dock blended the swapped colour. Body, launcher, selection and taskbar do not read this capture, so they matched.
+- Fix: read back as `Fourcc::Argb8888` (BGRA_EXT). After the change the top-left reads `[255,0,0,255]`, and the backdrop used by `paint_background` is `[240,0,15,255]` at the sampled pixel.
+- X11 was correct: its bar equals `(1-a) * wallpaper` with straight channel order. X11 unchanged.
+- Window placement: the Wayland terminal sits 30 px lower than the X11 one in this harness (bar at y 60 vs 30). This is the placement difference already recorded above and is not part of this change.
+- Unit guard: `translucent_bar_composites_known_wallpaper_in_rgb_order` (titlebar.rs) asserts `(4,0,60)` for black glass at alpha 191 over `(240,0,15)`. It covers the blend path only. The readback order is not unit-testable without GL, and is verified by the harness numbers above.
+- Not verified: other GPUs or drivers. The same `Abgr8888` readback is used by the screencopy path in `render/mod.rs` (`render_rgba`) and was not measured here; it may show the same swap.
