@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Deterministic look capture: private Xvfb (display >= :440), private dbus session, one app at a time.
+# Each surface is captured only after it paints (root not black) and two consecutive frames hash equal.
+# Live apps that repaint every tick (task-manager) never hash-equal: they report UNSETTLED_LIVE.
+# usage: scripts/look-capture <bin-dir> <out-dir> [display-number>=440]
+set -euo pipefail
+usage() { echo "usage: scripts/look-capture <bin-dir> <out-dir> [display>=440]" >&2; exit 2; }
+(($# >= 2 && $# <= 3)) || usage
+BIN="$(readlink -f "$1")"; OUT="$(readlink -f -m "$2")"; NUM="${3:-441}"
+[[ "$NUM" =~ ^[0-9]+$ ]] && ((NUM >= 440)) || usage
+for tool in Xvfb import convert dbus-run-session tar md5sum; do
+  command -v "$tool" >/dev/null || { echo "ENV_BLOCKED: $tool missing" >&2; exit 3; }
+done
+mkdir -p "$OUT"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/look-capture.XXXXXX")"
+XPID=""
+cleanup() { [[ -n "$XPID" ]] && kill "$XPID" 2>/dev/null || true; rm -rf "$WORK"; }
+trap cleanup EXIT
+export HOME="$WORK/home" XDG_RUNTIME_DIR="$WORK/xdg" LANG=C.UTF-8 TZ=UTC
+export FLAMEWM_CONFIG_DIR="$WORK/cfg"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$FLAMEWM_CONFIG_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+# Archiver needs an archive argument; without one it prints usage and exits (blank capture).
+mkdir -p "$WORK/src" && printf 'look\n' >"$WORK/src/sample.txt"
+tar czf "$WORK/sample.tar.gz" -C "$WORK/src" sample.txt
+export DISPLAY=":$NUM"
+Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp -noreset >"$OUT/xvfb.log" 2>&1 &
+XPID=$!
+for _ in $(seq 1 50); do [[ -e "/tmp/.X11-unix/X$NUM" ]] && break; sleep 0.1; done
+
+frame_hash() { import -window root png:- 2>/dev/null | convert png:- rgb:- | md5sum | cut -d' ' -f1; }
+frame_mean() { import -window root png:- 2>/dev/null | convert png:- -format '%[fx:mean]' info:; }
+
+# shot NAME CMD...: launch, wait for paint, then for two identical frames (max 15 samples).
+shot() {
+  local name="$1"; shift
+  "$@" >"$OUT/$name.log" 2>&1 &
+  local pid=$! tries=0 prev="" cur="" status="UNSETTLED_LIVE"
+  while ((tries < 15)); do
+    sleep 1; tries=$((tries + 1))
+    cur="$(frame_hash)"
+    if [[ "$(frame_mean)" == "0" || "$(frame_mean)" == "0.0" ]]; then prev=""; continue; fi
+    if [[ "$cur" == "$prev" ]]; then status="SETTLED"; break; fi
+    prev="$cur"
+  done
+  import -window root "$OUT/$name.png"
+  printf '%s samples=%s status=%s alive=%s\n' "$name" "$tries" "$status" \
+    "$(kill -0 "$pid" 2>/dev/null && echo y || echo n)" | tee -a "$OUT/stability.txt"
+  kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
+  sleep 0.5
+}
+
+run_all() {
+  shot task-manager "$BIN/flamewm-task-manager"
+  shot assistant "$BIN/flamewm-assistant"
+  shot archiver "$BIN/flamewm-archiver" "$WORK/sample.tar.gz"
+}
+: >"$OUT/stability.txt"
+dbus-run-session -- bash -c "$(declare -f frame_hash frame_mean shot); OUT='$OUT' BIN='$BIN' WORK='$WORK'; $(declare -f run_all); run_all"
+echo LOOK_CAPTURE_DONE

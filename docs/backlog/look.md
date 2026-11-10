@@ -72,3 +72,21 @@ Screenshots: `/tmp/claude-1000/osdshots/{parent,head-osd,head-r2}-{osd,assistant
 - Archiver: 846 px differ, bbox (91,77)-(619,227): muted labels only. Window size and layout unchanged.
 - Verdict: colour-only change on muted text, no regression. No code fix made, nothing pushed except this note.
 - Not checked: hover/focus states, shell OSD (`ui/shell/osd.html`, volume/brightness, not touched by `0de670a1`).
+
+## Harness verification (look-harness, 2026-11-10)
+
+Reproduced on private Xvfb `:441` (1920x1080, `-noreset`), fast build `flamewm-task-manager`, `flamewm-assistant`,
+`flamewm-archiver` in own target dir. Deterministic capture: `scripts/look-capture <bin-dir> <out-dir> 441`.
+
+- Archiver blank: harness bug. Launched with no archive argument it prints usage and exits 2. With an archive it
+  renders the listing (`samples=2 status=SETTLED`). Fixed in `scripts/look-capture` (passes a generated archive).
+- Assistant black: not reproduced. Capture shows the full ARK AI window (mean luma 0.023, content visible), settled
+  after 2 samples. The earlier black capture is not explained by this build; treat as unverified history.
+- Task-manager never settles: product behaviour, not a harness bug. `crates/flamewm-task-manager/src/lib.rs:862`
+  samples every second and repaints the process list and graph (frame diff 5% of the screen). Hash-equal settle is
+  impossible without a frozen data source. `scripts/look-capture` reports `UNSETTLED_LIVE` after 15 samples and still
+  saves the frame.
+- Guard: `tools/test_look_capture.py` (4 contract checks, exit 0).
+
+Still open: task-manager pixel-stable capture needs a frozen-data hook or a masked-region settle (not added: no
+product change in this pass). Shell panel, start, notifications, lock: still outside the deterministic capture.
