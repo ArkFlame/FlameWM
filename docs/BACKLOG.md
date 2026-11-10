@@ -9,7 +9,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | meas-blur | perf | Full-frame CPU blur dominates the frame | `docs/backlog/measure.md:44`: blurs 77-83 ms of 83-93 ms batch | up to ~80 ms/frame (estimate) | L | open |
 | meas-settings | perf | Settings app startup outlier | `docs/backlog/measure.md:45`: 1774 / 1844 ms mapped / painted; cold after shadow cache 463 ms painted median (`measure.md:62-70`) | up to ~1.5 s per open (estimate) | M | open |
 | meas-terminal | perf | Terminal paints ~340 ms after map | `docs/backlog/measure.md:47`: 276 / 618 ms | up to ~340 ms per open (estimate) | M | open |
-| meas-heap | perf | Idle RSS: 40 MB heap/anon unattributed | `wayland-rss.md (line unpinned)`; no heap profiler run | unknown until profiled | M | open |
+| meas-heap | perf | Idle RSS: 40 MB heap/anon unattributed | `wayland-rss.md` "Heap attribution": about 10.4 MB of the Wayland heap is non-Rust malloc; desktop Rust live 10.6 MB, largest site 3.4 MB; no site over 5 MB | no single site over 5 MB PSS; nothing landed | M | done (attributed, no fix) |
 | wrss-scratch | perf | Drop scratch texture after backdrop capture | `wayland-rss.md (line unpinned)`: -3.0 to -3.5 MB PSS, measured | below 5 MB bar | S | open |
 | wrss-gpu | perf | Re-measure idle RSS on a GPU host | `wayland-rss.md (line unpinned)`: all numbers from llvmpipe | unknown | S | open |
 | meas-build | quality | `syn` and `x11rb-protocol` single-unit build cost | `docs/backlog/measure.md:43-50`: 50-110 s units | build time, gain unmeasured | M | open |

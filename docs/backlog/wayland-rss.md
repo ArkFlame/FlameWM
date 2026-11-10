@@ -44,8 +44,53 @@ Baseline Xwayland: 114424 KB RSS, 61381 KB PSS. Discovery figures (`idle60.tsv`)
 - Desktop backdrop capture at idle (about 12 MB): would be the largest saving, but it removes translucent backdrop on an idle desktop. Forbidden by the task (keep transparency). Only a design change could do it.
 - Mesa software fallback (about 36 MB PSS with llvmpipe): not product code. Re-measure on a GPU host before deciding anything.
 
+## Heap attribution (meas-heap)
+
+Base: origin/main `c08cdcc4`, fast profile, private Xvfb `:457` (1600x900), idle 30 s. Method: no perf, no heaptrack or valgrind (absent). Scratch counting `#[global_allocator]` in the three bins, not committed: it tracks live bytes and per-site stacks (`backtrace(3)`) for allocations of 16 KiB or more, dumped every 5 s. Smaps from `/proc/<pid>/smaps` for mappings. Scratch allocator did not change PSS (see the PSS runs below).
+
+| Process | Rust live (global allocator) | Sites >= 16 KiB | Rust live < 16 KiB | `[heap]` touched | Other anon touched |
+|---|---|---|---|---|---|
+| flamewm-wayland | 0.46 MB | 4 sites, 0.09 MB | 0.44 MB | 10.9 MB | libnvidia-gpucomp 2.6, libLLVM 2.2, libnvidia-eglcore 1.5 MB |
+| flamewm-desktop | 10.6 MB | 21 sites, 7.2 MB | 4.7 MB | 8.9 MB | one 3.4 MB mmap (`[anon]`) |
+| flamewm-shell | 3.5 MB | 7 sites, 2.2 MB | 1.4 MB | 5.0 MB | none over 1 MB |
+| Xwayland | not ours | n/a | n/a | 15.4 MB | shared libs as above |
+
+Top Rust sites (live, resolved by `addr2line` on the fast binary; `??` where the frame has no symbol):
+
+| Subsystem / site | Process | MB live | Count | Note |
+|---|---|---|---|---|
+| `flamewm_image_core` `Vec::with_capacity` | desktop | 3.38 | 1 | Single buffer, caller not resolved; same size class as the 3.0 to 3.5 MB scratch texture in the Experiments table, likely the same buffer (not confirmed) |
+| `flamewm_render_core` `Vec::with_capacity` | desktop | 0.71 | 1 | Caller not resolved |
+| `icon_theme::lookup::IconLookupIndex::candidates` | desktop | 1.18 | 5 | Icon candidate lists, icon cache |
+| `render::text_shadow::text_shadow_image` | desktop | 0.64 | 23 | Text shadow images |
+| `render::text_shadow::text_shadow_image` | shell | 0.47 | 20 | Same path in shell |
+| `alloc::vec::from_elem` | shell | 0.98 | 2 | Caller not resolved |
+| `image_core::blur::gaussian_blur_rgba_with` | desktop, shell | 0.15 + 0.24 | 3 | Blur scratch |
+| `ui_x11::surface_runtime::desktop_backdrop` | shell | 0.21 | 1 | Backdrop |
+| `render_x11::xft::text_alpha_mask`, `render_core::glyphs::caret_positions`, `redraw_if_dirty` | desktop | about 0.25 | 6 | Text and frame scratch |
+
+Attribution by owner:
+- Wayland `[heap]` 10.9 MB touched, Rust live 0.46 MB: about 10.4 MB is malloc from non-Rust code (Mesa, libLLVM, NVIDIA EGL, libwayland). Not attributable to a Rust site without malloc interposition. ENVIRONMENT, as above.
+- Desktop: Rust live 10.6 MB is the only FlameWM-owned heap of size. Its largest single site is 3.4 MB, under the 5 MB bar.
+- Shell: 3.5 MB Rust live, no site over 1 MB.
+- No single FlameWM site reaches 5 MB PSS. Nothing landed. A combined change across the desktop buffers (3.4 + 0.7 MB) and the icon and text caches would be about 5 MB, but it touches the backdrop and text caches with no measured win, so it stays in the backlog.
+
+Idle PSS runs (KB, Xvfb, unrelated load on host; numbers vary by about 8 MB run to run here):
+
+| Build | Run | flamewm-wayland PSS | desktop PSS | shell PSS | Xwayland PSS |
+|---|---|---|---|---|---|
+| base | 3 | 46408 | 20952 | 12288 | 49638 |
+| base | 4 | 46460 | 20452 | 12506 | 49486 |
+| base | 5 | 46614 | 19978 | 12468 | 49529 |
+| alloc (scratch, not landed) | 1 | 46598 | 21021 | 12502 | 49429 |
+| alloc (scratch, not landed) | 2 | 55163 | 21967 | 13437 | 57288 |
+
+Base runs 1 and 2 ran but their output was lost to a `tail` cut, so only runs 3 to 5 are recorded. The alloc build is not a candidate and is not part of the product.
+
 ## Unverified
 
-- A heap profile to attribute the 40 MB heap and anon, and the 3.5 MB Shm buffers.
+- Caller of the 3.4 MB `image_core` buffer and of the 0.7 MB `render_core` buffer (needs symbols with inlining or a debug build).
+- The 10.4 MB of non-Rust heap in the Wayland process, by library (needs malloc interposition or `malloc_info` per arena).
+- The 3.5 MB Shm buffers, traced to a client.
 - A release (fat LTO) build, to size the 8 MB binary.
 - Any GPU-host measurement (the numbers above all come from software GL).
