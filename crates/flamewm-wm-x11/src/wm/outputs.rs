@@ -1,6 +1,6 @@
 //! Output and work-area bookkeeping for the Wm.
 use super::*;
-use flamewm_window_core::dock_reserve::{ReserveEdge, cut_dock};
+use flamewm_window_core::dock_reserve::{ReserveEdge, cut_dock, dock_reserve_uncovered_by_struts};
 use flamewm_window_core::strut::sanitize_strut;
 
 /// Cuts the Dock from a work area. The taskbar strut is already out of `work_area`, so a Dock on
@@ -30,24 +30,6 @@ mod dock_reserve_vector_tests {
         );
         assert_eq!(with_dock_reserve(work, None), work);
     }
-}
-
-/// The part of the Dock reserve that a strut-derived work area does not already cover. A Dock
-/// window touching its root edge publishes that edge as `_NET_WM_STRUT`, and `strut` (left, top,
-/// right, top, bottom: EWMH order, as `work_area` reads it) already holds it, so reserving it again
-/// would count the Dock twice.
-pub(super) fn dock_reserve_uncovered_by_struts(
-    strut: [u32; 4],
-    dock: Option<(ReserveEdge, i32)>,
-) -> Option<(ReserveEdge, i32)> {
-    let (edge, extent) = dock?;
-    let index = match edge {
-        ReserveEdge::Left => 0,
-        ReserveEdge::Right => 1,
-        ReserveEdge::Top => 2,
-        ReserveEdge::Bottom => 3,
-    };
-    (i64::from(strut[index]) < i64::from(extent)).then_some((edge, extent))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,7 +161,10 @@ impl<C: Connection> Wm<'_, C> {
                 self.screen_rect.width.saturating_sub(left + right).max(1),
                 self.screen_rect.height.saturating_sub(top + bottom).max(1),
             ),
-            dock_reserve_uncovered_by_struts(strut, crate::live_settings::dock_reserve()),
+            dock_reserve_uncovered_by_struts(
+                strut.map(i64::from),
+                crate::live_settings::dock_reserve(),
+            ),
         )
     }
 
@@ -319,33 +304,5 @@ mod dock_work_area_tests {
             with_dock_reserve(output(), dock_reserve_uncovered_by_struts(strut, dock)),
             output()
         );
-    }
-
-    #[test]
-    fn dock_strut_uses_ewmh_slots_for_top_and_right() {
-        // `work_area` reads the strut as [left, right, top, bottom].
-        let right = [0, 76, 0, 0];
-        assert_eq!(
-            dock_reserve_uncovered_by_struts(right, Some((ReserveEdge::Right, 76))),
-            None
-        );
-        let top = [0, 0, 104, 0];
-        assert_eq!(
-            dock_reserve_uncovered_by_struts(top, Some((ReserveEdge::Top, 76))),
-            None
-        );
-        assert_eq!(
-            dock_reserve_uncovered_by_struts([0, 0, 0, 44], Some((ReserveEdge::Top, 76))),
-            Some((ReserveEdge::Top, 76))
-        );
-    }
-
-    #[test]
-    fn dock_without_strut_on_its_edge_keeps_the_reserve() {
-        // Bottom Dock above a bottom taskbar: the Dock does not touch the root edge.
-        let strut = [0, 0, 0, 44];
-        let dock = Some((ReserveEdge::Bottom, 72));
-        assert_eq!(dock_reserve_uncovered_by_struts(strut, dock), dock);
-        assert_eq!(dock_reserve_uncovered_by_struts(strut, None), None);
     }
 }

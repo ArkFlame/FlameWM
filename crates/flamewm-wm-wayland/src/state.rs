@@ -733,17 +733,17 @@ impl State {
         map.arrange();
         let zone: Rectangle<i32, Logical> = map.non_exclusive_zone();
         let size = (self.output_size.w, self.output_size.h);
-        let struts = self
+        let struts: Vec<[i32; 4]> = self
             .unmanaged
             .iter()
             .filter_map(|entry| entry.strut)
-            .filter_map(|strut| flamewm_window_core::strut::sanitize_strut(strut, None, size));
-        let work = reserve_struts(
+            .filter_map(|strut| flamewm_window_core::strut::sanitize_strut(strut, None, size))
+            .collect();
+        work_area_with_dock(
             Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h),
-            struts,
-        );
-        // The Dock cuts after the taskbar's zone, so a Dock on the same edge stacks beyond it.
-        cut_dock(work, self.dock_reserve)
+            &struts,
+            self.dock_reserve,
+        )
     }
 
     /// Refit output-sized placements once, and only once, for each effective work-area change.
@@ -1177,9 +1177,30 @@ mod dock_work_area_tests {
 
     const OUTPUT: Rect = Rect::new(0, 0, 1280, 800);
 
-    /// The `work_area()` pipeline with the layer zone already reduced by `zone_struts`.
+    /// The `work_area()` pipeline with the unmanaged struts (already sanitized) and the Dock.
     fn work_area(zone: Rect, struts: &[[i32; 4]], dock: Option<(ReserveEdge, i32)>) -> Rect {
-        cut_dock(reserve_struts(zone, struts.iter().copied()), dock)
+        work_area_with_dock(zone, struts, dock)
+    }
+
+    #[test]
+    fn dock_strut_on_its_edge_is_not_reserved_twice() {
+        // Bottom Dock at 58 px publishes its strut as [l, r, t, b] = [0, 0, 0, 58].
+        let dock = Some((ReserveEdge::Bottom, dock_extent(32)));
+        assert_eq!(
+            work_area(OUTPUT, &[[0, 0, 0, dock_extent(32)]], dock),
+            Rect::new(0, 0, 1280, 800 - dock_extent(32))
+        );
+    }
+
+    #[test]
+    fn dock_strut_with_a_taskbar_reserves_the_edge_once() {
+        // Taskbar 44 px and Dock strut 58 px on the same edge: max per edge gives 58, not 102.
+        let struts = [[0, 0, 0, 44], [0, 0, 0, dock_extent(32)]];
+        let dock = Some((ReserveEdge::Bottom, dock_extent(32)));
+        assert_eq!(
+            work_area(OUTPUT, &struts, dock),
+            Rect::new(0, 0, 1280, 800 - dock_extent(32))
+        );
     }
 
     #[test]
@@ -1206,6 +1227,23 @@ mod dock_work_area_tests {
     fn hidden_dock_and_no_taskbar_leave_the_output_whole() {
         assert_eq!(work_area(OUTPUT, &[], None), OUTPUT);
     }
+}
+
+/// Work area after the layer zone and the unmanaged struts, then the Dock's reserve. The Dock's
+/// own strut is already in `struts` when it touches its edge, so the same rule X11 applies skips
+/// that edge instead of reserving it twice.
+fn work_area_with_dock(zone: Rect, struts: &[[i32; 4]], dock: Option<(ReserveEdge, i32)>) -> Rect {
+    let work = reserve_struts(zone, struts.iter().copied());
+    let folded = struts.iter().fold([0_i64; 4], |mut folded, strut| {
+        for (slot, value) in folded.iter_mut().zip(strut) {
+            *slot = (*slot).max(i64::from(*value));
+        }
+        folded
+    });
+    cut_dock(
+        work,
+        dock_reserve::dock_reserve_uncovered_by_struts(folded, dock),
+    )
 }
 
 /// Cuts the Dock's reserve from a work area; `None` (dock hidden) returns it unchanged.

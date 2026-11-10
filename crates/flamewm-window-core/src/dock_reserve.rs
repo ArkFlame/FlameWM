@@ -300,6 +300,73 @@ pub fn cut_dock(work: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
     }
 }
 
+/// The part of the Dock reserve that a strut-derived work area does not already cover. `strut` is
+/// the folded `[left, right, top, bottom]` (EWMH order) that the Dock's own struts publish. A Dock
+/// touching its root edge publishes that edge, so reserving it again would count the Dock twice.
+#[must_use]
+pub fn dock_reserve_uncovered_by_struts(
+    strut: [i64; 4],
+    dock: Option<(ReserveEdge, i32)>,
+) -> Option<(ReserveEdge, i32)> {
+    let (edge, extent) = dock?;
+    let index = match edge {
+        ReserveEdge::Left => 0,
+        ReserveEdge::Right => 1,
+        ReserveEdge::Top => 2,
+        ReserveEdge::Bottom => 3,
+    };
+    (strut[index] < i64::from(extent)).then_some((edge, extent))
+}
+
+#[cfg(test)]
+mod uncovered_by_struts_vectors {
+    use super::*;
+
+    /// Shared with the X11 `work_area` pins; Wayland applies the same function in its `work_area`.
+    #[test]
+    fn dock_strut_on_its_edge_is_not_reserved_twice() {
+        // Left Dock at 72 px: its own strut already holds 72 px on the left.
+        let strut = [72, 0, 0, 44];
+        let dock = Some((ReserveEdge::Left, 72));
+        assert_eq!(dock_reserve_uncovered_by_struts(strut, dock), None);
+        assert_eq!(
+            cut_dock(
+                Rect::new(0, 0, 1280, 800),
+                dock_reserve_uncovered_by_struts(strut, dock)
+            ),
+            Rect::new(0, 0, 1280, 800)
+        );
+    }
+
+    #[test]
+    fn dock_strut_uses_ewmh_slots_for_top_and_right() {
+        // `work_area` reads the strut as [left, right, top, bottom].
+        let right = [0, 76, 0, 0];
+        assert_eq!(
+            dock_reserve_uncovered_by_struts(right, Some((ReserveEdge::Right, 76))),
+            None
+        );
+        let top = [0, 0, 104, 0];
+        assert_eq!(
+            dock_reserve_uncovered_by_struts(top, Some((ReserveEdge::Top, 76))),
+            None
+        );
+        assert_eq!(
+            dock_reserve_uncovered_by_struts([0, 0, 0, 44], Some((ReserveEdge::Top, 76))),
+            Some((ReserveEdge::Top, 76))
+        );
+    }
+
+    #[test]
+    fn dock_without_strut_on_its_edge_keeps_the_reserve() {
+        // Bottom Dock above a bottom taskbar: the Dock does not touch the root edge.
+        let strut = [0, 0, 0, 44];
+        let dock = Some((ReserveEdge::Bottom, 72));
+        assert_eq!(dock_reserve_uncovered_by_struts(strut, dock), dock);
+        assert_eq!(dock_reserve_uncovered_by_struts(strut, None), None);
+    }
+}
+
 #[cfg(test)]
 mod cut_dock_vector_tests {
     use super::*;
