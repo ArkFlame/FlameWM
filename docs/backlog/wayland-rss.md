@@ -1,5 +1,7 @@
 # Idle RSS of flamewm-wayland and Xwayland
 
+> Rows: `wrss-scratch`, `wrss-gpu`, `meas-heap` in `docs/BACKLOG.md`.
+
 Base: origin/main `7c83102c`. Build: `cargo build --profile fast -p flamewm-wm-wayland -p flamewm-desktop -p flamewm-shell -p flamewm-settings --bins`, exit 0 (`BUILD_EXIT=0`, 7m 34s). Host: 12 cores, shared; Xvfb nested session, 20 to 30 s idle. Numbers are not release-grade. Raw data: `/tmp/claude-1000/wlrss-*` (not committed).
 
 ## Verdict

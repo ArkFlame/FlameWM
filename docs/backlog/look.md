@@ -1,5 +1,7 @@
 # Look pass backlog (visual and behavioural consistency)
 
+> Rows: `look-muted`, `look-muted-done`, `look-radius`, `look-radius-large`, `look-harness` in `docs/BACKLOG.md`.
+
 Evidence: deterministic captures in `/tmp/claude-1000/look/` (`c1-before`, `c1-after`, `s2-after`).
 Harness: `/tmp/claude-1000/look/shot2.sh` (private Xvfb `:96`, 1920x1080, no WM, windows at 0,0,
 dbus session, capture after two identical frames). Base build: clean `32f28041` in `look-base-fast`.

@@ -1,5 +1,7 @@
 # READ discovery backlog
 
+> Rows: `read-*` (E, P, K, D, U, SIZE, GUARD ids) in `docs/BACKLOG.md`.
+
 Base: `origin/main` at `c5955ae3`. Read-only discovery. No product code changed. Cargo not run.
 Size: S = under 20 lines, M = 20 to 100 lines, L = over 100 lines or cross-crate.
 Method: a Python scan over `crates/*/src/**` that drops `#[cfg(test)]` blocks, plus `rg`/`grep` and `git blame`.

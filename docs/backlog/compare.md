@@ -1,5 +1,7 @@
 # Competitor feature gap table
 
+> Rows: `cmp-quick`, `cmp-power`, `cmp-dnd`, `cmp-bt`, `cmp-polkit`, `cmp-a11y`, `cmp-alttab`, `cmp-volume`, `cmp-wm-session-lock` in `docs/BACKLOG.md`.
+
 Snapshot: origin/main 32f28041, 2026-11-09. Competitor source is read-only from `.vendor/vela-main` (Vela). Status values: `absent` (no hits), `partial`, `present`, `unverified` (no runtime proof). Rank = user-visible gap x fit with the current architecture.
 
 | Rank | Gap | Competitor evidence (Vela) | FlameWM evidence (origin/main) | Status | Fit / next step |

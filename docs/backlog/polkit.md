@@ -1,5 +1,7 @@
 # Polkit authentication agent (cmp-polkit)
 
+> Rows: `cmp-polkit` (partial, core `1951e0df`), `pol-ui`, `pol-helper`, `pol-session`, `pol-sessid`, `pol-proof` in `docs/BACKLOG.md`.
+
 Status: core landed in `flamewm-integrations-linux`; UI and helper I/O open. Static evidence only, no runtime proof.
 
 ## Scope check (origin/main)

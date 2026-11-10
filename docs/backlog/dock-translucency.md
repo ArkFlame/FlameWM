@@ -1,5 +1,7 @@
 # Dock translucency over a bright window (X11): status
 
+> Rows: `dock-wl`, `dock-x11`, `dock-wire` in `docs/BACKLOG.md`.
+
 Status: FIXED on X11 (pill alpha follows `dock.surfaceOpacity`; backdrop reinstated after hide).
 Wayland is not covered.
 

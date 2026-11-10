@@ -1,5 +1,7 @@
 # Wayland/X11 shared-logic audit
 
+> Rows: `wsh-dock-reserve` (done `79aa37c7`), `wsh-grab`, `wsh-strut`, `wsh-lock-x11` in `docs/BACKLOG.md`.
+
 Base: `origin/main` at worktree creation. Method: function-level reads of both sides (not name or size
 judgement). Verdicts: **identical** (same output for every input), **near** (same output for the
 reachable inputs, differing edge case), **different** (structurally distinct), **unmeasured**.

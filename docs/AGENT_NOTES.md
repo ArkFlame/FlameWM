@@ -53,3 +53,18 @@ Lessons from the 2026-11-09 backlog session. Each item gives the rule, then evid
 
 14. **Do not touch the primary tree.** Use a fresh worktree per worker. If the requested path already exists (for example `/tmp/claude-1000/wt-docs`, which held another worker's detached HEAD), pick a new path and do not reset the existing one.
     Evidence: `git worktree list` on 2026-11-09.
+
+## What slowed agents (2026-11-10)
+
+- **Shared cargo flock queues for hours.** `flock /tmp/opencode/cargo.lock` is not FIFO. A gate can wait 1-3 h, and a later short run can overtake it. Batch gates and check the lock holder before queuing.
+  Evidence: `docs/backlog/measure.md:43-50` (contended clean build), `docs/backlog/measure.md:129` session note.
+- **Workers end turns on wait-wrapper timeouts.** A worker that times out mid-wait returns no result. Use one bounded foreground wait per build (see item 2).
+  Evidence: session-only, reported in this session.
+- **Gates run on pre-rebase trees.** A green gate before rebase proves nothing about the rebased tree. Rerun the gate after rebase before push.
+  Evidence: `docs/backlog/look.md:12` (`pre-rebase tree`); `docs/backlog/wayland-shared.md:27` (rebased gate for Step B).
+- **Known flakes waste reruns.** `flamewm-render-x11` lib test SIGSEGV and `xdnd_two_windows` flake (item 5). Rerun alone and record both results.
+  Evidence: item 5 above.
+- **`perf` is blocked on this host.** `perf_event_paranoid=4` gives "Failure to open any events", so CPU profiles are not possible without a privilege change.
+  Evidence: `docs/backlog/measure.md:69`.
+- **Harness sign inversion.** `measure.py` reads `win.translate_coords(root,0,0)` with inverted sign, so measured x/y origins are wrong until fixed. Use the on-screen origin from screenshots.
+  Evidence: `docs/backlog/wayland-shared.md:56,71`.

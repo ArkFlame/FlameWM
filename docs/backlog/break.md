@@ -1,5 +1,7 @@
 # BREAK reliability scenarios backlog
 
+> Rows: `break-b1` (done `d7d1c91e`), `break-s6` (done `501b59cd`), `break-b2`..`break-b6` in `docs/BACKLOG.md`.
+
 Harness: `scripts/break/break.sh [all|s1..s7]` (private Xvfb, private HOME/XDG, copies of fast-profile
 binaries, XTest pointer via `scripts/break/pointer.py`). Evidence dir per run:
 `.agents/runtime/break/<stamp>/<scenario>/` (ignored by git).

@@ -1,5 +1,7 @@
 # Bluetooth scope (2026-11-10, origin/main 0de670a1)
 
+> Rows: `cmp-bt` (partial, facade `b6bddef9`), `bt-reply`, `bt-plumb`, `bt-agent`, `bt-list`, `bt-ui` in `docs/BACKLOG.md`.
+
 ## What exists before this change
 
 | Capability | Status | Evidence |

@@ -1,5 +1,7 @@
 # FlameWM Measurement Backlog
 
+> Rows: `meas-blur`, `meas-settings`, `meas-terminal`, `meas-build`, `meas-tm`, `meas-shadow`, `meas-blur-eq`, `meas-sign`, `meas-perf-blocked` in `docs/BACKLOG.md`.
+
 Discovery only. No product code changed. Base: origin/main `c5955ae3`. Build target: `/run/media/linsaftw/SDD/target-disc-measure`, `CARGO_BUILD_JOBS=2`, cargo runs under `flock /tmp/opencode/cargo.lock`. Host: 12 cores, shared with other workers, so timings are not clean.
 
 ## Measured metrics
