@@ -29,48 +29,7 @@ const ACTIVE_PROFILE: &str = "ActiveProfile";
 const PROFILES: &str = "Profiles";
 const PROFILE_KEY: &str = "Profile";
 
-/// The three wire profiles. Unknown names reported by a service are ignored, never guessed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowerProfile {
-    PowerSaver,
-    Balanced,
-    Performance,
-}
-
-impl PowerProfile {
-    pub const ALL: [Self; 3] = [Self::PowerSaver, Self::Balanced, Self::Performance];
-
-    /// Wire name used by both services.
-    #[must_use]
-    pub const fn wire(self) -> &'static str {
-        match self {
-            Self::PowerSaver => "power-saver",
-            Self::Balanced => "balanced",
-            Self::Performance => "performance",
-        }
-    }
-
-    #[must_use]
-    pub fn from_wire(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|profile| profile.wire() == name)
-    }
-}
-
-/// Published state. `profiles` keeps service order with duplicates and unknown names removed.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PowerProfilesSnapshot {
-    pub available: bool,
-    pub active: Option<PowerProfile>,
-    pub profiles: Vec<PowerProfile>,
-}
-
-impl PowerProfilesSnapshot {
-    /// The control is shown only when a service answered and advertised at least one profile.
-    #[must_use]
-    pub fn tile_visible(&self) -> bool {
-        self.available && !self.profiles.is_empty()
-    }
-}
+pub use flamewm_api::system::{PowerProfile, PowerProfilesSnapshot};
 
 /// Unwraps nested `v` variants so payloads parse regardless of how a service wrapped them.
 fn unwrap_variant(item: &MessageItem) -> &MessageItem {

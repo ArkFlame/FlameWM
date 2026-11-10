@@ -136,6 +136,32 @@ pub(crate) fn power_snapshot(dict: &WireDict) -> Result<PowerSnapshot, ControlEr
     })
 }
 
+/// Absent profile keys (older peers) decode to the default snapshot. Unknown names in the list are
+/// dropped rather than failing the whole snapshot.
+pub(crate) fn power_profiles_snapshot(
+    dict: &WireDict,
+) -> Result<flamewm_api::system::PowerProfilesSnapshot, ControlError> {
+    use flamewm_api::system::PowerProfile;
+    if dict.get("powerProfilesAvailable").is_none() {
+        return Ok(flamewm_api::system::PowerProfilesSnapshot::default());
+    }
+    let active = match dict_string(dict, "powerProfilesActive")? {
+        "" => None,
+        name => Some(
+            PowerProfile::from_wire(name).ok_or_else(|| invalid("unknown active power profile"))?,
+        ),
+    };
+    let profiles = dict_string(dict, "powerProfiles")?
+        .split(',')
+        .filter_map(PowerProfile::from_wire)
+        .collect();
+    Ok(flamewm_api::system::PowerProfilesSnapshot {
+        available: dict_bool(dict, "powerProfilesAvailable")?,
+        active,
+        profiles,
+    })
+}
+
 pub(crate) fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
     let strength = dict_u32(dict, "networkStrength")?;
     let volume = dict_u32(dict, "audioVolume")?;
@@ -186,6 +212,7 @@ pub(crate) fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, Control
             can_previous: dict_bool(dict, "mediaCanPrevious")?,
         },
         power: power_snapshot(dict)?,
+        power_profiles: power_profiles_snapshot(dict)?,
         brightness: brightness_snapshot(dict)?,
         audio: AudioSnapshot {
             availability: parse_availability(dict_string(dict, "audioAvailability")?)?,

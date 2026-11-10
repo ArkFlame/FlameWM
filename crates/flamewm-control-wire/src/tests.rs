@@ -450,6 +450,7 @@ fn application_snapshot_reply_round_trips_through_wire_mapping() {
 fn system_fixture() -> SystemSnapshot {
     SystemSnapshot {
         revision: 11,
+        power_profiles: Default::default(),
         network: NetworkSnapshot {
             availability: ServiceAvailability::Available,
             generation: 3,
@@ -1097,4 +1098,61 @@ fn workspace_snapshot_with_zero_count_is_rejected_not_panicking() {
     });
     dict.insert("count".to_owned(), WireValue::U32(0));
     assert!(workspace_snapshot(&dict).is_err());
+}
+
+#[test]
+fn power_profile_action_round_trips_and_rejects_unknown_profile_names() {
+    use flamewm_api::system::PowerProfile;
+    for profile in PowerProfile::ALL {
+        let request = ControlRequest::SystemAction {
+            action: SystemAction::SetPowerProfile(profile),
+            expected_revision: 9,
+        };
+        let call = assert_request_round_trip(&request);
+        assert_eq!(call.member, "SetPowerProfile");
+    }
+    let unknown = WireCall::new(
+        IFACE_SYSTEM,
+        "SetPowerProfile",
+        vec![WireValue::String("turbo".to_owned()), WireValue::U64(9)],
+    );
+    assert!(decode_call(&unknown).is_err());
+}
+
+#[test]
+fn power_profiles_snapshot_round_trips_including_absent_defaults() {
+    use flamewm_api::system::{PowerProfile, PowerProfilesSnapshot};
+    let offered = SystemSnapshot {
+        power_profiles: PowerProfilesSnapshot {
+            available: true,
+            active: Some(PowerProfile::Balanced),
+            profiles: vec![
+                PowerProfile::PowerSaver,
+                PowerProfile::Balanced,
+                PowerProfile::Performance,
+            ],
+        },
+        ..system_fixture()
+    };
+    let dict = system_dict(&offered);
+    assert_eq!(system_snapshot(&dict).expect("decode"), offered);
+
+    let none_active = SystemSnapshot {
+        power_profiles: PowerProfilesSnapshot {
+            available: true,
+            active: None,
+            profiles: vec![PowerProfile::Performance],
+        },
+        ..system_fixture()
+    };
+    let dict = system_dict(&none_active);
+    assert_eq!(system_snapshot(&dict).expect("decode"), none_active);
+
+    // Peers that never send profile keys decode to the default (hidden) state.
+    let mut legacy = system_dict(&system_fixture());
+    legacy.remove("powerProfilesAvailable");
+    assert_eq!(
+        system_snapshot(&legacy).expect("decode").power_profiles,
+        PowerProfilesSnapshot::default()
+    );
 }

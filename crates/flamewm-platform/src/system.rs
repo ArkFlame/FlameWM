@@ -122,6 +122,13 @@ impl SystemService {
         self.apply(|s| &mut s.power, update)
     }
 
+    pub fn update_power_profiles(
+        &mut self,
+        update: flamewm_api::system::PowerProfilesSnapshot,
+    ) -> bool {
+        self.apply(|s| &mut s.power_profiles, update)
+    }
+
     pub fn update_brightness(&mut self, update: BrightnessSnapshot) -> bool {
         if update.generation < self.snapshot.brightness.generation {
             return false;
@@ -193,6 +200,16 @@ impl SystemService {
             }
             SystemAction::SetMute(action) => {
                 self.validate_audio_generation(action.generation, action.server_generation)?;
+            }
+            SystemAction::SetPowerProfile(profile) => {
+                if !self.snapshot.power_profiles.tile_visible()
+                    || !self.snapshot.power_profiles.profiles.contains(profile)
+                {
+                    return Err(FlameError::new(
+                        ErrorCode::Unsupported,
+                        "power profile is not offered by the service",
+                    ));
+                }
             }
             SystemAction::SetBrightness(action) => {
                 if action.percent > MAX_BRIGHTNESS_PERCENT {
@@ -437,6 +454,51 @@ mod tests {
     }
 
     #[test]
+    fn power_profile_action_requires_an_offered_profile_and_bypasses_revision_fence() {
+        use flamewm_api::system::{PowerProfile, PowerProfilesSnapshot};
+        let mut service = SystemService::default();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        service.set_action_handler(Box::new(move |action, _| {
+            sink.borrow_mut().push(action);
+            Ok(())
+        }));
+        let stale = service.snapshot().revision.wrapping_add(7);
+        // Service absent: no profile is offered, so the action is refused before the handler.
+        assert!(
+            service
+                .perform_action(SystemAction::SetPowerProfile(PowerProfile::Balanced), stale)
+                .is_err()
+        );
+        assert!(seen.borrow().is_empty());
+
+        let _ = service.update_power_profiles(PowerProfilesSnapshot {
+            available: true,
+            active: Some(PowerProfile::Balanced),
+            profiles: vec![PowerProfile::PowerSaver, PowerProfile::Balanced],
+        });
+        let stale = service.snapshot().revision.wrapping_add(7);
+        assert!(
+            service
+                .perform_action(
+                    SystemAction::SetPowerProfile(PowerProfile::Performance),
+                    stale
+                )
+                .is_err()
+        );
+        service
+            .perform_action(
+                SystemAction::SetPowerProfile(PowerProfile::PowerSaver),
+                stale,
+            )
+            .expect("offered profile is not revision-fenced");
+        assert_eq!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetPowerProfile(PowerProfile::PowerSaver)]
+        );
+    }
+
+    #[test]
     fn battery_menu_actions_bypass_revision_fence_but_still_reach_handler() {
         let mut service = SystemService::default();
         let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -607,6 +669,7 @@ fn bypasses_revision_fence(action: &SystemAction) -> bool {
         SystemAction::SetVolume(_)
             | SystemAction::SetMute(_)
             | SystemAction::SetBrightness(_)
+            | SystemAction::SetPowerProfile(_)
             | SystemAction::BatteryMenuOpened
             | SystemAction::BatteryMenuClosed
             | SystemAction::Scan

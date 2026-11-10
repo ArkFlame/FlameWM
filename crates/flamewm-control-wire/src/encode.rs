@@ -252,6 +252,32 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
         out.insert("powerRateMilliwatts".to_owned(), WireValue::U32(milliwatts));
     }
     out.insert(
+        "powerProfilesAvailable".to_owned(),
+        WireValue::Bool(snapshot.power_profiles.available),
+    );
+    out.insert(
+        "powerProfilesActive".to_owned(),
+        WireValue::String(
+            snapshot
+                .power_profiles
+                .active
+                .map_or("", flamewm_api::system::PowerProfile::wire)
+                .to_owned(),
+        ),
+    );
+    out.insert(
+        "powerProfiles".to_owned(),
+        WireValue::String(
+            snapshot
+                .power_profiles
+                .profiles
+                .iter()
+                .map(|profile| profile.wire())
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+    out.insert(
         "brightnessAvailability".to_owned(),
         WireValue::String(availability_name(snapshot.brightness.availability).to_owned()),
     );

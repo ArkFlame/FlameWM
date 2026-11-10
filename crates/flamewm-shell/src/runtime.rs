@@ -78,6 +78,7 @@ impl Default for ShellSnapshot {
             workspaces: None,
             session: SessionCapabilities::default(),
             system: SystemSnapshot {
+                power_profiles: Default::default(),
                 revision: 0,
                 network: Default::default(),
                 media: Default::default(),

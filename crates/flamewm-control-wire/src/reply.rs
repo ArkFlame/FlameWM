@@ -154,6 +154,7 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
             | "Previous"
             | "SetVolume"
             | "SetMute"
+            | "SetPowerProfile"
             | "BatteryMenuOpened"
             | "BatteryMenuClosed",
         )

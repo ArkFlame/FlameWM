@@ -185,6 +185,49 @@ pub struct PowerSnapshot {
     pub power_rate_mw: Option<u32>,
 }
 
+/// Power profile names from `net.hadess.PowerProfiles`. Unknown names are never guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerProfile {
+    PowerSaver,
+    Balanced,
+    Performance,
+}
+
+impl PowerProfile {
+    pub const ALL: [Self; 3] = [Self::PowerSaver, Self::Balanced, Self::Performance];
+
+    /// Wire name used by both `net.hadess.PowerProfiles` and `org.freedesktop.UPower.PowerProfiles`.
+    #[must_use]
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::PowerSaver => "power-saver",
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
+        }
+    }
+
+    #[must_use]
+    pub fn from_wire(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|profile| profile.wire() == name)
+    }
+}
+
+/// Published profile state. `profiles` keeps service order with unknown and duplicate names removed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PowerProfilesSnapshot {
+    pub available: bool,
+    pub active: Option<PowerProfile>,
+    pub profiles: Vec<PowerProfile>,
+}
+
+impl PowerProfilesSnapshot {
+    /// The control is shown only when a service answered and advertised at least one profile.
+    #[must_use]
+    pub fn tile_visible(&self) -> bool {
+        self.available && !self.profiles.is_empty()
+    }
+}
+
 /// Backlight state of the panel device. `percent` is `0..=100`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BrightnessSnapshot {
@@ -278,6 +321,7 @@ pub struct SystemSnapshot {
     pub media: MediaSnapshot,
     pub audio: AudioSnapshot,
     pub power: PowerSnapshot,
+    pub power_profiles: PowerProfilesSnapshot,
     pub brightness: BrightnessSnapshot,
 }
 
@@ -320,6 +364,7 @@ pub enum SystemAction {
     SetVolume(AudioVolumeAction),
     SetMute(AudioMuteAction),
     SetBrightness(BrightnessAction),
+    SetPowerProfile(PowerProfile),
     BatteryMenuOpened,
     BatteryMenuClosed,
 }
@@ -378,6 +423,9 @@ impl core::fmt::Debug for SystemAction {
             Self::SetVolume(action) => f.debug_tuple("SetVolume").field(action).finish(),
             Self::SetMute(action) => f.debug_tuple("SetMute").field(action).finish(),
             Self::SetBrightness(action) => f.debug_tuple("SetBrightness").field(action).finish(),
+            Self::SetPowerProfile(profile) => {
+                f.debug_tuple("SetPowerProfile").field(profile).finish()
+            }
             Self::BatteryMenuOpened => f.write_str("BatteryMenuOpened"),
             Self::BatteryMenuClosed => f.write_str("BatteryMenuClosed"),
         }

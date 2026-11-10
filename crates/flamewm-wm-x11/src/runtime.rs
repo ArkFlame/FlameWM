@@ -155,6 +155,7 @@ fn run_session(
     let mut network_registration = register(LinuxIntegrationSource::NetworkManager)?;
     let mut mpris_registration = register(LinuxIntegrationSource::Mpris)?;
     let mut power_registration = register(LinuxIntegrationSource::Power)?;
+    let mut power_profiles_registration = register(LinuxIntegrationSource::PowerProfiles)?;
     let (audio_sender, audio_receiver) = mpsc::sync_channel::<AudioSnapshot>(32);
     let (audio_reader, mut audio_writer) = UnixStream::pair()
         .and_then(|(reader, writer)| {
@@ -413,6 +414,7 @@ fn run_session(
                         | SystemAction::Next { .. }
                         | SystemAction::Previous { .. }
                         | SystemAction::SetBrightness(_)
+                        | SystemAction::SetPowerProfile(_)
                         | SystemAction::BatteryMenuOpened
                         | SystemAction::BatteryMenuClosed => integrations
                             .borrow_mut()
@@ -465,6 +467,10 @@ fn run_session(
                 if host.system_mut().update_power(power) {
                     emit_system_signals(host, &control_for_hook);
                 }
+                let power_profiles = integrations.power_profiles_snapshot();
+                if host.system_mut().update_power_profiles(power_profiles) {
+                    emit_system_signals(host, &control_for_hook);
+                }
                 let brightness = integrations.brightness_snapshot();
                 if host.system_mut().update_brightness(brightness) {
                     emit_system_signals(host, &control_for_hook);
@@ -491,6 +497,12 @@ fn run_session(
             refresh_provider(
                 &reactor_for_hook,
                 &mut power_registration,
+                &integrations_for_hook,
+                &provider_error_for_hook,
+            )?;
+            refresh_provider(
+                &reactor_for_hook,
+                &mut power_profiles_registration,
                 &integrations_for_hook,
                 &provider_error_for_hook,
             )?;

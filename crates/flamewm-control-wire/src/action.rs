@@ -149,6 +149,16 @@ pub(crate) fn system_action_request(
                 required_u64(&call.args[6], "expectedRevision")?,
             )
         }
+        "SetPowerProfile" => {
+            expect_arity(call, 2)?;
+            let name = required_string(&call.args[0], "profile")?;
+            let profile = flamewm_api::system::PowerProfile::from_wire(name)
+                .ok_or_else(|| invalid("unknown power profile"))?;
+            (
+                SystemAction::SetPowerProfile(profile),
+                required_u64(&call.args[1], "expectedRevision")?,
+            )
+        }
         "SetBrightness" => {
             expect_arity(call, 3)?;
             let percent = u8::try_from(required_u32(&call.args[0], "percent")?)
@@ -267,6 +277,10 @@ pub(crate) fn system_action_call(action: &SystemAction, expected_revision: u64) 
                 action.generation,
                 action.server_generation,
             ),
+        ),
+        SystemAction::SetPowerProfile(profile) => (
+            "SetPowerProfile",
+            vec![WireValue::String(profile.wire().to_owned())],
         ),
         SystemAction::SetBrightness(action) => (
             "SetBrightness",

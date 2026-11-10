@@ -60,6 +60,7 @@ pub enum LinuxIntegrationSource {
     NetworkManager,
     Mpris,
     Power,
+    PowerProfiles,
 }
 
 /// The single owner of Linux integration provider lifecycles.
@@ -67,6 +68,7 @@ pub struct LinuxIntegrationRuntime {
     network_manager: NetworkManagerSlot,
     mpris: MprisProvider,
     power: PowerProvider,
+    power_profiles: PowerProfilesProvider,
     brightness: BacklightProvider,
     removable_mounts: Option<RemovableMountWorker>,
     started: bool,
@@ -79,6 +81,7 @@ impl LinuxIntegrationRuntime {
             network_manager: NetworkManagerSlot::connect()?,
             mpris: MprisProvider::connect()?,
             power: PowerProvider::connect()?,
+            power_profiles: PowerProfilesProvider::connect()?,
             brightness: BacklightProvider::connect(),
             removable_mounts: None,
             started: false,
@@ -93,6 +96,7 @@ impl LinuxIntegrationRuntime {
         self.network_manager.start()?;
         self.mpris.start()?;
         self.power.start();
+        self.power_profiles.start();
         self.brightness.start();
         self.removable_mounts = Some(RemovableMountWorker::start());
         self.started = true;
@@ -103,6 +107,7 @@ impl LinuxIntegrationRuntime {
     pub fn stop(&mut self) {
         self.removable_mounts = None;
         self.brightness.stop();
+        self.power_profiles.stop();
         self.power.stop();
         self.mpris.stop();
         self.network_manager.stop();
@@ -130,6 +135,7 @@ impl LinuxIntegrationRuntime {
             LinuxIntegrationSource::NetworkManager => self.network_manager.watch(),
             LinuxIntegrationSource::Mpris => self.mpris.watch(),
             LinuxIntegrationSource::Power => self.power.watch(),
+            LinuxIntegrationSource::PowerProfiles => self.power_profiles.watch(),
         }
     }
 
@@ -139,6 +145,7 @@ impl LinuxIntegrationRuntime {
             LinuxIntegrationSource::NetworkManager => self.network_manager.on_ready(),
             LinuxIntegrationSource::Mpris => self.mpris.on_ready(),
             LinuxIntegrationSource::Power => self.power.on_ready(),
+            LinuxIntegrationSource::PowerProfiles => self.power_profiles.on_ready(),
         }
     }
 
@@ -169,6 +176,11 @@ impl LinuxIntegrationRuntime {
     #[must_use]
     pub fn power_snapshot(&self) -> PowerSnapshot {
         self.power.snapshot()
+    }
+
+    #[must_use]
+    pub fn power_profiles_snapshot(&self) -> flamewm_api::system::PowerProfilesSnapshot {
+        self.power_profiles.snapshot()
     }
 
     /// Reads the panel backlight on demand; the generation only moves when the observed
@@ -210,8 +222,10 @@ impl LinuxIntegrationRuntime {
             | SystemAction::Previous { .. } => self.mpris.perform_action(action, media),
             SystemAction::BatteryMenuOpened => {
                 self.power.set_battery_menu_open(true);
+                self.power_profiles.refresh();
                 Ok(())
             }
+            SystemAction::SetPowerProfile(profile) => self.power_profiles.set_active(profile),
             SystemAction::BatteryMenuClosed => {
                 self.power.set_battery_menu_open(false);
                 Ok(())
