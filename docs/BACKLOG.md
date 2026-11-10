@@ -25,8 +25,8 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | cmp-polkit | feature | Polkit authentication agent | `cmp-4`; core `1951e0df` on origin/main; bounded prompt event queue `acfdc70d`; `docs/backlog/polkit.md:26-34` | partial: core and event queue landed; `pol-*` open | L | partial |
 | pol-ui | feature | Polkit prompt window (needs design decision and dialog pattern) | `docs/backlog/polkit.md:37` | no prompt | M | open |
 | pol-helper | security | Password flow via `polkit-agent-helper-1` (stdin/stdout, PAM response) | `docs/backlog/polkit.md:38` | no auth possible | L | open |
-| pol-session | feature | Session wiring: which process registers, when, unregister on exit | `docs/backlog/polkit.md:39` | agent not registered | M | open |
-| pol-sessid | feature | Session-id source: `XDG_SESSION_ID` vs logind `GetSessionByPID` | `docs/backlog/polkit.md:40` | unresolved | S | open |
+| pol-session | feature | Session wiring: which process registers, when, unregister on exit | `docs/backlog/polkit.md:39` | agent not registered | M | design decided cd7d0649 (shell registers; not wired) |
+| pol-sessid | feature | Session-id source: `XDG_SESSION_ID` vs logind `GetSessionByPID` | `docs/backlog/polkit.md:40` | unresolved | S | partial: resolver cd7d0649 (gate all=0); real logind impl open |
 | pol-proof | quality | Runtime proof with polkit daemon and `pkexec` | `docs/backlog/polkit.md:41` | mock-bus tests only | M | open |
 | bt-agent | feature | `org.bluez.Agent1` registration for PIN/passkey prompts (security-sensitive) | `docs/backlog/bluetooth.md:23` | Pair fails for most devices | L | open |
 | bt-ui | feature | Quick-controls Bluetooth row (network popup; trust toggle via typed action) | `docs/backlog/bluetooth.md` (Landed: bt-ui) | done in `e80d4163`; no real BlueZ verification | S | done |
