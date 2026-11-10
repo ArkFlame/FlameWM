@@ -90,3 +90,15 @@ Reproduced on private Xvfb `:441` (1920x1080, `-noreset`), fast build `flamewm-t
 
 Still open: task-manager pixel-stable capture needs a frozen-data hook or a masked-region settle (not added: no
 product change in this pass). Shell panel, start, notifications, lock: still outside the deterministic capture.
+
+## Radius tokens, exact values (look-radius)
+
+- Commit `8587c1ba`: literal `4px`, `8px`, `12px` corners in `ui/explorer/explorer.css`, `ui/finder/finder.css`,
+  `ui/archiver/archiver.css`, `ui/imageviewer/imageviewer.css` now `var(--r-sm|md|lg)`. Values equal, so no pixel change.
+- Captures on private Xvfb (`/tmp/claude-1000/look-radius/{before,after}`, 1920x1080, no WM): archiver and imageviewer
+  0 differing pixels; explorer and finder differ only in a random temp-dir name in the address bar and the finder's
+  animated search prompt, not in any corner. The changed corners are not visible in the captured states.
+- Still open: 3/6/9/11px literals (`--radius-*` legacy scale, e.g. explorer 6px fields and buttons), 2/5/10/16px literals,
+  and the choice of one radius scale. Changing any of these changes pixels, so it needs a decision.
+- Gate: `EXIT_GUARD=0 EXIT_FMT=0 EXIT_CLIPPY=0 EXIT_TEST=0 GATE_DONE all=0` on rebased tree (`8587c1ba` on `31553190`).
+  No golden re-pin needed.
