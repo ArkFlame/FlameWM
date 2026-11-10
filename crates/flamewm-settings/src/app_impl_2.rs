@@ -594,12 +594,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     pub(crate) fn percent_setting(&self, key: &str) -> Result<u8, String> {
-        match self.setting_value(key) {
-            Some(SettingValue::Percent(value)) => Ok(*value),
-            _ => Err(format!(
-                "setting '{key}' has no authoritative percent value"
-            )),
-        }
+        self.client
+            .settings()
+            .and_then(|snapshot| flamewm_api::settings::percent_value(snapshot, key))
+            .ok_or_else(|| format!("setting '{key}' has no authoritative percent value"))
     }
 
     /// A percent or integer value as an integer, for keys that the wire types either way.
@@ -612,13 +610,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     pub(crate) fn integer_setting(&self, key: &str) -> Result<i64, String> {
-        match self.setting_value(key) {
-            Some(SettingValue::Integer(value)) => Ok(*value),
-            Some(SettingValue::Percent(value)) => Ok(i64::from(*value)),
-            _ => Err(format!(
-                "setting '{key}' has no authoritative integer value"
-            )),
-        }
+        self.client
+            .settings()
+            .and_then(|snapshot| {
+                flamewm_api::settings::integer_value(snapshot, key)
+                    .or_else(|| flamewm_api::settings::percent_value(snapshot, key).map(i64::from))
+            })
+            .ok_or_else(|| format!("setting '{key}' has no authoritative integer value"))
     }
 
     /// The configured accent, falling back to `DEFAULT_ACCENT` when the setting is absent.
@@ -639,7 +637,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Boolean setting value; an absent or non-boolean key reads as OFF.
     pub(crate) fn bool_setting(&self, key: &str) -> bool {
-        matches!(self.setting_value(key), Some(SettingValue::Boolean(true)))
+        self.client
+            .settings()
+            .and_then(|snapshot| flamewm_api::settings::boolean_value(snapshot, key))
+            == Some(true)
     }
 
     /// Writes every node; a failed node write is recorded and the rest still apply.

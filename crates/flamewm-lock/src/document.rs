@@ -207,7 +207,10 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         // Solid colour, or a custom mode without a saved path: the caller paints the colour.
         _ => return None,
     };
-    Some(runtime_image(source, cover_rgba(&natural, width, height)?))
+    Some(RuntimeImage::from_rgba(
+        source,
+        cover_rgba(&natural, width, height)?,
+    ))
 }
 
 /// Scales `image` to fully cover `width` x `height` and crops the centre.
@@ -565,7 +568,7 @@ fn svg_image(bytes: &[u8], size: u32) -> Result<RuntimeImage, String> {
     } else {
         svg::render(bytes, size, size)?
     };
-    Ok(runtime_image(format!("lock-svg-{size}"), image))
+    Ok(RuntimeImage::from_rgba(format!("lock-svg-{size}"), image))
 }
 
 /// The avatar ring at `size`, with the profile picture composited inside it when one decodes.
@@ -586,7 +589,10 @@ fn avatar_runtime(settings: &LockSettings, size: u32) -> Result<RuntimeImage, St
     };
     let offset = (size - inner) / 2;
     composite_over(&mut base, &picture, offset, offset);
-    Ok(runtime_image(format!("lock-avatar-picture-{size}"), base))
+    Ok(RuntimeImage::from_rgba(
+        format!("lock-avatar-picture-{size}"),
+        base,
+    ))
 }
 
 fn decode_file(path: &Path) -> Option<RgbaImage> {
@@ -643,15 +649,6 @@ fn composite_over(base: &mut RgbaImage, top: &RgbaImage, x0: u32, y0: u32) {
             }
             base.pixels[dst + 3] = (oa * 255.0).round() as u8;
         }
-    }
-}
-
-fn runtime_image(source: String, image: RgbaImage) -> RuntimeImage {
-    RuntimeImage {
-        source,
-        width: image.width,
-        height: image.height,
-        pixels: image.pixels,
     }
 }
 

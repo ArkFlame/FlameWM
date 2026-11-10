@@ -90,10 +90,5 @@ fn resolve_icon(
 }
 
 fn runtime_image(raster: Rgb8Raster) -> RuntimeImage {
-    RuntimeImage {
-        source: raster.source,
-        width: raster.width,
-        height: raster.height,
-        pixels: raster.pixels,
-    }
+    RuntimeImage::new(raster.source, raster.width, raster.height, raster.pixels)
 }

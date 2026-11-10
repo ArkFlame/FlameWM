@@ -96,28 +96,89 @@ pub fn accent_rgb(snapshot: &SettingsSnapshot) -> u32 {
     }
 }
 
-/// Typed readers: the stored value when its variant matches, else `default`.
+/// Typed readers: the stored value when its variant matches, else `None`.
+#[must_use]
+pub fn boolean_value(snapshot: &SettingsSnapshot, key: &str) -> Option<bool> {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Boolean(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn percent_value(snapshot: &SettingsSnapshot, key: &str) -> Option<u8> {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Percent(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn integer_value(snapshot: &SettingsSnapshot, key: &str) -> Option<i64> {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Integer(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Non-blank text value, if stored.
+#[must_use]
+pub fn text_value<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str> {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Text(value)) if !value.trim().is_empty() => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+/// Typed value, else `default` (the same defaults every projection used).
 #[must_use]
 pub fn setting_bool(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => *value,
-        _ => default,
-    }
+    boolean_value(snapshot, key).unwrap_or(default)
 }
 
 #[must_use]
 pub fn setting_percent(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Percent(value)) => *value,
-        _ => default,
-    }
+    percent_value(snapshot, key).unwrap_or(default)
 }
 
 #[must_use]
 pub fn setting_integer(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Integer(value)) => *value,
-        _ => default,
+    integer_value(snapshot, key).unwrap_or(default)
+}
+
+#[must_use]
+pub fn setting_text(snapshot: &SettingsSnapshot, key: &str, default: &str) -> String {
+    text_value(snapshot, key).map_or_else(|| default.to_owned(), str::to_owned)
+}
+
+#[cfg(test)]
+mod typed_reader_tests {
+    use super::*;
+
+    #[test]
+    fn typed_readers_fall_back_on_missing_variant_or_blank_text() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("b".into(), SettingValue::Boolean(true));
+        snapshot
+            .values
+            .insert("p".into(), SettingValue::Percent(40));
+        snapshot.values.insert("i".into(), SettingValue::Integer(7));
+        snapshot
+            .values
+            .insert("blank".into(), SettingValue::Text("  ".into()));
+        snapshot
+            .values
+            .insert("s".into(), SettingValue::Text("x".into()));
+        assert!(setting_bool(&snapshot, "b", false));
+        assert!(!setting_bool(&snapshot, "p", false));
+        assert_eq!(setting_percent(&snapshot, "p", 0), 40);
+        assert_eq!(setting_integer(&snapshot, "i", 0), 7);
+        assert_eq!(setting_integer(&snapshot, "p", 3), 3);
+        assert_eq!(setting_text(&snapshot, "blank", "d"), "d");
+        assert_eq!(setting_text(&snapshot, "s", "d"), "x");
+        assert_eq!(text_value(&snapshot, "s"), Some("x"));
     }
 }
 

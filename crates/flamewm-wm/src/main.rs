@@ -6,7 +6,9 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use flamewm_api::repeat_log::RepeatLog;
-use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
+use flamewm_api::settings::{
+    AppearanceMode, SettingValue, SettingsSnapshot, boolean_value, text_value,
+};
 use flamewm_integrations_linux::icons::resolve_icon_theme;
 use flamewm_session_core::{
     AppearancePlan, AppearanceProbe, SessionPaths, build_launch_plan_with_appearance,
@@ -299,20 +301,6 @@ fn cursor_size(snapshot: &SettingsSnapshot) -> Option<u32> {
         Some(SettingValue::Integer(size)) => u32::try_from(*size)
             .ok()
             .filter(|size| matches!(*size, 24 | 32 | 48 | 64)),
-        _ => None,
-    }
-}
-
-fn text_value<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str> {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Text(text)) if !text.trim().is_empty() => Some(text.as_str()),
-        _ => None,
-    }
-}
-
-fn boolean_value(snapshot: &SettingsSnapshot, key: &str) -> Option<bool> {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => Some(*value),
         _ => None,
     }
 }

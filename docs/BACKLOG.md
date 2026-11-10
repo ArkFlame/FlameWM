@@ -45,11 +45,11 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-D5 | quality | Unused constants in glass, palette, recipes (9 names, each one occurrence) | `ui-core/src/glass.rs:26-28`; `skin/src/palette.rs:26,30,242`; `skin/src/recipes/{button.rs:12,sticky.rs:13,taskbar.rs:10}` | dead code | S | open |
 | read-D6 | quality | Dead `set_ring_mask` (dock, other owner) | `render-x11/src/surface_controller/dock.rs:153` | dead code | S | open |
 | read-D7 | quality | Unused `titlebar_rect`, `SESSION_LOCK_INTERFACE` | `skin/src/recipes/window_chrome.rs:82`; `wm-wayland/src/lock_global.rs:13` | dead code | S | open |
-| read-U1 | quality | Settings accessor duplicated (six copies; discovery said five) | `api/src/settings.rs:101-117`; `settings/src/app_impl_2.rs:596-641`; `wm-x11/src/live_settings.rs:96`; `shell/src/settings_projection/settings.rs:35-49`; `api/src/blue_light.rs:93`; `wm/src/main.rs:313` | maintenance | M | open |
+| read-U1 | quality | Settings accessor duplicated (six copies; discovery said five) | `api/src/settings.rs:101-117`; `settings/src/app_impl_2.rs:596-641`; `wm-x11/src/live_settings.rs:96`; `shell/src/settings_projection/settings.rs:35-49`; `api/src/blue_light.rs:93`; `wm/src/main.rs:313` | maintenance | M | done (flamewm-api typed readers; RuntimeImage::new/from_rgba) |
 | read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `finder/src/lib.rs:270,284`; `assistant/src/lib.rs:981,995` | test maintenance | S | open |
 | read-U5 | quality | `send_state` per-type adapters | `x11-desktop/src/shared.rs:156`; `x11-desktop/src/lib.rs:217`; `wm-x11/src/lib.rs:290` | low value | S | open (see dup-color-rgb) |
 | read-U6 | quality | `wall_clock_delay_ms` duplicated | `reactor/src/lib.rs:337`; `shell-core/src/clock.rs:40` | dep-edge decision | S | open (same as dup-wall-clock) |
-| read-U7 | quality | `runtime_image` duplicated (three copies) | `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91`; `lock/src/document.rs:649` | maintenance | S | open (same as dup-color-rgb) |
+| read-U7 | quality | `runtime_image` duplicated (three copies) | `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91`; `lock/src/document.rs:649` | maintenance | S | done (flamewm-api typed readers; RuntimeImage::new/from_rgba) |
 | read-U8 | quality | `release` and `drop` single-instance helpers duplicated | `finder/src/instance.rs:63`; `assistant/src/instance.rs:69`; `integrations-linux/src/device_watch.rs:115`; `explorer/src/refresh.rs:114` | maintenance | S | open |
 | read-U9 | quality | `From<SurfaceRole>` in two crates | `ui-x11/src/surface_runtime.rs:25`; `render-x11/src/config.rs:67` | not a duplicate: different `SurfaceRole` and target types | S | won't-fix |
 | read-SIZE | quality | Oversized files (discovery: 49 over 600 lines, unverified) | `desktop/src/widgets/mod.rs` 1460 (was 1307); `lock/src/run.rs` 1262 (was 1130) | split by responsibility | L | open |
@@ -105,7 +105,7 @@ Re-checked by grep and read of current source, not from memory. Evidence per row
 
 - Done: P1 `e96156bc`, P2 `94be79e1`, P5 `d8dfa39e`, E1-E3 `e96156bc`, E4-E6 `093a850c`, K1 `d8dfa39e`, D1 `d8dfa39e`, U2-U3 `871b4d33`.
 - Won't-fix: P4 (`mpris.rs:568` guard makes `575` unreachable), U9 (different types), K2 and K3 (intentional aliases, not rows).
-- Open: P3, P6, D2, D3, D4, D5, D6, D7, U1, U4, U5, U6, U7, U8, SIZE, GUARD (`tools/architecture_guard.py:440,518,522,851,859`, all present).
+- Open: P3, P6, D2, D3, D4, D5, D6, D7, U4, U5, U6, U8, SIZE, GUARD (`tools/architecture_guard.py:440,518,522,851,859`, all present).
 - Unverified: P3 runtime timing (no runtime run); D4 "test-only" is from grep, not a build; SIZE file-count baseline (49) not re-run.
 
 ## Landed since 1951e0df

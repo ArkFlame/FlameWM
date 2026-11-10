@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::settings::{SettingValue, SettingsSnapshot, setting_bool};
 use flamewm_platform::settings::HotCornerAction;
 use flamewm_shell_core::hot_corner::Corner;
 use flamewm_window_core::dock_reserve::{ReserveEdge, dock_reserve_from_snapshot};
@@ -93,24 +93,17 @@ fn cursor_size_from_snapshot(snapshot: &SettingsSnapshot) -> u32 {
     }
 }
 
-fn boolean_setting(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => *value,
-        _ => default,
-    }
-}
-
 /// Pure mapping from a settings snapshot to `(snapPreviewEnabled, focusFollowsMouse)`.
 fn window_behaviour_from_snapshot(snapshot: &SettingsSnapshot) -> (bool, bool) {
     (
-        boolean_setting(snapshot, "snapPreviewEnabled", DEFAULT_SNAP_PREVIEW_ENABLED),
-        boolean_setting(snapshot, "focusFollowsMouse", DEFAULT_FOCUS_FOLLOWS_MOUSE),
+        setting_bool(snapshot, "snapPreviewEnabled", DEFAULT_SNAP_PREVIEW_ENABLED),
+        setting_bool(snapshot, "focusFollowsMouse", DEFAULT_FOCUS_FOLLOWS_MOUSE),
     )
 }
 
 /// Pure mapping from a settings snapshot to `showContentWhileDragging`.
 fn show_content_from_snapshot(snapshot: &SettingsSnapshot) -> bool {
-    boolean_setting(
+    setting_bool(
         snapshot,
         "showContentWhileDragging",
         DEFAULT_SHOW_CONTENT_WHILE_DRAGGING,
@@ -140,7 +133,7 @@ fn edge_snap_from_snapshot(snapshot: &SettingsSnapshot) -> (bool, i32) {
         _ => DEFAULT_EDGE_SNAP_THRESHOLD_PX,
     };
     (
-        boolean_setting(snapshot, "edgeSnap.enabled", DEFAULT_EDGE_SNAP_ENABLED),
+        setting_bool(snapshot, "edgeSnap.enabled", DEFAULT_EDGE_SNAP_ENABLED),
         threshold,
     )
 }
@@ -223,15 +216,15 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
     TITLEBARS.store(
-        boolean_setting(snapshot, "titlebars", DEFAULT_TITLEBARS),
+        setting_bool(snapshot, "titlebars", DEFAULT_TITLEBARS),
         Ordering::Relaxed,
     );
     TASKBAR_ACTIVITIES.store(
-        boolean_setting(snapshot, "taskbarActivities", DEFAULT_TASKBAR_ACTIVITIES),
+        setting_bool(snapshot, "taskbarActivities", DEFAULT_TASKBAR_ACTIVITIES),
         Ordering::Relaxed,
     );
     SHARE_WALLPAPER.store(
-        boolean_setting(snapshot, "shareWallpaper", false),
+        setting_bool(snapshot, "shareWallpaper", false),
         Ordering::Relaxed,
     );
     SATURATION_PERCENT.store(
@@ -241,7 +234,7 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
     WINDOW_MARGIN.store(window_margin_from_snapshot(snapshot), Ordering::Relaxed);
     AUDIO_RAISE_MAXIMUM.store(
-        boolean_setting(
+        setting_bool(
             snapshot,
             flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY,
             false,
@@ -249,11 +242,11 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
         Ordering::Relaxed,
     );
     STICKY_KEYS.store(
-        boolean_setting(snapshot, "stickyKeys", false),
+        setting_bool(snapshot, "stickyKeys", false),
         Ordering::Relaxed,
     );
     SHAKE_TO_LOCATE.store(
-        boolean_setting(snapshot, "shakeToLocate", false),
+        setting_bool(snapshot, "shakeToLocate", false),
         Ordering::Relaxed,
     );
     CURSOR_SIZE.store(cursor_size_from_snapshot(snapshot), Ordering::Relaxed);
@@ -432,7 +425,7 @@ mod tests {
         let key = flamewm_platform::system::AUDIO_RAISE_MAXIMUM_KEY;
         let raise = |value| {
             AUDIO_RAISE_MAXIMUM.store(
-                boolean_setting(
+                setting_bool(
                     &snapshot(&[(key, SettingValue::Boolean(value))]),
                     key,
                     false,
@@ -517,8 +510,8 @@ mod tests {
     fn titlebars_and_activities_default_on_and_map_booleans() {
         // Pure mapping only: `sync` writes process globals that parallel WM tests read.
         let empty = SettingsSnapshot::new(1);
-        assert!(boolean_setting(&empty, "titlebars", DEFAULT_TITLEBARS));
-        assert!(boolean_setting(
+        assert!(setting_bool(&empty, "titlebars", DEFAULT_TITLEBARS));
+        assert!(setting_bool(
             &empty,
             "taskbarActivities",
             DEFAULT_TASKBAR_ACTIVITIES
@@ -527,13 +520,13 @@ mod tests {
             ("titlebars", SettingValue::Boolean(false)),
             ("taskbarActivities", SettingValue::Boolean(false)),
         ]);
-        assert!(!boolean_setting(&off, "titlebars", DEFAULT_TITLEBARS));
-        assert!(!boolean_setting(
+        assert!(!setting_bool(&off, "titlebars", DEFAULT_TITLEBARS));
+        assert!(!setting_bool(
             &off,
             "taskbarActivities",
             DEFAULT_TASKBAR_ACTIVITIES
         ));
         let junk = snapshot(&[("titlebars", SettingValue::Integer(0))]);
-        assert!(boolean_setting(&junk, "titlebars", DEFAULT_TITLEBARS));
+        assert!(setting_bool(&junk, "titlebars", DEFAULT_TITLEBARS));
     }
 }

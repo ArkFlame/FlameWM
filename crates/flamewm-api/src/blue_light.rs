@@ -4,7 +4,7 @@
 //! window and the applied colour cannot drift between X11, Wayland, and the preview. Nothing here
 //! touches a display: the session decides how to apply the returned ramp.
 
-use crate::settings::{SettingValue, SettingsSnapshot};
+use crate::settings::{SettingValue, SettingsSnapshot, boolean_value};
 
 /// Key of the filter intensity (0..=100). `0` is neutral; `100` is the warmest step.
 pub const BLUE_LIGHT_FILTER_KEY: &str = "blueLightFilter";
@@ -87,13 +87,6 @@ impl BlueLightConfig {
             end_minutes: minutes_value(snapshot, NIGHT_SHIFT_END_KEY)
                 .unwrap_or(defaults.end_minutes),
         }
-    }
-}
-
-fn boolean_value(snapshot: &SettingsSnapshot, key: &str) -> Option<bool> {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => Some(*value),
-        _ => None,
     }
 }
 

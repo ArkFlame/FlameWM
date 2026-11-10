@@ -60,13 +60,13 @@ Excluded by design: `shell/src/quick_controls/supervisor.rs:310,321`; dock `let 
 
 | # | Location (verified) | Status | Evidence |
 |---|---|---|---|
-| U1 | `api/src/settings.rs:101-117`; `settings/src/app_impl_2.rs:596,614,641`; `wm-x11/src/live_settings.rs:96`; `shell/src/settings_projection/settings.rs:35-49`; `api/src/blue_light.rs:93`; `wm/src/main.rs:313` | open | six copies remain (discovery listed five) |
+| U1 | `flamewm-api/src/settings.rs` (`boolean_value`/`percent_value`/`integer_value`/`text_value`, `setting_*`/`setting_text` defaults); `settings/src/app_impl_2.rs` percent/integer/bool readers delegate; wm-x11, shell settings_projection, wm main re-use api | done | deduped; `blue_light` percent reader stays local (accepts Integer 0..=100, distinct semantics) |
 | U2 | `render-core/src/lower.rs:204` | done | `871b4d33`; render-x11 copy re-exports core |
 | U3 | `render-core/src/lower.rs:126` | done | `871b4d33` |
 | U4 | `finder/src/lib.rs:270,284`; `assistant/src/lib.rs:981,995` | open | still duplicated |
 | U5 | `x11-desktop/src/shared.rs:156`; `x11-desktop/src/lib.rs:217`; `wm-x11/src/lib.rs:290` | open | per-type adapters over `shared::send_state`; no net line win (see `BACKLOG.md` dup-color-rgb) |
 | U6 | `reactor/src/lib.rs:337`; `shell-core/src/clock.rs:40` | open | both present; needs dep-edge decision |
-| U7 | `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91`; `lock/src/document.rs:649` | open | three copies; discovery listed two |
+| U7 | `flamewm-ui-document/src/template.rs` `RuntimeImage::new` / `from_rgba` (single owner); desktop, shell wrappers and lock use it | done | deduped; desktop/shell keep one-line adapters for their raster types |
 | U8 | `finder/src/instance.rs:63`; `assistant/src/instance.rs:69`; `integrations-linux/src/device_watch.rs:115`; `explorer/src/refresh.rs:114` | open | still duplicated |
 | U9 | `ui-x11/src/surface_runtime.rs:25`; `render-x11/src/config.rs:67` | won't-fix | two different `SurfaceRole` types and two target types; not a duplicate |
 

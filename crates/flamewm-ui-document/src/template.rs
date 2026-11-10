@@ -142,6 +142,22 @@ pub struct RuntimeImage {
 }
 
 impl RuntimeImage {
+    /// The one constructor every raster source maps through (straight RGBA8 pixels).
+    #[must_use]
+    pub fn new(source: String, width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        Self {
+            source,
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    #[must_use]
+    pub fn from_rgba(source: String, image: flamewm_image_core::RgbaImage) -> Self {
+        Self::new(source, image.width, image.height, image.pixels)
+    }
+
     #[must_use]
     pub fn is_fully_opaque(&self) -> bool {
         flamewm_image_core::rgba8_fully_opaque(&self.pixels)

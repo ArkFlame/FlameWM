@@ -28,10 +28,5 @@ pub(crate) fn flame_fallback_raster() -> Rgba8Raster {
 }
 
 pub(crate) fn runtime_image(raster: Rgba8Raster) -> RuntimeImage {
-    RuntimeImage {
-        source: raster.source,
-        width: raster.width,
-        height: raster.height,
-        pixels: raster.pixels,
-    }
+    RuntimeImage::new(raster.source, raster.width, raster.height, raster.pixels)
 }

@@ -25,30 +25,7 @@ pub fn start_favorites(snapshot: Option<&SettingsSnapshot>) -> Vec<String> {
     }
 }
 
-pub(super) fn text_setting(snapshot: &SettingsSnapshot, key: &str, default: &str) -> String {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Text(value)) if !value.trim().is_empty() => value.clone(),
-        _ => default.to_owned(),
-    }
-}
-
-pub(super) fn bool_setting(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => *value,
-        _ => default,
-    }
-}
-
-pub(super) fn integer_setting(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Integer(value)) => *value,
-        _ => default,
-    }
-}
-
-pub(super) fn percent_setting(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
-    match snapshot.values.get(key) {
-        Some(SettingValue::Percent(value)) => *value,
-        _ => default,
-    }
-}
+pub(super) use flamewm_api::settings::{
+    setting_bool as bool_setting, setting_integer as integer_setting,
+    setting_percent as percent_setting, setting_text as text_setting,
+};
