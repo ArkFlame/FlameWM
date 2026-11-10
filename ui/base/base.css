@@ -1,4 +1,6 @@
 @import "tokens.css";
+/* Canonical --muted for every sheet that links base.css (UI_DESIGN_LAYER step 2). */
+:root { --muted:#aeb4bb; }
 :root { --rim:#ffffff7f; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
