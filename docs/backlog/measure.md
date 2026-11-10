@@ -108,3 +108,17 @@ Findings:
 - Frame coalescing already exists: the pacer (`session.rs:107`) limits wakes to one per `FRAME`, and `OUTPUT_BUDGET` (256 KB) bounds each dispatch.
 
 Next step: `perf` access or a sampling profiler build for `terminal.parse`, then measure the event-coalescing candidate with 5 runs before and after.
+
+### Event coalescing measured (meas-termparse)
+
+Result: below the 10% bar, code not kept. Base: origin/main `4dbfcda4`, `flamewm-terminal` fast profile, own target `/run/media/linsaftw/SDD/gate-targets/termparse-base`, Xvfb `:260`. Harness: `/tmp/claude-1000/termparse-bench.sh` (copy of `termframe-bench.sh` on `:260`, not committed), workload `yes | head -c 20000000`, 5 runs each.
+
+Candidate: in `wake::drain_and_commit`, merge consecutive `SessionEvent::Output` for one tab into one `App::feed_output` call (one feed and one banner update per run, not per PTY read). Output-identical: the parser is streaming, and a regression test compared a grid fed byte-by-byte with one fed in one event (escape sequences split at every boundary; same grid and cursor).
+
+| Build | Runs | Wall (mean, median, range) | Throughput (mean) | CPU% (mean) | load1 |
+| --- | --- | --- | --- | --- | --- |
+| base, first pass | 5 | 9.96 s, median 10.08 s | 2.0 MB/s | 113 | 13.3 to 13.8 |
+| base, second pass (matched load) | 5 | 6.31 s, median 6.44 s (range 6.06 to 6.67) | 3.17 MB/s | 142 | 5.2 to 7.3 |
+| coalesced | 5 | 5.81 s, median 5.97 s (range 5.26 to 6.36) | 3.44 MB/s | 147 | 5.4 to 5.9 |
+
+Gain at matched load: +8.6% by mean, +2.6% by median, ranges overlap. Below the 10% bar, so the change was reverted and not pushed. The first base pass ran at load 13 and is not comparable to the coalesced run at load 5.5. Per-read `feed` overhead is therefore not the dominant cost; the remaining time is in the per-byte parser and screen print. Next: a sampling profile of `terminal.parse` (needs `perf` access or an external profiler) before any further parse change. Allocations per PTY read (`buffer[..count].to_vec()` in `session.rs` read loop) are still unmeasured.
