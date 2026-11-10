@@ -69,6 +69,16 @@ Top Rust sites (live, resolved by `addr2line` on the fast binary; `??` where the
 | `ui_x11::surface_runtime::desktop_backdrop` | shell | 0.21 | 1 | Backdrop |
 | `render_x11::xft::text_alpha_mask`, `render_core::glyphs::caret_positions`, `redraw_if_dirty` | desktop | about 0.25 | 6 | Text and frame scratch |
 
+Caller resolution (code reading on origin/main `5077064f`, no runtime trace, not confirmed):
+
+| Buffer | Likely caller | Needed at idle? | Droppable without a visible change? |
+|---|---|---|---|
+| `image_core` 3.38 MB | `wallpaper::compose_region` (`crates/flamewm-image-core/src/wallpaper.rs:124`), reached from `wallpaper_loader::decode_bytes_at` through `wallpaper_fit::compose` for cropped Fill and tiled fits. The composed raster is held as `WallpaperRaster.pixels` (`Arc<Vec<u8>>`) for the session. The 17.5 MB natural decode of the bundled 2560x1707 WebP is already consumed by `compose_decoded`, so it is not retained. Size match is not proven: a full 1600x900 RGBA canvas is 5.76 MB, so the 3.38 MB buffer implies a different target size or a different buffer. | Yes, while the wallpaper is shown. | No. Freeing it needs the renderer to stop reading the CPU copy after upload, which is not a tiny change. |
+| `render_core` 0.71 MB | Candidate `codec.rs:147` (RGB to RGBA asset expansion, kept with the decoded render document). `pixels.rs:152` and `:221` are per-frame region buffers and are transient. | Likely yes for the document assets. | Unknown. |
+| `icon_theme::IconLookupIndex::candidates` 1.18 MB | Icon lookup index, generation-scoped, shared by `icon_service`. | Yes for lookups. | Only by evicting cold icon lookups, not measured. |
+
+Verdict: none of the three is a clear dead allocation at idle. The desktop wallpaper decode path already drops its natural decode, so there is no tiny fix of 2 MB or more. No code change. A scratch counting allocator was not run in this pass, so the mapping above is code reading only.
+
 Attribution by owner:
 - Wayland `[heap]` 10.9 MB touched, Rust live 0.46 MB: about 10.4 MB is malloc from non-Rust code (Mesa, libLLVM, NVIDIA EGL, libwayland). Not attributable to a Rust site without malloc interposition. ENVIRONMENT, as above.
 - Desktop: Rust live 10.6 MB is the only FlameWM-owned heap of size. Its largest single site is 3.4 MB, under the 5 MB bar.
