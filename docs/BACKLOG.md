@@ -24,7 +24,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-E6 | reliability | Lock session settings `connect().ok()` falls back silently | `lock/src/session.rs:36,79` | silent default settings | S | done 093a850c |
 | read-P2 | reliability | `expect` on client compositor data | `wm-wayland/src/state.rs:1132` | compositor panic, hard to reach | S | open |
 | read-P3 | reliability | `expect` in XWayland callback after teardown | `wm-wayland/src/xwayland.rs:690` (per read.md) | compositor panic, timing unverified | M | open |
-| dock-wl | visual | Dock translucency on Wayland not runtime-verified | `dock-translucency.md:32,63`; `docs/DOCK_BACKDROP.md:109` | visual regression risk | M | open |
+| dock-wl | visual | Dock translucency on Wayland: bottom bar parity measured (X11 = Wayland, 0 levels, 3 runs at opacity 70 and 1 run at 30); dock pill over bright window still unverified | `dock-translucency.md` Wayland section; `docs/DOCK_BACKDROP.md:109` | visual regression risk | M | open (narrowed) |
 | dock-x11 | visual | Dock pill alpha follows opacity; backdrop reinstated after hide (X11) | `dock-translucency.md:31,51-56` 5-run table | dark pill over bright window (fixed on X11) | M | done 7aa3156e, 93448de1 |
 | dock-wire | reliability | Dock surface percent keys decoded as Integer | `dock-translucency.md:38`; test `control-wire/src/tests.rs:991` | wrong dock opacity | S | done 32f28041 |
 | look-muted | visual | `--muted` still differs in 4 stylesheets: `desktop.css`, `task-manager.css`, `shell/flamewm.css`, showcase `ui/flamewm.css` (terminal and explorer deliberate) | `docs/backlog/look.md:39`; assistant, osd, archiver removed in `0de670a1` | colour drift | S | open (base landed, see look-muted-done) |

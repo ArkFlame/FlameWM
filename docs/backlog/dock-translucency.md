@@ -34,8 +34,32 @@ white xterm through the pill.
 
 ## Limits
 
-- Wayland: not checked. `docs/DOCK_BACKDROP.md` lists its own unverified case.
+- Wayland dock pill: not isolated. The 2026-11-10 run below measured the bottom bar only.
+  `docs/DOCK_BACKDROP.md` still lists the bright-window-beneath case as unverified.
 - Inherit with a light taskbar keeps its light alpha floor only when the dock is not custom (the
   dock override replaces it while custom).
 - No performance claim. Standing decisions unchanged: transparency optimised, not disabled; no
   glass/shadow effects; no animations.
+
+## Wayland runtime (2026-11-10): bottom bar parity
+
+Build: `cargo build --profile fast -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-wm-wayland`
+at `a2cb7dae`. Private Xvfb 1920x1080, purple wallpaper `127,0,128` (fill), no window beneath.
+Harness: `/tmp/claude-1000/dockwl/run2.sh` (copy of the parity harness; taskbar `surfaceCustom=true`,
+`surfaceBlurPercent=70`, `surfaceOpacity` per row). Measure: band y 1036-1080, x 0-1600, mode colour.
+
+| Backend | Opacity | Run 1 | Run 2 | Run 3 | Expected (black fill, alpha = opacity) |
+|---|---|---|---|---|---|
+| X11 | 70 | 38,0,38 | 38,0,38 | 38,0,38 | 38.1, 0, 38.4 |
+| Wayland | 70 | 38,0,38 | 38,0,38 | 38,0,38 | 38.1, 0, 38.4 |
+| X11 | 30 | 89,0,89 | | | 88.9, 0, 89.1 |
+| Wayland | 30 | 89,0,89 | | | 88.9, 0, 89.1 |
+
+Max per-channel diff X11 vs Wayland over the whole band (all runs at 70): 0 levels. Both backends
+match the alpha-over-purple expectation, so the Wayland translucency path is runtime-correct for the
+bottom bar, within the 2-level bar.
+
+Not covered: the dock pill itself. With `dock.enabled=true` and `dock.surfaceCustom=true`, the band
+stayed at the default taskbar fill (32,0,32 on both backends at dock opacity 30 and 70), so the
+`dock.surfaceOpacity` override did not reach this band. The pill over a bright window beneath
+(`docs/DOCK_BACKDROP.md:109`) stays unverified on Wayland.
