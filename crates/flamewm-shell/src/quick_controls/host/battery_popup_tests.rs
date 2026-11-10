@@ -22,6 +22,43 @@ fn text_of<'a>(doc: &'a RecordingUiDoc, id: &str) -> Option<&'a str> {
     doc.texts.get(id).map(String::as_str)
 }
 
+fn profiles(
+    active: Option<flamewm_api::system::PowerProfile>,
+) -> flamewm_api::system::PowerProfilesSnapshot {
+    use flamewm_api::system::PowerProfile::*;
+    flamewm_api::system::PowerProfilesSnapshot {
+        available: true,
+        active,
+        profiles: vec![PowerSaver, Balanced, Performance],
+    }
+}
+
+#[test]
+fn power_profile_row_shows_active_label_and_dashes_when_absent() {
+    use flamewm_api::system::PowerProfile::Balanced;
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_power_profile_row(&mut doc, &profiles(Some(Balanced)))
+        .expect("row projects");
+    assert_eq!(text_of(&doc, "battery-profile"), Some("Balanced"));
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_power_profile_row(&mut doc, &Default::default())
+        .expect("row projects");
+    assert_eq!(text_of(&doc, "battery-profile"), Some("--"));
+}
+
+#[test]
+fn power_profile_cycle_wraps_through_offered_profiles() {
+    use flamewm_api::system::{PowerProfile, SystemAction};
+    let next = |active| match crate::projection::power_profile_cycle_action(&profiles(Some(active)))
+    {
+        Some(SystemAction::SetPowerProfile(profile)) => profile,
+        other => panic!("unexpected action {other:?}"),
+    };
+    assert_eq!(next(PowerProfile::PowerSaver), PowerProfile::Balanced);
+    assert_eq!(next(PowerProfile::Performance), PowerProfile::PowerSaver);
+    assert!(crate::projection::power_profile_cycle_action(&Default::default()).is_none());
+}
+
 #[test]
 fn battery_kind_wire_name_and_popup_root_are_battery() {
     assert_eq!(QuickControlKind::Battery.as_str(), "battery");

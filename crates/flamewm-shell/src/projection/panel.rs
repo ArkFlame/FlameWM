@@ -996,6 +996,40 @@ pub fn project_battery_menu(
 /// Height of the battery menu progress fill (matches ui/shell/battery.html).
 pub const BATTERY_PROGRESS_HEIGHT: f32 = 8.0;
 
+/// Battery menu power-profile label: the active profile, or `--` when no service answered.
+pub fn project_power_profile_row(
+    document: &mut impl UiDocumentAccess,
+    profiles: &flamewm_api::system::PowerProfilesSnapshot,
+) -> Result<(), String> {
+    let label = match (profiles.tile_visible(), profiles.active) {
+        (true, Some(flamewm_api::system::PowerProfile::PowerSaver)) => "Power saver",
+        (true, Some(flamewm_api::system::PowerProfile::Balanced)) => "Balanced",
+        (true, Some(flamewm_api::system::PowerProfile::Performance)) => "Performance",
+        _ => "--",
+    };
+    document.text("battery-profile", label.to_owned())
+}
+
+/// Click target of the battery power-profile row: the next offered profile after the active one
+/// (wrapping). `None` when the service offers no profiles.
+#[must_use]
+pub fn power_profile_cycle_action(
+    profiles: &flamewm_api::system::PowerProfilesSnapshot,
+) -> Option<flamewm_api::system::SystemAction> {
+    if !profiles.tile_visible() {
+        return None;
+    }
+    let count = profiles.profiles.len();
+    let next = match profiles
+        .active
+        .and_then(|active| profiles.profiles.iter().position(|p| *p == active))
+    {
+        Some(index) => profiles.profiles[(index + 1) % count],
+        None => profiles.profiles[0],
+    };
+    Some(flamewm_api::system::SystemAction::SetPowerProfile(next))
+}
+
 #[cfg(test)]
 mod record_tests;
 #[cfg(test)]

@@ -69,6 +69,14 @@ pub(crate) fn helper_control_request(
             }
         });
     }
+    if action == "power.profile.cycle" {
+        return crate::projection::power_profile_cycle_action(&system.power_profiles).map(
+            |action| ControlRequest::SystemAction {
+                action,
+                expected_revision: system.revision,
+            },
+        );
+    }
     if action == "network.wifi.toggle" {
         return Some(ControlRequest::SystemAction {
             action: flamewm_api::system::SystemAction::SetWifiEnabled(!system.network.wifi_enabled),

@@ -85,7 +85,15 @@ pub(crate) fn project_snapshot(
                     crate::projection::local_date(),
                 ),
                 QuickControlKind::Battery => {
-                    crate::projection::project_battery_menu(document, &snapshot.system.power, 268.0)
+                    crate::projection::project_battery_menu(
+                        document,
+                        &snapshot.system.power,
+                        268.0,
+                    )?;
+                    crate::projection::project_power_profile_row(
+                        document,
+                        &snapshot.system.power_profiles,
+                    )
                 }
                 QuickControlKind::Weather => project_weather_popup(
                     document,

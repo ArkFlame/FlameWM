@@ -15,7 +15,8 @@
     .battery-status-row { position:absolute; left:20px; top:92px; width:260px; height:18px; display:flex; justify-content:space-between; }
     .battery-state { width:120px; height:18px; font-size:14px; color:var(--text); }
     .battery-rate { width:130px; height:18px; font-size:14px; color:var(--muted); justify-content:flex-end; }
-    .battery-cpu { position:absolute; left:20px; top:112px; width:260px; height:16px; font-size:var(--fs-sm); color:var(--muted); }
+    .battery-cpu { position:absolute; left:20px; top:112px; width:160px; height:16px; font-size:var(--fs-sm); color:var(--muted); }
+    .battery-profile { position:absolute; left:180px; top:112px; width:100px; height:16px; font-size:var(--fs-sm); color:var(--muted); display:flex; justify-content:flex-end; }
   </style>
 </head>
 <body class="popup-body">
@@ -49,6 +50,7 @@
       <div id="battery-rate" class="battery-rate" title="Battery power">&#8203;</div>
     </div>
     <div id="battery-cpu" class="battery-cpu">&#8203;</div>
+    <div id="battery-profile" class="battery-profile" data-action="power.profile.cycle" title="Power profile">&#8203;</div>
   </section>
 </body>
 </html>
