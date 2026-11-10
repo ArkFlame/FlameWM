@@ -86,18 +86,12 @@ pub fn keep_on_outputs(rect: RootRect, outputs: &[RootRect], fallback: RootRect)
 /// so they take this stricter rule instead of the quarter-visible drag rule of [`keep_on_outputs`].
 #[must_use]
 pub fn fit_restore_rect(rect: RootRect, work_area: RootRect) -> RootRect {
-    let w = rect.w.min(work_area.w).max(1);
-    let h = rect.h.min(work_area.h).max(1);
-    let fit = |start: i32, len: i32, lo: i32, span: i32| {
-        let hi = lo.saturating_add(span.saturating_sub(len)).max(lo);
-        start.clamp(lo, hi)
-    };
-    RootRect::new(
-        fit(rect.x, w, work_area.x, work_area.w),
-        fit(rect.y, h, work_area.y, work_area.h),
-        w,
-        h,
-    )
+    let fitted = flamewm_window_core::fit_into(
+        flamewm_api::Rect::new(rect.x, rect.y, rect.w, rect.h),
+        flamewm_api::Rect::new(work_area.x, work_area.y, work_area.w, work_area.h),
+        1,
+    );
+    RootRect::new(fitted.x, fitted.y, fitted.width, fitted.height)
 }
 
 /// Valid `[lo, hi]` for a left edge at `x` while the right edge `right` is fixed, against `[b0, b1)`.
@@ -185,4 +179,23 @@ pub(super) fn overlap_area(a: RootRect, b: RootRect) -> i64 {
 /// Clamp a span of `len` at `start` so it fits inside `[lo, lo + extent)`.
 pub(super) fn clamp_span(start: i32, len: i32, lo: i32, extent: i32) -> i32 {
     start.clamp(lo, lo.saturating_add(extent.saturating_sub(len).max(0)))
+}
+
+#[cfg(test)]
+mod fit_vector_tests {
+    use super::*;
+
+    /// Same vector as the Wayland `clamp_into_output` pin: a 1300x900 origin slides back into 1280x800.
+    #[test]
+    fn fit_restore_matches_shared_window_core_vector() {
+        let area = RootRect::new(0, 0, 1280, 800);
+        assert_eq!(
+            fit_restore_rect(RootRect::new(1300, 900, 500, 400), area),
+            RootRect::new(780, 400, 500, 400)
+        );
+        assert_eq!(
+            fit_restore_rect(RootRect::new(10, 10, 0, 0), area),
+            RootRect::new(10, 10, 1, 1)
+        );
+    }
 }

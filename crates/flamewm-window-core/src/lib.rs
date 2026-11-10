@@ -71,6 +71,26 @@ pub fn keep_visible(rect: Rect, bounds: Rect) -> Rect {
     )
 }
 
+/// Brings `rect` fully inside `area`: the extent is capped to `area` (and raised to `min_extent`),
+/// then the rect slides back in from the edge it crosses. Restores reappear where they were saved,
+/// so they use this stricter rule instead of the quarter-visible drag rule of [`keep_visible`].
+/// Backends choose `min_extent`: X11 restores keep at least 1 px, Wayland allows 0.
+#[must_use]
+pub fn fit_into(rect: Rect, area: Rect, min_extent: i32) -> Rect {
+    let w = rect.width.min(area.width).max(min_extent);
+    let h = rect.height.min(area.height).max(min_extent);
+    let fit = |start: i32, len: i32, lo: i32, span: i32| {
+        let hi = lo.saturating_add(span.saturating_sub(len)).max(lo);
+        start.clamp(lo, hi)
+    };
+    Rect::new(
+        fit(rect.x, w, area.x, area.width),
+        fit(rect.y, h, area.y, area.height),
+        w,
+        h,
+    )
+}
+
 /// Snap detection for a pointer on an output whose work area may be reserved by docks.
 /// Left/top zones are measured from the work area; right/bottom zones extend to the
 /// output edge so a pointer over a bottom/right dock band still reaches the physical corner.

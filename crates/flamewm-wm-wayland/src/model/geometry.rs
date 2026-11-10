@@ -19,11 +19,32 @@ pub(super) fn clamp_into_output(rect: Rect, output: Rect) -> Rect {
     if output.w <= 0 || output.h <= 0 {
         return rect;
     }
-    let w = rect.w.clamp(0, output.w);
-    let h = rect.h.clamp(0, output.h);
-    let x = rect.x.clamp(output.x, output.x + output.w - w);
-    let y = rect.y.clamp(output.y, output.y + output.h - h);
-    Rect::new(x, y, w, h)
+    let fitted = flamewm_window_core::fit_into(api_rect(rect), api_rect(output), 0);
+    Rect::new(fitted.x, fitted.y, fitted.width, fitted.height)
+}
+
+#[cfg(test)]
+mod fit_vector_tests {
+    use super::*;
+
+    /// Same vector as the X11 `fit_restore_rect` pin: a 1300x900 origin slides back into 1280x800.
+    #[test]
+    fn clamp_into_output_matches_shared_window_core_vector() {
+        let output = Rect::new(0, 0, 1280, 800);
+        assert_eq!(
+            clamp_into_output(Rect::new(1300, 900, 500, 400), output),
+            Rect::new(780, 400, 500, 400)
+        );
+        assert_eq!(
+            clamp_into_output(Rect::new(10, 10, 0, 0), output),
+            Rect::new(10, 10, 0, 0)
+        );
+        // An output with no usable area leaves the rect unchanged.
+        assert_eq!(
+            clamp_into_output(Rect::new(5, 6, 7, 8), Rect::new(0, 0, 0, 0)),
+            Rect::new(5, 6, 7, 8)
+        );
+    }
 }
 
 /// Keeps a pointer position on the last pixel row and column of `output`.
