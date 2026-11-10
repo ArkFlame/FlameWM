@@ -2,7 +2,7 @@
 
 > Rows: `cmp-polkit` (partial, core `1951e0df`), `pol-ui`, `pol-helper`, `pol-session`, `pol-sessid`, `pol-proof` in `docs/BACKLOG.md`.
 
-Status: core landed in `flamewm-integrations-linux`; UI and helper I/O open. Static evidence only, no runtime proof.
+Status: core and bounded event queue landed in `flamewm-integrations-linux`; UI, shell consumer and helper I/O open. Static evidence only, no runtime proof.
 
 ## Scope check (origin/main)
 
@@ -31,7 +31,8 @@ Status: core landed in `flamewm-integrations-linux`; UI and helper I/O open. Sta
 - `parse_begin`, `parse_cancel`: argument validation (arity, types, empty cookie).
 - `AgentSessions`: pending map keyed by cookie; duplicate rejection; cancel dismisses once; `finish` for the UI answer.
 - `handle_agent_call`: routes on interface and member; returns `Reply` or `Unhandled`.
-- `AuthPrompt` trait: UI boundary.
+- `AuthPrompt` trait: UI boundary. `show` is fallible so a full queue becomes an error reply.
+- `PolkitEventQueue`: bounded (`MAX_QUEUED_EVENTS` = 16) FIFO implementing `AuthPrompt`. The shell drains typed `PolkitEvent::{Show, Dismiss}` via `drain()`. A cancel for an undrained `Show` removes it instead of queueing a `Dismiss`. No bus, UI or shell wiring; no daemon. Tests: `full_queue_rejects_second_prompt_without_pending_entry`, `dismiss_before_drain_cancels_undelivered_show`, `dismiss_after_drain_is_queued_for_shell`.
 - Tests use a mock prompt and in-process messages (no bus).
 
 ## Open (not in this step)

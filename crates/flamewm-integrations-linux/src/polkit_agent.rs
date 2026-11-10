@@ -5,7 +5,7 @@
 //! `AGENT_PATH` through `handle_agent_call`. Prompting the user goes through `AuthPrompt`; the
 //! password step (polkit-agent-helper-1) is out of scope here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
 
 use dbus::arg::messageitem::{MessageItem, MessageItemDict};
@@ -44,10 +44,93 @@ pub struct BeginRequest {
     pub identities: Vec<Identity>,
 }
 
-/// The UI side. `show` starts a prompt for one cookie; `dismiss` withdraws it on cancel.
+/// The UI side. `show` starts a prompt for one cookie and may refuse it (`Err` becomes an error
+/// reply to polkit); `dismiss` withdraws it on cancel.
 pub trait AuthPrompt {
-    fn show(&mut self, request: &BeginRequest);
+    /// # Errors
+    /// Returns an error when the prompt cannot be accepted, for example a full queue.
+    fn show(&mut self, request: &BeginRequest) -> FlameResult<()>;
     fn dismiss(&mut self, cookie: &str);
+}
+
+/// Default bound on prompt events the shell has not drained yet.
+pub const MAX_QUEUED_EVENTS: usize = 16;
+
+/// Typed event the shell drains from `PolkitEventQueue` and turns into UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolkitEvent {
+    Show(BeginRequest),
+    Dismiss(String),
+}
+
+/// Bounded FIFO between the bus callback and the shell. `show` fails when full, so polkit gets an
+/// error reply instead of an unbounded backlog. `dismiss` for a `Show` the shell has not drained
+/// removes that `Show`, so the shell never displays a cancelled prompt. Otherwise `Dismiss` is
+/// queued; those are only produced for prompts the shell already drained.
+#[derive(Debug)]
+pub struct PolkitEventQueue {
+    events: VecDeque<PolkitEvent>,
+    capacity: usize,
+}
+
+impl Default for PolkitEventQueue {
+    fn default() -> Self {
+        Self::with_capacity(MAX_QUEUED_EVENTS)
+    }
+}
+
+impl PolkitEventQueue {
+    /// Creates a queue holding at most `capacity` undrained `Show` events (minimum 1).
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            events: VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Takes every queued event in arrival order.
+    pub fn drain(&mut self) -> std::collections::vec_deque::Drain<'_, PolkitEvent> {
+        self.events.drain(..)
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+impl AuthPrompt for PolkitEventQueue {
+    fn show(&mut self, request: &BeginRequest) -> FlameResult<()> {
+        if self.events.len() >= self.capacity {
+            return Err(FlameError::new(
+                ErrorCode::Busy,
+                "polkit: prompt queue full",
+            ));
+        }
+        self.events.push_back(PolkitEvent::Show(request.clone()));
+        Ok(())
+    }
+
+    fn dismiss(&mut self, cookie: &str) {
+        let undrained = self
+            .events
+            .iter()
+            .position(|event| matches!(event, PolkitEvent::Show(req) if req.cookie == cookie));
+        match undrained {
+            Some(index) => {
+                self.events.remove(index);
+            }
+            None => self
+                .events
+                .push_back(PolkitEvent::Dismiss(cookie.to_owned())),
+        }
+    }
 }
 
 /// Pending authentication requests keyed by polkit cookie.
@@ -66,7 +149,7 @@ impl AgentSessions {
         if self.pending.contains_key(&request.cookie) {
             return Err(invalid("duplicate authentication cookie"));
         }
-        prompt.show(&request);
+        prompt.show(&request)?;
         self.pending.insert(request.cookie.clone(), request);
         Ok(())
     }
@@ -292,8 +375,9 @@ mod tests {
     }
 
     impl AuthPrompt for MockPrompt {
-        fn show(&mut self, request: &BeginRequest) {
+        fn show(&mut self, request: &BeginRequest) -> FlameResult<()> {
             self.shown.push(request.cookie.clone());
+            Ok(())
         }
         fn dismiss(&mut self, cookie: &str) {
             self.dismissed.push(cookie.to_owned());
@@ -403,6 +487,50 @@ mod tests {
                 .is_err()
         );
         assert_eq!(prompt.shown.len(), 1);
+    }
+
+    #[test]
+    fn full_queue_rejects_second_prompt_without_pending_entry() {
+        let mut sessions = AgentSessions::default();
+        let mut queue = PolkitEventQueue::with_capacity(1);
+        let first = parse_begin(&begin_items("q1")).expect("p");
+        sessions.begin(&mut queue, first.clone()).expect("first");
+        let second = call(BEGIN, &begin_items("q2"));
+        assert!(matches!(
+            handle_agent_call(&mut sessions, &mut queue, &second),
+            MessageDisposition::Reply(_)
+        ));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            queue.drain().collect::<Vec<_>>(),
+            vec![PolkitEvent::Show(first)]
+        );
+    }
+
+    #[test]
+    fn dismiss_before_drain_cancels_undelivered_show() {
+        let mut sessions = AgentSessions::default();
+        let mut queue = PolkitEventQueue::default();
+        sessions
+            .begin(&mut queue, parse_begin(&begin_items("c")).expect("p"))
+            .expect("begin");
+        assert!(sessions.cancel(&mut queue, "c"));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn dismiss_after_drain_is_queued_for_shell() {
+        let mut sessions = AgentSessions::default();
+        let mut queue = PolkitEventQueue::default();
+        sessions
+            .begin(&mut queue, parse_begin(&begin_items("c")).expect("p"))
+            .expect("begin");
+        assert_eq!(queue.drain().count(), 1);
+        assert!(sessions.cancel(&mut queue, "c"));
+        assert_eq!(
+            queue.drain().collect::<Vec<_>>(),
+            vec![PolkitEvent::Dismiss("c".to_owned())]
+        );
     }
 
     #[test]
