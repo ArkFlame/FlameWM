@@ -95,6 +95,7 @@ pub(super) fn wait_ready(
 ) -> Result<(), String> {
     let deadline = Instant::now() + READY_TIMEOUT;
     let mut last_error = String::from("readiness not yet available");
+    let mut ewmh_seen = false;
     while Instant::now() < deadline {
         if Instant::now() >= deadline {
             break;
@@ -119,6 +120,7 @@ pub(super) fn wait_ready(
         }
         match ewmh {
             Ok(true) => {
+                ewmh_seen = true;
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     break;
@@ -141,11 +143,28 @@ pub(super) fn wait_ready(
         }
         thread::sleep(TICK.min(deadline.saturating_duration_since(Instant::now())));
     }
-    Err(format!(
-        "WindowManager readiness timed out after {} seconds ({}): {last_error}",
-        READY_TIMEOUT.as_secs(),
-        wm.plan.program.display()
-    ))
+    readiness_timeout(
+        ewmh_seen,
+        format!(
+            "WindowManager readiness timed out after {} seconds ({}): {last_error}",
+            READY_TIMEOUT.as_secs(),
+            wm.plan.program.display()
+        ),
+    )
+}
+
+/// Session control is optional: once EWMH reports the WM ready, a missing or silent control bus
+/// degrades the session (logged) instead of aborting it before the desktop and shell start.
+pub(super) fn readiness_timeout(ewmh_ready: bool, message: String) -> Result<(), String> {
+    if ewmh_ready {
+        session_diagnostics::log(
+            "window manager",
+            &format!("{message}; continuing without session control"),
+        );
+        Ok(())
+    } else {
+        Err(message)
+    }
 }
 
 pub(super) fn control_ready(timeout: Duration) -> Result<bool, String> {
@@ -204,4 +223,15 @@ pub(super) fn supporting_wm_check_is_valid(
     self_support: Option<u32>,
 ) -> bool {
     matches!(root_support, Some(support) if support != 0 && self_support == Some(support))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readiness_timeout;
+
+    #[test]
+    fn readiness_timeout_is_fatal_only_before_ewmh_is_ready() {
+        assert!(readiness_timeout(false, "timed out".to_owned()).is_err());
+        assert!(readiness_timeout(true, "control bus unavailable".to_owned()).is_ok());
+    }
 }

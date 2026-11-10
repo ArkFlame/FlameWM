@@ -80,9 +80,25 @@ impl<E: EnginePorts> PlatformHost<E> {
         if self.started {
             return Ok(());
         }
-        match std::fs::read_to_string(self.settings.path()) {
-            Ok(text) => self.settings.load_text(&text)?,
+        let path = self.settings.path().to_path_buf();
+        match std::fs::read_to_string(&path) {
+            // The parse runs before any state change, so a rejected file leaves defaults in place.
+            Ok(text) => {
+                if let Err(error) = self.settings.load_text(&text) {
+                    eprintln!(
+                        "flamewm: settings {} ignored, using defaults: {}",
+                        path.display(),
+                        error.message
+                    );
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                eprintln!(
+                    "flamewm: settings {} is not UTF-8, using defaults: {error}",
+                    path.display()
+                );
+            }
             Err(error) => {
                 return Err(FlameError::new(ErrorCode::IoFailure, error.to_string()));
             }

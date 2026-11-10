@@ -717,3 +717,25 @@ fn dock_auto_hide_toggle_flips_the_setting_against_the_current_revision() {
         Some(SettingValue::Boolean(true))
     );
 }
+
+#[test]
+fn start_falls_back_to_defaults_for_non_utf8_settings_file() {
+    let path = fixture_path("non-utf8");
+    std::fs::write(&path, b"revision=\xff\xfe\x00\nscale.default=125\n").expect("write fixture");
+    let mut host = host_at(&path, 100);
+    let started = host.start();
+    let _ = std::fs::remove_file(&path);
+    started.expect("corrupt settings must not abort host start");
+    assert_eq!(cached_scale(&host), Some(100));
+}
+
+#[test]
+fn start_falls_back_to_defaults_for_malformed_settings_value() {
+    let path = fixture_path("malformed-value");
+    std::fs::write(&path, "scale.default=not-a-number\n").expect("write fixture");
+    let mut host = host_at(&path, 100);
+    let started = host.start();
+    let _ = std::fs::remove_file(&path);
+    started.expect("malformed settings must not abort host start");
+    assert_eq!(cached_scale(&host), Some(100));
+}
