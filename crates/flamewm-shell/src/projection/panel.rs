@@ -1030,6 +1030,43 @@ pub fn power_profile_cycle_action(
     Some(flamewm_api::system::SystemAction::SetPowerProfile(next))
 }
 
+/// Battery menu brightness label: the panel backlight percent, or `--` when no device answered.
+pub fn project_brightness_row(
+    document: &mut impl UiDocumentAccess,
+    brightness: &flamewm_api::system::BrightnessSnapshot,
+) -> Result<(), String> {
+    let label = if brightness.availability == flamewm_api::system::ServiceAvailability::Available {
+        format!("{}%", brightness.percent.min(100))
+    } else {
+        "--".to_owned()
+    };
+    document.text("battery-brightness-value", label)
+}
+
+/// Click target of a battery brightness step: 10 percent down or up, clamped to `0..=100`.
+/// `None` when no device is available or the value is already at the bound.
+#[must_use]
+pub fn brightness_step_action(
+    brightness: &flamewm_api::system::BrightnessSnapshot,
+    up: bool,
+) -> Option<flamewm_api::system::SystemAction> {
+    if brightness.availability != flamewm_api::system::ServiceAvailability::Available {
+        return None;
+    }
+    let current = brightness.percent.min(100);
+    let percent = if up {
+        (current + 10).min(100)
+    } else {
+        current.saturating_sub(10)
+    };
+    (percent != current).then_some(flamewm_api::system::SystemAction::SetBrightness(
+        flamewm_api::system::BrightnessAction {
+            percent,
+            generation: brightness.generation,
+        },
+    ))
+}
+
 #[cfg(test)]
 mod record_tests;
 #[cfg(test)]

@@ -77,6 +77,16 @@ pub(crate) fn helper_control_request(
             },
         );
     }
+    if matches!(action, "brightness.down" | "brightness.up") {
+        return crate::projection::brightness_step_action(
+            &system.brightness,
+            action == "brightness.up",
+        )
+        .map(|action| ControlRequest::SystemAction {
+            action,
+            expected_revision: system.revision,
+        });
+    }
     if action == "network.wifi.toggle" {
         return Some(ControlRequest::SystemAction {
             action: flamewm_api::system::SystemAction::SetWifiEnabled(!system.network.wifi_enabled),

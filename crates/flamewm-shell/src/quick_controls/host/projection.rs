@@ -93,7 +93,8 @@ pub(crate) fn project_snapshot(
                     crate::projection::project_power_profile_row(
                         document,
                         &snapshot.system.power_profiles,
-                    )
+                    )?;
+                    crate::projection::project_brightness_row(document, &snapshot.system.brightness)
                 }
                 QuickControlKind::Weather => project_weather_popup(
                     document,

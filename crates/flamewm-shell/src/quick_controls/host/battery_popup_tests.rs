@@ -22,6 +22,88 @@ fn text_of<'a>(doc: &'a RecordingUiDoc, id: &str) -> Option<&'a str> {
     doc.texts.get(id).map(String::as_str)
 }
 
+fn backlight(
+    availability: ServiceAvailability,
+    percent: u8,
+) -> flamewm_api::system::BrightnessSnapshot {
+    flamewm_api::system::BrightnessSnapshot {
+        availability,
+        generation: 7,
+        percent,
+    }
+}
+
+#[test]
+fn brightness_row_shows_percent_and_dashes_when_absent() {
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_brightness_row(
+        &mut doc,
+        &backlight(ServiceAvailability::Available, 40),
+    )
+    .expect("row projects");
+    assert_eq!(text_of(&doc, "battery-brightness-value"), Some("40%"));
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_brightness_row(
+        &mut doc,
+        &backlight(ServiceAvailability::Unavailable, 40),
+    )
+    .expect("row projects");
+    assert_eq!(text_of(&doc, "battery-brightness-value"), Some("--"));
+}
+
+#[test]
+fn brightness_step_clamps_and_carries_generation() {
+    use flamewm_api::system::{BrightnessAction, SystemAction};
+    let step = |percent, up| {
+        crate::projection::brightness_step_action(
+            &backlight(ServiceAvailability::Available, percent),
+            up,
+        )
+    };
+    assert_eq!(
+        step(40, true),
+        Some(SystemAction::SetBrightness(BrightnessAction {
+            percent: 50,
+            generation: 7,
+        }))
+    );
+    assert_eq!(
+        step(95, true),
+        Some(SystemAction::SetBrightness(BrightnessAction {
+            percent: 100,
+            generation: 7,
+        }))
+    );
+    assert_eq!(
+        step(4, false),
+        Some(SystemAction::SetBrightness(BrightnessAction {
+            percent: 0,
+            generation: 7,
+        }))
+    );
+    assert!(step(100, true).is_none());
+    assert!(step(0, false).is_none());
+    assert!(crate::projection::brightness_step_action(
+        &backlight(ServiceAvailability::Unavailable, 40),
+        true,
+    )
+    .is_none());
+}
+
+#[test]
+fn battery_popup_brightness_row_fits_the_popup_and_is_wired() {
+    let html = include_str!("../../../../../ui/shell/battery.html");
+    assert!(html.contains("data-action=\"brightness.down\""));
+    assert!(html.contains("data-action=\"brightness.up\""));
+    assert!(html.contains("id=\"battery-brightness-value\""));
+    assert!(
+        html.contains("height:160px"),
+        "popup must grow to hold the brightness row"
+    );
+    // Row spans top 136..154, inside the 160px popup.
+    assert!(html.contains("top:136px; width:260px; height:18px"));
+}
+
 fn profiles(
     active: Option<flamewm_api::system::PowerProfile>,
 ) -> flamewm_api::system::PowerProfilesSnapshot {

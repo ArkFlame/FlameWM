@@ -57,7 +57,7 @@ Quick-controls audit (FlameWM `file:line` vs Vela `.vendor/vela-main/shell/qml/Q
 | Energy saver / power profile | `ui/shell/battery.html:53` (`power.profile.cycle`, row not tile) | present (row, cycle) | `QuickSettings.qml:726-732` (`Status.setPowerSaver`) |
 | Battery percent, state, rate | `ui/shell/battery.html:19-22` | present | `QuickSettings.qml:1089-1110`, `1311-1327` |
 | CPU usage row | `ui/shell/battery.html:18` (160px) | present | not in Vela |
-| Brightness | none in quick controls (`ui/shell/osd.html:22` OSD only) | absent | `QuickSettings.qml:486-512`, `761-765` |
+| Brightness | `ui/shell/battery.html` `battery-brightness-*` row (`brightness.down`/`brightness.up`, 10% steps, `SetBrightness`); OSD `ui/shell/osd.html:22` | present (row, step buttons; not a slider) | `QuickSettings.qml:486-512`, `761-765` |
 | Accessibility page | none in `ui/shell/*.html` | absent | `QuickSettings.qml:747` |
 | Calendar (tabs, prev/next/today, days) | `ui/shell/calendar.html` | present | not in Vela quick panel |
 | Weather (location search, pick) | `ui/shell/weather.html:42-43,135-139` | present | not in Vela quick panel |
