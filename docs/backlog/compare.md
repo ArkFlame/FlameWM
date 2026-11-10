@@ -92,3 +92,9 @@ Microphone mute row: not added. The audio popup Devices tab already lists input 
 ## Battery tray missing on fresh start (not reproduced)
 
 Root-cause candidate: `flamewm-shell` `main.rs` loaded the `GetShellBootstrap` snapshot before subscribing to control signals (`execute()` and `attach_control_bus()`). A `SystemSnapshot` (power/battery) change between the two was never delivered, so the tray could stay stale. Fixed by subscribing first (`load_bus_bootstrap`, `subscribe_then_load`), same ordering as `db42c3b6`. Regression: `bootstrap_order_tests`. Fresh-start reproduction count was not measured in this change; status UNVERIFIED at runtime.
+
+Measurement (2026-11-10, before/after e04630bf, not a fix claim): N=20 fresh starts per build on private Xvfb `-noreset` with a dbus session (`scripts/break/lib.sh` harness, binaries from `fast` profile: `flamewm`, `flamewm-session`, `flamewm-shell`, `flamewm-desktop`). Before = `e04630bf^` (2dfd3ecb), after = `e04630bf`. Each start waited for WM, shell and desktop, then 15s settle, then a root screenshot. Detection: pixel template match of the battery slot (18x24 at x=1165,y=766, 1280x800) against a screenshot where the battery was shown, `compare -metric AE -fuzz 8%`, PRESENT when AE<=0.
+
+Counts: before 0/20 missing (20 PRESENT); after 0/20 missing (20 PRESENT). The missing case did not reproduce on either build, so this run gives no evidence that e04630bf changes the failure rate, and no claim that it fixes the reported case.
+
+Detector caveat: the first pass used pixel stddev of the same slot. It was rejected because with the battery absent the bell icon shifts into that slot (no-bus negative control scored as present). Template match gives AE=90 for the no-bus control and AE=0 for every battery-present run. The host has BAT0 (97%, Not charging) and the power-profile service; the reported failing session's host state was not reproduced.
