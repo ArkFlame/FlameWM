@@ -53,7 +53,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-D6 | quality | Dead `set_ring_mask` (dock, other owner) | `render-x11/src/surface_controller/dock.rs:153` | dead code | S | open |
 | read-D7 | quality | Unused `titlebar_rect`, `SESSION_LOCK_INTERFACE` | `skin/src/recipes/window_chrome.rs:82`; `wm-wayland/src/lock_global.rs:13` | dead code | S | open |
 | read-U1 | quality | Settings accessor duplicated in 5 places | `read.md:279` | maintenance | M | open |
-| read-U2 | quality | `node_backdrop_clip` and `scale_rect` duplicated in render-x11 | `read.md:280-281`; render-x11 copies now re-export `flamewm-render-core::lower` (this change, sha in `git log`) | maintenance | S | done (this change; sha pending) |
+| read-U2 | quality | `node_backdrop_clip` and `scale_rect` duplicated in render-x11 | `read.md:280-281`; render-x11 copies now re-export `flamewm-render-core::lower` (871b4d33) | maintenance | S | done (871b4d33) |
 | dup-rect-test | quality | `fn rect(x,y,w,h) -> Rect` test helper copied in 5 render-x11 test modules | `render-x11/src/app/clip.rs`, `damage_plan.rs`, `render.rs`, `native/coverage.rs` tests; `app/primitives.rs` | test maintenance | S | open |
 | dup-wall-clock | quality | `wall_clock_delay_ms` duplicated in shell-core and reactor | `shell-core/src/clock.rs:40`; `reactor/src/lib.rs:337` (shell-core comment says it stays dependency-free) | needs dep-edge decision | S | open |
 | dup-build-rerun | quality | `rerun_tree` and `stage_tree` copied in desktop, settings and shell `build.rs` | `desktop/build.rs:391,456`; `settings/build.rs:92,103`; `shell/build.rs:102,124` | build-script duplication, no shared build crate | M | open |
