@@ -216,6 +216,7 @@ pub(super) fn build_output(
         let global = output.create_global::<State>(&state.display);
         (output, Some(global))
     } else {
+        let before = presentation_scale::scale_snapshot(state);
         state.output.change_current_state(
             Some(mode),
             Some(Transform::Normal),
@@ -225,6 +226,7 @@ pub(super) fn build_output(
         state.output.set_preferred(mode);
         let (w, h) = presentation_scale::logical_output_size((mode.size.w, mode.size.h), percent);
         state.output_size = Size::from((w, h));
+        presentation_scale::notify_scale_change(state, &before);
         (state.output.clone(), None)
     };
     let allocator = GbmAllocator::new(

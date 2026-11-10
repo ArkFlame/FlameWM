@@ -17,8 +17,8 @@ use smithay::output::{Output, Scale};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Clock, Monotonic};
-use smithay::wayland::compositor::with_states;
+use smithay::utils::{Clock, Monotonic, Transform};
+use smithay::wayland::compositor::{send_surface_state, with_states};
 use smithay::wayland::fractional_scale::{
     FractionalScaleHandler, FractionalScaleManagerState, with_fractional_scale,
 };
@@ -71,11 +71,8 @@ impl FractionalScaleHandler for State {
 delegate_fractional_scale!(State);
 delegate_presentation!(State);
 
-/// Gathers the presentation feedback of every surface this frame presents on `output`.
-///
-/// Call before the frame is submitted, so the callbacks belong to the frame being drawn.
-pub fn collect_feedback(state: &State, output: &Output) -> OutputPresentationFeedback {
-    let mut feedback = OutputPresentationFeedback::new(output);
+/// Every surface `output` presents: toplevels, their popups and the output's layer surfaces.
+fn mapped_surfaces(state: &State, output: &Output) -> Vec<WlSurface> {
     let mut surfaces = Vec::new();
     for (_, top) in &state.toplevels {
         let surface = top.wl_surface();
@@ -89,7 +86,112 @@ pub fn collect_feedback(state: &State, output: &Output) -> OutputPresentationFee
             .layers()
             .map(|layer| layer.layer_surface().wl_surface().clone()),
     );
-    for surface in &surfaces {
+    surfaces
+}
+
+/// Output scales and the output each mapped surface sits on, taken before a scale change.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+pub struct ScaleSnapshot {
+    outputs: Vec<(String, f64)>,
+    surfaces: Vec<(WlSurface, String)>,
+}
+
+/// Snapshots the scale and the mapped surfaces of the compositor's output.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+pub fn scale_snapshot(state: &State) -> ScaleSnapshot {
+    let name = state.output.name();
+    ScaleSnapshot {
+        outputs: vec![(name.clone(), state.output_scale())],
+        surfaces: mapped_surfaces(state, &state.output)
+            .into_iter()
+            .map(|surface| (surface, name.clone()))
+            .collect(),
+    }
+}
+
+/// Re-sends the scale to every surface whose output scale changed since `before`.
+///
+/// Call after the output's scale is set; a surface whose scale is unchanged gets nothing.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+pub fn notify_scale_change(state: &State, before: &ScaleSnapshot) {
+    let after = scale_snapshot(state);
+    for notice in scale_notices(
+        &before.outputs,
+        &after.outputs,
+        &before.surfaces,
+        &after.surfaces,
+    ) {
+        with_states(&notice.surface, |states| {
+            with_fractional_scale(states, |fractional| {
+                fractional.set_preferred_scale(notice.scale);
+            });
+            send_surface_state(
+                &notice.surface,
+                states,
+                buffer_scale(notice.scale),
+                Transform::Normal,
+            );
+        });
+    }
+}
+
+/// A scale to send to one surface.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScaleNotice<S> {
+    pub surface: S,
+    pub scale: f64,
+}
+
+/// The surfaces that must learn a new scale, given outputs and surface placement before and after.
+///
+/// A surface is notified when the scale of its output now differs from the scale of the output it
+/// was on before, so a surface moved to another output is included. A surface absent from
+/// `surfaces_before` is new and left to the creation path, and an unchanged scale yields nothing.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+pub fn scale_notices<S, K>(
+    outputs_before: &[(K, f64)],
+    outputs_after: &[(K, f64)],
+    surfaces_before: &[(S, K)],
+    surfaces_after: &[(S, K)],
+) -> Vec<ScaleNotice<S>>
+where
+    S: Clone + PartialEq,
+    K: PartialEq,
+{
+    let scale_of = |outputs: &[(K, f64)], key: &K| {
+        outputs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, scale)| *scale)
+    };
+    surfaces_after
+        .iter()
+        .filter_map(|(surface, now)| {
+            let (_, was) = surfaces_before.iter().find(|(s, _)| s == surface)?;
+            let scale = scale_of(outputs_after, now)?;
+            (scale_of(outputs_before, was) != Some(scale)).then(|| ScaleNotice {
+                surface: surface.clone(),
+                scale,
+            })
+        })
+        .collect()
+}
+
+/// The integer `wl_surface.preferred_buffer_scale` for a fractional output scale.
+///
+/// Rounded up, so buffers are never shown below the output's density; never below 1.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+pub fn buffer_scale(scale: f64) -> i32 {
+    (scale.ceil() as i32).max(1)
+}
+
+/// Gathers the presentation feedback of every surface this frame presents on `output`.
+///
+/// Call before the frame is submitted, so the callbacks belong to the frame being drawn.
+pub fn collect_feedback(state: &State, output: &Output) -> OutputPresentationFeedback {
+    let mut feedback = OutputPresentationFeedback::new(output);
+    for surface in &mapped_surfaces(state, output) {
         take_presentation_feedback_surface_tree(
             surface,
             &mut feedback,
@@ -199,5 +301,83 @@ mod tests {
     #[test]
     fn presentation_clock_is_linux_monotonic() {
         assert_eq!(PRESENTATION_CLOCK_ID, 1);
+    }
+
+    fn notices(
+        outputs_before: &[(&'static str, f64)],
+        outputs_after: &[(&'static str, f64)],
+        surfaces_before: &[(u32, &'static str)],
+        surfaces_after: &[(u32, &'static str)],
+    ) -> Vec<(u32, f64)> {
+        scale_notices(
+            outputs_before,
+            outputs_after,
+            surfaces_before,
+            surfaces_after,
+        )
+        .into_iter()
+        .map(|notice| (notice.surface, notice.scale))
+        .collect()
+    }
+
+    #[test]
+    fn unchanged_scale_sends_nothing() {
+        let outputs = [("out", 1.25)];
+        let surfaces = [(1, "out"), (2, "out")];
+        assert!(notices(&outputs, &outputs, &surfaces, &surfaces).is_empty());
+    }
+
+    #[test]
+    fn scale_change_reaches_every_surface_on_that_output() {
+        let before = [("out", 1.0)];
+        let after = [("out", 1.25)];
+        let surfaces = [(1, "out"), (2, "out")];
+        assert_eq!(
+            notices(&before, &after, &surfaces, &surfaces),
+            vec![(1, 1.25), (2, 1.25)]
+        );
+    }
+
+    #[test]
+    fn scale_change_skips_surfaces_on_other_outputs() {
+        let before = [("a", 1.0), ("b", 1.0)];
+        let after = [("a", 2.0), ("b", 1.0)];
+        let surfaces = [(1, "a"), (2, "b")];
+        assert_eq!(
+            notices(&before, &after, &surfaces, &surfaces),
+            vec![(1, 2.0)]
+        );
+    }
+
+    #[test]
+    fn surface_moved_to_output_with_other_scale_is_notified() {
+        let outputs = [("a", 1.0), ("b", 2.0)];
+        let before = [(1, "a")];
+        let after = [(1, "b")];
+        assert_eq!(notices(&outputs, &outputs, &before, &after), vec![(1, 2.0)]);
+    }
+
+    #[test]
+    fn surface_moved_to_output_with_same_scale_is_not_notified() {
+        let outputs = [("a", 1.5), ("b", 1.5)];
+        let before = [(1, "a")];
+        let after = [(1, "b")];
+        assert!(notices(&outputs, &outputs, &before, &after).is_empty());
+    }
+
+    #[test]
+    fn new_surface_is_left_to_creation_path() {
+        let outputs = [("out", 1.0)];
+        let before: [(u32, &str); 0] = [];
+        let after = [(1, "out")];
+        assert!(notices(&outputs, &outputs, &before, &after).is_empty());
+    }
+
+    #[test]
+    fn buffer_scale_rounds_up_and_stays_positive() {
+        assert_eq!(buffer_scale(1.0), 1);
+        assert_eq!(buffer_scale(1.25), 2);
+        assert_eq!(buffer_scale(2.0), 2);
+        assert_eq!(buffer_scale(0.0), 1);
     }
 }
