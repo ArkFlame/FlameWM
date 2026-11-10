@@ -44,7 +44,7 @@ mod cases {
     #[test]
     fn constant_colour_is_unchanged_for_any_radius() {
         for rgba in [[200, 100, 50, 255], [200, 100, 50, 128], [0, 0, 0, 0]] {
-            for radius in [0.5f32, 3.0, 11.0, 12.5, 24.0, 40.0, 64.0] {
+            for radius in [0.5f32, 3.0, 6.5, 9.0, 11.0, 12.5, 24.0, 40.0, 64.0] {
                 let mut pixels = solid(37, 29, rgba);
                 gaussian_blur_rgba(&mut pixels, 37, 29, radius).unwrap();
                 assert!(
@@ -275,17 +275,121 @@ mod cases {
     /// Byte-exactness oracle; see `oracle.rs`.
     mod oracle;
 
+    /// Per-channel difference between two equal-size RGBA8 buffers: (mean, max).
+    fn abs_diff(a: &[u8], b: &[u8]) -> (f64, u8) {
+        assert_eq!(a.len(), b.len());
+        let mut sum = 0u64;
+        let mut max = 0u8;
+        for (x, y) in a.iter().zip(b) {
+            let d = x.abs_diff(*y);
+            sum += u64::from(d);
+            max = max.max(d);
+        }
+        (sum as f64 / a.len() as f64, max)
+    }
+
     #[test]
     fn gaussian_blur_matches_previous_implementation() {
         let mut scratch = BlurScratch::new();
         for (w, h) in [(61u32, 9u32), (37, 29), (13, 7), (1280, 31), (1, 1)] {
             let original = noisy(w, h);
-            for radius in [3.0f32, 12.0, 13.0, 19.0, 24.0] {
+            // Full-resolution tier: bit-identical to the previous implementation.
+            for radius in [3.0f32, 6.0] {
                 let mut expected = original.clone();
                 oracle::gaussian_blur_rgba(&mut expected, w, h, radius).unwrap();
                 let mut got = original.clone();
                 gaussian_blur_rgba_with(&mut scratch, &mut got, w, h, radius).unwrap();
                 assert_eq!(got, expected, "{w}x{h} radius {radius}");
+            }
+            // Downscaled tiers (2x above 6, 4x above 12) on white noise, the worst case for a
+            // downscale: bounded difference. Smooth content is held to 1.5 in the gradient test.
+            for radius in [9.0f32, 12.0, 13.0, 19.0, 24.0] {
+                let mut expected = original.clone();
+                oracle::gaussian_blur_rgba(&mut expected, w, h, radius).unwrap();
+                let mut got = original.clone();
+                gaussian_blur_rgba_with(&mut scratch, &mut got, w, h, radius).unwrap();
+                // A 13x7 image is all edge; the bound is for images with real area.
+                if w * h >= 512 {
+                    let (mean, max) = abs_diff(&got, &expected);
+                    assert!(mean < 4.0, "{w}x{h} radius {radius}: mean {mean}");
+                    assert!(max <= 128, "{w}x{h} radius {radius}: max {max}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blur_of_a_gradient_stays_within_tolerance_of_previous_implementation() {
+        let (w, h) = (480u32, 270u32);
+        let mut original = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = ((x * 255 / (w - 1)) ^ (y * 255 / (h - 1))) as u8;
+                original.extend_from_slice(&[
+                    v,
+                    (x * 255 / (w - 1)) as u8,
+                    (y * 255 / (h - 1)) as u8,
+                    255,
+                ]);
+            }
+        }
+        let mut scratch = BlurScratch::new();
+        for radius in [12.0f32, 24.0] {
+            let mut expected = original.clone();
+            oracle::gaussian_blur_rgba(&mut expected, w, h, radius).unwrap();
+            let mut got = original.clone();
+            gaussian_blur_rgba_with(&mut scratch, &mut got, w, h, radius).unwrap();
+            let (mean, max) = abs_diff(&got, &expected);
+            assert!(mean < 1.5, "radius {radius}: mean {mean}");
+            assert!(max <= 16, "radius {radius}: max {max}");
+        }
+    }
+
+    #[test]
+    fn energy_is_preserved_within_one_percent_on_downscaled_tiers() {
+        const N: u32 = 96;
+        let mut pixels = solid(N, N, [0, 0, 0, 255]);
+        for y in 33..63u32 {
+            for x in 33..63u32 {
+                let i = ((y * N + x) * 4) as usize;
+                pixels[i..i + 3].fill(255);
+            }
+        }
+        let total: u64 = pixels.chunks_exact(4).map(|p| u64::from(p[0])).sum();
+        for radius in [8.0f32, 12.0, 20.0] {
+            let mut blurred = pixels.clone();
+            gaussian_blur_rgba(&mut blurred, N, N, radius).unwrap();
+            let after: u64 = blurred.chunks_exact(4).map(|p| u64::from(p[0])).sum();
+            let error = (after as f64 - total as f64).abs() / total as f64;
+            assert!(error < 0.01, "radius {radius}: energy error {error}");
+        }
+    }
+
+    #[test]
+    fn downscaled_tiers_keep_white_half_white_at_border() {
+        const W: u32 = 96;
+        const H: u32 = 8;
+        let mut pixels = Vec::with_capacity((W * H * 4) as usize);
+        for _ in 0..H {
+            for x in 0..W {
+                let v = if x < W / 2 { 255 } else { 0 };
+                pixels.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        for radius in [9.0f32, 16.0] {
+            let mut blurred = pixels.clone();
+            gaussian_blur_rgba(&mut blurred, W, H, radius).unwrap();
+            for y in 0..H {
+                assert_eq!(
+                    pixel_at(&blurred, W, 0, y),
+                    [255, 255, 255, 255],
+                    "r{radius} left {y}"
+                );
+                assert_eq!(
+                    pixel_at(&blurred, W, W - 1, y),
+                    [0, 0, 0, 255],
+                    "r{radius} right {y}"
+                );
             }
         }
     }
@@ -301,15 +405,23 @@ mod cases {
         ];
         let mut scratch = BlurScratch::new();
         for crop in crops {
-            for radius in [0.0f32, 3.0, 12.0, 13.0, 19.0, 24.0] {
+            for radius in [0.0f32, 3.0, 6.0, 12.0, 13.0, 19.0, 24.0] {
                 for tint in [None, Some([10, 20, 30, 100])] {
                     let expected = oracle::frosted_backdrop(&src, crop, radius, tint);
                     let got = frosted_backdrop_with(&mut scratch, &src, crop, radius, tint);
                     assert_eq!((got.width, got.height), (expected.width, expected.height));
-                    assert_eq!(
-                        got.pixels, expected.pixels,
-                        "crop {crop:?} radius {radius} tint {tint:?}"
-                    );
+                    if radius <= 6.0 {
+                        assert_eq!(
+                            got.pixels, expected.pixels,
+                            "crop {crop:?} radius {radius} tint {tint:?}"
+                        );
+                    } else {
+                        let (mean, max) = abs_diff(&got.pixels, &expected.pixels);
+                        assert!(
+                            mean < 1.5 && max <= 16,
+                            "crop {crop:?} radius {radius}: {mean} {max}"
+                        );
+                    }
                 }
             }
         }
@@ -319,7 +431,8 @@ mod cases {
     fn scratch_capacity_tracks_current_request_and_releases() {
         let mut scratch = BlurScratch::new();
         let mut big = noisy(1280, 31);
-        gaussian_blur_rgba_with(&mut scratch, &mut big, 1280, 31, 12.0).unwrap();
+        // Full-resolution tier: the big request sizes `work`.
+        gaussian_blur_rgba_with(&mut scratch, &mut big, 1280, 31, 3.0).unwrap();
         assert!(scratch.work.capacity() >= 1280 * 31 * 4);
 
         let mut small = noisy(16, 16);

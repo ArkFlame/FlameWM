@@ -3,9 +3,10 @@
 //! Input and output are straight RGBA8. Colour is blurred premultiplied so
 //! transparent pixels never bleed black. Each blur is three separable box
 //! passes with running sums and clamp-to-edge sampling, so cost per pass is
-//! O(pixels) regardless of radius. Radius above `DOWNSCALE_RADIUS` blurs a
-//! box-downscaled copy (4x) and upscales bilinearly. Trade-off: high-radius output loses fine detail that a
-//! full-resolution blur would keep, which is acceptable for frosted glass.
+//! O(pixels) regardless of radius. Radius above `HALF_DOWNSCALE_RADIUS` blurs a
+//! box-downscaled copy (2x, or 4x above `DOWNSCALE_RADIUS`) and upscales bilinearly. Trade-off:
+//! high-radius output loses fine detail that a full-resolution blur would keep, which is
+//! acceptable for frosted glass.
 
 use crate::RgbaImage;
 
@@ -15,6 +16,8 @@ pub const MAX_BLUR_RADIUS: f32 = 64.0;
 const MIN_BLUR_RADIUS: f32 = 0.5;
 /// Above this radius the blur runs on a box-downscaled copy.
 const DOWNSCALE_RADIUS: f32 = 12.0;
+/// Above this radius the blur runs on a 2x box-downscaled copy (below `DOWNSCALE_RADIUS`).
+const HALF_DOWNSCALE_RADIUS: f32 = 6.0;
 /// Integer downscale factor used above `DOWNSCALE_RADIUS`.
 const DOWNSCALE_FACTOR: usize = 4;
 /// Extra float capacity tolerated before `fit_f32` releases memory.
@@ -46,9 +49,9 @@ pub struct Rect {
 /// Buffers hold only what the current blur needs; `release` drops all capacity.
 #[derive(Debug, Default)]
 pub struct BlurScratch {
-    /// Premultiplied region, blurred in place (radius <= `DOWNSCALE_RADIUS`).
+    /// Premultiplied region, blurred in place (full resolution, radius <= `HALF_DOWNSCALE_RADIUS`).
     work: Vec<f32>,
-    /// Box-downscaled premultiplied copy (radius > `DOWNSCALE_RADIUS`).
+    /// Box-downscaled premultiplied copy (radius > `HALF_DOWNSCALE_RADIUS`).
     down: Vec<f32>,
     /// One row copy for in-place horizontal passes.
     line: Vec<f32>,
@@ -135,7 +138,7 @@ pub fn gaussian_blur_rgba_with(
     let (w, h) = (width as usize, height as usize);
     let factor = blur_stage(
         scratch,
-        |x, y| rgba_at(pixels, (y * w + x) * 4),
+        |y, row| premultiply_row(&pixels[y * w * 4..(y + 1) * w * 4], row),
         w,
         h,
         radius_px,
@@ -209,7 +212,17 @@ pub fn frosted_backdrop_with(
     };
     let mut out = vec![0u8; cw * ch * 4];
     if blur {
-        let factor = blur_stage(scratch, sample, pw, ph, radius);
+        let factor = blur_stage(
+            scratch,
+            |y, row| {
+                for (x, px) in row.chunks_exact_mut(4).enumerate() {
+                    premultiply_pixel(&sample(x, y), px);
+                }
+            },
+            pw,
+            ph,
+            radius,
+        );
         let win = Window {
             x: pad,
             y: pad,
