@@ -16,6 +16,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
+use crate::background;
 use crate::icon_theme::IconLookupIndex;
 use crate::icons::{IconError, IconKey, IconResolver, Rgba8Raster};
 
@@ -256,6 +257,7 @@ impl<R: IconResolve> IconService<R> {
                 thread::Builder::new()
                     .name(format!("icon-resolver-{number}"))
                     .spawn(move || {
+                        background::lower_current_thread();
                         worker_loop(shared, result_tx, wake_tx, cache, completed, factory());
                     })
                     .expect("spawn icon resolver worker"),
@@ -613,7 +615,10 @@ impl ThemeRebuilder {
         let thread_state = Arc::clone(&state);
         let handle = thread::Builder::new()
             .name("icon-theme-rebuild".to_owned())
-            .spawn(move || rebuild_loop(&rx, &thread_state, wake.as_ref()))
+            .spawn(move || {
+                background::lower_current_thread();
+                rebuild_loop(&rx, &thread_state, wake.as_ref());
+            })
             .expect("spawn icon theme rebuild thread");
         Self {
             tx: Some(tx),

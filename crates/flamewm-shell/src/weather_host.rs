@@ -156,6 +156,7 @@ pub fn spawn_weather_fetch(location: WeatherLocation) -> mpsc::Receiver<WeatherR
     let _ = std::thread::Builder::new()
         .name("flamewm-weather".to_owned())
         .spawn(move || {
+            flamewm_integrations_linux::background::lower_current_thread();
             let _ = tx.send(OpenMeteo(CurlFetcher).forecast(&location));
         });
     rx
@@ -170,6 +171,7 @@ pub fn spawn_location_search(query: String) -> mpsc::Receiver<SearchResult> {
     let _ = std::thread::Builder::new()
         .name("flamewm-weather-search".to_owned())
         .spawn(move || {
+            flamewm_integrations_linux::background::lower_current_thread();
             let _ = tx.send(OpenMeteo(CurlFetcher).search(&query));
         });
     rx

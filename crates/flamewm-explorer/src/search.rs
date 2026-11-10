@@ -289,6 +289,7 @@ impl SearchWorker {
         thread::Builder::new()
             .name("explorer-search".into())
             .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
                 while let Ok(job) = jobs_rx.recv() {
                     let id = job.id;
                     let batches = events_tx.clone();

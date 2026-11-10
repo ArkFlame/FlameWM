@@ -162,6 +162,7 @@ impl WallpaperLoader {
         let worker = thread::Builder::new()
             .name("flamewm-wallpaper-loader".to_owned())
             .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
                 wallpaper_worker(worker_control, (width, height), worker_root, wake_write);
             })
             .map_err(|error| format!("failed to start wallpaper loader: {error}"))?;

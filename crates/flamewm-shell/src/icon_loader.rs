@@ -177,6 +177,7 @@ impl IconLoader {
         std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
                 let mut resolver = IconResolver::from_environment_with_theme(
                     packaged_root,
                     0,

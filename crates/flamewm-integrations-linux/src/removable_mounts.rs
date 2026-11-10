@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::background;
 use crate::device_watch::DeviceWatch;
 
 /// Filesystem UUIDs are short ASCII tokens; anything else in the state file is dropped.
@@ -373,8 +374,16 @@ impl RemovableMountWorker {
         let initial = Arc::clone(&memory);
         let _ = thread::Builder::new()
             .name("removable-mounts".into())
-            .spawn(move || remount_pass(&initial));
-        let watch = DeviceWatch::spawn(move || remount_pass(&memory)).ok();
+            .spawn(move || {
+                background::lower_current_thread();
+                remount_pass(&initial);
+            });
+        // The notify closure runs on the device-watch thread; lowering is idempotent and rare.
+        let watch = DeviceWatch::spawn(move || {
+            background::lower_current_thread();
+            remount_pass(&memory);
+        })
+        .ok();
         Self { _watch: watch }
     }
 }

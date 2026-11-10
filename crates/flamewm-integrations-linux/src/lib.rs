@@ -8,6 +8,7 @@ extern crate pulse as libpulse_binding;
 
 pub mod audio_helper;
 pub mod audio_protocol;
+pub mod background;
 pub mod backlight;
 pub mod device_watch;
 pub mod icon_service;
