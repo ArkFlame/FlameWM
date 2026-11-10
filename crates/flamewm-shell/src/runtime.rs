@@ -58,7 +58,6 @@ pub struct ShellSnapshot {
     pub system: SystemSnapshot,
 }
 
-#[cfg(test)]
 impl Default for ShellSnapshot {
     fn default() -> Self {
         Self {

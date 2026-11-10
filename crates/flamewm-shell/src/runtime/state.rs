@@ -17,6 +17,19 @@ impl ShellRuntime {
         self.dirty
     }
 
+    /// Replace the whole snapshot with a bus bootstrap that arrived after startup (degraded start).
+    /// Every projected domain is marked dirty so the next turn repaints from the new data.
+    pub fn apply_bootstrap(&mut self, snapshot: ShellSnapshot) {
+        self.snapshot = Rc::new(snapshot);
+        self.dirty = ShellDirty {
+            windows: true,
+            workspaces: true,
+            panels: true,
+            system: true,
+            applications: true,
+        };
+    }
+
     /// Record a delivered `ControlSignal` by applying snapshot payloads
     /// directly. No fetch happens here and legacy revision-only signals
     /// (`WindowsChanged` / `WorkspacesChanged` / `PanelsChanged` /

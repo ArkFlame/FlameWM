@@ -303,6 +303,13 @@ remove_by = "0.3.0"
 
 [[exception]]
 path = "crates/flamewm-wm/src/bin/flamewm-session/readiness.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The no-bus fast path reads `DBUS_SESSION_BUS_ADDRESS`, the standard D-Bus session-address variable, to decide whether a session bus can exist before waiting on it; it is not a FlameWM setting."
+canonical_target = "crates/flamewm-wm/src/bin/flamewm-session/readiness.rs"
+remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-wm/src/bin/flamewm-session/readiness.rs"
 capability = "x11rb-symbol"
 reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
 canonical_target = "crates/flamewm-wm-x11/src"

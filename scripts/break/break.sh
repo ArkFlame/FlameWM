@@ -127,7 +127,15 @@ s7_nobus() {
   wait_until 15 have_proc flamewm-desktop; sleep 2
   local comp="wm=$(have_proc flamewm && echo up || echo down) shell=$(have_proc flamewm-shell && echo up || echo down) desktop=$(have_proc flamewm-desktop && echo up || echo down) shell_after_s=$t_shell"
   local v=PASS; wm_ready || v=FAIL; have_proc flamewm-shell && have_proc flamewm-desktop || v=FAIL
-  finish s7 "$v" "no session bus: wm_ready=$(wm_ready && echo yes || echo no) $comp dbus_lines=$(logs_grep 'dbus' 2 | cut -c1-120 | tr '\n' ' ')"
+  shot s7 >/dev/null
+  # Late attach: the bus appears on the absent socket; the shell retries every 30 s and must attach.
+  local late=no
+  DBUS_VERBOSE=0 dbus-daemon --session --address="unix:path=$S/tmp/absent.sock" --nofork --nopidfile >"$S/late-bus.out" 2>&1 &
+  BUS_PID=$!
+  wait_until 75 bash -c "grep -q 'control bus attached' '$S/home/.local/state/flamewm/session.log'" && late=yes
+  kill "$BUS_PID" 2>/dev/null; wait "$BUS_PID" 2>/dev/null
+  shot s7-late >/dev/null
+  finish s7 "$v" "no session bus: wm_ready=$(wm_ready && echo yes || echo no) $comp late_attach=$late dbus_lines=$(logs_grep 'dbus' 2 | cut -c1-120 | tr '\n' ' ')"
 }
 
 main() {

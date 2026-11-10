@@ -181,28 +181,20 @@ impl Reactor {
         &mut self,
         source: F,
         interest: Interest,
-        mut callback: C,
+        callback: C,
     ) -> calloop::Result<RegistrationToken>
     where
         F: AsFd + AsRawFd + 'static,
         C: FnMut(i32, &mut F, FdReadiness) -> FdAction + 'static,
     {
-        let fd = source.as_raw_fd();
-        self.event_loop
-            .handle()
-            .insert_source(
-                Generic::new(source, interest, Mode::Level),
-                move |readiness, source, _| {
-                    #[allow(unsafe_code)]
-                    let source = unsafe { source.get_mut() };
-                    let action = callback(fd, source, readiness.into());
-                    Ok(match action {
-                        FdAction::Continue => PostAction::Continue,
-                        FdAction::Remove => PostAction::Remove,
-                    })
-                },
-            )
-            .map_err(Into::into)
+        insert_fd_source(&self.event_loop.handle(), source, interest, callback)
+    }
+
+    /// Cloneable insertion handle for sources registered from inside a dispatch callback, where
+    /// `&mut Reactor` is not reachable (for example a bus attached after startup).
+    #[must_use]
+    pub fn handle(&self) -> ReactorHandle {
+        ReactorHandle(self.event_loop.handle())
     }
 
     /// Registers a descriptor without taking ownership. The caller must keep it open until the
@@ -261,6 +253,57 @@ impl Reactor {
             })
             .map_err(Into::into)
     }
+}
+
+/// Insertion handle onto the reactor's event loop. Clones share the same loop.
+#[derive(Clone)]
+pub struct ReactorHandle(calloop::LoopHandle<'static, ()>);
+
+impl ReactorHandle {
+    /// Same contract as [`Reactor::register_raw_fd_with_action`].
+    pub fn register_raw_fd_with_action<C>(
+        &self,
+        fd: RawFd,
+        interest: Interest,
+        mut callback: C,
+    ) -> calloop::Result<RegistrationToken>
+    where
+        C: FnMut(i32, FdReadiness) -> FdAction + 'static,
+    {
+        insert_fd_source(
+            &self.0,
+            BorrowedRawFd(fd),
+            interest,
+            move |fd, _, readiness| callback(fd, readiness),
+        )
+    }
+}
+
+fn insert_fd_source<F, C>(
+    handle: &calloop::LoopHandle<'static, ()>,
+    source: F,
+    interest: Interest,
+    mut callback: C,
+) -> calloop::Result<RegistrationToken>
+where
+    F: AsFd + AsRawFd + 'static,
+    C: FnMut(i32, &mut F, FdReadiness) -> FdAction + 'static,
+{
+    let fd = source.as_raw_fd();
+    handle
+        .insert_source(
+            Generic::new(source, interest, Mode::Level),
+            move |readiness, source, _| {
+                #[allow(unsafe_code)]
+                let source = unsafe { source.get_mut() };
+                let action = callback(fd, source, readiness.into());
+                Ok(match action {
+                    FdAction::Continue => PostAction::Continue,
+                    FdAction::Remove => PostAction::Remove,
+                })
+            },
+        )
+        .map_err(Into::into)
 }
 
 /// Injectable wall-time source for the wall-clock timer.

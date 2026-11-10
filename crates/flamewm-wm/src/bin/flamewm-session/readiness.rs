@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
@@ -121,6 +122,13 @@ pub(super) fn wait_ready(
         match ewmh {
             Ok(true) => {
                 ewmh_seen = true;
+                if session_bus_absent() {
+                    session_diagnostics::log(
+                        "window manager",
+                        "no session D-Bus address reachable; continuing without session control",
+                    );
+                    return Ok(());
+                }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     break;
@@ -164,6 +172,41 @@ pub(super) fn readiness_timeout(ewmh_ready: bool, message: String) -> Result<(),
         Ok(())
     } else {
         Err(message)
+    }
+}
+
+/// No-bus fast path: true when no session bus can be reached at all, so waiting for the
+/// control bootstrap would only burn `READY_TIMEOUT`. Checked from the environment, not by connecting.
+pub(super) fn session_bus_absent() -> bool {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let uid = rustix::process::getuid().as_raw();
+    session_bus_absent_for(
+        address.as_deref(),
+        Path::new(&format!("/run/user/{uid}/bus")),
+        Path::exists,
+    )
+}
+
+pub(super) fn session_bus_absent_for(
+    address: Option<&str>,
+    default_socket: &Path,
+    exists: impl Fn(&Path) -> bool,
+) -> bool {
+    match address {
+        None => !exists(default_socket),
+        Some(address) => !address
+            .split(';')
+            .any(|entry| match entry.strip_prefix("unix:") {
+                // A unix:path= entry is reachable only if its socket file exists; abstract sockets
+                // and other transports cannot be checked cheaply, so they count as possibly reachable.
+                Some(params) => params
+                    .split(',')
+                    .find_map(|pair| pair.strip_prefix("path="))
+                    .is_none_or(|path| exists(Path::new(path))),
+                None => true,
+            }),
     }
 }
 
@@ -228,10 +271,38 @@ pub(super) fn supporting_wm_check_is_valid(
 #[cfg(test)]
 mod tests {
     use super::readiness_timeout;
+    use std::path::Path;
 
     #[test]
     fn readiness_timeout_is_fatal_only_before_ewmh_is_ready() {
         assert!(readiness_timeout(false, "timed out".to_owned()).is_err());
         assert!(readiness_timeout(true, "control bus unavailable".to_owned()).is_ok());
+    }
+
+    #[test]
+    fn session_bus_absent_when_no_address_and_no_default_socket() {
+        let missing = Path::new("/run/user/1000/bus");
+        assert!(super::session_bus_absent_for(None, missing, |_| false));
+        assert!(!super::session_bus_absent_for(None, missing, |_| true));
+    }
+
+    #[test]
+    fn session_bus_present_when_address_socket_exists_or_is_not_checkable() {
+        let missing = Path::new("/run/user/1000/bus");
+        assert!(!super::session_bus_absent_for(
+            Some("unix:path=/tmp/bus"),
+            missing,
+            |path| path == Path::new("/tmp/bus")
+        ));
+        assert!(super::session_bus_absent_for(
+            Some("unix:path=/tmp/gone"),
+            missing,
+            |_| false
+        ));
+        assert!(!super::session_bus_absent_for(
+            Some("unix:abstract=/tmp/x"),
+            missing,
+            |_| false
+        ));
     }
 }

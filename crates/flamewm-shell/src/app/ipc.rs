@@ -136,6 +136,23 @@ impl ShellLoop {
         }
     }
 
+    /// Late bus attach after a degraded start: panels and start get the bootstrap, then settings.
+    pub(crate) fn apply_bus_bootstrap(
+        &mut self,
+        snapshot: ShellSnapshot,
+        settings: Option<flamewm_api::settings::SettingsSnapshot>,
+    ) {
+        self.start_model = flamewm_shell::start::state(snapshot.applications.clone());
+        self.start_model
+            .set_favorites(flamewm_shell::settings_projection::start_favorites(
+                settings.as_ref(),
+            ));
+        self.shell.apply_bootstrap(snapshot);
+        if let Some(settings) = settings {
+            self.apply_settings_snapshot(settings);
+        }
+    }
+
     pub(crate) fn note_signal(&mut self, signal: &flamewm_control_wire::ControlSignal) {
         if let flamewm_control_wire::ControlSignal::SettingsSnapshotChanged { snapshot } = signal {
             self.apply_settings_snapshot(snapshot.clone());

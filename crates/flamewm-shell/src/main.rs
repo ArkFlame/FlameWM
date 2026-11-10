@@ -11,12 +11,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flamewm_api::ports::FdEvents;
+use flamewm_api::settings::SettingsSnapshot;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
 use flamewm_integrations_linux::notifications;
 use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
+use flamewm_shell::bus_offline;
 use flamewm_shell::icon_loader::{IconLoader, IconTarget};
 use flamewm_shell::notification_center;
 use flamewm_shell::projection;
@@ -43,6 +45,8 @@ const NOTIFICATION_CENTER_CLEARANCE: i32 = 44 + 16;
 /// Once the startup burst (icon loads, backdrop decode, first paints) has settled, its freed
 /// heap is handed back; later churn is trimmed on the minute clock tick.
 const STARTUP_HEAP_TRIM_DELAY: Duration = Duration::from_secs(10);
+/// Degraded-start retry cadence for the session control bus: at most one attempt per interval.
+const BUS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 struct NotificationHost {
     provider: flamewm_integrations_linux::notifications::NotificationProvider,
@@ -587,39 +591,18 @@ fn execute() -> Result<(), String> {
     flamewm_debug::init_process("flamewm-shell");
     let total = flamewm_profiler::ProfilePoint::new("shell.startup.total");
     let total_guard = total.start();
-    let client = {
-        let scope = flamewm_profiler::ProfilePoint::new("shell.startup.control_connect");
-        let _s = scope.start();
-        ControlClient::connect(BusKind::Session)
-            .map_err(|error| format!("connect control session: {}", error.message))?
-    };
-    let snapshot = {
-        let scope = flamewm_profiler::ProfilePoint::new("shell.startup.bootstrap_call");
-        let _s = scope.start();
-        ShellSnapshot::load(&client)?
-    };
-    // Settings are not part of the shell bootstrap aggregate. Fetch the
-    // current settings once here so the first projection applies saved
-    // presentation values (font family/size, accent, taskbar color) instead
-    // of waiting for a live SettingsSnapshotChanged signal. Nonfatal: defaults
-    // remain in effect when the fetch fails.
-    let startup_settings = match client.call(&flamewm_control_core::ControlRequest::GetSettings) {
-        Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => Some(snapshot),
-        Ok(response) => {
-            eprintln!("flamewm-shell: GetSettings returned {response:?} (nonfatal)");
-            None
-        }
+    let root = flamewm_ui_x11::root_geometry().unwrap_or((0, 0));
+    let (snapshot, startup_settings, bus_offline) = match load_bus_bootstrap() {
+        Ok((snapshot, settings)) => (snapshot, settings, false),
         Err(error) => {
+            // Logged once. The retry timer below attaches the bus if it appears later.
             eprintln!(
-                "flamewm-shell: GetSettings failed (nonfatal): {}",
-                error.message
+                "flamewm-shell: session control bus unavailable, running without it (retry every {}s): {error}",
+                BUS_RETRY_INTERVAL.as_secs()
             );
-            None
+            (bus_offline::offline_snapshot(root), None, true)
         }
     };
-    // The startup client owns only the bootstrap roundtrip. Steady-state
-    // mutations use the dispatcher worker and snapshots arrive by signal.
-    drop(client);
     flamewm_ui_x11::install_default_layout_measure();
     let mut runtime = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.runtime_create");
@@ -717,6 +700,23 @@ fn execute() -> Result<(), String> {
         current_exe_program(),
     )));
     // StatusNotifier host: shares this reactor's bus source, no thread or timer.
+    if bus_offline {
+        let attach_state = Rc::clone(&state);
+        let attach_handle = reactor.handle();
+        let mut attached = false;
+        reactor
+            .register_timer(BUS_RETRY_INTERVAL, true, move || {
+                if attached {
+                    return;
+                }
+                // Failures stay silent: the one-time startup line already explains the degraded state.
+                if attach_control_bus(&attach_state, &attach_handle).is_ok() {
+                    attached = true;
+                    eprintln!("flamewm-shell: session control bus attached");
+                }
+            })
+            .map_err(|error| format!("register control bus retry: {error}"))?;
+    }
     let tray_host =
         flamewm_shell::tray_host::TrayHost::connect().map(|host| Rc::new(RefCell::new(host)));
     state.borrow_mut().tray.clone_from(&tray_host);
@@ -796,27 +796,14 @@ fn execute() -> Result<(), String> {
     let event_state = Rc::clone(&state);
     let tray_events = tray_host.clone();
     let tick_state = Rc::clone(&state);
-    let signal_state = Rc::clone(&state);
     // Signal subscription into the same Reactor: snapshot signals apply
     // their payload directly in `mark_signal` (zero fetch); legacy
     // revision-only signals are ignored for normal refresh. The tick
     // drains applied domains once per turn.
-    let signal_client = ControlSignalClient::connect(BusKind::Session)
-        .map_err(|error| format!("subscribe control signals: {error}"))?;
-    // Leak the client for process lifetime: its pump fd must stay open for the
-    // reactor registration below, and the reactor never owns the descriptor.
-    let signal_client: &'static ControlSignalClient = Box::leak(Box::new(signal_client));
-    {
-        let watch = signal_client.watch();
-        let interest = signal_interest(watch.events);
-        reactor
-            .register_raw_fd_with_action(watch.fd, interest, move |_, _| {
-                let _ = signal_client.on_ready(|signal: ControlSignal| {
-                    signal_state.borrow_mut().note_signal(&signal);
-                });
-                flamewm_reactor::FdAction::Continue
-            })
-            .map_err(|error| format!("register control signal source: {error}"))?;
+    if !bus_offline {
+        let signal_client = ControlSignalClient::connect(BusKind::Session)
+            .map_err(|error| format!("subscribe control signals: {error}"))?;
+        register_signal_source(&reactor.handle(), &state, signal_client)?;
     }
     if let Some(observer) = badge.as_ref() {
         let observer = Rc::clone(observer);
@@ -946,6 +933,71 @@ fn execute() -> Result<(), String> {
 
 /// Parent helper program: re-exec this binary with the helper role flag so
 /// no second binary or install path is required.
+/// Control bootstrap and startup settings. Settings are not part of the bootstrap aggregate; a
+/// failed settings fetch is nonfatal and leaves defaults in effect.
+fn load_bus_bootstrap() -> Result<(ShellSnapshot, Option<SettingsSnapshot>), String> {
+    let client = {
+        let scope = flamewm_profiler::ProfilePoint::new("shell.startup.control_connect");
+        let _s = scope.start();
+        ControlClient::connect(BusKind::Session)
+            .map_err(|error| format!("connect control session: {}", error.message))?
+    };
+    let snapshot = {
+        let scope = flamewm_profiler::ProfilePoint::new("shell.startup.bootstrap_call");
+        let _s = scope.start();
+        ShellSnapshot::load(&client)?
+    };
+    let settings = match client.call(&flamewm_control_core::ControlRequest::GetSettings) {
+        Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => Some(snapshot),
+        Ok(response) => {
+            eprintln!("flamewm-shell: GetSettings returned {response:?} (nonfatal)");
+            None
+        }
+        Err(error) => {
+            eprintln!(
+                "flamewm-shell: GetSettings failed (nonfatal): {}",
+                error.message
+            );
+            None
+        }
+    };
+    Ok((snapshot, settings))
+}
+
+/// Late attach for a shell that started without the bus: bootstrap, signal source, then state.
+fn attach_control_bus(
+    state: &Rc<RefCell<ShellLoop>>,
+    reactor: &flamewm_reactor::ReactorHandle,
+) -> Result<(), String> {
+    let (snapshot, settings) = load_bus_bootstrap()?;
+    let signal_client = ControlSignalClient::connect(BusKind::Session)
+        .map_err(|error| format!("subscribe control signals: {error}"))?;
+    register_signal_source(reactor, state, signal_client)?;
+    state.borrow_mut().apply_bus_bootstrap(snapshot, settings);
+    Ok(())
+}
+
+fn register_signal_source(
+    reactor: &flamewm_reactor::ReactorHandle,
+    state: &Rc<RefCell<ShellLoop>>,
+    client: ControlSignalClient,
+) -> Result<(), String> {
+    // Leak the client for process lifetime: its pump fd must stay open for the reactor
+    // registration, and the reactor never owns the descriptor.
+    let client: &'static ControlSignalClient = Box::leak(Box::new(client));
+    let watch = client.watch();
+    let signal_state = Rc::clone(state);
+    reactor
+        .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+            let _ = client.on_ready(|signal: ControlSignal| {
+                signal_state.borrow_mut().note_signal(&signal);
+            });
+            flamewm_reactor::FdAction::Continue
+        })
+        .map(|_| ())
+        .map_err(|error| format!("register control signal source: {error}"))
+}
+
 fn current_exe_program() -> String {
     std::env::current_exe().map_or_else(
         |_| "flamewm-shell".to_owned(),
