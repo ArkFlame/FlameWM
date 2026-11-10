@@ -294,15 +294,17 @@ pub(crate) fn switcher_entry_wire_value(entry: &SwitcherEntry) -> WireValue {
         ("appId", WireValue::String(entry.app_id.clone())),
     ]);
     // The `thumb` key is written only when a preview exists; older shells ignore unknown keys.
+    // A reference preview (unchanged content) omits `rgba`; the shell reuses its cached pixels.
     if let Some(thumb) = &entry.thumb {
-        dict.insert(
-            "thumb".to_owned(),
-            WireValue::Dict(dict_of([
-                ("width", WireValue::U32(thumb.width)),
-                ("height", WireValue::U32(thumb.height)),
-                ("rgba", WireValue::Bytes(thumb.rgba.clone())),
-            ])),
-        );
+        let mut fields = dict_of([
+            ("width", WireValue::U32(thumb.width)),
+            ("height", WireValue::U32(thumb.height)),
+            ("generation", WireValue::U64(thumb.generation)),
+        ]);
+        if !thumb.is_reference() {
+            fields.insert("rgba".to_owned(), WireValue::Bytes(thumb.rgba.clone()));
+        }
+        dict.insert("thumb".to_owned(), WireValue::Dict(fields));
     }
     WireValue::Dict(dict)
 }
@@ -319,13 +321,22 @@ pub(crate) fn switcher_entry(value: &WireValue) -> Result<SwitcherEntry, Control
 
 fn switcher_thumb(value: &WireValue) -> Result<flamewm_api::switcher::SwitcherThumb, ControlError> {
     let dict = required_dict(value, "switcher thumb")?;
+    // A payload without `generation` (the legacy shape) is untracked: pixels are required.
+    let generation = match dict.get("generation") {
+        Some(value) => required_u64(value, "generation")?,
+        None => 0,
+    };
+    let rgba = match dict.get("rgba") {
+        Some(WireValue::Bytes(bytes)) => bytes.clone(),
+        Some(_) => return Err(invalid("switcher thumb rgba must be bytes")),
+        None if generation != 0 => Vec::new(),
+        None => return Err(invalid("switcher thumb rgba missing")),
+    };
     let thumb = flamewm_api::switcher::SwitcherThumb {
         width: dict_u32(dict, "width")?,
         height: dict_u32(dict, "height")?,
-        rgba: match dict_value(dict, "rgba")? {
-            WireValue::Bytes(bytes) => bytes.clone(),
-            _ => return Err(invalid("switcher thumb rgba must be bytes")),
-        },
+        generation,
+        rgba,
     };
     if !thumb.is_well_formed() {
         return Err(invalid("switcher thumb size does not match its pixels"));

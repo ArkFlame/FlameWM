@@ -12,6 +12,7 @@ use super::switcher_thumbs::{MAX_THUMBS, THUMB_MAX_H, THUMB_MAX_W, ThumbKey};
 use super::*;
 use flamewm_api::switcher::SwitcherThumb;
 use flamewm_control_wire::{ControlSignal, SwitcherEntry};
+use std::hash::{Hash, Hasher};
 
 /// Most-recently-focused windows remembered for the switcher order.
 const MRU_LIMIT: usize = 64;
@@ -204,6 +205,73 @@ fn closed_signal() -> ControlSignal {
     }
 }
 
+/// Which previews the shell already holds for this switcher session. A window keeps its
+/// generation while its pixels are unchanged; the shell resolves the rest from its cache.
+#[derive(Debug, Default)]
+pub(crate) struct PreviewLedger {
+    /// Window -> (content hash, generation) of the pixels last sent for it.
+    sent: HashMap<Window, (u64, u64)>,
+    last: u64,
+}
+
+impl PreviewLedger {
+    /// Generation already sent for `window` with this content hash, if any.
+    pub(crate) fn current(&self, window: Window, hash: u64) -> Option<u64> {
+        self.sent
+            .get(&window)
+            .filter(|(sent, _)| *sent == hash)
+            .map(|(_, generation)| *generation)
+    }
+
+    /// Assigns a fresh generation to `window`'s new content. Generations never repeat.
+    pub(crate) fn record(&mut self, window: Window, hash: u64) -> u64 {
+        self.last += 1;
+        self.sent.insert(window, (hash, self.last));
+        self.last
+    }
+
+    pub(crate) fn forget(&mut self, window: Window) {
+        self.sent.remove(&window);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.sent.clear();
+    }
+}
+
+/// Content hash of one preview's BGRX pixels and size.
+pub(crate) fn pixel_hash(width: u32, height: u32, bgrx: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (width, height).hash(&mut hasher);
+    bgrx.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Pixels for references whose generation an unflushed signal still holds. The reactor keeps
+/// only the latest signal, so a dropped pixel-bearing signal must not strand its references.
+pub(crate) fn carry_pixels(previous: Option<&ControlSignal>, entries: &mut [SwitcherEntry]) {
+    let Some(ControlSignal::WindowSwitcherChanged {
+        entries: old_entries,
+        ..
+    }) = previous
+    else {
+        return;
+    };
+    let carried: HashMap<u64, &SwitcherThumb> = old_entries
+        .iter()
+        .filter_map(|entry| entry.thumb.as_ref())
+        .filter(|thumb| thumb.generation != 0 && !thumb.is_reference())
+        .map(|thumb| (thumb.generation, thumb))
+        .collect();
+    for entry in entries {
+        if let Some(thumb) = entry.thumb.as_mut().filter(|t| t.is_reference())
+            && let Some(full) = carried.get(&thumb.generation)
+        {
+            thumb.rgba = full.rgba.clone();
+        }
+    }
+}
+
 impl<C: Connection> Wm<'_, C> {
     /// Alt+Tab press. Opens the switcher on the first press, steps it on later ones.
     pub(super) fn switcher_step(&mut self, step: Step) -> Result<(), ReplyError> {
@@ -214,6 +282,8 @@ impl<C: Connection> Wm<'_, C> {
             if !self.switcher.open(windows, step) {
                 return Ok(());
             }
+            // A new session starts with an empty shell cache: every preview goes out again once.
+            self.switcher_previews.clear();
             // No keyboard grab: a WM-held grab stops the raw feed from delivering the Alt
             // release, so the switcher would never commit. Keys reach the WM via the raw feed.
         }
@@ -243,7 +313,9 @@ impl<C: Connection> Wm<'_, C> {
     /// Records the overlay snapshot for the next reactor flush.
     pub(super) fn publish_switcher(&mut self) {
         let immediate = self.switcher.immediate();
+        let previous = self.switcher_signal.take();
         let Some((windows, selected)) = self.switcher.view().map(|(w, s)| (w.to_vec(), s)) else {
+            self.switcher_previews.clear();
             self.switcher_signal = Some(closed_signal());
             return;
         };
@@ -255,6 +327,7 @@ impl<C: Connection> Wm<'_, C> {
             }
             entries.push(entry);
         }
+        carry_pixels(previous.as_ref(), &mut entries);
         self.switcher_signal = Some(ControlSignal::WindowSwitcherChanged {
             open: true,
             immediate,
@@ -287,11 +360,26 @@ impl<C: Connection> Wm<'_, C> {
             src_w: u32::from(geom.width),
             src_h: u32::from(geom.height),
         };
-        let (w, h, px) = self.switcher_thumbs.request(key)?;
-        let rgba = thumb_rgba(*w, *h, px)?;
+        let Some((w, h, px)) = self.switcher_thumbs.request(key) else {
+            self.switcher_previews.forget(window);
+            return None;
+        };
+        let (w, h) = (*w, *h);
+        let hash = pixel_hash(w, h, px);
+        if let Some(generation) = self.switcher_previews.current(window, hash) {
+            return Some(SwitcherThumb {
+                width: w,
+                height: h,
+                generation,
+                rgba: Vec::new(),
+            });
+        }
+        let rgba = thumb_rgba(w, h, px)?;
+        let generation = self.switcher_previews.record(window, hash);
         Some(SwitcherThumb {
-            width: *w,
-            height: *h,
+            width: w,
+            height: h,
+            generation,
             rgba,
         })
     }
@@ -486,6 +574,62 @@ mod tests {
         switcher.cancel();
         assert!(!switcher.is_open());
         assert_eq!(switcher.commit(), None);
+    }
+
+    #[test]
+    fn preview_ledger_references_unchanged_content_and_renews_on_change() {
+        let mut ledger = PreviewLedger::default();
+        let first = ledger.record(7, 0xAA);
+        assert_eq!(
+            ledger.current(7, 0xAA),
+            Some(first),
+            "same content is a reference"
+        );
+        assert_eq!(
+            ledger.current(7, 0xBB),
+            None,
+            "changed content must be resent"
+        );
+        let second = ledger.record(7, 0xBB);
+        assert_ne!(first, second, "generations never repeat");
+        ledger.clear();
+        assert_eq!(
+            ledger.current(7, 0xBB),
+            None,
+            "a new session resends everything"
+        );
+    }
+
+    #[test]
+    fn carry_pixels_fills_references_from_the_unflushed_signal() {
+        let pixels = SwitcherThumb {
+            width: 1,
+            height: 1,
+            generation: 4,
+            rgba: vec![9, 9, 9, 255],
+        };
+        let previous = ControlSignal::WindowSwitcherChanged {
+            open: true,
+            immediate: false,
+            selected: 0,
+            entries: vec![SwitcherEntry {
+                title: String::new(),
+                app_id: String::new(),
+                thumb: Some(pixels.clone()),
+            }],
+        };
+        let reference = SwitcherThumb {
+            rgba: Vec::new(),
+            ..pixels.clone()
+        };
+        let mut entries = vec![SwitcherEntry {
+            title: String::new(),
+            app_id: String::new(),
+            thumb: Some(reference),
+        }];
+        carry_pixels(Some(&previous), &mut entries);
+        assert_eq!(entries[0].thumb, Some(pixels));
+        carry_pixels(None, &mut entries);
     }
 
     #[test]

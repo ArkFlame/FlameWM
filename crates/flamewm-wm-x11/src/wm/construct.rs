@@ -132,6 +132,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             mru: switcher::Mru::default(),
             switcher_signal: None,
             switcher_thumbs: Default::default(),
+            switcher_previews: switcher::PreviewLedger::default(),
             switcher_budget: switcher_thumb_provider::CaptureBudget::new(
                 switcher::SWITCHER_CAPTURES_PER_TURN,
             ),

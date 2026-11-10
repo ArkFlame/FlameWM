@@ -777,6 +777,25 @@ mod tests {
         });
     }
 
+    #[test]
+    fn window_switcher_reference_thumb_round_trips_through_dbus() {
+        assert_bus_round_trip(ControlSignal::WindowSwitcherChanged {
+            open: true,
+            immediate: true,
+            selected: 0,
+            entries: vec![SwitcherEntry {
+                title: "Terminal".to_owned(),
+                app_id: "terminal".to_owned(),
+                thumb: Some(flamewm_api::switcher::SwitcherThumb {
+                    width: 64,
+                    height: 36,
+                    generation: 3,
+                    rgba: Vec::new(),
+                }),
+            }],
+        });
+    }
+
     // CONTRACT-REGRESSION: T12 ApplySettings success order is reply, snapshot signal, legacy signal.
     // TRIGGER: decode a revision N+1 reply followed by both ordered D-Bus signals.
     // OBSERVABLE: the snapshot-bearing signal is first; legacy compatibility follows it.

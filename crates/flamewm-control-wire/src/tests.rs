@@ -946,6 +946,7 @@ fn switcher_thumb_round_trips_and_rejects_mismatched_pixels() {
     let thumb = SwitcherThumb {
         width: 2,
         height: 1,
+        generation: 0,
         rgba: vec![255, 0, 0, 255, 0, 0, 255, 255],
     };
     let signal = ControlSignal::WindowSwitcherChanged {
@@ -970,11 +971,94 @@ fn switcher_thumb_round_trips_and_rejects_mismatched_pixels() {
             thumb: Some(SwitcherThumb {
                 width: 2,
                 height: 2,
+                generation: 0,
                 rgba: vec![0; 8],
             }),
         }],
     });
     assert!(decode_signal(&wire).is_err(), "2x2 needs 16 bytes, got 8");
+}
+
+// Unchanged previews travel as references: no `rgba` on the wire, the generation names the pixels.
+#[test]
+fn switcher_reference_thumb_round_trips_without_pixels() {
+    use flamewm_api::switcher::SwitcherThumb;
+    let reference = SwitcherThumb {
+        width: 64,
+        height: 36,
+        generation: 9,
+        rgba: Vec::new(),
+    };
+    let fresh = SwitcherThumb {
+        width: 1,
+        height: 1,
+        generation: 10,
+        rgba: vec![1, 2, 3, 255],
+    };
+    let signal = ControlSignal::WindowSwitcherChanged {
+        open: true,
+        immediate: true,
+        selected: 1,
+        entries: vec![
+            SwitcherEntry {
+                title: "Same".to_owned(),
+                app_id: String::new(),
+                thumb: Some(reference.clone()),
+            },
+            SwitcherEntry {
+                title: "New".to_owned(),
+                app_id: String::new(),
+                thumb: Some(fresh.clone()),
+            },
+        ],
+    };
+    let wire = encode_signal(&signal);
+    let WireValue::Array(rows) = &wire.args[3] else {
+        panic!("entries must be an array");
+    };
+    let WireValue::Dict(same) = &rows[0] else {
+        panic!("entry must be a dict");
+    };
+    let WireValue::Dict(same_thumb) = same.get("thumb").expect("thumb key") else {
+        panic!("thumb must be a dict");
+    };
+    assert!(
+        !same_thumb.contains_key("rgba"),
+        "reference must omit pixels"
+    );
+    assert_eq!(decode_signal(&wire), Ok(signal));
+}
+
+// LEGACY-DEFAULT: a thumb with pixels and no `generation` (older WMs) decodes as untracked.
+#[test]
+fn switcher_thumb_without_generation_decodes_as_untracked_pixels() {
+    let legacy = WireSignal {
+        interface: IFACE_ROOT.to_owned(),
+        member: "WindowSwitcherChanged".to_owned(),
+        args: vec![
+            WireValue::Bool(true),
+            WireValue::Bool(false),
+            WireValue::U32(0),
+            WireValue::Array(vec![WireValue::Dict(dict_of([
+                ("title", WireValue::String("Red".to_owned())),
+                ("appId", WireValue::String(String::new())),
+                (
+                    "thumb",
+                    WireValue::Dict(dict_of([
+                        ("width", WireValue::U32(1)),
+                        ("height", WireValue::U32(1)),
+                        ("rgba", WireValue::Bytes(vec![255, 0, 0, 255])),
+                    ])),
+                ),
+            ]))]),
+        ],
+    };
+    let Ok(ControlSignal::WindowSwitcherChanged { entries, .. }) = decode_signal(&legacy) else {
+        panic!("legacy thumb must decode");
+    };
+    let thumb = entries[0].thumb.clone().expect("thumb");
+    assert_eq!(thumb.generation, 0);
+    assert_eq!(thumb.rgba, vec![255, 0, 0, 255]);
 }
 
 // CONTRACT-REGRESSION: T05 SystemSnapshotChanged carries the complete authoritative snapshot.

@@ -6,11 +6,13 @@
 //! closes first never paints. The shell loop wakes at [`SwitcherController::deadline`].
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use flamewm_api::settings::SettingsSnapshot;
+use flamewm_api::switcher::SwitcherThumb;
 use flamewm_api::Rect;
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_ui_x11::{
@@ -80,6 +82,49 @@ pub fn row_label(entry: &SwitcherEntry) -> &str {
         &entry.app_id
     } else {
         "Window"
+    }
+}
+
+/// Preview pixels the shell holds, keyed by the WM's generation. Rebuilt from every snapshot, so
+/// only generations the latest snapshot names survive; a closed snapshot names none.
+#[derive(Debug, Clone, Default)]
+pub struct SwitcherThumbCache(HashMap<u64, SwitcherThumb>);
+
+impl SwitcherThumbCache {
+    /// Stores fresh pixels and fills references from the cache. A reference whose pixels are
+    /// missing drops to no preview (the row keeps its title).
+    pub fn resolve(&mut self, entries: &mut [SwitcherEntry]) {
+        let mut next = HashMap::new();
+        for entry in entries.iter_mut() {
+            let Some(thumb) = entry.thumb.as_mut() else {
+                continue;
+            };
+            if thumb.generation == 0 {
+                continue;
+            }
+            if thumb.is_reference() {
+                let Some(held) = self.0.get(&thumb.generation) else {
+                    entry.thumb = None;
+                    continue;
+                };
+                thumb.rgba = held.rgba.clone();
+            }
+            if let Some(thumb) = entry.thumb.as_ref() {
+                next.insert(thumb.generation, thumb.clone());
+            }
+        }
+        self.0 = next;
+    }
+
+    /// Number of previews held; for tests and diagnostics.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -291,6 +336,70 @@ mod tests {
             app_id: app_id.to_owned(),
             thumb: None,
         }
+    }
+
+    fn thumb_entry(generation: u64, rgba: Vec<u8>) -> SwitcherEntry {
+        SwitcherEntry {
+            title: String::new(),
+            app_id: String::new(),
+            thumb: Some(SwitcherThumb {
+                width: 1,
+                height: 1,
+                generation,
+                rgba,
+            }),
+        }
+    }
+
+    // Regression: an unchanged preview arrives as a reference and the shell reuses its pixels.
+    #[test]
+    fn thumb_cache_reuses_pixels_for_reference_entries() {
+        let mut cache = SwitcherThumbCache::default();
+        let mut first = vec![thumb_entry(5, vec![1, 2, 3, 255])];
+        cache.resolve(&mut first);
+        assert_eq!(first[0].thumb.as_ref().map(|t| t.rgba.len()), Some(4));
+
+        let mut again = vec![thumb_entry(5, Vec::new())];
+        cache.resolve(&mut again);
+        assert_eq!(
+            again[0].thumb.as_ref().map(|t| t.rgba.clone()),
+            Some(vec![1, 2, 3, 255])
+        );
+    }
+
+    // Regression: the cache keeps only generations the latest snapshot names; a missing one
+    // yields no preview instead of an empty image.
+    #[test]
+    fn thumb_cache_prunes_unnamed_generations_and_drops_missing_references() {
+        let mut cache = SwitcherThumbCache::default();
+        cache.resolve(&mut [
+            thumb_entry(5, vec![1, 2, 3, 255]),
+            thumb_entry(6, vec![0; 4]),
+        ]);
+        assert_eq!(cache.len(), 2);
+
+        cache.resolve(&mut [thumb_entry(6, Vec::new())]);
+        assert_eq!(cache.len(), 1, "generation 5 is no longer named");
+
+        let mut stale = vec![thumb_entry(5, Vec::new())];
+        cache.resolve(&mut stale);
+        assert_eq!(stale[0].thumb, None);
+
+        cache.resolve(&mut []);
+        assert!(cache.is_empty(), "a closed snapshot names nothing");
+    }
+
+    // LEGACY-DEFAULT: pixels with generation 0 (older WMs) render directly and are not cached.
+    #[test]
+    fn thumb_cache_leaves_untracked_pixels_alone() {
+        let mut cache = SwitcherThumbCache::default();
+        let mut rows = vec![thumb_entry(0, vec![9, 9, 9, 255])];
+        cache.resolve(&mut rows);
+        assert_eq!(
+            rows[0].thumb.as_ref().map(|t| t.rgba.clone()),
+            Some(vec![9, 9, 9, 255])
+        );
+        assert!(cache.is_empty());
     }
 
     fn frame(open: bool, immediate: bool, count: usize) -> SwitcherFrame {

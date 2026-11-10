@@ -515,6 +515,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     switcher_signal: Option<flamewm_control_wire::ControlSignal>,
     /// Alt+Tab previews: captured while the switcher is open, dropped when it closes.
     switcher_thumbs: switcher_thumb_provider::ThumbProvider,
+    /// Preview generations sent in the open switcher session; cleared on open.
+    switcher_previews: switcher::PreviewLedger,
     switcher_budget: switcher_thumb_provider::CaptureBudget,
     /// Alt+Tab previews: captured while the switcher is open, dropped when it closes.
     dock_struts: HashMap<Window, [u32; 12]>,

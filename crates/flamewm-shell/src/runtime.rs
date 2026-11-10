@@ -206,6 +206,8 @@ pub struct ShellRuntime {
     dirty: ShellDirty,
     /// Latest Alt+Tab switcher snapshot not yet taken by the shell loop.
     switcher: Option<crate::switcher::SwitcherFrame>,
+    /// Alt+Tab preview pixels by WM generation; references in a snapshot resolve against it.
+    switcher_thumbs: crate::switcher::SwitcherThumbCache,
 }
 
 /// Domain dirty flags set by `ControlSignal` delivery and reconciled at most
