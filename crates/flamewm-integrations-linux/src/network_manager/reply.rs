@@ -592,7 +592,9 @@ impl NetworkManagerProvider {
                 PendingRequest::VpnLookup
                 | PendingRequest::VpnAction
                 | PendingRequest::VpnActiveList { .. }
-                | PendingRequest::VpnActiveUuid { .. } => {
+                | PendingRequest::VpnActiveUuid { .. }
+                | PendingRequest::VpnRowsActiveList { .. }
+                | PendingRequest::VpnRowsActiveUuid { .. } => {
                     eprintln!("flamewm: NetworkManager VPN request failed: {items:?}");
                     return Ok(());
                 }
@@ -626,6 +628,32 @@ impl NetworkManagerProvider {
                 self.queue(message, PendingRequest::VpnAction)
             }
             PendingRequest::VpnAction => Ok(()),
+            PendingRequest::VpnRowsActiveList { generation } => {
+                if generation != self.controller.generation() {
+                    return Ok(());
+                }
+                let paths = vpn::active_paths_from_items(
+                    &items,
+                    "network manager active connections reply",
+                )?;
+                self.vpn_active.clear();
+                for path in paths {
+                    let message = vpn::active_uuid_message(&path)?;
+                    self.queue(message, PendingRequest::VpnRowsActiveUuid { generation })?;
+                }
+                self.publish_vpn();
+                Ok(())
+            }
+            PendingRequest::VpnRowsActiveUuid { generation } => {
+                if generation != self.controller.generation() {
+                    return Ok(());
+                }
+                let uuid =
+                    vpn::active_uuid_from_items(&items, "network manager active uuid reply")?;
+                self.vpn_active.insert(uuid);
+                self.publish_vpn();
+                Ok(())
+            }
             PendingRequest::VpnActiveList { uuid } => {
                 let paths = vpn::active_paths_from_items(
                     &items,
@@ -806,7 +834,14 @@ impl NetworkManagerProvider {
                 if generation != self.controller.generation() {
                     return Ok(());
                 }
-                for profile in object_paths(&items, "NetworkManager profile reply")? {
+                let listed = object_paths(&items, "NetworkManager profile reply")?;
+                // A profile deleted since the last listing drops out of the VPN rows.
+                let before = self.vpn_profiles.len();
+                self.vpn_profiles.retain(|path, _| listed.contains(path));
+                if self.vpn_profiles.len() != before {
+                    self.publish_vpn();
+                }
+                for profile in listed {
                     self.queue_profile_settings(generation, profile)?;
                 }
                 Ok(())
@@ -817,6 +852,10 @@ impl NetworkManagerProvider {
             } => {
                 if generation != self.controller.generation() {
                     return Ok(());
+                }
+                if let Some(vpn_profile) = vpn::parse_vpn_profile(items.first()) {
+                    self.vpn_profiles.insert(profile.clone(), vpn_profile);
+                    self.publish_vpn();
                 }
                 if let Some(ssid) = parse_profile_ssid(items.first())? {
                     self.profile_ssids.insert(profile, ssid);

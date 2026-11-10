@@ -2,7 +2,7 @@ use super::*;
 use flamewm_api::settings::SettingValue;
 use flamewm_api::system::{
     AudioSnapshot, BrightnessAction, BrightnessSnapshot, MediaSnapshot, NetworkAccessPointSnapshot,
-    NetworkKind, NetworkSnapshot, PlaybackState, ServiceAvailability,
+    NetworkKind, NetworkSnapshot, PlaybackState, ServiceAvailability, VpnProfileSnapshot,
 };
 
 fn assert_request_round_trip(request: &ControlRequest) -> WireCall {
@@ -470,6 +470,11 @@ fn system_fixture() -> SystemSnapshot {
                 known: true,
             }],
             pending_secret: None,
+            vpn_profiles: vec![VpnProfileSnapshot {
+                uuid: "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f".to_owned(),
+                id: "Office VPN".to_owned(),
+                active: true,
+            }],
         },
         media: MediaSnapshot {
             availability: ServiceAvailability::Available,

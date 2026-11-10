@@ -204,6 +204,125 @@ pub(super) fn active_uuid_from_items(items: &[MessageItem], context: &str) -> Fl
     }
 }
 
+/// A `VPN` or `WireGuard` profile row: `id` and `uuid` from its `connection` settings section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnProfile {
+    pub id: String,
+    pub uuid: String,
+}
+
+fn settings_field<'a>(
+    entries: &'a [(MessageItem, MessageItem)],
+    key: &str,
+) -> Option<&'a MessageItem> {
+    entries.iter().find_map(|(name, value)| match name {
+        MessageItem::Str(text) if text == key => Some(value),
+        _ => None,
+    })
+}
+
+fn unwrap_variant_ref(item: &MessageItem) -> &MessageItem {
+    match item {
+        MessageItem::Variant(inner) => inner.as_ref(),
+        other => other,
+    }
+}
+
+fn settings_dict(item: &MessageItem) -> Option<Vec<(MessageItem, MessageItem)>> {
+    match unwrap_variant_ref(item) {
+        MessageItem::Dict(dict) => Some(dict.clone().into_vec()),
+        _ => None,
+    }
+}
+
+fn settings_text<'a>(entries: &'a [(MessageItem, MessageItem)], key: &str) -> Option<&'a str> {
+    match unwrap_variant_ref(settings_field(entries, key)?) {
+        MessageItem::Str(text) => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+/// Pure: a `VPN` or `WireGuard` profile from one `GetSettings` reply (`a{sa{sv}}`). Returns `None`
+/// for any other profile type and for any reply that is not that shape, so ordinary Wi-Fi and
+/// wired profiles are skipped rather than failing the reply.
+#[must_use]
+pub fn parse_vpn_profile(item: Option<&MessageItem>) -> Option<VpnProfile> {
+    let sections = settings_dict(item?)?;
+    let connection = settings_dict(settings_field(&sections, "connection")?)?;
+    let kind = settings_text(&connection, "type")?;
+    if kind != "vpn" && kind != "wireguard" {
+        return None;
+    }
+    let uuid = settings_text(&connection, "uuid")?;
+    if !is_connection_uuid(uuid) {
+        return None;
+    }
+    Some(VpnProfile {
+        id: settings_text(&connection, "id")?.to_owned(),
+        uuid: uuid.to_owned(),
+    })
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn text(value: &str) -> MessageItem {
+        MessageItem::Variant(Box::new(MessageItem::Str(value.to_owned())))
+    }
+
+    fn settings(kind: &str, id: &str, uuid: &str) -> MessageItem {
+        let connection = MessageItem::new_dict(vec![
+            (MessageItem::Str("type".to_owned()), text(kind)),
+            (MessageItem::Str("id".to_owned()), text(id)),
+            (MessageItem::Str("uuid".to_owned()), text(uuid)),
+        ])
+        .expect("dict");
+        MessageItem::new_dict(vec![(
+            MessageItem::Str("connection".to_owned()),
+            MessageItem::Variant(Box::new(connection)),
+        )])
+        .expect("dict")
+    }
+
+    const UUID: &str = "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+
+    #[test]
+    fn vpn_and_wireguard_profiles_are_listed_with_id_and_uuid() {
+        let vpn = settings("vpn", "Office", UUID);
+        assert_eq!(
+            parse_vpn_profile(Some(&vpn)),
+            Some(VpnProfile {
+                id: "Office".to_owned(),
+                uuid: UUID.to_owned(),
+            })
+        );
+        let wg = settings("wireguard", "Home WG", UUID);
+        assert!(parse_vpn_profile(Some(&wg)).is_some());
+    }
+
+    #[test]
+    fn wifi_wired_and_malformed_profiles_are_skipped() {
+        assert_eq!(
+            parse_vpn_profile(Some(&settings("802-11-wireless", "Cafe", UUID))),
+            None
+        );
+        assert_eq!(
+            parse_vpn_profile(Some(&settings("802-3-ethernet", "Wired", UUID))),
+            None
+        );
+        assert_eq!(
+            parse_vpn_profile(Some(&settings("vpn", "Bad", "not-a-uuid"))),
+            None
+        );
+        assert_eq!(
+            parse_vpn_profile(Some(&MessageItem::Str("x".to_owned()))),
+            None
+        );
+        assert_eq!(parse_vpn_profile(None), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -171,6 +171,17 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
         ),
     );
     out.insert(
+        "vpnProfiles".to_owned(),
+        WireValue::Array(
+            snapshot
+                .network
+                .vpn_profiles
+                .iter()
+                .map(vpn_profile_wire_value)
+                .collect(),
+        ),
+    );
+    out.insert(
         "hasPendingNetworkSecret".to_owned(),
         WireValue::Bool(snapshot.network.pending_secret.is_some()),
     );

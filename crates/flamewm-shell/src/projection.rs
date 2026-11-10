@@ -47,6 +47,7 @@ pub use media::project_media;
 pub use network::{
     bluetooth_row_status, bluetooth_trust_action, project_bluetooth_row, project_network,
     project_network_details, project_network_full, project_network_secret, project_network_status,
+    project_vpn_rows, vpn_toggle_action,
 };
 #[cfg(test)]
 pub(crate) use panel::pager_active_fill;

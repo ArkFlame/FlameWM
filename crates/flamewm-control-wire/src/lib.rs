@@ -21,6 +21,7 @@ use flamewm_api::system::{
     AudioTarget, AudioVolumeAction, BrightnessAction, BrightnessSnapshot, MediaSnapshot,
     NetworkAccessPointSnapshot, NetworkKind, NetworkSecretRequestSnapshot, NetworkSnapshot,
     PlaybackState, PowerSnapshot, PowerState, ServiceAvailability, SystemAction, SystemSnapshot,
+    VpnProfileSnapshot,
 };
 use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_api::workspace::WorkspaceSnapshot;

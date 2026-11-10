@@ -61,6 +61,17 @@ pub(crate) fn helper_control_request(
     snapshot: &QuickControlSnapshot,
 ) -> Option<ControlRequest> {
     let system = &snapshot.system;
+    if let Some(slot) = action
+        .strip_prefix("vpn.toggle.")
+        .and_then(|text| text.parse::<usize>().ok())
+    {
+        return crate::projection::vpn_toggle_action(&system.network, slot).map(|action| {
+            ControlRequest::SystemAction {
+                action,
+                expected_revision: system.revision,
+            }
+        });
+    }
     if action == "bluetooth.trust.toggle" {
         return crate::projection::bluetooth_trust_action(&system.bluetooth).map(|action| {
             ControlRequest::SystemAction {

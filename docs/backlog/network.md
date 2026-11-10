@@ -26,7 +26,7 @@ The Bluetooth pattern (`88271686`) fits only when the handler is a single method
 1. `net-vpn-lookup`: settings-path resolution by UUID via `Settings.GetConnectionByUuid`. Pure message-shape test. Changes `mod.rs` (`PendingRequest`) and `reply.rs`.
 2. `net-vpn-activate`: `SystemAction::VpnConnection { action: Activate, uuid }`. Validated UUID type in `flamewm-api`. Wire round trip, platform bypass-and-handler test, mock `ActivateConnection(path, "/", "/")` shape.
 3. `net-vpn-deactivate` (landed): active-path lookup via root `ActiveConnections`, then `Connection.Active.Uuid` per path (sequential probe), then `DeactivateConnection(active_path)`. Pure builders and reply parsers in `vpn.rs`; error replies and an unknown UUID are logged or returned, not dropped. Verified by unit tests on message shape only.
-4. `net-vpn-ui`: quick-controls row. Out of scope until 1-3 land.
+4. `net-vpn-ui` (landed): VPN rows in the network popup (`network-vpn-row-1..4`, `data-action="vpn.toggle.N"`). Snapshot: `NetworkSnapshot::vpn_profiles` filled by the existing reconcile (`ListConnections` plus `GetSettings` per profile, parsed by `vpn::parse_vpn_profile`) and root `ActiveConnections` with `Connection.Active.Uuid` probes. Pure parser tests in `vpn.rs`; no new timer.
 
 ## Unverified
 

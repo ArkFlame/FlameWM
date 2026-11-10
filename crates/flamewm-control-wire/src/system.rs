@@ -1,5 +1,22 @@
 use super::*;
 
+pub(crate) fn vpn_profile_wire_value(profile: &VpnProfileSnapshot) -> WireValue {
+    let mut item = WireDict::new();
+    item.insert("uuid".to_owned(), WireValue::String(profile.uuid.clone()));
+    item.insert("id".to_owned(), WireValue::String(profile.id.clone()));
+    item.insert("active".to_owned(), WireValue::Bool(profile.active));
+    WireValue::Dict(item)
+}
+
+pub(crate) fn vpn_profile_snapshot(value: &WireValue) -> Result<VpnProfileSnapshot, ControlError> {
+    let dict = required_dict(value, "vpnProfile")?;
+    Ok(VpnProfileSnapshot {
+        uuid: dict_string(dict, "uuid")?.to_owned(),
+        id: dict_string(dict, "id")?.to_owned(),
+        active: dict_bool(dict, "active")?,
+    })
+}
+
 pub(crate) fn access_point_wire_value(point: &NetworkAccessPointSnapshot) -> WireValue {
     let mut item = WireDict::new();
     item.insert("path".to_owned(), WireValue::String(point.path.clone()));
@@ -222,6 +239,14 @@ pub(crate) fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, Control
                     .map(access_point_snapshot)
                     .collect::<Result<Vec<_>, _>>()
             })?,
+            // Optional for older peers: absent means no VPN profiles.
+            vpn_profiles: match dict.get("vpnProfiles") {
+                Some(value) => required_array(value, "vpnProfiles")?
+                    .iter()
+                    .map(vpn_profile_snapshot)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => Vec::new(),
+            },
             pending_secret: if dict_bool(dict, "hasPendingNetworkSecret")? {
                 Some(NetworkSecretRequestSnapshot {
                     request_id: dict_u64(dict, "pendingNetworkSecretRequestId")?,

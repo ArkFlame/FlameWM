@@ -149,6 +149,14 @@ enum PendingRequest {
         path: String,
         remaining: Vec<String>,
     },
+    /// Root `ActiveConnections` for the VPN row active flags, queued by `reconcile`.
+    VpnRowsActiveList {
+        generation: u64,
+    },
+    /// `Connection.Active.Uuid` of one active connection, for the VPN row active flags.
+    VpnRowsActiveUuid {
+        generation: u64,
+    },
     ActivateConnection {
         attempt: u64,
     },
@@ -215,6 +223,10 @@ pub struct NetworkManagerProvider {
     secret_prompt: Option<SecretPrompt>,
     secret_context: Option<SecretContext>,
     attempts: ConnectAttempts,
+    /// `VPN` and `WireGuard` profiles by settings path, filled from `GetSettings` replies.
+    vpn_profiles: BTreeMap<String, vpn::VpnProfile>,
+    /// UUIDs of active connections, filled from the root `ActiveConnections` probe.
+    vpn_active: BTreeSet<String>,
 }
 
 impl NetworkManagerProvider {
@@ -232,6 +244,8 @@ impl NetworkManagerProvider {
             secret_prompt: None,
             secret_context: None,
             attempts: ConnectAttempts::default(),
+            vpn_profiles: BTreeMap::new(),
+            vpn_active: BTreeSet::new(),
         })
     }
 
@@ -311,7 +325,38 @@ impl NetworkManagerProvider {
         self.queue(message, PendingRequest::RootProperties { generation })?;
         self.queue_devices(generation)?;
         self.queue_profiles(generation)?;
+        self.queue_vpn_active(generation)?;
         Ok(true)
+    }
+
+    /// Root `ActiveConnections` for the VPN row active flags. Rides the existing reconcile, so it
+    /// adds no timer and no polling; the per-path UUID replies follow in the same reactor turns.
+    fn queue_vpn_active(&mut self, generation: u64) -> FlameResult<()> {
+        let message = vpn::active_connections_message()?;
+        self.queue(message, PendingRequest::VpnRowsActiveList { generation })
+    }
+
+    /// Rebuild the VPN rows in the status snapshot and hand them to the controller.
+    pub(super) fn publish_vpn(&mut self) {
+        let mut profiles = self
+            .vpn_profiles
+            .values()
+            .map(|profile| flamewm_api::system::VpnProfileSnapshot {
+                uuid: profile.uuid.clone(),
+                id: profile.id.clone(),
+                active: self.vpn_active.contains(&profile.uuid),
+            })
+            .collect::<Vec<_>>();
+        profiles.sort_by(|left, right| {
+            left.id
+                .cmp(&right.id)
+                .then_with(|| left.uuid.cmp(&right.uuid))
+        });
+        self.status.snapshot.vpn_profiles = profiles;
+        let generation = self.controller.generation();
+        let _ = self
+            .controller
+            .inject_status(self.status.clone(), generation);
     }
 
     /// Drain one reactor turn and apply only native owner/property events and their replies.

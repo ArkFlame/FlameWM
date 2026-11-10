@@ -64,6 +64,17 @@ pub struct NetworkSnapshot {
     pub active_access_point_path: String,
     pub access_points: Vec<NetworkAccessPointSnapshot>,
     pub pending_secret: Option<NetworkSecretRequestSnapshot>,
+    /// `VPN` and `WireGuard` profiles, sorted by id. Additive: defaults to empty.
+    pub vpn_profiles: Vec<VpnProfileSnapshot>,
+}
+
+/// One `VPN` or `WireGuard` profile. `uuid` is the canonical 36-character form; `active` is true when
+/// `NetworkManager` reports an active connection with that UUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnProfileSnapshot {
+    pub uuid: String,
+    pub id: String,
+    pub active: bool,
 }
 
 impl Default for NetworkSnapshot {
@@ -80,6 +91,7 @@ impl Default for NetworkSnapshot {
             active_access_point_path: String::new(),
             access_points: Vec::new(),
             pending_secret: None,
+            vpn_profiles: Vec::new(),
         }
     }
 }

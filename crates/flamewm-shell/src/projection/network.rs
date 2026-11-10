@@ -731,6 +731,57 @@ pub fn bluetooth_trust_action(
     Some(flamewm_api::system::SystemAction::BluetoothDevice(action))
 }
 
+/// VPN rows the network popup shows. Profiles past this count stay out of the popup.
+pub const VPN_ROW_SLOTS: usize = 4;
+
+/// Click on VPN row `slot` (1-based): activates an inactive profile, deactivates an active one.
+/// `None` when the slot has no profile or the UUID is malformed.
+#[must_use]
+pub fn vpn_toggle_action(
+    network: &flamewm_api::system::NetworkSnapshot,
+    slot: usize,
+) -> Option<flamewm_api::system::SystemAction> {
+    let profile = network.vpn_profiles.get(slot.checked_sub(1)?)?;
+    let uuid = flamewm_api::system::VpnConnectionUuid::new(&profile.uuid)?;
+    let op = if profile.active {
+        flamewm_api::system::VpnConnectionOp::Deactivate
+    } else {
+        flamewm_api::system::VpnConnectionOp::Activate
+    };
+    Some(flamewm_api::system::SystemAction::VpnConnection(
+        flamewm_api::system::VpnConnectionAction { op, uuid },
+    ))
+}
+
+/// Projects the VPN rows: name, and connected or not connected. Unused slots are hidden.
+pub fn project_vpn_rows(
+    document: &mut impl UiDocumentAccess,
+    network: &flamewm_api::system::NetworkSnapshot,
+) -> Result<(), String> {
+    for slot in 1..=VPN_ROW_SLOTS {
+        let profile = network.vpn_profiles.get(slot - 1);
+        document.visible(&format!("network-vpn-row-{slot}"), profile.is_some())?;
+        document.text(
+            &format!("network-vpn-name-{slot}"),
+            profile.map(|p| p.id.clone()).unwrap_or_default(),
+        )?;
+        document.text(
+            &format!("network-vpn-status-{slot}"),
+            profile
+                .map(|p| {
+                    if p.active {
+                        "Connected"
+                    } else {
+                        "Not connected"
+                    }
+                })
+                .unwrap_or_default()
+                .to_owned(),
+        )?;
+    }
+    Ok(())
+}
+
 pub fn project_bluetooth_row(
     document: &mut impl UiDocumentAccess,
     bluetooth: &flamewm_api::system::BluetoothSnapshot,
@@ -738,6 +789,42 @@ pub fn project_bluetooth_row(
     let status = bluetooth_row_status(bluetooth);
     document.visible("network-bluetooth-row", status.is_some())?;
     document.text("network-bluetooth-status", status.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod vpn_row_tests {
+    use super::*;
+    use flamewm_api::system::{NetworkSnapshot, SystemAction, VpnConnectionOp, VpnProfileSnapshot};
+
+    fn network(active: bool) -> NetworkSnapshot {
+        NetworkSnapshot {
+            vpn_profiles: vec![VpnProfileSnapshot {
+                uuid: "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f".to_owned(),
+                id: "Office".to_owned(),
+                active,
+            }],
+            ..NetworkSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn vpn_row_click_activates_inactive_and_deactivates_active_profile() {
+        let op = |active| match vpn_toggle_action(&network(active), 1) {
+            Some(SystemAction::VpnConnection(action)) => Some(action.op),
+            _ => None,
+        };
+        assert_eq!(op(false), Some(VpnConnectionOp::Activate));
+        assert_eq!(op(true), Some(VpnConnectionOp::Deactivate));
+    }
+
+    #[test]
+    fn vpn_row_click_ignores_empty_slot_and_malformed_uuid() {
+        assert_eq!(vpn_toggle_action(&network(false), 2), None);
+        assert_eq!(vpn_toggle_action(&network(false), 0), None);
+        let mut bad = network(false);
+        bad.vpn_profiles[0].uuid = "not-a-uuid".to_owned();
+        assert_eq!(vpn_toggle_action(&bad, 1), None);
+    }
 }
 
 #[cfg(test)]
