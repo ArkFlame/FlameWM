@@ -55,3 +55,19 @@ Dock (not touched, owned by the translucency worker): `.dock-dot` radius 2px in 
 
 - Hover and focus consistency, and controls that do nothing: not exercised.
 - Goldens for `ui/` radius changes: not re-pinned (no radius commit landed).
+
+## Measured: `0de670a1` vs parent `7ac41256` (assistant OSD, assistant, archiver)
+
+Scope: `ui/assistant/osd.html` (links `../base/base.css`), `osd.css`, `assistant.css`, `archiver.css`; `--muted` removed locally.
+Harness: private Xvfb 1920x1080 per tree (`:121` head, `:124` parent), no WM, dbus session, two identical frames.
+OSD host run as `flamewm-assistant --osd` with stdin `listening`. Assistant run plain. Archiver run with a
+sample `.tar.gz` argument (earlier blank capture was a missing-argument usage error, not a render fault).
+Screenshots: `/tmp/claude-1000/osdshots/{parent,head-osd,head-r2}-{osd,assistant,archiver}.png`.
+
+- OSD: frame 1920x1080 both. Pixel diff 227 px, bbox (932,581)-(989,589) = the "Esc cancels" line only.
+  No layout shift, no focus ring, window size unchanged (260x140 WIDTH/HEIGHT). Muted text brightest pixel
+  `#9f9fa4` (parent, from `#a1a1a6`) -> `#acb1b8` (head, from `#aeb4bb`), anti-aliased. `base.css:3` defines `--muted:#aeb4bb`.
+- Assistant: 953 px differ, bbox (748,190)-(1008,919): secondary text rows only (subtitle, placeholder, footer). Not glyph-checked.
+- Archiver: 846 px differ, bbox (91,77)-(619,227): muted labels only. Window size and layout unchanged.
+- Verdict: colour-only change on muted text, no regression. No code fix made, nothing pushed except this note.
+- Not checked: hover/focus states, shell OSD (`ui/shell/osd.html`, volume/brightness, not touched by `0de670a1`).
