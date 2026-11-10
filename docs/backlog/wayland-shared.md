@@ -34,4 +34,19 @@ reachable inputs, differing edge case), **different** (structurally distinct), *
   - Visual check: `run-wl-dock1/shot.png` shows the Dock on the bottom edge with the xterm ending above it.
   - Harness flakes seen: some Wayland startups aborted (`Failed to initialize an event loop`), and some runs found no shell child within 12 s. Those runs were discarded; only completed measurements are reported above.
 
+- Step E runtime re-verify on final main `79aa37c7` (fast build; private Xvfb `:151` X11 and `:152` Wayland host, 1920x1080; one xterm maximized per run; taskbar on in every run). Harness copy: `/tmp/claude-1000/wt-dock2-run/run2.sh <x11|wl> <0|1>` with `POS=bottom|left|right|top AH=0|1` (not committed). Client rect, W x H (x,y):
+
+| Mode | X11 client | Δ X11 | Wayland client | Δ Wayland |
+|---|---|---|---|---|
+| Dock off (taskbar only) | 1914 x 1000 (-3,-33) | - | 1916 x 1001 (-2,-33) | - |
+| Dock bottom (taskbar + Dock) | 1914 x 942 (-3,-33) | h -58 | 1916 x 943 (-2,-33) | h -58 |
+| Dock left | 1856 x 1000 (-61,-33) | w -58 | 1858 x 1001 (-60,-33) | w -58 |
+| Dock right | 1856 x 1000 (-3,-33) | w -58 | 1858 x 1001 (-2,-33) | w -58 |
+| Dock top | 1914 x 942 (-3,-91) | h -58, y -58 | 1916 x 943 (-2,-91) | h -58, y -58 |
+| Dock bottom, auto-hide on | 1914 x 1000 (-3,-33) | 0 | 1916 x 1001 (-2,-33) | 0 |
+
+  - Result: every edge removes exactly 58 px (`dock_extent(32)`) in both sessions; auto-hide reserves nothing in both. No edge/mode differs by more than 1 px in its Dock delta, so no code change.
+  - Absolute differences (X11 client 2 px narrower and 1 px shorter, left x 1 px more negative) also appear with Dock off, so they are frame-decoration baseline, not Dock reserve. Not investigated further.
+  - Not run: the gate (no code change in this step), and any taskbar-off mode (no key used).
+
 Rows 4, 6b, 6c, 8, 12 are not moved; reasons are in the table. Row 8 (Grab state machine) is the largest remaining item.
