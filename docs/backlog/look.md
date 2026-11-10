@@ -37,9 +37,6 @@ Design decisions (radii outside 1.5px of a scale step, kept on purpose for large
 3. Two radius scales in `ui/base/tokens.css`: `--radius-*` (3/6/9/11) and `--r-*` (4/8/12). Choose one.
    Mapping that stays within 1.5px: 2, 2.5 -> radius-sm; 5, 7 -> radius-md; 10 -> radius-lg; 13 -> r-lg.
 
-Colour and token drift:
-4. `--muted` still differs in `ui/assistant/assistant.css` (`#d2d2d8`) and `ui/assistant/osd.css`
-   (`#a1a1a6`), `ui/archiver/archiver.css` (`#a1a1a6`) and showcase `ui/flamewm.css` (`#aeb9cc`). Unify once the
    assistant and archiver captures work. Deliberate: `ui/terminal/terminal.css` (`#8a8a8a`),
    `ui/explorer/explorer.css` (`#f1f2f3`).
 
