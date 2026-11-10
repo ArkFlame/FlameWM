@@ -68,6 +68,7 @@ mod tests {
     const EXPLORER_CSS: &str = include_str!("../../../ui/explorer/explorer.css");
     const DESKTOP_CSS: &str = include_str!("../../../ui/desktop/desktop.css");
     const MENU_CSS: &str = include_str!("../../../ui/shared/menu.css");
+    const BASE_CSS: &str = include_str!("../../../ui/base/base.css");
 
     #[test]
     fn detects_literals_outside_root_only() {
@@ -209,7 +210,11 @@ mod tests {
                 .unwrap_or("");
             let missing: Vec<&str> = PROJECTED
                 .into_iter()
-                .filter(|token| !root.contains(&format!("{token}:")))
+                .filter(|token| {
+                    // settings links ui/base/base.css, which declares the canonical --muted.
+                    let from_base = name == "settings" && BASE_CSS.contains(&format!("{token}:"));
+                    !root.contains(&format!("{token}:")) && !from_base
+                })
                 .collect();
             assert_eq!(missing, Vec::<&str>::new(), "{name}");
         }
