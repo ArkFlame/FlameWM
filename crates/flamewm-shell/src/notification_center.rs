@@ -18,6 +18,18 @@ pub const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 /// Window in which the opener release that follows an outside-press close is the same click.
 pub const CLOSE_LATCH_TTL: Duration = Duration::from_millis(300);
 
+/// True when a secondary-button release on a notification card dismisses it instead of invoking
+/// the body action. Primary and other buttons keep their existing behaviour.
+#[must_use]
+pub fn is_secondary_dismiss(action: &str, button: u32) -> bool {
+    action == DISMISS_ACTION
+        && flamewm_ui_x11::PointerButton::from_raw_x(button)
+            == flamewm_ui_x11::PointerButton::Secondary
+}
+
+/// Body action of a toast card; a primary release invokes `default` or dismisses.
+pub const DISMISS_ACTION: &str = "notification.dismiss";
+
 /// True when an outside-press release closes the open center. Matches the quick popups' rule.
 #[must_use]
 pub fn outside_press_closes(action: &str, inside: bool, open: bool) -> bool {
@@ -327,6 +339,15 @@ mod tests {
         assert_eq!(Command::parse("notification.center.group.0.mute"), None);
         assert_eq!(Command::parse("notification.center.bogus"), None);
         assert_eq!(Command::parse("start.toggle"), None);
+    }
+
+    #[test]
+    fn secondary_release_on_a_card_dismisses_and_primary_is_unchanged() {
+        assert!(is_secondary_dismiss(DISMISS_ACTION, 3));
+        assert!(!is_secondary_dismiss(DISMISS_ACTION, 1));
+        assert!(!is_secondary_dismiss(DISMISS_ACTION, 2));
+        assert!(!is_secondary_dismiss("notification.action.1", 3));
+        assert!(!is_secondary_dismiss(OPEN_ACTION, 3));
     }
 
     #[test]

@@ -218,6 +218,12 @@ impl NotificationHost {
         if let Some(notification) = self.visible.clone() {
             // Body click invokes `default` when the client sent one, else dismisses.
             let outcome = match event.action.action.as_str() {
+                // Secondary release dismisses the card, like the centre's dismiss control.
+                action
+                    if notification_center::is_secondary_dismiss(action, event.action.button) =>
+                {
+                    self.provider.dismiss(notification.id)
+                }
                 "notification.dismiss" if notification.default_action => self
                     .provider
                     .invoke_action(notification.id, notifications::DEFAULT_ACTION_KEY),
