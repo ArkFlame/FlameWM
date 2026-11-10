@@ -9,16 +9,16 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | meas-blur | perf | Full-frame CPU blur dominates the frame | `docs/backlog/measure.md:44`: blurs 77-83 ms of 83-93 ms batch | up to ~80 ms/frame (estimate) | L | open |
 | meas-settings | perf | Settings app startup outlier | `docs/backlog/measure.md:45`: 1774 / 1844 ms mapped / painted; cold after shadow cache 463 ms painted median (`measure.md:62-70`) | up to ~1.5 s per open (estimate) | M | open |
 | meas-terminal | perf | Terminal paints ~340 ms after map | `docs/backlog/measure.md:47`: 276 / 618 ms | up to ~340 ms per open (estimate) | M | open |
-| meas-heap | perf | Idle RSS: 40 MB heap/anon unattributed | `wayland-rss.md:350`; no heap profiler run | unknown until profiled | M | open |
-| wrss-scratch | perf | Drop scratch texture after backdrop capture | `wayland-rss.md:368`: -3.0 to -3.5 MB PSS, measured | below 5 MB bar | S | open |
-| wrss-gpu | perf | Re-measure idle RSS on a GPU host | `wayland-rss.md:377`: all numbers from llvmpipe | unknown | S | open |
+| meas-heap | perf | Idle RSS: 40 MB heap/anon unattributed | `wayland-rss.md (line unpinned)`; no heap profiler run | unknown until profiled | M | open |
+| wrss-scratch | perf | Drop scratch texture after backdrop capture | `wayland-rss.md (line unpinned)`: -3.0 to -3.5 MB PSS, measured | below 5 MB bar | S | open |
+| wrss-gpu | perf | Re-measure idle RSS on a GPU host | `wayland-rss.md (line unpinned)`: all numbers from llvmpipe | unknown | S | open |
 | meas-build | quality | `syn` and `x11rb-protocol` single-unit build cost | `docs/backlog/measure.md:43-50`: 50-110 s units | build time, gain unmeasured | M | open |
 | meas-sign | quality | Harness `measure.py` inverts signed `translate_coords` x/y | `docs/backlog/wayland-shared.md:56,71` | wrong measured frame origin | S | open |
 | meas-perf-blocked | quality | `perf record` blocked: `perf_event_paranoid=4` | `docs/backlog/measure.md:69` | no CPU profile of cold settings paint | S | open |
-| read-E1 | reliability | Icon-theme rollback result dropped (data-loss path) | `read.md:221`; pattern gone in `themes/import.rs` | would lose user icon theme | S | done e96156bc |
-| read-E2 | reliability | Removable-mount save and auto-mount failures silent | `read.md:222`; no `let _ =` hits in `removable_mounts.rs` | silent mount failure | S | done e96156bc |
-| read-E3 | reliability | Desktop settings sync `on_ready` error dropped | `read.md:223`; `desktop/src/main.rs:567` now binds `ready` | stale settings UI | S | done e96156bc |
-| read-P1 | reliability | `unreachable!()` on D-Bus string-array input | `read.md:201`; `control-dbus/src/lib.rs:482` now `from_item` with `?` | desktop/shell panic | S | done e96156bc |
+| read-E1 | reliability | Icon-theme rollback result dropped (data-loss path) | `read.md:36`; pattern gone in `themes/import.rs` | would lose user icon theme | S | done e96156bc |
+| read-E2 | reliability | Removable-mount save and auto-mount failures silent | `read.md:37`; no `let _ =` hits in `removable_mounts.rs` | silent mount failure | S | done e96156bc |
+| read-E3 | reliability | Desktop settings sync `on_ready` error dropped | `read.md:38`; `desktop/src/main.rs:567` now binds `ready` | stale settings UI | S | done e96156bc |
+| read-P1 | reliability | `unreachable!()` on D-Bus string-array input | `read.md:16`; `control-dbus/src/lib.rs:482` now `from_item` with `?` | desktop/shell panic | S | done e96156bc |
 | read-E4 | reliability | Icon submit error dropped when queue full | `desktop/src/projection.rs:418` `let _ = self.service.submit(` | missing icons, no log | S | open |
 | read-E5 | reliability | Empty `Err(_) => {}` arms in icon loader | `shell/src/icon_loader.rs:269,316,335` | unknown until read | S | open |
 | read-E6 | reliability | Lock session settings `connect().ok()` falls back silently | `lock/src/session.rs:36,79` | silent default settings | S | open |
@@ -63,17 +63,17 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-D2 | quality | Dead `runtime_document` | `ui-document/src/template.rs:94` | dead code | S | open |
 | read-D3 | quality | `icon_chain` used only by test | `integrations-linux/src/themes/mod.rs:132` | test-only API | S | open |
 | read-D4 | quality | `flush_settings` used only by test | `platform/src/host.rs:348` (confirm first) | possibly dead | S | open |
-| read-D5 | quality | Unused constants in glass, palette, recipes | `read.md:252` | dead code | S | open |
+| read-D5 | quality | Unused constants in glass, palette, recipes | `read.md:67` | dead code | S | open |
 | read-D6 | quality | Dead `set_ring_mask` (dock, other owner) | `render-x11/src/surface_controller/dock.rs:153` | dead code | S | open |
 | read-D7 | quality | Unused `titlebar_rect`, `SESSION_LOCK_INTERFACE` | `skin/src/recipes/window_chrome.rs:82`; `wm-wayland/src/lock_global.rs:13` | dead code | S | open |
-| read-U1 | quality | Settings accessor duplicated in 5 places | `read.md:279` | maintenance | M | open |
-| read-U2 | quality | `node_backdrop_clip` and `scale_rect` duplicated in render-x11 (covers U3) | `read.md:280-281`; render-x11 copies now re-export `flamewm-render-core::lower` (871b4d33) | maintenance | S | done (871b4d33) |
+| read-U1 | quality | Settings accessor duplicated in 5 places | `read.md:94` | maintenance | M | open |
+| read-U2 | quality | `node_backdrop_clip` and `scale_rect` duplicated in render-x11 (covers U3) | `read.md:95-281`; render-x11 copies now re-export `flamewm-render-core::lower` (871b4d33) | maintenance | S | done (871b4d33) |
 | dup-rect-test | quality | `fn rect(x,y,w,h) -> Rect` test helper copied in 5 render-x11 test modules | `render-x11/src/app/clip.rs`, `damage_plan.rs`, `render.rs`, `native/coverage.rs` tests; `app/primitives.rs` | test maintenance | S | done (4 copies in render-x11 tests; primitives.rs had none; added Rect::new in render-core) |
 | dup-wall-clock | quality | `wall_clock_delay_ms` duplicated in shell-core and reactor | `shell-core/src/clock.rs:40`; `reactor/src/lib.rs:337` (shell-core comment says it stays dependency-free) | needs dep-edge decision | S | open |
 | dup-build-rerun | quality | `rerun_tree` and `stage_tree` copied in desktop, settings and shell `build.rs` | `desktop/build.rs:391,456`; `settings/build.rs:92,103`; `shell/build.rs:102,124` | build-script duplication, no shared build crate | M | open |
 | dup-color-rgb | quality | `rgb` helper in terminal and explorer; `send_state` in x11-desktop and wm-x11; `runtime_image` in desktop and shell | `terminal/src/ui.rs:21`; `explorer/src/theme.rs:97`; `x11-desktop/src/lib.rs:217`; `wm-x11/src/lib.rs:290`; `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91` | maintenance, owner not checked | S | partial: terminal+explorer rgb done via UiColor::from_rgb; send_state, runtime_image blocked (different types or no shared owner) |
-| read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `read.md:282` | test maintenance | S | open |
-| read-SIZE | quality | 49 production files over 600 lines; 6 over 1000 | `read.md:258-271`; `desktop/src/widgets/mod.rs` 1307 | split by responsibility | L | open |
+| read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `read.md:97` | test maintenance | S | open |
+| read-SIZE | quality | 49 production files over 600 lines; 6 over 1000 | `read.md (line unpinned)-271`; `desktop/src/widgets/mod.rs` 1307 | split by responsibility | L | open |
 | read-GUARD | quality | Five pending `TODO(J..-PENDING)` guard warnings, 24-62 days old | `tools/architecture_guard.py:440,518,522,851,859` | governance debt | S | open |
 | wl-portal | feature | xdg-desktop-portal Screenshot and ScreenCast for Wayland. Landed: zwlr-screencopy full-output shm capture (`bf3af84a`) and Screenshot portal backend `flamewm-screenshot --portal` (`0eaf3888`). Open: ScreenCast; region/window capture on Wayland; Wayland branch of the portal and real xdg-desktop-portal routing unverified | `wm-wayland/src/screencopy.rs`; `screenshot/src/wayland.rs`; `WAYLAND_PLAN.md` item 2 | portal integration | L | partial |
 | wl-dmabuf-resume | reliability | Initial `zwp_linux_dmabuf_v1` offer landed (`294250da`); drm resume does not re-run `dmabuf::init`, so the global is not re-offered after resume | `WAYLAND_PLAN.md` item 8 (resume note) | no zwp_linux_dmabuf_v1 after resume (hardware path unproven) | S | open |

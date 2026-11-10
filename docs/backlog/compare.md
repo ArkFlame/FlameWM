@@ -6,7 +6,7 @@ Snapshot: origin/main 32f28041, 2026-11-09. Competitor source is read-only from 
 
 | Rank | Gap | Competitor evidence (Vela) | FlameWM evidence (origin/main) | Status | Fit / next step |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Power profile switch (UPower PowerProfiles) | `.vendor/vela-main/shell/src/systemstatus.cpp:54,59`; `settings/qml/pages/PowerPage.qml` | 0 hits for `power-profiles`, `PowerProfiles`, `power_profile` in `crates/**/*.rs` | absent | Small D-Bus client in `flamewm-integrations-linux` (reactor-owned bus), settings toggle, quick-controls tile. Multi-crate + UI, needs runtime check on a host with power-profiles-daemon. |
+| 1 | Power profile switch (UPower PowerProfiles) | `.vendor/vela-main/shell/src/systemstatus.cpp (line unpinned),59`; `settings/qml/pages/PowerPage.qml` | 0 hits for `power-profiles`, `PowerProfiles`, `power_profile` in `crates/**/*.rs` | absent | Small D-Bus client in `flamewm-integrations-linux` (reactor-owned bus), settings toggle, quick-controls tile. Multi-crate + UI, needs runtime check on a host with power-profiles-daemon. |
 | 2 | Quick settings sheet in one place (Wi-Fi, BT, power, brightness) | `shell/qml/`, `brightness/`, `bluetooth/` (FEATURES.md 1.2 L209-214) | `crates/flamewm-shell/src/quick_controls/host/run.rs` exists; NetworkManager hits 18 | partial | Extend existing quick controls rather than a new surface. |
 | 3 | Bluetooth pairing and in-shell prompts | `.vendor/vela-main/bluetooth/` (25 files) | 1 keyword hit under `crates/` | absent | Large: new daemon client, agent prompts. Separate plan. |
 | 4 | Polkit authentication agent | `.vendor/vela-main/polkit/` (17 files) | 0 hits | absent | Medium-large; security-sensitive, needs its own owner crate. |
