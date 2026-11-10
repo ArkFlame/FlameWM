@@ -78,3 +78,33 @@ Candidates checked against the code, none landed:
 - Skip blank runs: already done (`has_ink`). Skip zero-alpha colour: pixel-identical but rare, not measured.
 
 Next step: add per-phase counters (mask, blur, premultiply, server upload) to `text_shadow_image` and run 5 cold settings starts. Gate a code change only after that shows one phase at >= 15% of the 463 ms painted median.
+
+## Terminal sustained output per-frame cost (meas-terminal)
+
+Measurement only. No product code changed. Base: origin/main `0f70161e`, `flamewm-terminal` fast profile, own target `/run/media/linsaftw/SDD/gate-targets/termframe-base`. Private `Xvfb :220` 1920x1080x24, no WM. Terminal run as `flamewm-terminal -e sh -c '<workload>'`; the terminal exits when its tab's child exits. Harness: `/tmp/claude-1000/termframe-bench.sh <bin> <label> <runs>` (not committed). Host: 12 cores, shared; load1 17 to 27 during runs, so timings are noisy.
+
+| Workload | Runs | Wall (mean, sd) | Throughput | CPU% of terminal (mean, range) | VmHWM (kB) |
+| --- | --- | --- | --- | --- | --- |
+| `yes \| head -c 20000000` | 5 | 9.85 s, sd 0.43 | 2.0 MB/s, about 1.0 M lines/s | 119.6 (114.2 to 126.2) | 79 k to 89 k |
+| `seq 1 200000` | 5 | 0.53 s (mostly startup) | not meaningful | 91 (85 to 98) | 43 k to 45 k |
+
+Profiled run (`FLAMEWM_PROFILE=1`, one run, `yes \| head -c 60000000`, 9.6 s wake time; profiler adds overhead):
+
+| Span | Count | Total wall | Share of wake | Note |
+| --- | --- | --- | --- | --- |
+| `terminal.wake` | 149 | 9609 ms | 100% | one dispatch per pacer wake |
+| `terminal.parse` (`session.rs:56`) | 1 905 562 | 7464 ms | 78% | VT parser + `Screen::print`/scroll; 1.9 M feeds, about 31 bytes each |
+| `render.draw` | 72 | 405 ms | 4.2% | 5.6 ms per frame avg, max 10.5 ms |
+| `render.present` | 72 | 411 ms | 4.3% | includes draw |
+| `terminal.project` | 149 | 29 ms | 0.3% | row dedupe already in `ui.rs` |
+| `render.paint` / `shape` / `layout` | 72 each | 13 / 2 / 2 ms | <0.2% | |
+
+Frames: the profiler shows 72 presented frames in 9.6 s, about 7.5 frames/s, about 83 ms of render per second. Frames per second without the profiler were not counted (no counter in the unprofiled build). Allocations per frame: not measured (no heaptrack, ltrace or counting allocator; `perf` blocked by `perf_event_paranoid=4`).
+
+Findings:
+- The render path is about 5% of sustained-output CPU (draw + present). No render-path change can beat the 5% bar.
+- The largest bucket is `terminal.parse` at 78%. Per-byte parser and screen print cost, about 120 ns/byte, is the top hot spot. Without a CPU profile, no single line is proven to dominate, so no code change was made.
+- Per-event overhead: the reader sends one `SessionEvent::Output` per PTY read, which averages about 31 bytes here, so the UI handles about 1.9 M events per 60 MB. The wake self time (2.1 s of 9.6 s) includes channel and event dispatch. Coalescing consecutive `Output` bytes per tab before `feed` is a candidate; it is output-identical because the parser is streaming, but unmeasured.
+- Frame coalescing already exists: the pacer (`session.rs:107`) limits wakes to one per `FRAME`, and `OUTPUT_BUDGET` (256 KB) bounds each dispatch.
+
+Next step: `perf` access or a sampling profiler build for `terminal.parse`, then measure the event-coalescing candidate with 5 runs before and after.
