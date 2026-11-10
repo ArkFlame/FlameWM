@@ -700,12 +700,14 @@ mod tests {
     /// Update only for an intended settings page change.
     /// Re-pinned 0xdf93_9260_dd67_2338 -> 0xc575_3a91_ac46_57f8 for the --muted unification: settings.css
     /// text colour #aeb9cc -> #aeb4bb, now from ui/base/base.css. Byte count unchanged.
+    /// Re-pinned 827_242 / 0xc575_3a91_ac46_57f8 -> 828_052 / 0x4784_cecd_88bd_f6ea for the intended
+    /// settings slider-track focus ring (`.slider-track:focus-visible` in ui/base/base.css).
     #[test]
     fn settings_hotkeys_document_is_unchanged_by_utility_migration() {
         let page = ui_dir().join("settings.html");
         assert_eq!(
             compiled_page_digest(&page, true),
-            (827_242, 0xc575_3a91_ac46_57f8)
+            (828_052, 0x4784_cecd_88bd_f6ea)
         );
     }
 

@@ -125,5 +125,10 @@ class FocusVisibleCoverageTests(unittest.TestCase):
             guard.find_focus_gaps(root, "ui/archiver/archiver.html", ["ui/archiver/archiver.css"]), []
         )
 
+    def test_settings_document_has_no_focus_gaps(self):
+        # Regression: slider-track carries data-action (Tab-reachable) and needed a :focus-visible ring.
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual(guard.find_focus_gaps(root, "ui/settings.html", ["ui/settings.css"]), [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ DOCUMENTS = {
 # Documents checked for keyboard focus coverage only (no document-call or action mapping yet).
 FOCUS_DOCUMENTS = {
     "ui/archiver/archiver.html": ["ui/archiver/archiver.css"],
+    "ui/settings.html": ["ui/settings.css"],
 }
 
 DOCUMENT_OPS = (
