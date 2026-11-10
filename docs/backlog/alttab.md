@@ -162,3 +162,9 @@ Open unknowns: scale cost on the X11 path, composite pixmap server memory, shell
 - Not measured: the maximum single event-loop turn with capture (no per-turn instrumentation; release build not
   timed); occluded windows (the card does not cover the test windows; an overlapped window would return cover
   pixels); content damage outside lingering windows (the existing damage watch only covers lingering clients).
+
+## 8. Unchanged thumbnail references (slice 5)
+
+`SwitcherThumb` carries a `generation`. The X11 WM keeps a per-window ledger of pixel hashes; an unchanged preview is sent as generation only (no `rgba`). A preview that changed gets a new generation and its pixels. The shell caches pixels by generation and resolves references from that cache, pruning generations the latest snapshot does not name.
+
+Verified: unit and wire round-trip tests, scoped gate `all=0`. Not verified: bytes per Tab press on Xvfb and event-loop turn timing (no key-injection tool was available).
