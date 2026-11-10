@@ -32,11 +32,11 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | cmp-a11y | feature | Magnifier, colour filters (sticky keys partly: `26020113`) | `cmp-5` | absent | L | open |
 | cmp-alttab | feature | Alt+Tab live previews | `cmp-6`; no preview capture found | unverified | L | open |
 | cmp-volume | feature | Per-app volume wheel on taskbar button | `cmp-7`; `integrations-linux/src/pulse.rs:180` backend exists | partial | S | open |
-| read-P4 | quality | `unreachable!()` in MPRIS (provably unreachable) | `integrations-linux/src/mpris.rs:575` | cosmetic | S | open |
-| read-P5 | quality | `pub` test oracle with `expect` in production file | `control-dbus/src/mutation_queue.rs:196` | limited | S | open |
+| read-P4 | quality | `unreachable!()` in MPRIS (provably unreachable) | `integrations-linux/src/mpris.rs:575` | cosmetic | S | won't-fix: let-else rewrite does not reduce code; the early return already guarantees both Options |
+| read-P5 | quality | `pub` test oracle with `expect` in production file | `control-dbus/src/mutation_queue.rs:196` | limited | S | done d8dfa39e (oracle under cfg(test)) |
 | read-P6 | quality | `expect` on thread spawn and socket pair in icon paths | `integrations-linux/src/icon_service.rs:261,617`; `shell/src/icon_loader.rs` | startup only | M | open |
-| read-K1 | quality | Reads undefined setting key `launchFeedbackAnimation` | `shell/src/launch_feedback.rs:328`; no row in `platform/src/settings/stable.rs` | flag cannot be enabled | S | open |
-| read-D1 | quality | Dead `registered_items` | `tray/src/watcher.rs:114` | dead code | S | open |
+| read-K1 | quality | Reads undefined setting key `launchFeedbackAnimation` | `shell/src/launch_feedback.rs:328`; no row in `platform/src/settings/stable.rs` | flag cannot be enabled | S | done d8dfa39e (dead read removed) |
+| read-D1 | quality | Dead `registered_items` | `tray/src/watcher.rs:114` | dead code | S | done d8dfa39e (dead accessor deleted) |
 | read-D2 | quality | Dead `runtime_document` | `ui-document/src/template.rs:94` | dead code | S | open |
 | read-D3 | quality | `icon_chain` used only by test | `integrations-linux/src/themes/mod.rs:132` | test-only API | S | open |
 | read-D4 | quality | `flush_settings` used only by test | `platform/src/host.rs:348` (confirm first) | possibly dead | S | open |
