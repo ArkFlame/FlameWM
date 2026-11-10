@@ -74,6 +74,6 @@ Every item needs `./scripts/check` (build and native checks) and `./scripts/veri
 
 ## Not checked in this plan
 
-- The D-Bus notification server is confirmed (checked 2026-11-09): `crates/flamewm-integrations-linux/src/notifications.rs:431` answers `GetCapabilities` and `:450` answers `Notify`. P2 step 1 is resolved. The DND toggle still has no UI caller (`set_dnd` at `notifications.rs:178` is used only in tests), so P2 step 2 remains open.
+- The D-Bus notification server is confirmed (checked 2026-11-09): `crates/flamewm-integrations-linux/src/notifications.rs:431` answers `GetCapabilities` and `:450` answers `Notify`. P2 step 1 is resolved. The DND toggle is wired end to end (checked 2026-11-09): `set_dnd` at `notifications.rs:178` is called from `crates/flamewm-shell/src/main.rs` (`Command::ToggleDnd`), and the UI button is `ui/shell/notification-center.html` (`notification.center.dnd`). P2 step 2 is resolved.
 - Per-surface accent consumption is not proven. P1 starts with that audit.
 - No release build was measured this session. All deltas are `unmeasured`.

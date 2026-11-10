@@ -23,6 +23,7 @@ pub mod notification_history;
 pub mod notifications;
 pub mod portal_file_chooser;
 pub mod power;
+pub mod power_profiles;
 #[cfg(feature = "pulse-audio")]
 pub mod pulse;
 pub mod removable_mounts;
@@ -42,6 +43,7 @@ pub use network_manager::{
 pub use network_slot::NetworkManagerSlot;
 pub use portal_file_chooser::PortalFileChooser;
 pub use power::PowerProvider;
+pub use power_profiles::{PowerProfile, PowerProfilesProvider, PowerProfilesSnapshot};
 
 use flamewm_api::FlameResult;
 use flamewm_api::system::{
