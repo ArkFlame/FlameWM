@@ -183,4 +183,17 @@ Not background-class (user-initiated or latency-sensitive, left alone): explorer
 
 Priority syscalls: nice only (existing helper). `SCHED_IDLE`/`SCHED_BATCH` and `IOPRIO_CLASS_IDLE` need raw syscalls; `unsafe_code = forbid` blocks them, so they are not applied. Child processes inherit the nice value of the spawning thread; none of the listed children were measured for this.
 
-Measurement: not run in this change. The foreground paint-under-CPU-hog A/B (7 runs) was not executed, so no latency gain is claimed. Verdict: UNVERIFIED for benefit; change kept only as a scoped extension of the existing helper.
+Measurement (run after landing f23fe81b): A = origin/main f23fe81b (both explorer calls lowered); B = scratch build with the two `lower_current_thread` calls removed (not committed). Private Xvfb (`-noreset`), explorer opened on a directory of 300 PNG 512x512 files, `scripts`-style probe (`/tmp` harness, not committed): map and first-paint wall time, plus scroll latency = median over 10 wheel notches (XTEST) from input to the first changed window pixel. Interleaved A,B,A,B... 7 pairs per batch after one discarded warm-up. Host: 12 cores, load average 11-31 during runs (shared machine).
+
+| condition | build | map med (range) ms | paint med (range) ms | scroll med (range) ms |
+|---|---|---|---|---|
+| idle, 7 pairs | A | 39.6 (33.4-51.8) | 66.6 (54.8-86.4) | 43.7 (36.8-51.5) |
+| idle, 7 pairs | B | 40.7 (33.5-55.4) | 65.5 (56.2-88.5) | 44.8 (37.8-49.7) |
+| stress-ng --cpu 12, batch 1 | A | 155.0 (131.6-302.1) | 399.5 (252.0-572.2) | 248.5 (174.0-317.7) |
+| stress-ng --cpu 12, batch 1 | B | 219.1 (119.3-329.6) | 476.6 (206.8-671.4) | 207.9 (153.0-239.0) |
+| stress-ng --cpu 12, batch 2 | A | 285.7 (138.5-389.6) | 513.5 (322.0-1086.3) | 192.9 (168.4-277.2) |
+| stress-ng --cpu 12, batch 2 | B | 186.2 (162.2-476.5) | 418.5 (363.1-1022.6) | 258.9 (121.7-286.3) |
+| stress-ng --cpu 12, pooled 14 pairs | A | 192.1 (131.6-389.6) | 405.4 (252.0-1086.3) | 204.4 (168.4-317.7) |
+| stress-ng --cpu 12, pooled 14 pairs | B | 194.6 (119.3-476.5) | 452.3 (206.8-1022.6) | 234.9 (121.7-286.3) |
+
+Reading: idle shows no difference (within 3%). Under contention the pooled medians favour the nice build by about 10% on paint and scroll, but the sign flips between batches (batch 1 and 2 disagree on map and scroll), so the gain is inside the noise. No regression of 5% or more is reproduced. Verdict: measured, no reliable gain. The nice-10 calls are kept (no revert); the benefit claim stays unproven.
