@@ -1,3 +1,4 @@
+pub mod app_volume;
 pub mod drag;
 pub mod icon_geometry;
 

@@ -94,6 +94,27 @@ impl ShellLoop {
             return Ok(());
         }
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown) {
+            if let Some(slot) = slot_of(action, "task.slot.") {
+                // Per-app volume: one notch over a task button steps that app's playback stream.
+                let up = button == PointerButton::WheelUp;
+                let cap = self.audio_settings.max_percent();
+                let snapshot = self.shell.snapshot();
+                let request = self
+                    .shell
+                    .task_target_for_slot_on_output(slot, &output)
+                    .and_then(|target| {
+                        flamewm_shell::taskbar::tasks::app_volume::app_volume_request(
+                            &snapshot.system,
+                            target.app_id.0.as_str(),
+                            cap,
+                            up,
+                        )
+                    });
+                if let Some(request) = request {
+                    self.submit(request);
+                }
+                return Ok(());
+            }
             // One step per wheel tick: the node-targeted event is delivered once per X tick.
             // The request is enqueued on the control dispatcher; the OSD follows the snapshot.
             if action == TRAY_VOLUME_ACTION {
