@@ -58,3 +58,21 @@ Build-time items (lower priority, gain not measured): `syn` and `x11rb-protocol`
 - Idle wakeup counts: owned by the other worker (`docs/PERF_IDLE.md`, not on main yet).
 - Competitor comparison: `docs/competitors/` marks footprint numbers as `unmeasured`, so no comparison is possible.
 - Idle and startup numbers are from a fast-profile build on a shared 12-core machine, so they are not release-grade.
+
+## Cold settings paint after text-shadow cache (819a2284)
+
+Baseline only. No product code changed. Binary: `/run/media/linsaftw/SDD/gate-targets/shadow-fast/fast/flamewm-settings` (prebuilt by the cache worker, commit not re-verified). Load average during runs: 13 to 19 on 12 cores.
+
+| Metric | Value | Command |
+|---|---|---|
+| Settings startup, 5 timed runs + 1 warmup | mapped median 451.7 ms, painted median 463.0 ms; runs 419.7 to 486.6 ms; 0 failed | `scripts/perf/startup.sh --bin-dir <above> --runs 5 --warmups 1 settings` |
+| Settings startup, 3 runs under `perf record` | not measured | `perf` blocked: `perf_event_paranoid=4`, "Failure to open any events" |
+
+Cold-path breakdown (blur ~322 ms over 1186 misses, Xft glyph prefetch 110 to 290 ms) is the cache worker's timing-counter evidence, not re-measured here. The 1186 figure matches the 4 MiB eviction run in `text_shadow_cache.rs` docs, so the miss count on the 16 MiB cap is unverified.
+
+Candidates checked against the code, none landed:
+- Share one blur across colours (key without colour): not pixel-identical. The blur runs on RGBA, so the alpha quantisation `(coverage * a + 127) / 255` and per-channel unpremultiply round differently per colour.
+- Dedupe glyph prefetch: already done. `xft/backend_mask.rs` `prefetch_text_masks` skips cached masks and uses a `seen` set keyed by (family, text, size, weight, pad).
+- Skip blank runs: already done (`has_ink`). Skip zero-alpha colour: pixel-identical but rare, not measured.
+
+Next step: add per-phase counters (mask, blur, premultiply, server upload) to `text_shadow_image` and run 5 cold settings starts. Gate a code change only after that shows one phase at >= 15% of the 463 ms painted median.
