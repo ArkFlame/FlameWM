@@ -5,6 +5,7 @@ mod reply;
 mod rules;
 #[cfg(test)]
 mod tests;
+pub mod vpn;
 
 use actions::*;
 use reply::*;
