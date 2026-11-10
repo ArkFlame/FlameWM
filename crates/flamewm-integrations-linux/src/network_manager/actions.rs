@@ -153,6 +153,11 @@ impl NetworkManagerProvider {
                     let message = vpn::get_connection_by_uuid_message(action.uuid.as_str())?;
                     self.queue(message, PendingRequest::VpnLookup)
                 }
+                flamewm_api::system::VpnConnectionOp::Deactivate => {
+                    let message = vpn::active_connections_message()?;
+                    let uuid = action.uuid.as_str().to_owned();
+                    self.queue(message, PendingRequest::VpnActiveList { uuid })
+                }
             },
             SystemAction::Scan => {
                 let Some(_) = self.controller.request_scan()? else {
@@ -697,6 +702,30 @@ impl NetworkManagerProvider {
         let serial = self.pump.send(message)?;
         self.pending.insert(serial, request);
         Ok(())
+    }
+
+    /// Probes the next candidate active connection for a VPN deactivation. Fails when none is left,
+    /// so an unknown UUID is an error, not a silent no-op.
+    pub(super) fn probe_vpn_active(
+        &mut self,
+        uuid: String,
+        mut candidates: Vec<String>,
+    ) -> FlameResult<()> {
+        if candidates.is_empty() {
+            return Err(FlameError::unsupported(
+                "no active NetworkManager VPN connection with that uuid",
+            ));
+        }
+        let path = candidates.remove(0);
+        let message = vpn::active_uuid_message(&path)?;
+        self.queue(
+            message,
+            PendingRequest::VpnActiveUuid {
+                uuid,
+                path,
+                remaining: candidates,
+            },
+        )
     }
 }
 

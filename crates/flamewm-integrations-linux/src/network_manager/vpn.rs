@@ -8,7 +8,7 @@ use dbus::arg::messageitem::MessageItem;
 use dbus::{Message, MessageType};
 use flamewm_api::{FlameError, FlameResult};
 
-use super::NETWORK_MANAGER_SERVICE;
+use super::{NETWORK_MANAGER_SERVICE, PROPERTIES_INTERFACE};
 
 const SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
 const SETTINGS_INTERFACE: &str = "org.freedesktop.NetworkManager.Settings";
@@ -103,6 +103,105 @@ pub fn parse_activate_vpn_reply(reply: &Message) -> FlameResult<String> {
         return Err(FlameError::invalid("network manager activate reply"));
     }
     single_object_path(&reply.get_items(), "network manager activate reply")
+}
+
+const ACTIVE_CONNECTIONS: &str = "ActiveConnections";
+const ACTIVE_CONNECTION_PREFIX: &str = "/org/freedesktop/NetworkManager/ActiveConnection/";
+const ACTIVE_CONNECTION_INTERFACE: &str = "org.freedesktop.NetworkManager.Connection.Active";
+const DEACTIVATE_CONNECTION: &str = "DeactivateConnection";
+const PROPERTIES_GET: &str = "Get";
+
+fn property_get_message(path: &str, interface: &str, name: &str) -> FlameResult<Message> {
+    let mut message = Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        path,
+        PROPERTIES_INTERFACE,
+        PROPERTIES_GET,
+    )
+    .map_err(|error| FlameError::invalid(format!("network manager message: {error}")))?;
+    message.append_items(&[
+        MessageItem::Str(interface.to_owned()),
+        MessageItem::Str(name.to_owned()),
+    ]);
+    Ok(message)
+}
+
+fn active_connection_path(path: &str) -> FlameResult<()> {
+    if path.starts_with(ACTIVE_CONNECTION_PREFIX) {
+        Ok(())
+    } else {
+        Err(FlameError::invalid(
+            "network manager active connection path",
+        ))
+    }
+}
+
+/// `Properties.Get(root, ActiveConnections)`: the object paths of every active connection.
+pub fn active_connections_message() -> FlameResult<Message> {
+    property_get_message(ROOT_PATH, ROOT_INTERFACE, ACTIVE_CONNECTIONS)
+}
+
+/// `Properties.Get(active, Connection.Active, Uuid)` for one candidate active connection.
+pub fn active_uuid_message(active_path: &str) -> FlameResult<Message> {
+    active_connection_path(active_path)?;
+    property_get_message(active_path, ACTIVE_CONNECTION_INTERFACE, "Uuid")
+}
+
+/// `DeactivateConnection(o active_connection)` on the root object. Takes an active-connection path
+/// found by the UUID probe; rejects anything outside the active-connection namespace.
+pub fn deactivate_vpn_message(active_path: &str) -> FlameResult<Message> {
+    active_connection_path(active_path)?;
+    let path = dbus::Path::new(active_path.to_owned()).map_err(|error| {
+        FlameError::invalid(format!("network manager active connection path: {error}"))
+    })?;
+    let mut message = Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        ROOT_PATH,
+        ROOT_INTERFACE,
+        DEACTIVATE_CONNECTION,
+    )
+    .map_err(|error| FlameError::invalid(format!("network manager message: {error}")))?;
+    message.append_items(&[MessageItem::ObjectPath(path)]);
+    Ok(message)
+}
+
+/// `DeactivateConnection` reply: success is an empty method return. Pure.
+pub fn parse_deactivate_vpn_reply(reply: &Message) -> FlameResult<()> {
+    if reply.msg_type() != MessageType::MethodReturn || !reply.get_items().is_empty() {
+        return Err(FlameError::invalid("network manager deactivate reply"));
+    }
+    Ok(())
+}
+
+/// Active-connection paths from an `ActiveConnections` property reply (`v` holding `ao`). Reactor
+/// helper over reply items.
+pub(super) fn active_paths_from_items(
+    items: &[MessageItem],
+    context: &str,
+) -> FlameResult<Vec<String>> {
+    let [MessageItem::Variant(inner)] = items else {
+        return Err(FlameError::invalid(context));
+    };
+    let MessageItem::Array(list) = inner.as_ref() else {
+        return Err(FlameError::invalid(context));
+    };
+    list.iter()
+        .map(|item| match item {
+            MessageItem::ObjectPath(path) => Ok(path.to_string()),
+            _ => Err(FlameError::invalid(context)),
+        })
+        .collect()
+}
+
+/// UUID string from a `Connection.Active.Uuid` property reply (`v` holding `s`). Reactor helper.
+pub(super) fn active_uuid_from_items(items: &[MessageItem], context: &str) -> FlameResult<String> {
+    match items {
+        [MessageItem::Variant(inner)] => match inner.as_ref() {
+            MessageItem::Str(uuid) => Ok(uuid.clone()),
+            _ => Err(FlameError::invalid(context)),
+        },
+        _ => Err(FlameError::invalid(context)),
+    }
 }
 
 #[cfg(test)]
@@ -250,5 +349,101 @@ mod tests {
         let mut wrong = call.method_return();
         wrong.append_items(&[MessageItem::Str(PROFILE_PATH.to_owned())]);
         assert!(parse_connection_by_uuid_reply(&wrong).is_err());
+    }
+
+    fn variant(item: MessageItem) -> MessageItem {
+        MessageItem::Variant(Box::new(item))
+    }
+
+    #[test]
+    fn deactivate_message_targets_root_with_active_path() {
+        let message = deactivate_vpn_message(ACTIVE_PATH).expect("active path");
+        assert_eq!(
+            message.destination().as_deref(),
+            Some(NETWORK_MANAGER_SERVICE)
+        );
+        assert_eq!(message.path().as_deref(), Some(ROOT_PATH));
+        assert_eq!(message.interface().as_deref(), Some(ROOT_INTERFACE));
+        assert_eq!(message.member().as_deref(), Some(DEACTIVATE_CONNECTION));
+        assert_eq!(
+            message.get_items(),
+            vec![MessageItem::ObjectPath(
+                Path::new(ACTIVE_PATH.to_owned()).expect("path")
+            )]
+        );
+    }
+
+    #[test]
+    fn deactivate_message_rejects_profile_root_uuid_and_empty_paths() {
+        assert!(deactivate_vpn_message(PROFILE_PATH).is_err());
+        assert!(deactivate_vpn_message(ROOT_PATH).is_err());
+        assert!(deactivate_vpn_message(UUID).is_err());
+        assert!(deactivate_vpn_message("").is_err());
+    }
+
+    #[test]
+    fn active_lookup_messages_read_root_list_then_candidate_uuid() {
+        let list = active_connections_message().expect("root list");
+        assert_eq!(list.path().as_deref(), Some(ROOT_PATH));
+        assert_eq!(list.interface().as_deref(), Some(PROPERTIES_INTERFACE));
+        assert_eq!(list.member().as_deref(), Some(PROPERTIES_GET));
+        assert_eq!(
+            list.get_items(),
+            vec![
+                MessageItem::Str(ROOT_INTERFACE.to_owned()),
+                MessageItem::Str(ACTIVE_CONNECTIONS.to_owned()),
+            ]
+        );
+        let uuid = active_uuid_message(ACTIVE_PATH).expect("active path");
+        assert_eq!(uuid.path().as_deref(), Some(ACTIVE_PATH));
+        assert_eq!(
+            uuid.get_items(),
+            vec![
+                MessageItem::Str(ACTIVE_CONNECTION_INTERFACE.to_owned()),
+                MessageItem::Str("Uuid".to_owned()),
+            ]
+        );
+        assert!(active_uuid_message(PROFILE_PATH).is_err());
+    }
+
+    #[test]
+    fn active_list_reader_takes_variant_array_of_active_paths() {
+        let paths = MessageItem::new_array(vec![MessageItem::ObjectPath(
+            Path::new(ACTIVE_PATH.to_owned()).expect("path"),
+        )])
+        .expect("non-empty array");
+        let reply = [variant(paths)];
+        assert_eq!(
+            active_paths_from_items(&reply, "lookup").expect("paths"),
+            vec![ACTIVE_PATH.to_owned()]
+        );
+        assert!(active_paths_from_items(&[], "lookup").is_err());
+        let not_array = [variant(MessageItem::Str(ACTIVE_PATH.to_owned()))];
+        assert!(active_paths_from_items(&not_array, "lookup").is_err());
+    }
+
+    #[test]
+    fn active_uuid_reader_takes_variant_string_only() {
+        let reply = [variant(MessageItem::Str(UUID.to_owned()))];
+        assert_eq!(
+            active_uuid_from_items(&reply, "uuid").expect("string"),
+            UUID
+        );
+        assert!(active_uuid_from_items(&[MessageItem::Str(UUID.to_owned())], "uuid").is_err());
+        assert!(active_uuid_from_items(&[], "uuid").is_err());
+    }
+
+    #[test]
+    fn deactivate_reply_parser_accepts_empty_return_only() {
+        let mut call = deactivate_vpn_message(ACTIVE_PATH).expect("active path");
+        call.set_serial(1);
+        assert!(parse_deactivate_vpn_reply(&call.method_return()).is_ok());
+        let mut wrong = call.method_return();
+        wrong.append_items(&[MessageItem::Str(ACTIVE_PATH.to_owned())]);
+        assert!(parse_deactivate_vpn_reply(&wrong).is_err());
+        let name =
+            ErrorName::new("org.freedesktop.NetworkManager.UnknownConnection").expect("error name");
+        let text = CString::new("not active").expect("cstring");
+        assert!(parse_deactivate_vpn_reply(&call.error(&name, &text)).is_err());
     }
 }

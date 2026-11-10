@@ -589,9 +589,14 @@ impl NetworkManagerProvider {
                     let _ = self.controller.complete_scan(generation);
                     return Ok(());
                 }
-                PendingRequest::Action
-                | PendingRequest::VpnLookup
-                | PendingRequest::RegisterSecretAgent => return Ok(()),
+                PendingRequest::VpnLookup
+                | PendingRequest::VpnAction
+                | PendingRequest::VpnActiveList { .. }
+                | PendingRequest::VpnActiveUuid { .. } => {
+                    eprintln!("flamewm: NetworkManager VPN request failed: {items:?}");
+                    return Ok(());
+                }
+                PendingRequest::Action | PendingRequest::RegisterSecretAgent => return Ok(()),
                 PendingRequest::ActivateConnection { attempt }
                 | PendingRequest::AddAndActivateSecure { attempt }
                 | PendingRequest::SavedSettings { attempt, .. }
@@ -618,7 +623,29 @@ impl NetworkManagerProvider {
                 let profile =
                     vpn::single_object_path(&items, "network manager connection lookup reply")?;
                 let message = vpn::activate_vpn_message(&profile)?;
-                self.queue(message, PendingRequest::Action)
+                self.queue(message, PendingRequest::VpnAction)
+            }
+            PendingRequest::VpnAction => Ok(()),
+            PendingRequest::VpnActiveList { uuid } => {
+                let paths = vpn::active_paths_from_items(
+                    &items,
+                    "network manager active connections reply",
+                )?;
+                self.probe_vpn_active(uuid, paths)
+            }
+            PendingRequest::VpnActiveUuid {
+                uuid,
+                path,
+                remaining,
+            } => {
+                let found =
+                    vpn::active_uuid_from_items(&items, "network manager active uuid reply")?;
+                if found == uuid {
+                    let message = vpn::deactivate_vpn_message(&path)?;
+                    self.queue(message, PendingRequest::VpnAction)
+                } else {
+                    self.probe_vpn_active(uuid, remaining)
+                }
             }
             PendingRequest::AddMatch
             | PendingRequest::Action

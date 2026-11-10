@@ -1340,11 +1340,20 @@ fn vpn_connection_action_round_trips_and_rejects_malformed_input() {
             WireValue::U64(9),
         ]
     );
+    let deactivate = ControlRequest::SystemAction {
+        action: SystemAction::VpnConnection(VpnConnectionAction {
+            op: VpnConnectionOp::Deactivate,
+            uuid: VpnConnectionUuid::new(UUID).expect("valid uuid"),
+        }),
+        expected_revision: 10,
+    };
+    let call = assert_request_round_trip(&deactivate);
+    assert_eq!(call.args[0], WireValue::String("deactivate".to_owned()));
     let bad_op = WireCall::new(
         IFACE_SYSTEM,
         "VpnConnection",
         vec![
-            WireValue::String("deactivate".to_owned()),
+            WireValue::String("bogus".to_owned()),
             WireValue::String(UUID.to_owned()),
             WireValue::U64(9),
         ],

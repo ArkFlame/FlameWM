@@ -137,6 +137,18 @@ enum PendingRequest {
     Action,
     /// `GetConnectionByUuid` for a VPN activation; its reply queues the `ActivateConnection`.
     VpnLookup,
+    /// VPN `ActivateConnection` or `DeactivateConnection`; error replies are logged, not dropped.
+    VpnAction,
+    /// Root `ActiveConnections` for a VPN deactivation; its reply starts the per-path UUID probe.
+    VpnActiveList {
+        uuid: String,
+    },
+    /// `Connection.Active.Uuid` of candidate `path`; `remaining` holds the paths not yet probed.
+    VpnActiveUuid {
+        uuid: String,
+        path: String,
+        remaining: Vec<String>,
+    },
     ActivateConnection {
         attempt: u64,
     },

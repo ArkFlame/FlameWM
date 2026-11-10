@@ -184,6 +184,7 @@ pub(crate) fn system_action_request(
             expect_arity(call, 3)?;
             let op = match required_string(&call.args[0], "op")? {
                 "activate" => VpnConnectionOp::Activate,
+                "deactivate" => VpnConnectionOp::Deactivate,
                 _ => return Err(invalid("unknown vpn connection operation")),
             };
             let uuid = VpnConnectionUuid::new(required_string(&call.args[1], "uuid")?)
@@ -334,6 +335,7 @@ pub(crate) fn system_action_call(action: &SystemAction, expected_revision: u64) 
         SystemAction::VpnConnection(action) => {
             let op = match action.op {
                 VpnConnectionOp::Activate => "activate",
+                VpnConnectionOp::Deactivate => "deactivate",
             };
             (
                 "VpnConnection",

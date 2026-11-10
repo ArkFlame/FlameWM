@@ -111,7 +111,10 @@ impl Service {
             | SystemAction::SubmitNetworkSecret { .. }
             | SystemAction::CancelNetworkSecret { .. }
             | SystemAction::Disconnect
-            | SystemAction::Scan => network_action(&network_for_actions, action, &snapshot),
+            | SystemAction::Scan
+            | SystemAction::VpnConnection(_) => {
+                network_action(&network_for_actions, action, &snapshot)
+            }
             SystemAction::BluetoothDevice(action) => {
                 bluetooth_for_actions.borrow().perform_action(&action)
             }

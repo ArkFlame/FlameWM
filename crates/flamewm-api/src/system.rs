@@ -451,10 +451,11 @@ impl VpnConnectionUuid {
     }
 }
 
-/// One VPN profile operation. Only `Activate` exists; deactivate is a later slice.
+/// One VPN operation: activate the profile, or deactivate its active connection, both selected by UUID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VpnConnectionOp {
     Activate,
+    Deactivate,
 }
 
 /// VPN profile write, selected by the profile's UUID.
