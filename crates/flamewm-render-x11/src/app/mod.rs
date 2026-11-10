@@ -293,6 +293,8 @@ pub(crate) struct X11App {
     pub(crate) backdrop_deadline: Option<std::time::Instant>,
     /// Reused ARGB upload target for text shadows: (pixmap, capacity width, capacity height, bytes).
     pub(crate) shadow_pixmap: Option<(Pixmap, u32, u32, usize)>,
+    /// Finished premultiplied text-shadow images, byte-bounded LRU (see `text_shadow_cache`).
+    pub(crate) shadow_images: crate::text_shadow_cache::TextShadowCache,
     /// Window backdrop generation the backbuffer was last painted over (`window_backdrop`).
     pub(crate) window_backdrop_painted: Option<u64>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
@@ -737,6 +739,7 @@ impl X11App {
             pending_visibility: None,
             backdrop_deadline: None,
             shadow_pixmap: None,
+            shadow_images: Default::default(),
             window_backdrop_painted: None,
             window_backdrop: config
                 .backdrop
@@ -1159,6 +1162,8 @@ impl Drop for X11App {
         if let Some((pixmap, _, _, bytes)) = self.shadow_pixmap.take() {
             self.free_pixmap_tracked(pixmap, bytes);
         }
+        let shadows = self.shadow_images.take_all();
+        self.free_shadow_images(shadows);
         unsafe {
             if self.pointer_grabbed {
                 XUngrabPointer(self.display, CURRENT_TIME);

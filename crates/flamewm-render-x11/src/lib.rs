@@ -4,6 +4,7 @@ mod accel;
 mod lamp;
 mod overlay;
 mod text_mask_cache;
+mod text_shadow_cache;
 mod warp;
 mod xcomposite;
 mod xft;

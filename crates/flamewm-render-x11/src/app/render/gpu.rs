@@ -1,4 +1,4 @@
-use super::text_shadow::SHADOW_SCRATCH;
+use super::text_shadow::{SHADOW_SCRATCH, shadow_origin};
 use super::*;
 
 /// Backdrop size and optional RGBA bytes handed to the GPU frame.
@@ -244,30 +244,30 @@ impl X11App {
                 let (x, y, size) = (*x * scale, *y * scale, *size * scale);
                 let radius = (*blur_radius * scale).clamp(0.0, 8.0);
                 let mut scratch = SHADOW_SCRATCH.take();
-                let placed = self.text_shadow_rgba(
+                let placed = self.text_shadow_image(
                     &mut scratch,
-                    x,
-                    y,
-                    *color,
                     size,
                     *weight,
                     radius,
+                    *color,
                     text,
                     document.ui_font_family(),
                 );
                 let source = match placed {
-                    Ok(Some((dx, dy, width, height))) => {
+                    Ok(Some(image)) => {
+                        let (dx, dy) = shadow_origin(x, y, size, radius);
+                        let (width, height) = (image.width, image.height);
                         // The XRender blit keeps only pixels inside the clip bounds; the rest are
-                        // transparent. The blurred alpha already carries the shadow colour's alpha.
+                        // transparent. The blurred alpha already carries the shadow colour's alpha,
+                        // which is the top byte of each premultiplied word.
                         let (min_x, min_y, max_x, max_y) = gpu_frame::shadow_clip(stack);
                         let row = width as usize;
-                        let alpha = scratch
-                            .rgba
+                        let alpha = image
+                            .argb
                             .iter()
-                            .skip(3)
-                            .step_by(4)
                             .enumerate()
-                            .map(|(i, &a)| {
+                            .map(|(i, &word)| {
+                                let a = (word >> 24) as u8;
                                 let gx = dx + (i % row) as i32;
                                 let gy = dy + (i / row) as i32;
                                 let inside = gx >= min_x && gy >= min_y && gx < max_x && gy < max_y;
