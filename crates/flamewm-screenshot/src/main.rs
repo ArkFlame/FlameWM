@@ -6,6 +6,7 @@ mod clipboard;
 mod notify;
 mod record;
 mod ui;
+mod wayland;
 
 use capture::{Capture as _, Image, Rect};
 use std::fs::{self, OpenOptions};
@@ -369,6 +370,39 @@ fn record_video(
     outcome
 }
 
+/// Encodes, saves, copies and announces one finished capture. Shared by the X11 and Wayland paths.
+fn save_capture(o: Options, rect: capture::Rect, captured: capture::Image) -> Result<(), String> {
+    let bytes = captured.png()?;
+    let mut saved = None;
+    if o.save {
+        let path = o
+            .output
+            .map_or_else(|| default_output("png", &o.name_template, o.mode, rect), Ok)?;
+        new_file(&path, &bytes)?;
+        println!("{}", path.display());
+        saved = Some(path);
+    }
+    if o.copy {
+        let temporary = saved.is_none();
+        let temporary_path;
+        let path = if let Some(p) = saved.as_ref() {
+            p.as_path()
+        } else {
+            temporary_path = std::env::temp_dir().join(format!(
+                "flamewm-clipboard-{}-{}.png",
+                std::process::id(),
+                flamewm_api::clock::unix_nanos()
+            ));
+            new_file(&temporary_path, &bytes)?;
+            &temporary_path
+        };
+        clipboard::spawn_owner(path, temporary)?;
+        eprintln!("FlameWM: image copied to clipboard");
+    }
+    notify::captured(saved.as_deref(), o.copy);
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     if args.first().is_some_and(|s| s == "--serve-clipboard") {
         let path = args.get(1).ok_or("missing clipboard path")?;
@@ -382,6 +416,22 @@ fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let o = parse(args)?;
+    // Full-output captures on a native Wayland session go through screencopy: the X11 root never
+    // holds native Wayland windows. Anything else (region, window, recording) stays on X11.
+    if o.record.is_none() && !o.annotate && matches!(o.mode, Mode::Full | Mode::Screen) {
+        if o.delay > Duration::ZERO {
+            std::thread::sleep(o.delay);
+        }
+        if let Some(image) = wayland::capture_output()? {
+            let rect = capture::Rect {
+                x: 0,
+                y: 0,
+                w: image.width,
+                h: image.height,
+            };
+            return save_capture(o, rect, image);
+        }
+    }
     let (conn, screen) = x11rb::connect(None).map_err(|e| format!("X11 connection failed: {e}"))?;
     let backend = capture::X11Capture::new(&conn, screen);
     if o.delay > Duration::ZERO {
@@ -423,35 +473,7 @@ fn run(args: &[String]) -> Result<(), String> {
     } else {
         captured
     };
-    let bytes = captured.png()?;
-    let mut saved = None;
-    if o.save {
-        let path = o
-            .output
-            .map_or_else(|| default_output("png", &o.name_template, o.mode, rect), Ok)?;
-        new_file(&path, &bytes)?;
-        println!("{}", path.display());
-        saved = Some(path);
-    }
-    if o.copy {
-        let temporary = saved.is_none();
-        let temporary_path;
-        let path = if let Some(p) = saved.as_ref() {
-            p.as_path()
-        } else {
-            temporary_path = std::env::temp_dir().join(format!(
-                "flamewm-clipboard-{}-{}.png",
-                std::process::id(),
-                flamewm_api::clock::unix_nanos()
-            ));
-            new_file(&temporary_path, &bytes)?;
-            &temporary_path
-        };
-        clipboard::spawn_owner(path, temporary)?;
-        eprintln!("FlameWM: image copied to clipboard");
-    }
-    notify::captured(saved.as_deref(), o.copy);
-    Ok(())
+    save_capture(o, rect, captured)
 }
 
 fn main() {

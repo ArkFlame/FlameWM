@@ -30,6 +30,8 @@ flamewm-platform = { path = "../flamewm-platform" }
 flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-session-core = { path = "../flamewm-session-core" }
+# zwlr-screencopy server side: smithay 0.7 has no screencopy, the wlr protocol bindings do.
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
 flamewm-skin = { path = "../flamewm-skin" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 # The window outline policy (`windowOutlineColor`, `windowOutlineOpacity`, `outlines`) is owned by

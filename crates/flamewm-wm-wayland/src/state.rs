@@ -361,6 +361,8 @@ pub struct State {
     /// True from a lock request until unlock. It outlives the locker: a locker that dies leaves
     /// the output blank and the keyboard unfocused, never the desktop.
     pub session_locked: bool,
+    /// `zwlr_screencopy` copies waiting for the next render's readback.
+    pub screencopy_pending: Vec<crate::screencopy::PendingCopy>,
     pub xdg_shell: XdgShellState,
     pub layer_shell: WlrLayerShellState,
     pub shm: ShmState,
@@ -526,6 +528,7 @@ impl State {
             session_lock,
             locked_outputs,
             session_locked: false,
+            screencopy_pending: Vec::new(),
             display,
             loop_signal,
             socket_name,

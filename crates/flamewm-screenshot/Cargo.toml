@@ -15,6 +15,9 @@ flamewm-api = { path = "../flamewm-api" }
 flamewm-clipboard = { path = "../flamewm-clipboard" }
 x11rb = { workspace = true, features = ["randr", "xfixes", "shm"] }
 png = "=0.18.1"
+# Native Wayland full-output capture through zwlr-screencopy (see src/wayland.rs).
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [lints]
 workspace = true

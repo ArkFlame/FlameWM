@@ -264,8 +264,13 @@ Known limitations that remain true are listed under "Remaining work".
 
 1. Layer-shell support exists in the compositor, but the shipped shell, desktop and launcher are
    still X11 clients on XWayland. Native Wayland shell clients are not built.
-2. Screenshot and portal integration.
-3. Session lock.
+2. Screenshot: full-output capture through `zwlr-screencopy-unstable-v1` (shm, full damage) and the
+   shared `ScreenshotFull` action run on native Wayland. Region and window capture on Wayland, and
+   xdg-desktop-portal Screenshot/ScreenCast, are open (`docs/BACKLOG.md` `wl-portal`).
+3. Session lock: `ext-session-lock-v1` is advertised and paints the lock surface. A held lock now
+   blocks WM shortcuts and routes pointer input only to the lock surface. Open: multi-output lock
+   surfaces and outputs added while locked (the compositor drives one output), and no runtime test
+   with a lock client yet.
 4. Native event sources: the compositor drives smithay's `EventLoop<State>` directly.
    `flamewm-reactor` wraps an `EventLoop<()>` whose callbacks take no state, so smithay's sources
    cannot be routed through it without a reactor change (owner decision). No

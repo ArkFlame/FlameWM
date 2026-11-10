@@ -57,3 +57,4 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `read.md:282` | test maintenance | S | open |
 | read-SIZE | quality | 49 production files over 600 lines; 6 over 1000 | `read.md:258-271`; `desktop/src/widgets/mod.rs` 1307 | split by responsibility | L | open |
 | read-GUARD | quality | Five pending `TODO(J..-PENDING)` guard warnings, 24-62 days old | `tools/architecture_guard.py:440,518,522,851,859` | governance debt | S | open |
+| wl-portal | feature | xdg-desktop-portal Screenshot and ScreenCast for Wayland (zwlr-screencopy covers full-output shm capture only; no portal, no dmabuf, no region/window capture, no video stream) | `wm-wayland/src/screencopy.rs`; `screenshot/src/wayland.rs` | portal integration | L | open |

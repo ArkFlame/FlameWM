@@ -350,6 +350,18 @@ impl State {
     pub(super) fn pointer_target(&self, location: Point<f64, Logical>) -> PointerTarget {
         use crate::scene::SceneItem;
 
+        if !crate::session_lock::windows_reachable(self.session_locked) {
+            // Locked: the pointer reaches the lock surface alone. Windows behind the lock get no
+            // focus, decoration hits (close, maximize) or move/resize grabs.
+            return PointerTarget {
+                focus: self
+                    .lock_surface()
+                    .map(|lock| (lock.wl_surface().clone(), Point::from((0.0, 0.0)))),
+                managed_hit: None,
+                scene_hit: true,
+            };
+        }
+
         first_hit(crate::scene::front_to_back(self), |item| match item {
             SceneItem::Layer { surface, origin } => {
                 let origin = origin.to_f64();

@@ -1039,6 +1039,8 @@ dependencies = [
  "flamewm-api",
  "flamewm-clipboard",
  "png",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "x11rb 0.14.0",
 ]
 
@@ -1274,6 +1276,7 @@ dependencies = [
  "tracing",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-wlr",
  "xcursor",
 ]
 

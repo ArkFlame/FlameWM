@@ -16,6 +16,18 @@ use flamewm_api::shortcuts::{
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+/// The `flamewm-screenshot` arguments for a screenshot action. Both window managers spawn the
+/// same binary from this one mapping, so the shortcut means the same thing on X11 and Wayland.
+#[must_use]
+pub fn screenshot_args(action: &str) -> Option<&'static [&'static str]> {
+    match action {
+        ACTION_SCREENSHOT_FULL => Some(&["--full", "--copy"]),
+        ACTION_SCREENSHOT_REGION => Some(&["--region", "--annotate", "--copy"]),
+        ACTION_SCREENSHOT_WINDOW => Some(&["--active", "--copy"]),
+        _ => None,
+    }
+}
+
 /// Media-key actions. Their ids are local to the platform shortcut registry; they
 /// are dispatched through `PlatformHost::media_audio_key`.
 pub const ACTION_OPEN_FILES_SUPER: &str = "OpenFilesSuper";
@@ -685,6 +697,23 @@ mod tests {
             effective.binding(ACTION_WINDOW_CLOSE),
             Some(&KeyBinding::assigned("Ctrl+Super+Q"))
         );
+    }
+
+    #[test]
+    fn screenshot_actions_map_to_the_screenshot_binary_arguments() {
+        assert_eq!(
+            screenshot_args(ACTION_SCREENSHOT_FULL),
+            Some(&["--full", "--copy"][..])
+        );
+        assert_eq!(
+            screenshot_args(ACTION_SCREENSHOT_REGION),
+            Some(&["--region", "--annotate", "--copy"][..])
+        );
+        assert_eq!(
+            screenshot_args(ACTION_SCREENSHOT_WINDOW),
+            Some(&["--active", "--copy"][..])
+        );
+        assert_eq!(screenshot_args(ACTION_LAUNCHER), None);
     }
 
     #[test]

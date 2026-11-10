@@ -86,6 +86,7 @@ mod presentation_scale;
 mod probe;
 mod render;
 mod scene;
+mod screencopy;
 mod session_lock;
 mod snap_preview;
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
@@ -619,6 +620,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // Advertise ext-session-lock-v1 before clients connect: the lock UI is an ordinary client,
     // so this global is the only way it can paint while the session is locked.
     state.init_session_lock();
+    state.init_screencopy();
     // Control service: a failed bus connection leaves the compositor usable without the shell API.
     if let Err(error) = control::install(&mut state) {
         eprintln!("flamewm-wayland: control service unavailable: {error}");

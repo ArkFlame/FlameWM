@@ -137,6 +137,19 @@ pub fn screen_for<S>(session_locked: bool, lock_surface: Option<&S>) -> Screen<'
     }
 }
 
+/// Whether WM shortcuts may act. A held lock disables them: the keyboard belongs to the lock
+/// client alone.
+#[must_use]
+pub const fn shortcuts_active(session_locked: bool) -> bool {
+    !session_locked
+}
+
+/// Whether pointer input may reach windows behind the screen. A held lock hides them all.
+#[must_use]
+pub const fn windows_reachable(session_locked: bool) -> bool {
+    !session_locked
+}
+
 /// Drops lock surfaces whose client is gone. The session stays locked (see `screen_for`), so a
 /// dead locker leaves a blank output rather than unlocking. Returns whether anything was removed.
 pub fn prune_dead_locks(state: &mut State) -> bool {
@@ -180,6 +193,14 @@ mod tests {
     fn the_desktop_shows_only_when_unlocked() {
         let none: Option<&u8> = None;
         assert_eq!(screen_for(false, none), Screen::Desktop);
+    }
+
+    #[test]
+    fn a_held_lock_disables_shortcuts_and_window_pointer_reach() {
+        assert!(!shortcuts_active(true));
+        assert!(!windows_reachable(true));
+        assert!(shortcuts_active(false));
+        assert!(windows_reachable(false));
     }
 
     #[test]

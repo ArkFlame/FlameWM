@@ -100,6 +100,15 @@ impl State {
         let keycode = event.key_code();
         let time = event.time_msec();
         let serial = next_serial();
+        if !crate::session_lock::shortcuts_active(self.session_locked) {
+            // Locked: every key belongs to the lock client. No WM shortcut may act on the windows
+            // behind the lock (close, focus cycling, launchers), so none is intercepted.
+            let _ = self.pin_focus_to_lock();
+            keyboard.input::<(), _>(self, keycode, key_state, serial, time, |_, _, _| {
+                FilterResult::Forward
+            });
+            return false;
+        }
         let shortcuts = std::mem::take(&mut self.shortcuts);
 
         let action = keyboard.input::<Option<String>, _>(

@@ -442,6 +442,7 @@ fn render_into(
             elements
         }
     };
+    serve_screencopy(state, backend.renderer(), &elements, size);
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
@@ -490,13 +491,14 @@ fn render_into(
     Ok(())
 }
 
-pub fn dump_offscreen(
+/// Renders `elements` into an offscreen texture and reads it back as RGBA rows (`Abgr8888`
+/// bytes, memory order R, G, B, A). The one readback path shared by PPM dumps and screencopy.
+pub fn offscreen_pixels(
     renderer: &mut GlowRenderer,
     output: &smithay::output::Output,
     elements: &[Elem],
     size: Size<i32, Physical>,
-    path: &Path,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Vec<u8>, Box<dyn Error>> {
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     let mut tracker = OutputDamageTracker::from_output(output);
@@ -507,12 +509,54 @@ pub fn dump_offscreen(
     let target = renderer.bind(&mut texture)?;
     let mapping =
         renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Abgr8888)?;
-    let pixels = renderer.map_texture(&mapping)?;
-    let flip_rows = matches!(
+    Ok(renderer.map_texture(&mapping)?.to_vec())
+}
+
+/// Whether a readback of `output` must reverse its rows (flipped transforms).
+#[must_use]
+pub fn readback_is_flipped(output: &smithay::output::Output) -> bool {
+    matches!(
         output.current_transform(),
         Transform::Flipped | Transform::Flipped180
-    );
-    write_ppm(path, size, pixels, flip_rows)
+    )
+}
+
+/// Answers queued screencopy requests from one readback of the frame about to be shown.
+/// Does nothing (no GPU work) when no client asked for a copy.
+pub fn serve_screencopy(
+    state: &mut State,
+    renderer: &mut GlowRenderer,
+    elements: &[Elem],
+    size: Size<i32, Physical>,
+) {
+    if state.screencopy_pending.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut state.screencopy_pending);
+    match offscreen_pixels(renderer, &state.output, elements, size) {
+        Ok(rgba) => crate::screencopy::serve(
+            pending,
+            size.w.max(0) as u32,
+            size.h.max(0) as u32,
+            &rgba,
+            readback_is_flipped(&state.output),
+        ),
+        Err(error) => {
+            eprintln!("flamewm-wayland: screencopy readback failed: {error}");
+            crate::screencopy::fail(pending);
+        }
+    }
+}
+
+pub fn dump_offscreen(
+    renderer: &mut GlowRenderer,
+    output: &smithay::output::Output,
+    elements: &[Elem],
+    size: Size<i32, Physical>,
+    path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let pixels = offscreen_pixels(renderer, output, elements, size)?;
+    write_ppm(path, size, &pixels, readback_is_flipped(output))
 }
 
 fn send_frame_callbacks(state: &State) {

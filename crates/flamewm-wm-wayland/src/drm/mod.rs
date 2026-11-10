@@ -366,6 +366,15 @@ impl Drm {
         };
         let elements = &scene.elements;
 
+        // Screencopy readback shares the frame's elements; it runs before the dump so a dump
+        // request and a capture of the same frame see identical pixels.
+        render::serve_screencopy(
+            state,
+            &mut self.renderer,
+            elements,
+            state.physical_output_size(),
+        );
+
         // `FLAMEWM_WAYLAND_DUMP`: one readback of the primary output. Taking the path makes a set
         // request be consumed exactly once, and `state.dumped` stops main.rs's re-arming timer.
         if let Some(path) = state.dump.take() {

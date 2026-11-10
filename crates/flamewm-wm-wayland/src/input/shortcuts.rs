@@ -146,11 +146,13 @@ impl State {
                 let home = std::env::var_os("HOME").unwrap_or_else(|| "/".into());
                 self.spawn("xdg-open", &[&home.to_string_lossy()]);
             }
-            ACTION_SCREENSHOT_FULL => self.spawn("flamewm-screenshot", &["--full", "--copy"]),
-            ACTION_SCREENSHOT_REGION => {
-                self.spawn("flamewm-screenshot", &["--region", "--annotate", "--copy"]);
+            // Same mapping as X11 (`flamewm_platform::shortcuts::screenshot_args`); the binary picks
+            // the Wayland screencopy path itself when it runs on a native session.
+            ACTION_SCREENSHOT_FULL | ACTION_SCREENSHOT_REGION | ACTION_SCREENSHOT_WINDOW => {
+                if let Some(args) = flamewm_platform::shortcuts::screenshot_args(action) {
+                    self.spawn("flamewm-screenshot", args);
+                }
             }
-            ACTION_SCREENSHOT_WINDOW => self.spawn("flamewm-screenshot", &["--active", "--copy"]),
             // The shell owns the launcher and start menu; it listens for the same control signals
             // the X11 WM emits.
             ACTION_LAUNCHER => self.emit_control_signal("LauncherToggleRequested"),

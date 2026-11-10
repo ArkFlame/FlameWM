@@ -190,11 +190,8 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_SCREENSHOT_FULL | ACTION_SCREENSHOT_REGION | ACTION_SCREENSHOT_WINDOW => {
                 // Screenshot runs on demand in its own process; WM input processing must not wait
                 // for a region gesture or PNG compression to complete.
-                let options: &[&str] = match action.as_str() {
-                    ACTION_SCREENSHOT_FULL => &["--full", "--copy"],
-                    ACTION_SCREENSHOT_REGION => &["--region", "--annotate", "--copy"],
-                    _ => &["--active", "--copy"],
-                };
+                let options = flamewm_platform::shortcuts::screenshot_args(action.as_str())
+                    .unwrap_or(&["--active", "--copy"]);
                 if let Err(error) = flamewm_applications::spawn_reaped(
                     std::process::Command::new("flamewm-screenshot").args(options),
                 ) {
