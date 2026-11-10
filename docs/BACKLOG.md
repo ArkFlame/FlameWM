@@ -13,7 +13,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | wrss-scratch | perf | Drop scratch texture after backdrop capture | `wayland-rss.md (line unpinned)`: -3.0 to -3.5 MB PSS, measured | below 5 MB bar | S | open |
 | wrss-gpu | perf | Re-measure idle RSS on a GPU host | `wayland-rss.md (line unpinned)`: all numbers from llvmpipe | unknown | S | open |
 | meas-build | quality | `syn` and `x11rb-protocol` single-unit build cost | `docs/backlog/measure.md:43-50`: 50-110 s units | build time, gain unmeasured | M | open |
-| meas-sign | quality | Harness `measure.py` inverts signed `translate_coords` x/y | `docs/backlog/wayland-shared.md:56,71` | wrong measured frame origin | S | open |
+| meas-sign | quality | Harness `measure.py` inverts signed `translate_coords` x/y | `docs/backlog/wayland-shared.md:56,71` | wrong measured frame origin | S | done (`tools/test_flamewm_frame_origin.py`) |
 | meas-perf-blocked | quality | `perf record` blocked: `perf_event_paranoid=4` | `docs/backlog/measure.md:69` | no CPU profile of cold settings paint | S | open |
 | read-E1 | reliability | Icon-theme rollback result dropped (data-loss path) | `read.md:36`; pattern gone in `themes/import.rs` | would lose user icon theme | S | done e96156bc |
 | read-E2 | reliability | Removable-mount save and auto-mount failures silent | `read.md:37`; no `let _ =` hits in `removable_mounts.rs` | silent mount failure | S | done e96156bc |
