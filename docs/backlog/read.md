@@ -14,8 +14,8 @@ Counts: 76 `unwrap`/`expect`/`panic!`/`unreachable!` hits across shell, desktop,
 | # | file:line | Why it matters | Proposed minimal fix | Size | Risk |
 |---|---|---|---|---|---|
 | P1 | `crates/flamewm-control-dbus/src/lib.rs:482` | `from_item` maps a D-Bus `as` array with `unreachable!()` on any non-string element. The input comes from any D-Bus client. dbus-rs should enforce element types, so this is probably unreachable, but a panic here kills the shell or desktop. | Return `Err(FlameError::invalid("D-Bus string array element must be string"))`, in the same style as the Dict arm at line 490. | S | Low likelihood, high impact |
-| P2 | `crates/flamewm-wm-wayland/src/state.rs:1129-1133` | `client_compositor_state` panics with `expect("every client carries compositor data")` when a client has neither `ClientState` nor `XWaylandClientData`. `main.rs (line unpinned)` inserts `ClientState` for every normal client, so this is hard to reach. | Return a default `CompositorClientState` or a `Result`, or log and skip. | S | Low |
-| P3 | `crates/flamewm-wm-wayland/src/xwayland.rs:690` | `xwm_state` panics if an XWayland callback fires after the X11 WM is torn down. | Make `xwm_state` return an `Option`, or guard the callback. | M | Low, unverified timing |
+| P2 | `crates/flamewm-wm-wayland/src/state.rs` | DONE at 94be79e1. `client_compositor_state` no longer panics when a client has neither `ClientState` nor `XWaylandClientData`. It logs once and returns one shared default `CompositorClientState`. Unit test: `missing_client_state_tests`. | Done. | S | Low |
+| P3 | `crates/flamewm-wm-wayland/src/xwayland.rs:687` | OPEN, not changed at 94be79e1. `xwm_state` still `expect`s. Smithay 0.7 `XwmHandler::xwm_state` returns `&mut X11Wm`, so no `Option` or default can be returned. Smithay calls it from each XWM event source (`xwm/mod.rs` ~1253, 1398, 2059, 2325). A real fix needs the source removed at teardown or an upstream trait change. Not verified at runtime. | Remove the calloop source at `disconnected`, or upstream an optional accessor. | M | Low, unverified timing |
 | P4 | `crates/flamewm-integrations-linux/src/mpris.rs:575` | `unwrap_or_else(\|\| unreachable!())` on `pending.player`. Line 568 returns early when `player` is `None`, so this is provably unreachable. Players come from the session bus. | Use `let Some(mut info) = pending.player.take() else { return Ok(()) };`. | S | Negligible; cosmetic |
 | P5 | `crates/flamewm-control-dbus/src/mutation_queue.rs:196` | `drain_queue_inline` is `pub` in a production file. It calls `push_result(..).expect("write mutation wake byte")`. It is a test oracle, so the impact is limited. | Move it under `#[cfg(test)]`, or return the error. | S | Low |
 | P6 | `crates/flamewm-integrations-linux/src/icon_service.rs:261,617` and `icon_loader.rs:173,176,223` in shell | `expect` on thread spawn and `UnixStream::pair()`. These fail only under resource exhaustion, and they run at startup or on the icon path. | Propagate as `FlameResult` and log, or keep as a startup-only abort with a clear message. | M | Low |
@@ -123,8 +123,8 @@ Proposed fix for all five: either promote each to a hard violation with the migr
 3. **E3** `crates/flamewm-desktop/src/main.rs:557`: `on_ready` error dropped, so settings sync stops silently. S. Medium.
 4. **P1** `crates/flamewm-control-dbus/src/lib.rs:482`: `unreachable!()` on D-Bus input. S. Low likelihood, high impact.
 5. **E4** `crates/flamewm-desktop/src/projection.rs:418`: icon submit error dropped; icons go missing silently. S. Low.
-6. **P2** `crates/flamewm-wm-wayland/src/state.rs:1129-1133`: `expect` on client data. S. Low.
-7. **P3** `crates/flamewm-wm-wayland/src/xwayland.rs:690`: `expect` in XWayland handler. M. Low.
+6. **P2** `crates/flamewm-wm-wayland/src/state.rs`: `expect` on client data. Done at 94be79e1. S. Low.
+7. **P3** `crates/flamewm-wm-wayland/src/xwayland.rs:687`: `expect` in XWayland handler. Open, blocked by the smithay trait signature. M. Low.
 8. **K1** `crates/flamewm-shell/src/launch_feedback.rs:328`: reads an undefined setting key. S. Medium, owned by another worker; report only.
 9. **U1** settings accessor duplicated across five locations. M. Low.
 10. **E5** `crates/flamewm-shell/src/icon_loader.rs:268,315,334`: empty error arms, not read. S. Unknown.
