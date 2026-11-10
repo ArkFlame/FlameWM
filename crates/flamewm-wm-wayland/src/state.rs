@@ -1198,14 +1198,7 @@ mod dock_work_area_tests {
 
 /// Cuts the Dock's reserve from a work area; `None` (dock hidden) returns it unchanged.
 fn cut_dock(work: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
-    let Some((edge, extent)) = dock else {
-        return work;
-    };
-    let cut = dock_reserve::reserve_edge(
-        flamewm_api::Rect::new(work.x, work.y, work.w, work.h),
-        edge,
-        extent,
-    );
+    let cut = dock_reserve::cut_dock(flamewm_api::Rect::new(work.x, work.y, work.w, work.h), dock);
     Rect::new(cut.x, cut.y, cut.width, cut.height)
 }
 

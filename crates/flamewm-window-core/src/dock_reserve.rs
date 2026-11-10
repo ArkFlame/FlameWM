@@ -289,3 +289,29 @@ mod tests {
         );
     }
 }
+
+/// Cuts the Dock's reserve from a work area. A hidden Dock (`None`) leaves the work area unchanged.
+/// Both backends apply the Dock as the last cut, after the taskbar or strut reserve.
+#[must_use]
+pub fn cut_dock(work: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
+    match dock {
+        Some((edge, extent)) => reserve_edge(work, edge, extent),
+        None => work,
+    }
+}
+
+#[cfg(test)]
+mod cut_dock_vector_tests {
+    use super::*;
+
+    /// Vectors shared with the X11 `with_dock_reserve` and Wayland `cut_dock` pins.
+    #[test]
+    fn dock_stacks_above_a_bottom_taskbar() {
+        let work = Rect::new(0, 0, 1280, 800 - 44);
+        assert_eq!(
+            cut_dock(work, Some((ReserveEdge::Bottom, dock_extent(48)))),
+            Rect::new(0, 0, 1280, 800 - 44 - dock_extent(48))
+        );
+        assert_eq!(cut_dock(work, None), work);
+    }
+}

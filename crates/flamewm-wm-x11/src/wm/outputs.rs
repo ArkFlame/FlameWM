@@ -1,14 +1,34 @@
 //! Output and work-area bookkeeping for the Wm.
 use super::*;
-use flamewm_window_core::dock_reserve::{ReserveEdge, reserve_edge};
+use flamewm_window_core::dock_reserve::{ReserveEdge, cut_dock};
 use flamewm_window_core::strut::sanitize_strut;
 
 /// Cuts the Dock from a work area. The taskbar strut is already out of `work_area`, so a Dock on
 /// the same edge stacks beyond it.
 pub(super) fn with_dock_reserve(work_area: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
-    match dock {
-        Some((edge, extent)) => from_core_rect(reserve_edge(to_core_rect(work_area), edge, extent)),
-        None => work_area,
+    from_core_rect(cut_dock(to_core_rect(work_area), dock))
+}
+
+#[cfg(test)]
+mod dock_reserve_vector_tests {
+    use super::*;
+    use flamewm_window_core::dock_reserve::dock_extent;
+
+    /// The same vector pins `flamewm_window_core::dock_reserve::cut_dock`, which Wayland also uses.
+    #[test]
+    fn dock_stacks_above_a_bottom_taskbar() {
+        let work = from_core_rect(flamewm_api::Rect::new(0, 0, 1280, 800 - 44));
+        let expect = from_core_rect(flamewm_api::Rect::new(
+            0,
+            0,
+            1280,
+            800 - 44 - dock_extent(48),
+        ));
+        assert_eq!(
+            with_dock_reserve(work, Some((ReserveEdge::Bottom, dock_extent(48)))),
+            expect
+        );
+        assert_eq!(with_dock_reserve(work, None), work);
     }
 }
 
