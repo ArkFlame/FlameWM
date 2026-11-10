@@ -4,6 +4,7 @@
 mod capture;
 mod clipboard;
 mod notify;
+mod portal;
 mod record;
 mod ui;
 mod wayland;
@@ -91,6 +92,7 @@ Usage: flamewm-screenshot [--region|--full|--screen|--active|--window] [OPTIONS]
                    requires optional ffmpeg; output supports MP4, WebM or GIF\n\
   --fps N          Recording frame rate, 1..60 (default 30)\n\
   --audio-source SOURCE  Optional PulseAudio monitor source (off by default)\n\
+  --portal         Serve org.freedesktop.impl.portal.Screenshot on the session bus\n\
   -h, --help       Show this help\n\
 Notes: X11 only. Window capture records visible pixels, not obscured surfaces.\n";
 
@@ -404,6 +406,9 @@ fn save_capture(o: Options, rect: capture::Rect, captured: capture::Image) -> Re
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    if args.first().is_some_and(|s| s == "--portal") {
+        return portal::serve();
+    }
     if args.first().is_some_and(|s| s == "--serve-clipboard") {
         let path = args.get(1).ok_or("missing clipboard path")?;
         return clipboard::serve(

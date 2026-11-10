@@ -104,7 +104,9 @@ for source in \
     "$ROOT/packaging/install-manifest.txt" \
     "$ROOT/packaging/debian/control.in" \
     "$ROOT/packaging/debian/copyright" \
-    "$ROOT/packaging/xdg-desktop-portal/flamewm-portals.conf"; do
+    "$ROOT/packaging/xdg-desktop-portal/flamewm-portals.conf" \
+    "$ROOT/packaging/xdg-desktop-portal/flamewm.portal" \
+    "$ROOT/packaging/dbus-1/org.freedesktop.impl.portal.desktop.flamewm.service"; do
     [[ -f "$source" ]] || fail "missing packaging source: $source"
 done
 [[ -d "$ROOT/LICENSES" ]] || fail "missing packaging source directory: $ROOT/LICENSES"
@@ -167,6 +169,12 @@ install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" "$STAGE$LIBEXECDIR/fla
 install -d -m 0755 "$STAGE/usr/share/xdg-desktop-portal"
 install -m 0644 "$ROOT/packaging/xdg-desktop-portal/flamewm-portals.conf" \
     "$STAGE/usr/share/xdg-desktop-portal/flamewm-portals.conf"
+# Screenshot backend: frontend discovery file and D-Bus activation for `flamewm-screenshot --portal`.
+install -d -m 0755 "$STAGE/usr/share/xdg-desktop-portal/portals" "$STAGE/usr/share/dbus-1/services"
+install -m 0644 "$ROOT/packaging/xdg-desktop-portal/flamewm.portal" \
+    "$STAGE/usr/share/xdg-desktop-portal/portals/flamewm.portal"
+install -m 0644 "$ROOT/packaging/dbus-1/org.freedesktop.impl.portal.desktop.flamewm.service" \
+    "$STAGE/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.flamewm.service"
 install -m 0644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/flamewm/LICENSE"
 install -m 0644 "$ROOT/README.md" "$STAGE/usr/share/doc/flamewm/README.md"
 cp -a "$ROOT/LICENSES" "$STAGE/usr/share/doc/flamewm/LICENSES"

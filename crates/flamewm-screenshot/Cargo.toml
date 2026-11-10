@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-clipboard = { path = "../flamewm-clipboard" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 x11rb = { workspace = true, features = ["randr", "xfixes", "shm"] }
 png = "=0.18.1"
 # Native Wayland full-output capture through zwlr-screencopy (see src/wayland.rs).

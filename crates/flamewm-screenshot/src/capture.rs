@@ -146,6 +146,13 @@ impl Image {
     }
 }
 
+/// Full X11 root: the `XWayland` root on a Wayland session, for callers without a window selection.
+pub fn capture_root() -> Result<Image> {
+    let (conn, screen) = x11rb::connect(None).map_err(|e| format!("X11 connection failed: {e}"))?;
+    let rect = root_bounds(&conn, screen);
+    X11Capture::new(&conn, screen).capture(rect)
+}
+
 pub fn root_bounds<C: Connection>(conn: &C, screen: usize) -> Rect {
     let root = &conn.setup().roots[screen];
     Rect {
