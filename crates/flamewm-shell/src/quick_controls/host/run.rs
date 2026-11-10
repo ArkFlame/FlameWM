@@ -170,7 +170,17 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
     let event_state = std::rc::Rc::clone(&state);
     let tick_state = std::rc::Rc::clone(&state);
     let tick_input = Arc::clone(&input);
-    let search_wake = reactor.wake_deadline();
+    // Location search completions wake this loop; the tick applies the result.
+    let search_wake = crate::weather_host::ResultWake::new()
+        .map_err(|error| HostError::Control(format!("search wake pair: {error}")))?;
+    state.borrow_mut().snapshot.weather_search.wake = search_wake.waker();
+    let search_reader = search_wake.reader();
+    reactor
+        .register_raw_fd_with_action(search_wake.fd(), calloop::Interest::READ, move |_, _| {
+            crate::weather_host::ResultWake::drain(&search_reader);
+            flamewm_reactor::FdAction::Continue
+        })
+        .map_err(|error| HostError::Control(format!("register search result source: {error}")))?;
     // Surfaces are created lazily on OPEN, so zero surfaces is the normal idle
     // state: keep running until shutdown was requested and surfaces are torn down.
     let keep_state = std::rc::Rc::clone(&state);
@@ -238,11 +248,6 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
                 }
             }
             tick_host(runtime, &tick_state)?;
-            // The geocoding worker has no fd: keep the loop polling until its result lands.
-            let searching = tick_state.borrow().snapshot.weather_search.in_flight();
-            search_wake.set(
-                searching.then(|| std::time::Instant::now() + crate::weather_host::WEATHER_POLL_INTERVAL),
-            );
             if tick_state.borrow().shutdown {
                 // Close and destroy every helper-owned surface. A teardown
                 // error is returned so the owner exits nonzero instead of

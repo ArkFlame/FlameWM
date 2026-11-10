@@ -184,8 +184,6 @@ impl ShellLoop {
         wake.set(earliest_wake([
             self.osd.deadline(),
             self.switcher.deadline(),
-            self.weather.poll_deadline(now),
-            self.auto_lookup.poll_deadline(now),
             self.zone_settle_at,
             self.task_progress_deadline,
             self.dock_stage

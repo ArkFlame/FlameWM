@@ -841,6 +841,17 @@ fn execute() -> Result<(), String> {
             tick_profile_flag.store(true, Ordering::Release);
         })
         .map_err(|error| format!("register profile one-shot: {error}"))?;
+    // Weather and IP-lookup completions: one wake per finished worker; the tick applies the result.
+    {
+        let result_fd = state.borrow().result_wake.fd();
+        let result_reader = state.borrow().result_wake.reader();
+        reactor
+            .register_raw_fd_with_action(result_fd, calloop::Interest::READ, move |_, _| {
+                flamewm_shell::weather_host::ResultWake::drain(&result_reader);
+                flamewm_reactor::FdAction::Continue
+            })
+            .map_err(|error| format!("register result wake source: {error}"))?;
+    }
     // Canonical IconService wake FD: registered before the run loop so
     // worker completions wake the reactor; the tick drains them.
     {

@@ -114,14 +114,10 @@ pub fn lookup_with(http: &impl HttpGet) -> Result<IpFix, WeatherError> {
 
 /// Worker-thread lookup on the production curl seam. A failed thread start reports transport.
 #[must_use]
-pub fn spawn_ip_lookup() -> mpsc::Receiver<Result<IpFix, WeatherError>> {
-    let (tx, rx) = mpsc::channel();
-    let _ = std::thread::Builder::new()
-        .name("flamewm-auto-location".to_owned())
-        .spawn(move || {
-            let _ = tx.send(lookup_with(&CurlFetcher));
-        });
-    rx
+pub fn spawn_ip_lookup(
+    waker: Option<crate::weather_host::Waker>,
+) -> mpsc::Receiver<Result<IpFix, WeatherError>> {
+    crate::weather_host::spawn_worker("flamewm-auto-location", waker, || lookup_with(&CurlFetcher))
 }
 
 type FixReceiver = Arc<Mutex<mpsc::Receiver<Result<IpFix, WeatherError>>>>;
@@ -136,15 +132,6 @@ pub struct AutoLookup {
 }
 
 impl AutoLookup {
-    /// The next instant the shell loop must wake to poll an in-flight lookup; the worker
-    /// has no fd, so without this the result waits for an unrelated event.
-    #[must_use]
-    pub fn poll_deadline(&self, now: Instant) -> Option<Instant> {
-        self.inflight
-            .as_ref()
-            .map(|_| now + crate::weather_host::WEATHER_POLL_INTERVAL)
-    }
-
     /// Due on enable, on a network-up edge, or when the last start is 6 hours old. Disabled
     /// drops any in-flight lookup. Never blocks.
     pub fn tick(
@@ -388,23 +375,19 @@ mod tests {
     }
 
     #[test]
-    fn inflight_lookup_keeps_the_loop_polling_until_it_settles() {
+    fn inflight_lookup_settles_on_the_tick_after_its_wake() {
         let mut host = AutoLookup::default();
         let t0 = Instant::now();
-        assert_eq!(host.poll_deadline(t0), None);
         let (tx, pending) = mpsc::channel();
         let mut pending = Some(pending);
         host.tick(t0, true, true, || pending.take().expect("one lookup"));
-        assert!(host.poll_deadline(t0).is_some(), "lookup in flight");
+        assert!(host
+            .tick(t0, true, true, || unreachable!("lookup in flight"))
+            .is_none());
         tx.send(Ok(fix())).unwrap();
         assert!(host
             .tick(t0, true, true, || unreachable!("lookup in flight"))
             .is_some());
-        assert_eq!(
-            host.poll_deadline(t0),
-            None,
-            "idle once the fix is delivered"
-        );
     }
 
     #[test]

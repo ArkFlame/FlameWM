@@ -6,6 +6,9 @@
 //! runs the geocoding query for the picker. Both run network work on a worker
 //! thread; the UI thread only polls a channel while a request is in flight.
 
+use std::io::{Read, Write};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,9 +20,86 @@ use crate::weather_provider::{CurlFetcher, OpenMeteo};
 
 /// Minimum spacing between periodic weather fetches (opening the popup always fetches).
 pub const WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
-/// Loop cadence while a fetch is in flight; bounded by the curl timeout. A fetch takes seconds,
-/// so half a second keeps the wake rate low without a visible delay on the popup.
-pub const WEATHER_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Write end handed to worker threads. Shared, so one pipe serves every worker of a loop.
+pub type Waker = Arc<UnixStream>;
+
+/// Completion wake for worker-thread results. The reactor watches [`Self::reader`]; a worker
+/// writes one byte after it has sent its result, so the loop wakes once per result and never
+/// polls. Both ends are nonblocking: a full pipe already means a wake is pending.
+#[derive(Debug)]
+pub struct ResultWake {
+    reader: Arc<UnixStream>,
+    waker: Waker,
+}
+
+impl ResultWake {
+    pub fn new() -> std::io::Result<Self> {
+        let (reader, writer) = UnixStream::pair()?;
+        reader.set_nonblocking(true)?;
+        writer.set_nonblocking(true)?;
+        Ok(Self {
+            reader: Arc::new(reader),
+            waker: Arc::new(writer),
+        })
+    }
+
+    /// The read end for reactor registration (`AsRawFd` via [`Self::fd`]).
+    #[must_use]
+    pub fn reader(&self) -> Arc<UnixStream> {
+        Arc::clone(&self.reader)
+    }
+
+    #[must_use]
+    pub fn fd(&self) -> RawFd {
+        self.reader.as_raw_fd()
+    }
+
+    #[must_use]
+    pub fn waker(&self) -> Option<Waker> {
+        Some(Arc::clone(&self.waker))
+    }
+
+    /// Consumes pending wake bytes. The tick that follows applies the results.
+    pub fn drain(reader: &UnixStream) {
+        let mut buf = [0_u8; 64];
+        loop {
+            match (&*reader).read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    }
+}
+
+/// Writes the wake byte when dropped. Owned by the worker closure, so the byte is also written
+/// when the thread cannot start: the dropped sender then reports disconnected on the next tick.
+struct WakeOnDrop(Waker);
+
+impl Drop for WakeOnDrop {
+    fn drop(&mut self) {
+        let _ = (&*self.0).write(&[1]);
+    }
+}
+
+/// Runs `work` on a named worker thread and returns its result channel. The result is sent
+/// before the wake byte, so a wake always finds the result already queued.
+#[must_use]
+pub fn spawn_worker<T: Send + 'static>(
+    name: &str,
+    waker: Option<Waker>,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> mpsc::Receiver<T> {
+    let (tx, rx) = mpsc::channel();
+    let guard = waker.map(WakeOnDrop);
+    let _ = std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let _wake = guard;
+            let _ = tx.send(work());
+        });
+    rx
+}
 
 type WeatherResult = Result<flamewm_weather::weather::WeatherSnapshot, WeatherError>;
 
@@ -96,14 +176,6 @@ impl WeatherHost {
                 .is_some_and(|started| now.duration_since(started) >= WEATHER_REFRESH_INTERVAL)
     }
 
-    /// The next instant the shell loop must wake to poll an in-flight fetch.
-    /// The worker's result has no fd, so without this the loop sleeps until an
-    /// unrelated event and the popup stays on "Loading...".
-    #[must_use]
-    pub fn poll_deadline(&self, now: Instant) -> Option<Instant> {
-        self.inflight.as_ref().map(|_| now + WEATHER_POLL_INTERVAL)
-    }
-
     /// Advances the scheduler: applies a finished fetch, then starts one if due.
     /// Returns true when the visible state changed.
     pub fn tick(
@@ -151,30 +223,25 @@ impl Default for WeatherHost {
 /// Production fetch: Open-Meteo through the curl fetcher, on a worker thread.
 /// If the thread cannot start, the dropped sender reports a transport error.
 #[must_use]
-pub fn spawn_weather_fetch(location: WeatherLocation) -> mpsc::Receiver<WeatherResult> {
-    let (tx, rx) = mpsc::channel();
-    let _ = std::thread::Builder::new()
-        .name("flamewm-weather".to_owned())
-        .spawn(move || {
-            flamewm_integrations_linux::background::lower_current_thread();
-            let _ = tx.send(OpenMeteo(CurlFetcher).forecast(&location));
-        });
-    rx
+pub fn spawn_weather_fetch(
+    location: WeatherLocation,
+    waker: Option<Waker>,
+) -> mpsc::Receiver<WeatherResult> {
+    spawn_worker("flamewm-weather", waker, move || {
+        flamewm_integrations_linux::background::lower_current_thread();
+        OpenMeteo(CurlFetcher).forecast(&location)
+    })
 }
 
 type SearchResult = Result<Vec<WeatherLocation>, WeatherError>;
 
 /// Production geocoding search on a worker thread (same fetcher as the forecast).
 #[must_use]
-pub fn spawn_location_search(query: String) -> mpsc::Receiver<SearchResult> {
-    let (tx, rx) = mpsc::channel();
-    let _ = std::thread::Builder::new()
-        .name("flamewm-weather-search".to_owned())
-        .spawn(move || {
-            flamewm_integrations_linux::background::lower_current_thread();
-            let _ = tx.send(OpenMeteo(CurlFetcher).search(&query));
-        });
-    rx
+pub fn spawn_location_search(query: String, waker: Option<Waker>) -> mpsc::Receiver<SearchResult> {
+    spawn_worker("flamewm-weather-search", waker, move || {
+        flamewm_integrations_linux::background::lower_current_thread();
+        OpenMeteo(CurlFetcher).search(&query)
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -196,6 +263,8 @@ pub struct LocationSearch {
     pub focused: bool,
     pub results: Vec<WeatherLocation>,
     pub status: SearchStatus,
+    /// Completion wake for the search worker; set once by the owning loop.
+    pub wake: Option<Waker>,
     inflight: Option<Arc<Mutex<mpsc::Receiver<SearchResult>>>>,
 }
 
@@ -210,12 +279,6 @@ impl LocationSearch {
         self.status = SearchStatus::Searching;
         self.inflight = Some(Arc::new(Mutex::new(spawn(query))));
         true
-    }
-
-    /// True while a geocoding request is outstanding and must be polled.
-    #[must_use]
-    pub fn in_flight(&self) -> bool {
-        self.inflight.is_some()
     }
 
     /// Applies a finished search. Returns true when the visible state changed.
@@ -323,24 +386,16 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_fetch_keeps_the_loop_polling_until_the_result_lands() {
+    fn in_flight_fetch_applies_on_the_tick_that_follows_its_wake() {
         let mut host = WeatherHost::new();
         host.apply_settings(settings(true, true));
         let start = Instant::now();
-        assert_eq!(host.poll_deadline(start), None, "nothing in flight yet");
         // Worker that has not answered yet: the sender stays alive, so try_recv is Empty.
         let (tx, rx) = mpsc::channel::<WeatherResult>();
         let mut pending = Some(rx);
         host.tick(start, |_| pending.take().expect("one fetch"));
-        assert_eq!(
-            host.poll_deadline(start),
-            Some(start + WEATHER_POLL_INTERVAL)
-        );
-        host.tick(start + WEATHER_POLL_INTERVAL, |_| {
-            unreachable!("fetch in flight")
-        });
+        assert!(!host.tick(start, |_| unreachable!("fetch in flight")));
         assert_eq!(host.state, WeatherState::Loading);
-        assert!(host.poll_deadline(start).is_some());
         tx.send(Ok(WeatherSnapshot {
             location: location(),
             temperature_c: 9,
@@ -350,13 +405,54 @@ mod tests {
             fetched_at: 1,
         }))
         .unwrap();
-        assert!(host.tick(start + WEATHER_POLL_INTERVAL, |_| unreachable!()));
+        assert!(host.tick(start, |_| unreachable!()));
         assert!(matches!(host.state, WeatherState::Ready(_)));
-        assert_eq!(
-            host.poll_deadline(start),
-            None,
-            "idle again after the result"
+    }
+
+    /// Blocks until the wake pipe has a byte. Bounded, so a missing wake fails instead of hanging.
+    fn wait_for_wake(reader: &UnixStream) -> bool {
+        let mut buf = [0_u8; 8];
+        for _ in 0..500 {
+            match (&*reader).read(&mut buf) {
+                Ok(n) if n > 0 => return true,
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn worker_completion_wakes_the_reader_once_with_the_result_queued() {
+        let wake = ResultWake::new().expect("wake pair");
+        let reader = wake.reader();
+        let (go, gate) = mpsc::channel::<()>();
+        let rx = spawn_worker("test-worker", wake.waker(), move || {
+            let _ = gate.recv();
+            7_u8
+        });
+        // Still running: no byte, so the loop has nothing to wake for.
+        let mut buf = [0_u8; 8];
+        assert!(
+            matches!((&*reader).read(&mut buf), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
         );
+        assert!(rx.try_recv().is_err());
+        go.send(()).unwrap();
+        assert!(wait_for_wake(&reader), "completion must wake the reader");
+        // The result was queued before the byte, so the woken tick finds it.
+        assert_eq!(rx.try_recv(), Ok(7));
+        ResultWake::drain(&reader);
+        assert!(
+            matches!((&*reader).read(&mut buf), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+
+    #[test]
+    fn failed_worker_start_still_wakes_and_reports_disconnect() {
+        // A worker dropped without running (the spawn-failure path) writes the wake byte.
+        let wake = ResultWake::new().expect("wake pair");
+        let reader = wake.reader();
+        drop(WakeOnDrop(wake.waker().expect("waker")));
+        assert!(wait_for_wake(&reader));
     }
 
     #[test]
@@ -440,22 +536,18 @@ mod tests {
     }
 
     #[test]
-    fn location_search_in_flight_until_its_result_is_polled() {
-        let mut search = LocationSearch::default();
-        assert!(!search.in_flight());
-        search.query = "Berlin".to_owned();
+    fn location_search_applies_its_result_only_when_polled() {
+        let mut search = LocationSearch {
+            query: "Berlin".to_owned(),
+            ..LocationSearch::default()
+        };
         let (tx, rx) = mpsc::channel::<SearchResult>();
         let mut pending = Some(rx);
         assert!(search.submit(|_| pending.take().expect("one search")));
-        assert!(
-            search.in_flight(),
-            "helper loop must keep polling while a search runs"
-        );
         assert!(!search.poll(), "no result yet");
-        assert!(search.in_flight());
         tx.send(Ok(vec![location()])).unwrap();
         assert!(search.poll());
-        assert!(!search.in_flight());
+        assert_eq!(search.results, vec![location()]);
     }
 
     #[test]

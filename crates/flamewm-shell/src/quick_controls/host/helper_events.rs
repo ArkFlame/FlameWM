@@ -42,7 +42,10 @@ pub fn route_helper_event(
                         snapshot.weather_search.query.pop();
                     }
                     "\r" | "\n" => {
-                        snapshot.weather_search.submit(spawn_location_search);
+                        let wake = snapshot.weather_search.wake.clone();
+                        snapshot
+                            .weather_search
+                            .submit(move |query| spawn_location_search(query, wake));
                     }
                     other => snapshot.weather_search.query.push_str(other),
                 }

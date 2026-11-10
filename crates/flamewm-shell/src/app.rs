@@ -154,6 +154,8 @@ pub(crate) struct ShellLoop {
     pub(crate) weather_feed_pending: bool,
     /// Automatic location lookup cadence (opt-in via `autoLocationEnabled`).
     pub(crate) auto_lookup: flamewm_shell::weather_auto::AutoLookup,
+    /// Completion wake shared by the weather and IP-lookup workers; the reactor watches its reader.
+    pub(crate) result_wake: flamewm_shell::weather_host::ResultWake,
     /// The reactor's single shared wake slot; the tick publishes the earliest pending deadline.
     pub(crate) wake: Option<flamewm_reactor::WakeDeadline>,
     /// Zone this process applied from the automatic time zone; `None` means the system zone.
@@ -244,6 +246,7 @@ impl ShellLoop {
             weather: flamewm_shell::weather_host::WeatherHost::new(),
             weather_feed_pending: true,
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
+            result_wake: flamewm_shell::weather_host::ResultWake::new().expect("result wake pair"),
             wake: None,
             auto_time_zone_applied: None,
             time_zone_changed: false,
