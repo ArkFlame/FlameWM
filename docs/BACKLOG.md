@@ -14,7 +14,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | meas-build | quality | `syn` and `x11rb-protocol` single-unit build cost | `docs/backlog/measure.md` meas-build section: gate scope has no syn or x11rb; build-override lever -6.5% | measured, no lever at 10% | S | measured |
 | meas-perf-blocked | quality | `perf record` blocked: `perf_event_paranoid=4` | `docs/backlog/measure.md:69` | no CPU profile of cold settings paint | S | open |
 | perf-bgprio | perf | Background workers lowered to nice 10 (explorer thumbs and watcher added) | `docs/backlog/measure.md` "perf-bgprio" inventory; helper `crates/flamewm-integrations-linux/src/background.rs` | A/B (explorer, 300 PNG, 14 pairs under stress-ng cpu 12 + 7 idle): no reliable gain; pooled ~10% under contention, sign flips between batches; idle no change | S | measured, no gain |
-| read-P3 | reliability | `expect` in XWayland callback after teardown | `wm-wayland/src/xwayland.rs:690` (per read.md); blocker recorded `810cb7ce` at `94be79e1` | compositor panic, timing unverified | M | open |
+| read-P3 | reliability | `expect` in XWayland callback after teardown | `wm-wayland/src/xwayland.rs:687-690` (verified at 92a40bf0); blocker recorded `810cb7ce` at `94be79e1` | compositor panic, timing unverified | M | open |
 | dock-wl | visual | Dock pill translucency on Wayland: pill = X11 at opacity 70 over purple (38,0,38) and over bright white wallpaper (76,76,76), 0 levels, 3 runs each; bottom bar 0 levels; bright managed window beneath pill still unverified | `dock-translucency.md` Wayland sections 2026-11-10 and 2026-11-10b; `docs/DOCK_BACKDROP.md:109` | visual regression risk | M | open (narrowed; managed-window case remains) |
 | look-muted | visual | `--muted` still differs in 3 stylesheets: `desktop.css`, `task-manager.css`, `shell/flamewm.css` (showcase `ui/flamewm.css` fixed in `decac5a4`; terminal and explorer deliberate) | `docs/backlog/look.md:39`; assistant, osd, archiver removed in `0de670a1` | colour drift | S | partial (base `bc8098cd`, showcase `decac5a4`) |
 | look-radius | visual | Two radius scales in `ui/base/tokens.css` | `docs/backlog/look.md:35`; radius pass dropped | token drift | M | open |
@@ -35,18 +35,23 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | cmp-volume | feature | Per-app volume wheel on taskbar button | `cmp-7`; `integrations-linux/src/pulse.rs:180` backend exists | partial | S | done in `5320c11a`; no real audio server verification |
 | read-P4 | quality | `unreachable!()` in MPRIS (provably unreachable) | `integrations-linux/src/mpris.rs:575` | cosmetic | S | won't-fix: let-else rewrite does not reduce code; the early return already guarantees both Options |
 | read-P5 | quality | `pub` test oracle with `expect` in production file | `control-dbus/src/mutation_queue.rs:196` | limited | S | done d8dfa39e (oracle under cfg(test)) |
-| read-P6 | quality | `expect` on thread spawn and socket pair in icon paths | `integrations-linux/src/icon_service.rs:261,617`; `shell/src/icon_loader.rs` | startup only | M | open |
+| read-P6 | quality | `expect` on thread spawn in icon paths | `integrations-linux/src/icon_service.rs:263,622` (shell `icon_loader.rs` expects removed) | startup only | M | open |
 | read-K1 | quality | Reads undefined setting key `launchFeedbackAnimation` | `shell/src/launch_feedback.rs:328`; no row in `platform/src/settings/stable.rs` | flag cannot be enabled | S | done d8dfa39e (dead read removed) |
 | read-D1 | quality | Dead `registered_items` | `tray/src/watcher.rs:114` | dead code | S | done d8dfa39e (dead accessor deleted) |
 | read-D2 | quality | Dead `runtime_document` | `ui-document/src/template.rs:94` | dead code | S | open |
 | read-D3 | quality | `icon_chain` used only by test | `integrations-linux/src/themes/mod.rs:132` | test-only API | S | open |
 | read-D4 | quality | `flush_settings` used only by test | `platform/src/host.rs:348` (confirm first) | possibly dead | S | open |
-| read-D5 | quality | Unused constants in glass, palette, recipes | `read.md:67` | dead code | S | open |
+| read-D5 | quality | Unused constants in glass, palette, recipes (9 names, each one occurrence) | `ui-core/src/glass.rs:26-28`; `skin/src/palette.rs:26,30,242`; `skin/src/recipes/{button.rs:12,sticky.rs:13,taskbar.rs:10}` | dead code | S | open |
 | read-D6 | quality | Dead `set_ring_mask` (dock, other owner) | `render-x11/src/surface_controller/dock.rs:153` | dead code | S | open |
 | read-D7 | quality | Unused `titlebar_rect`, `SESSION_LOCK_INTERFACE` | `skin/src/recipes/window_chrome.rs:82`; `wm-wayland/src/lock_global.rs:13` | dead code | S | open |
-| read-U1 | quality | Settings accessor duplicated in 5 places | `read.md:94` | maintenance | M | open |
-| read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `read.md:97` | test maintenance | S | open |
-| read-SIZE | quality | 49 production files over 600 lines; 6 over 1000 | `read.md (line unpinned)-271`; `desktop/src/widgets/mod.rs` 1307 | split by responsibility | L | open |
+| read-U1 | quality | Settings accessor duplicated (six copies; discovery said five) | `api/src/settings.rs:101-117`; `settings/src/app_impl_2.rs:596-641`; `wm-x11/src/live_settings.rs:96`; `shell/src/settings_projection/settings.rs:35-49`; `api/src/blue_light.rs:93`; `wm/src/main.rs:313` | maintenance | M | open |
+| read-U4 | quality | `drain` and `nonblocking_pair` test helpers duplicated | `finder/src/lib.rs:270,284`; `assistant/src/lib.rs:981,995` | test maintenance | S | open |
+| read-U5 | quality | `send_state` per-type adapters | `x11-desktop/src/shared.rs:156`; `x11-desktop/src/lib.rs:217`; `wm-x11/src/lib.rs:290` | low value | S | open (see dup-color-rgb) |
+| read-U6 | quality | `wall_clock_delay_ms` duplicated | `reactor/src/lib.rs:337`; `shell-core/src/clock.rs:40` | dep-edge decision | S | open (same as dup-wall-clock) |
+| read-U7 | quality | `runtime_image` duplicated (three copies) | `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91`; `lock/src/document.rs:649` | maintenance | S | open (same as dup-color-rgb) |
+| read-U8 | quality | `release` and `drop` single-instance helpers duplicated | `finder/src/instance.rs:63`; `assistant/src/instance.rs:69`; `integrations-linux/src/device_watch.rs:115`; `explorer/src/refresh.rs:114` | maintenance | S | open |
+| read-U9 | quality | `From<SurfaceRole>` in two crates | `ui-x11/src/surface_runtime.rs:25`; `render-x11/src/config.rs:67` | not a duplicate: different `SurfaceRole` and target types | S | won't-fix |
+| read-SIZE | quality | Oversized files (discovery: 49 over 600 lines, unverified) | `desktop/src/widgets/mod.rs` 1460 (was 1307); `lock/src/run.rs` 1262 (was 1130) | split by responsibility | L | open |
 | read-GUARD | quality | Five pending `TODO(J..-PENDING)` guard warnings, 24-62 days old | `tools/architecture_guard.py:440,518,522,851,859` | governance debt | S | open |
 | dup-wall-clock | quality | `wall_clock_delay_ms` duplicated in shell-core and reactor | `shell-core/src/clock.rs:40`; `reactor/src/lib.rs:337` (shell-core comment says it stays dependency-free) | needs dep-edge decision | S | open |
 | dup-color-rgb | quality | `rgb` helper in terminal and explorer; `send_state` in x11-desktop and wm-x11; `runtime_image` in desktop and shell | `terminal/src/ui.rs:21`; `explorer/src/theme.rs:97`; `x11-desktop/src/lib.rs:217`; `wm-x11/src/lib.rs:290`; `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91` | partial: rgb done via UiColor::from_rgb. send_state: logic already in `x11-desktop::shared::send_state`, remaining per-type wrappers are adapters (no net line win). runtime_image: `Rgb8Raster` is a type alias of `Rgba8Raster`, so identical converters; blocked on new edge `flamewm-integrations-linux -> flamewm-ui-document` (then `impl From<Rgba8Raster> for RuntimeImage` in integrations-linux) | S | open (needs dep edge) |
@@ -64,14 +69,14 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | wl-scale | feature | Per-output scale on Wayland. Pure layout math is tested: `output_layout.rs` `logical_size`/`physical_size` (round-trip fixed: `physical_size` now rounds like `logical_size`, `1329823d`). Static gaps: scale is read once from settings at startup (`control/settings.rs:107`, no runtime hook, `control/mod.rs:140`); `presentation_scale.rs:63-68` sends fractional preferred scale only on surface creation, so live scale changes never reach existing surfaces; `output_layout.rs` row layout, crossing and hit-test are `#![allow(dead_code)]` and not called from the live path (`output_layout.rs:1-9`). Runtime multi-scale unproven. | `wm-wayland/src/output_layout.rs`; `wm-wayland/src/presentation_scale.rs`; `wm-wayland/src/control/mod.rs:138-143` | mixed-scale outputs and live scale change (static, no runtime run) | M | partial |
 | meas-heap | perf | Idle RSS: 40 MB heap/anon unattributed | `wayland-rss.md` "Heap attribution" (`e92adbc5`): about 10.4 MB of the Wayland heap is non-Rust malloc; desktop Rust live 10.6 MB, largest site 3.4 MB; no site over 5 MB | no single site over 5 MB PSS; nothing landed | M | done `e92adbc5` (attributed); callers resolved by code reading in `wayland-rss.md` "Caller resolution", no runtime trace, no fix |
 | meas-sign | quality | Harness `measure.py` inverts signed `translate_coords` x/y | `docs/backlog/wayland-shared.md:56,71`; test pinned `f7f8a56f` | wrong measured frame origin | S | done `f7f8a56f` (`tools/test_flamewm_frame_origin.py`) |
-| read-E1 | reliability | Icon-theme rollback result dropped (data-loss path) | `read.md:36`; pattern gone in `themes/import.rs` | would lose user icon theme | S | done e96156bc |
-| read-E2 | reliability | Removable-mount save and auto-mount failures silent | `read.md:37`; no `let _ =` hits in `removable_mounts.rs` | silent mount failure | S | done e96156bc |
-| read-E3 | reliability | Desktop settings sync `on_ready` error dropped | `read.md:38`; `desktop/src/main.rs:567` now binds `ready` | stale settings UI | S | done e96156bc |
-| read-P1 | reliability | `unreachable!()` on D-Bus string-array input | `read.md:16`; `control-dbus/src/lib.rs:482` now `from_item` with `?` | desktop/shell panic | S | done e96156bc |
-| read-P2 | reliability | `expect` on client compositor data | `wm-wayland/src/state.rs:1132` | compositor panic, hard to reach | S | done `94be79e1` (logged default) |
+| read-E1 | reliability | Icon-theme rollback result dropped (data-loss path) | `docs/backlog/read.md` (discovery ref); pattern gone in `themes/import.rs` | would lose user icon theme | S | done e96156bc |
+| read-E2 | reliability | Removable-mount save and auto-mount failures silent | `docs/backlog/read.md` (discovery ref); no `let _ =` hits in `removable_mounts.rs` | silent mount failure | S | done e96156bc |
+| read-E3 | reliability | Desktop settings sync `on_ready` error dropped | `docs/backlog/read.md` (discovery ref); `desktop/src/main.rs:567` now binds `ready` | stale settings UI | S | done e96156bc |
+| read-P1 | reliability | `unreachable!()` on D-Bus string-array input | `docs/backlog/read.md` (discovery ref); `control-dbus/src/lib.rs:482` now `from_item` with `?` | desktop/shell panic | S | done e96156bc |
+| read-P2 | reliability | `expect` on client compositor data | `wm-wayland/src/state.rs:1145` (no `expect` left) | compositor panic, hard to reach | S | done `94be79e1` (logged default) |
 | read-E4 | reliability | Icon submit error dropped when queue full | `desktop/src/projection.rs:418` `let _ = self.service.submit(` | missing icons, no log | S | done 093a850c |
-| read-E5 | reliability | Empty `Err(_) => {}` arms in icon loader | `shell/src/icon_loader.rs:269,316,335` | unknown until read | S | done 093a850c |
-| read-E6 | reliability | Lock session settings `connect().ok()` falls back silently | `lock/src/session.rs:36,79` | silent default settings | S | done 093a850c |
+| read-E5 | reliability | Empty `Err(_) => {}` arms in icon loader | `shell/src/icon_loader.rs:374` (only `=> break` left) | unknown until read | S | done 093a850c |
+| read-E6 | reliability | Lock session settings `connect().ok()` falls back silently | `lock/src/session.rs:36-40` (logged before defaults) | silent default settings | S | done 093a850c |
 | dock-x11 | visual | Dock pill alpha follows opacity; backdrop reinstated after hide (X11) | `dock-translucency.md:31,51-56` 5-run table | dark pill over bright window (fixed on X11) | M | done 7aa3156e, 93448de1 |
 | dock-wire | reliability | Dock surface percent keys decoded as Integer | `dock-translucency.md:38`; test `control-wire/src/tests.rs:991` | wrong dock opacity | S | done 32f28041 |
 | look-muted-done | visual | One canonical `--muted` in `ui/base/base.css` | `look.md:7-12`; `ui/base/base.css:3` | colour consistency | S | done bc8098cd |
@@ -90,8 +95,17 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | break-b2 | reliability | WM start logs `XSettings X11 request failed: failed to read whole buffer` | `docs/backlog/break.md:27,42-46`: 14 of 30 soak runs; WM stays up, claim non-fatal (`crates/flamewm-wm/src/main.rs:165`); harness Xvfb `-noreset` `be106c4d` | XSettings not claimed in ~47% of runs before fix; root cause in `docs/backlog/break.md` | M | done be106c4d (harness fix; root cause in `docs/backlog/break.md`) |
 | wsh-dock-reserve | reliability | Dock strut-covered edge reserved once on Wayland (double reserve) | `docs/backlog/wayland-shared.md` row 5, Step E | Wayland client 58 px too small | S | done 79aa37c7 |
 | dup-rect-test | quality | `fn rect(x,y,w,h) -> Rect` test helper copied in 5 render-x11 test modules | `render-x11/src/app/clip.rs`, `damage_plan.rs`, `render.rs`, `native/coverage.rs` tests; `app/primitives.rs` | test maintenance | S | done (4 copies in render-x11 tests; primitives.rs had none; added Rect::new in render-core) |
-| read-U2 | quality | `node_backdrop_clip` and `scale_rect` duplicated in render-x11 (covers U3) | `read.md:95-281`; render-x11 copies now re-export `flamewm-render-core::lower` (871b4d33) | maintenance | S | done (871b4d33) |
+| read-U2 | quality | `node_backdrop_clip` and `scale_rect` duplicated in render-x11 (covers U3) | `docs/backlog/read.md` (discovery ref); render-x11 copies now re-export `flamewm-render-core::lower` (871b4d33) | maintenance | S | done (871b4d33) |
 | dup-build-rerun | quality | `rerun_tree` and `stage_tree` copied in desktop, settings and shell `build.rs` | moved to `crates/flamewm-render-compiler/src/build_tree.rs` (existing build-dep of all three; no new edge); landed `4be194c8` | done | M | done 4be194c8 |
+
+## read.md consolidated status (verified at origin/main `92a40bf0`)
+
+Re-checked by grep and read of current source, not from memory. Evidence per row is in the table above and in `docs/backlog/read.md`.
+
+- Done: P1 `e96156bc`, P2 `94be79e1`, P5 `d8dfa39e`, E1-E3 `e96156bc`, E4-E6 `093a850c`, K1 `d8dfa39e`, D1 `d8dfa39e`, U2-U3 `871b4d33`.
+- Won't-fix: P4 (`mpris.rs:568` guard makes `575` unreachable), U9 (different types), K2 and K3 (intentional aliases, not rows).
+- Open: P3, P6, D2, D3, D4, D5, D6, D7, U1, U4, U5, U6, U7, U8, SIZE, GUARD (`tools/architecture_guard.py:440,518,522,851,859`, all present).
+- Unverified: P3 runtime timing (no runtime run); D4 "test-only" is from grep, not a build; SIZE file-count baseline (49) not re-run.
 
 ## Landed since 1951e0df
 
