@@ -122,3 +122,20 @@ Candidate: in `wake::drain_and_commit`, merge consecutive `SessionEvent::Output`
 | coalesced | 5 | 5.81 s, median 5.97 s (range 5.26 to 6.36) | 3.44 MB/s | 147 | 5.4 to 5.9 |
 
 Gain at matched load: +8.6% by mean, +2.6% by median, ranges overlap. Below the 10% bar, so the change was reverted and not pushed. The first base pass ran at load 13 and is not comparable to the coalesced run at load 5.5. Per-read `feed` overhead is therefore not the dominant cost; the remaining time is in the per-byte parser and screen print. Next: a sampling profile of `terminal.parse` (needs `perf` access or an external profiler) before any further parse change. Allocations per PTY read (`buffer[..count].to_vec()` in `session.rs` read loop) are still unmeasured.
+
+## Terminal cold start re-measure (meas-terminal, origin/main be106c4d)
+
+Measurement only. No product code changed. Base: origin/main `be106c4d`, `flamewm-terminal` fast profile, own target `/run/media/linsaftw/SDD/gate-targets/termstart-base`. Private `Xvfb :320` 1920x1080x24 with `-noreset` (copy of `scripts/perf/startup.sh` with `DNUM=320` and `-noreset`, not committed). Command: `startup.sh --bin-dir <fast> --runs 7 --warmups 1 terminal`. Load1 8.5 to 8.9 before and after the run (12 cores, shared).
+
+| Run | Mapped (ms) | Painted (ms) | Map-to-paint (ms) |
+| --- | --- | --- | --- |
+| 1 | 130.1 | 155.9 | 25.8 |
+| 2 | 115.9 | 140.2 | 24.3 |
+| 3 | 146.9 | 179.5 | 32.6 |
+| 4 | 181.3 | 215.1 | 33.8 |
+| 5 | 117.7 | 134.9 | 17.2 |
+| 6 | 99.6 | 116.8 | 17.2 |
+| 7 | 100.1 | 105.4 | 5.3 |
+| Median | 117.7 | 140.2 | **24.3** (median of per-run differences) |
+
+Result: median map-to-paint 24.3 ms, below the 100 ms threshold, so no startup span was profiled and no code was changed. The earlier 276/618 ms figures and the ~340 ms map-to-paint gap in this row are stale. The f528ab83 change holds: the terminal paints about 24 ms after map on an idle-ish host.
