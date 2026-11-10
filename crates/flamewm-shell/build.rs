@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use flamewm_render_compiler::{compile_file, encode, CompileOptions};
+use flamewm_render_compiler::{compile_file, encode, rerun_tree, stage_tree, CompileOptions};
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -99,17 +99,6 @@ fn main() {
     }
 }
 
-fn stage_tree(source: &Path, dest: &Path) {
-    fs::create_dir_all(dest).expect("create staged asset dir");
-    for entry in fs::read_dir(source).expect("read staged asset dir") {
-        let entry = entry.expect("read staged asset entry");
-        let path = entry.path();
-        if path.is_file() {
-            fs::copy(&path, dest.join(entry.file_name())).expect("stage asset file");
-        }
-    }
-}
-
 fn compile_to(source: &Path, shared_menu_css: &Path, output: &Path) {
     let compiled = compile_file(
         source,
@@ -119,17 +108,4 @@ fn compile_to(source: &Path, shared_menu_css: &Path, output: &Path) {
     .unwrap_or_else(|error| panic!("failed to compile {}: {error}", source.display()));
     let bytes = encode(&compiled.document).expect("compiled FlameWM UI must encode");
     fs::write(output, bytes).expect("write compiled FlameWM UI artifact");
-}
-
-fn rerun_tree(dir: &Path) {
-    println!("cargo:rerun-if-changed={}", dir.display());
-    let mut files = fs::read_dir(dir)
-        .expect("read tracked asset dir")
-        .map(|entry| entry.expect("read tracked asset entry").path())
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
-    files.sort();
-    for file in files {
-        println!("cargo:rerun-if-changed={}", file.display());
-    }
 }

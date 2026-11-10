@@ -2,7 +2,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use flamewm_render_compiler::{CompileOptions, CompileOutput, compile_file, decode, encode};
+use flamewm_render_compiler::{
+    CompileOptions, CompileOutput, compile_file, decode, encode, rerun_tree, stage_tree,
+};
 
 #[path = "ui_contract.rs"]
 mod ui_contract;
@@ -388,17 +390,6 @@ fn validate_compiled_desktop_nodes(ids: &[&str]) {
     }
 }
 
-fn stage_tree(source: &Path, dest: &Path) {
-    fs::create_dir_all(dest).expect("create staged asset dir");
-    for entry in fs::read_dir(source).expect("read staged asset dir") {
-        let entry = entry.expect("read staged asset entry");
-        let path = entry.path();
-        if path.is_file() {
-            fs::copy(&path, dest.join(entry.file_name())).expect("stage asset file");
-        }
-    }
-}
-
 fn validate_text_targets(output: &CompileOutput) {
     let mut ids = Vec::with_capacity(272);
     for slot in 1..=16 {
@@ -451,17 +442,4 @@ fn assert_dynamic_text_target(output: &CompileOutput, id: &str) {
         child.next_sibling.is_none() && child.first_child.is_none(),
         "dynamic text target '{id}' must contain one text child"
     );
-}
-
-fn rerun_tree(dir: &Path) {
-    println!("cargo:rerun-if-changed={}", dir.display());
-    let mut files = fs::read_dir(dir)
-        .expect("read tracked asset dir")
-        .map(|entry| entry.expect("read tracked asset entry").path())
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
-    files.sort();
-    for file in files {
-        println!("cargo:rerun-if-changed={}", file.display());
-    }
 }
