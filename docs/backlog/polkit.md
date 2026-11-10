@@ -35,6 +35,44 @@ Status: core and bounded event queue landed in `flamewm-integrations-linux`; UI,
 - `PolkitEventQueue`: bounded (`MAX_QUEUED_EVENTS` = 16) FIFO implementing `AuthPrompt`. The shell drains typed `PolkitEvent::{Show, Dismiss}` via `drain()`. A cancel for an undrained `Show` removes it instead of queueing a `Dismiss`. No bus, UI or shell wiring; no daemon. Tests: `full_queue_rejects_second_prompt_without_pending_entry`, `dismiss_before_drain_cancels_undelivered_show`, `dismiss_after_drain_is_queued_for_shell`.
 - Tests use a mock prompt and in-process messages (no bus).
 
+## Session-id resolution (pol-sessid, landed)
+
+`polkit_agent::resolve_session_id(env_session_id, pid, &impl SessionLookup)` is pure:
+
+1. `XDG_SESSION_ID` passed in by the caller, trimmed; a blank value counts as absent. Not read inside the function.
+2. Otherwise `SessionLookup::session_id_for_pid(pid)`, the logind `GetSessionByPID` mapping (object path to `Id` property). Blank answer is `InvalidArgument`; lookup errors propagate. No guessed fallback.
+
+The trait has a fake in tests only. No real logind implementation: the crate has `BusPump` with `BusKind::System` and `send_with_reply`, so a thin call is possible, but it needs a pump and a reply-timeout policy that this step does not decide. Real impl stays open in `pol-sessid`. Known weakness: `XDG_SESSION_ID` can be stale under `su`/`sudo` that keeps the caller's env, so env-first can name another seat. Cross-checking against logind is the follow-up once the real lookup exists.
+
+## Session wiring decision (pol-session, design only, not wired)
+
+Decision: **the shell process registers the agent**, on its own system-bus connection, at shell start once the session id resolves. Not the WM, not a new helper.
+
+Reasons:
+
+- **Reactor rule.** `flamewm-reactor` owns native event sources. The agent's bus traffic goes through `flamewm_dbus_reactor::BusPump` on the shell's existing pump (`on_ready_with_object_path(AGENT_PATH, ...)`). No second pump, no thread.
+- **UI is not WM authority.** Polkit prompts are presentation; they must not live in `flamewm-wm` or `flamewm-wm-wayland`, which own windows and stacking. Registering in the WM would make a UI concern authoritative for WM lifetime.
+- **Consumer locality.** `PolkitEventQueue` is drained by the shell (`drain()`). Registering in the shell keeps producer and consumer in one process, so no new IPC is needed for `Show`/`Dismiss`.
+- **No new helper.** A dedicated `flamewm-polkit-agent` binary would need a new crate, new session-wrapper start order and a new IPC channel to the shell. That is more edges than the feature needs. Revisit only if the shell proves unable to stay up for the session.
+
+When:
+
+- After the shell's bus is ready (`BusPump::wait_ready` or the `on_ready` callback), not at process start. Failure to resolve the session id logs once and leaves the agent unregistered; no retry loop.
+- Session id: `resolve_session_id(std::env::var("XDG_SESSION_ID").ok().as_deref(), std::process::id(), &logind)`. The pid is the shell's own, never a child helper.
+
+Unregister:
+
+- On orderly shell exit: call `unregister_message(session_id)` and send it with a bounded timeout, ignoring the error, from the shell's shutdown path.
+- On crash or SIGKILL: no unregister runs. Polkit is expected to drop the agent when the registering unique name disappears, so a stale entry must not block the next shell. **Unverified:** this needs runtime proof (`pol-proof`).
+- Do not implement `Drop` that sends bus traffic. Drop runs during unwinding and would block on a dead bus.
+
+Another agent already registered:
+
+- Do not steal the subject. A second `RegisterAuthenticationAgent` for the same session is expected to fail with a polkit error; the shell logs it once and stays unregistered. **Unverified** error name, to confirm against polkit source in `pol-proof`.
+- Agents for other sessions are not our concern; the subject is per session.
+
+Constraints for the implementation row (not done here): the shell must not hold `AgentSessions` state in its UI layer as authority; it is a pending-prompt cache that polkit's cookies key. Cancel from polkit always wins over a pending UI answer.
+
 ## Open (not in this step)
 
 1. Prompt window (visual; needs a design decision and an existing dialog pattern).

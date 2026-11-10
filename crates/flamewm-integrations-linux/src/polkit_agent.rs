@@ -364,6 +364,123 @@ fn invalid(message: &str) -> FlameError {
     FlameError::new(ErrorCode::InvalidArgument, format!("polkit: {message}"))
 }
 
+/// Logind lookup of the session that owns a process. The real implementation is a
+/// `org.freedesktop.login1.Manager.GetSessionByPID` call on the system bus that maps the returned
+/// object path to its `Id` property; this crate does not provide it yet (see `pol-sessid`).
+pub trait SessionLookup {
+    /// Returns the logind session id (the `Id` property, e.g. `"2"`) for `pid`.
+    ///
+    /// # Errors
+    /// Returns an error when logind has no session for the process or the call fails.
+    fn session_id_for_pid(&self, pid: u32) -> FlameResult<String>;
+}
+
+/// Resolves the polkit `unix-session` subject id.
+///
+/// `XDG_SESSION_ID` (passed in by the caller, never read here) wins when it is non-blank. Otherwise
+/// the logind lookup is consulted for `pid`. A lookup failure or a blank logind answer is an error:
+/// there is no guessed fallback, because a wrong session id registers the agent for the wrong seat.
+///
+/// # Errors
+/// Returns `InvalidArgument` when neither source yields a non-blank id, or the lookup error.
+pub fn resolve_session_id(
+    env_session_id: Option<&str>,
+    pid: u32,
+    lookup: &impl SessionLookup,
+) -> FlameResult<String> {
+    if let Some(id) = env_session_id.map(str::trim).filter(|id| !id.is_empty()) {
+        return Ok(id.to_owned());
+    }
+    let id = lookup.session_id_for_pid(pid)?;
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(invalid("logind returned an empty session id"));
+    }
+    Ok(id.to_owned())
+}
+
+#[cfg(test)]
+mod session_id_tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    struct FakeLogind {
+        reply: Option<&'static str>,
+        calls: Cell<u32>,
+    }
+
+    impl FakeLogind {
+        fn new(reply: Option<&'static str>) -> Self {
+            Self {
+                reply,
+                calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl SessionLookup for FakeLogind {
+        fn session_id_for_pid(&self, pid: u32) -> FlameResult<String> {
+            self.calls.set(self.calls.get() + 1);
+            assert_eq!(pid, 4242, "lookup must be asked for the agent's pid");
+            self.reply
+                .map(str::to_owned)
+                .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake: no session for pid"))
+        }
+    }
+
+    #[test]
+    fn env_session_id_wins_and_skips_logind() {
+        let fake = FakeLogind::new(Some("99"));
+        assert_eq!(
+            resolve_session_id(Some("7"), 4242, &fake).expect("env"),
+            "7"
+        );
+        assert_eq!(fake.calls.get(), 0);
+    }
+
+    #[test]
+    fn env_is_trimmed_before_use() {
+        let fake = FakeLogind::new(None);
+        assert_eq!(
+            resolve_session_id(Some("  3\n"), 4242, &fake).expect("env"),
+            "3"
+        );
+        assert_eq!(fake.calls.get(), 0);
+    }
+
+    #[test]
+    fn missing_env_falls_back_to_logind() {
+        let fake = FakeLogind::new(Some("12"));
+        assert_eq!(resolve_session_id(None, 4242, &fake).expect("logind"), "12");
+        assert_eq!(fake.calls.get(), 1);
+    }
+
+    #[test]
+    fn blank_env_falls_back_to_logind() {
+        let fake = FakeLogind::new(Some("5"));
+        assert_eq!(
+            resolve_session_id(Some("   "), 4242, &fake).expect("logind"),
+            "5"
+        );
+        assert_eq!(fake.calls.get(), 1);
+    }
+
+    #[test]
+    fn logind_failure_is_reported_when_env_absent() {
+        let fake = FakeLogind::new(None);
+        let err = resolve_session_id(None, 4242, &fake).expect_err("no session");
+        assert!(matches!(err.code, ErrorCode::NotFound));
+    }
+
+    #[test]
+    fn blank_logind_answer_is_rejected() {
+        let fake = FakeLogind::new(Some(" "));
+        let err = resolve_session_id(Some(""), 4242, &fake).expect_err("blank");
+        assert!(matches!(err.code, ErrorCode::InvalidArgument));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
