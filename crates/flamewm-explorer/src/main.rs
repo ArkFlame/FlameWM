@@ -376,7 +376,7 @@ fn run()->Result<(),String>{
     let thumb_results=result_tx.clone();
     let thumb_wake=writer.try_clone().map_err(|e|e.to_string())?;
     let thumb_jobs=Arc::clone(&thumb_queue);
-    std::thread::Builder::new().name("flamewm-explorer-thumbs".into()).spawn(move||thumb_worker(thumb_jobs,thumb_results,thumb_wake)).map_err(|e|e.to_string())?;
+    std::thread::Builder::new().name("flamewm-explorer-thumbs".into()).spawn(move||{flamewm_integrations_linux::background::lower_current_thread();thumb_worker(thumb_jobs,thumb_results,thumb_wake)}).map_err(|e|e.to_string())?;
     // Background threads (search, watcher, recursive size) wake the UI through the same socket.
     let app_events=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let (search_tx,search_wake)=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);

@@ -156,3 +156,31 @@ Top units from the timed run (`--timings`, 66 units, 52 crates compiled, unit su
 - Build-override lever: median -6.5%, spread overlaps base (17.0 to 20.3 vs 17.2 to 31.6). Below the 10% bar, not applied.
 - Not tested: fast profile (not the gate profile; release is never touched), `debug = 0` for workspace crates (changes panic line info and backtraces, so excluded by the test-semantics rule), feature removal (no `x11rb` in scope).
 - Verdict: no lever qualifies for gate scope. Cargo.toml unchanged.
+
+## perf-bgprio: background worker priority inventory
+
+Base: origin/main `5383be64`. Command: `git grep -n -E "thread::Builder|thread::spawn|Command::new" -- crates` (649 hits, mostly tests, one-shot user actions and child processes). Background-class sites grouped by owner.
+
+Already lowered before this change (`flamewm_integrations_linux::background::lower_current_thread`, nice 10, per-thread via `setpriority(PRIO_PROCESS, gettid())`):
+- weather fetch and geocoding: `crates/flamewm-shell/src/weather_host.rs:231,242`
+- icon loader: `crates/flamewm-shell/src/icon_loader.rs:180`; `crates/flamewm-integrations-linux/src/icon_service.rs:260,619`
+- wallpaper decode: `crates/flamewm-desktop/src/wallpaper_loader.rs:165`
+- explorer search/index: `crates/flamewm-explorer/src/search.rs:292`
+- removable mount probe: `crates/flamewm-integrations-linux/src/removable_mounts.rs:378,383`
+
+Lowered by perf-bgprio (this change):
+- explorer thumbnail worker: `crates/flamewm-explorer/src/main.rs` (thread `flamewm-explorer-thumbs`)
+- explorer directory watcher: `crates/flamewm-explorer/src/refresh.rs` (thread `explorer-refresh`, mostly blocked in poll)
+
+Background-class, not lowered (no dependency edge to `flamewm-integrations-linux` in the owning crate; adding one is out of scope):
+- finder index thread: `crates/flamewm-finder/src/lib.rs:347`
+- imageviewer prefetch and decode: `crates/flamewm-imageviewer/src/decode.rs:173`
+- archiver worker: `crates/flamewm-archiver-app/src/window.rs:185,222`
+- screenshot helper: `crates/flamewm-screenshot/src/*` (child processes: ffmpeg, notify-send, gdbus)
+- updater/download paths: `crates/flamewm-assistant-core/src/download.rs:460` (user-initiated, not automatic)
+
+Not background-class (user-initiated or latency-sensitive, left alone): explorer copy/move transfers, explorer scan worker (directory listing for the open view), terminal PTY/session threads, WM event loops, clipboard owner/keeper.
+
+Priority syscalls: nice only (existing helper). `SCHED_IDLE`/`SCHED_BATCH` and `IOPRIO_CLASS_IDLE` need raw syscalls; `unsafe_code = forbid` blocks them, so they are not applied. Child processes inherit the nice value of the spawning thread; none of the listed children were measured for this.
+
+Measurement: not run in this change. The foreground paint-under-CPU-hog A/B (7 runs) was not executed, so no latency gain is claimed. Verdict: UNVERIFIED for benefit; change kept only as a scoped extension of the existing helper.

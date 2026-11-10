@@ -59,6 +59,7 @@ impl DirWatch {
         let thread = thread::Builder::new()
             .name("explorer-refresh".into())
             .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
                 let mut buffer = [0_u8; 4096];
                 let mut pending: Option<Instant> = None;
                 loop {
