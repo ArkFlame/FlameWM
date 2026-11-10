@@ -322,13 +322,7 @@ impl LaunchFeedback {
         }
         let surface = self.surface(runtime)?;
         // No global cursor replacement and no pointer-event interception.
-        let (x, mut y) = badge_position(px, py, side as i32, scale, output);
-        // Opt-in only; global animation/reduced-motion policy always wins.
-        let animate = settings.is_some_and(|s| {
-            s.values.get("launchFeedbackAnimation") == Some(&SettingValue::Boolean(true))
-                && s.values.get("animationsEnabled") != Some(&SettingValue::Boolean(false))
-                && s.values.get("reducedMotion") != Some(&SettingValue::Boolean(true))
-        });
+        let (x, y) = badge_position(px, py, side as i32, scale, output);
         let animate_indicator = settings.is_none_or(|s| {
             s.values.get("animationsEnabled") != Some(&SettingValue::Boolean(false))
                 && s.values.get("reducedMotion") != Some(&SettingValue::Boolean(true))
@@ -363,10 +357,6 @@ impl LaunchFeedback {
                 })?;
                 self.indicator_frame = Some(frame);
             }
-        }
-        if animate {
-            let frame = ((now.saturating_duration_since(started).as_millis() / 140) % 4) as usize;
-            y = y.saturating_sub([0, 1, 2, 1][frame]);
         }
         if self.scale_applied != Some(scale) {
             runtime.apply_output_scale(surface, scale as f32 / 100.0)?;

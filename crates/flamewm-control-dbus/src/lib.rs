@@ -2,7 +2,9 @@
 
 pub mod mutation_queue;
 
-pub use mutation_queue::{MutationDispatcher, drain_queue_inline};
+pub use mutation_queue::MutationDispatcher;
+#[cfg(test)]
+pub use mutation_queue::drain_queue_inline;
 
 use std::cell::RefCell;
 use std::ffi::CString;

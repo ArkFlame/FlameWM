@@ -110,11 +110,6 @@ impl TrayWatcher {
         pump.on_ready(|message| state.handle(pump, message))
     }
 
-    #[must_use]
-    pub fn registered_items(&self) -> Vec<String> {
-        self.state.registry.registered_strings()
-    }
-
     /// Current items in key order with their reduced properties.
     #[must_use]
     pub fn entries(&self) -> Vec<(ItemKey, ItemProps)> {

@@ -180,6 +180,7 @@ impl Drop for MutationDispatcher {
     }
 }
 
+#[cfg(test)]
 /// Pure FIFO ordering oracle used by tests that cannot open a bus: drains the
 /// queue in submission order and records `Unit` results without sleeping.
 pub fn drain_queue_inline(queue: &ControlMutationQueue) -> Vec<u64> {
