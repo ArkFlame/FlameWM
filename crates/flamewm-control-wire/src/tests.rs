@@ -1320,6 +1320,50 @@ fn bluetooth_device_actions_round_trip_and_reject_malformed_input() {
 }
 
 #[test]
+fn vpn_connection_action_round_trips_and_rejects_malformed_input() {
+    use flamewm_api::system::{VpnConnectionAction, VpnConnectionOp, VpnConnectionUuid};
+    const UUID: &str = "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    let request = ControlRequest::SystemAction {
+        action: SystemAction::VpnConnection(VpnConnectionAction {
+            op: VpnConnectionOp::Activate,
+            uuid: VpnConnectionUuid::new(UUID).expect("valid uuid"),
+        }),
+        expected_revision: 9,
+    };
+    let call = assert_request_round_trip(&request);
+    assert_eq!(call.member, "VpnConnection");
+    assert_eq!(
+        call.args,
+        vec![
+            WireValue::String("activate".to_owned()),
+            WireValue::String(UUID.to_owned()),
+            WireValue::U64(9),
+        ]
+    );
+    let bad_op = WireCall::new(
+        IFACE_SYSTEM,
+        "VpnConnection",
+        vec![
+            WireValue::String("deactivate".to_owned()),
+            WireValue::String(UUID.to_owned()),
+            WireValue::U64(9),
+        ],
+    );
+    assert!(decode_call(&bad_op).is_err());
+    let bad_uuid = WireCall::new(
+        IFACE_SYSTEM,
+        "VpnConnection",
+        vec![
+            WireValue::String("activate".to_owned()),
+            WireValue::String("/org/freedesktop/NetworkManager/Settings/7".to_owned()),
+            WireValue::U64(9),
+        ],
+    );
+    assert!(decode_call(&bad_uuid).is_err());
+    assert!(VpnConnectionUuid::new("3f1c2d4e5a6b4c7d8e9f0a1b2c3d4e5f").is_none());
+}
+
+#[test]
 fn power_profiles_snapshot_round_trips_including_absent_defaults() {
     use flamewm_api::system::{PowerProfile, PowerProfilesSnapshot};
     let offered = SystemSnapshot {

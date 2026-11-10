@@ -525,6 +525,32 @@ mod tests {
     }
 
     #[test]
+    fn vpn_connection_is_revision_fenced_and_reaches_handler_when_current() {
+        let mut service = SystemService::default();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        service.set_action_handler(Box::new(move |action, _| {
+            sink.borrow_mut().push(action);
+            Ok(())
+        }));
+        let action = SystemAction::VpnConnection(flamewm_api::system::VpnConnectionAction {
+            op: flamewm_api::system::VpnConnectionOp::Activate,
+            uuid: flamewm_api::system::VpnConnectionUuid::new(
+                "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+            )
+            .expect("valid uuid"),
+        });
+        let stale = service.snapshot().revision.wrapping_add(7);
+        assert!(service.perform_action(action.clone(), stale).is_err());
+        assert!(seen.borrow().is_empty());
+        let current = service.snapshot().revision;
+        service
+            .perform_action(action.clone(), current)
+            .expect("current revision reaches handler");
+        assert_eq!(seen.borrow().as_slice(), [action]);
+    }
+
+    #[test]
     fn battery_menu_actions_bypass_revision_fence_but_still_reach_handler() {
         let mut service = SystemService::default();
         let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));

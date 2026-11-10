@@ -157,6 +157,7 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
             | "SetPowerProfile"
             | "SetBrightness"
             | "BluetoothDevice"
+            | "VpnConnection"
             | "BatteryMenuOpened"
             | "BatteryMenuClosed",
         )

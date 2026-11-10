@@ -423,8 +423,45 @@ pub enum SystemAction {
     SetBrightness(BrightnessAction),
     SetPowerProfile(PowerProfile),
     BluetoothDevice(BluetoothDeviceAction),
+    VpnConnection(VpnConnectionAction),
     BatteryMenuOpened,
     BatteryMenuClosed,
+}
+
+/// Profile UUID of a `NetworkManager` connection, canonical `8-4-4-4-12` hex. Build with [`Self::new`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnConnectionUuid(String);
+
+impl VpnConnectionUuid {
+    /// Returns `None` unless `text` is the canonical 36-character hex UUID form.
+    #[must_use]
+    pub fn new(text: &str) -> Option<Self> {
+        let bytes = text.as_bytes();
+        let ok = bytes.len() == 36
+            && bytes.iter().enumerate().all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => *byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            });
+        ok.then(|| Self(text.to_owned()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One VPN profile operation. Only `Activate` exists; deactivate is a later slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VpnConnectionOp {
+    Activate,
+}
+
+/// VPN profile write, selected by the profile's UUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnConnectionAction {
+    pub op: VpnConnectionOp,
+    pub uuid: VpnConnectionUuid,
 }
 
 impl core::fmt::Debug for SystemAction {
@@ -487,6 +524,7 @@ impl core::fmt::Debug for SystemAction {
             Self::BluetoothDevice(action) => {
                 f.debug_tuple("BluetoothDevice").field(action).finish()
             }
+            Self::VpnConnection(action) => f.debug_tuple("VpnConnection").field(action).finish(),
             Self::BatteryMenuOpened => f.write_str("BatteryMenuOpened"),
             Self::BatteryMenuClosed => f.write_str("BatteryMenuClosed"),
         }

@@ -148,6 +148,12 @@ impl NetworkManagerProvider {
                 }
                 Ok(())
             }
+            SystemAction::VpnConnection(action) => match action.op {
+                flamewm_api::system::VpnConnectionOp::Activate => {
+                    let message = vpn::get_connection_by_uuid_message(action.uuid.as_str())?;
+                    self.queue(message, PendingRequest::VpnLookup)
+                }
+            },
             SystemAction::Scan => {
                 let Some(_) = self.controller.request_scan()? else {
                     return Ok(());

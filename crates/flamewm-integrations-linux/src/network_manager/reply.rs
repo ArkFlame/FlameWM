@@ -589,7 +589,9 @@ impl NetworkManagerProvider {
                     let _ = self.controller.complete_scan(generation);
                     return Ok(());
                 }
-                PendingRequest::Action | PendingRequest::RegisterSecretAgent => return Ok(()),
+                PendingRequest::Action
+                | PendingRequest::VpnLookup
+                | PendingRequest::RegisterSecretAgent => return Ok(()),
                 PendingRequest::ActivateConnection { attempt }
                 | PendingRequest::AddAndActivateSecure { attempt }
                 | PendingRequest::SavedSettings { attempt, .. }
@@ -612,6 +614,12 @@ impl NetworkManagerProvider {
             }
         }
         match request {
+            PendingRequest::VpnLookup => {
+                let profile =
+                    vpn::single_object_path(&items, "network manager connection lookup reply")?;
+                let message = vpn::activate_vpn_message(&profile)?;
+                self.queue(message, PendingRequest::Action)
+            }
             PendingRequest::AddMatch
             | PendingRequest::Action
             | PendingRequest::ActivateConnection { .. }

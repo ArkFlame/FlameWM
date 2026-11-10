@@ -226,7 +226,10 @@ impl LinuxIntegrationRuntime {
             | SystemAction::SubmitNetworkSecret { .. }
             | SystemAction::CancelNetworkSecret { .. }
             | SystemAction::Disconnect
-            | SystemAction::Scan => self.network_manager.perform_action(action, network),
+            | SystemAction::Scan
+            | SystemAction::VpnConnection(_) => {
+                self.network_manager.perform_action(action, network)
+            }
             SystemAction::Play { .. }
             | SystemAction::Pause { .. }
             | SystemAction::PlayPause { .. }

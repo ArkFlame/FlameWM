@@ -274,6 +274,7 @@
     <method name="BatteryMenuClosed"><arg name="expectedRevision" type="t" direction="in"/></method>
     <method name="SetPowerProfile"><arg name="profile" type="s" direction="in"/><arg name="expectedRevision" type="t" direction="in"/></method>
     <method name="BluetoothDevice"><arg name="op" type="s" direction="in"/><arg name="address" type="s" direction="in"/><arg name="expectedRevision" type="t" direction="in"/></method>
+    <method name="VpnConnection"><arg name="op" type="s" direction="in"/><arg name="uuid" type="s" direction="in"/><arg name="expectedRevision" type="t" direction="in"/></method>
     <signal name="SystemChanged">
       <arg name="revision" type="t"/>
     </signal>

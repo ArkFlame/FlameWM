@@ -50,11 +50,17 @@ pub fn parse_connection_by_uuid_reply(reply: &Message) -> FlameResult<String> {
             "network manager connection lookup reply",
         ));
     }
-    match reply.get_items().as_slice() {
+    single_object_path(
+        &reply.get_items(),
+        "network manager connection lookup reply",
+    )
+}
+
+/// The one object path in a reply body. Used by the reactor, which holds reply items, not messages.
+pub(super) fn single_object_path(items: &[MessageItem], context: &str) -> FlameResult<String> {
+    match items {
         [MessageItem::ObjectPath(path)] => Ok(path.to_string()),
-        _ => Err(FlameError::invalid(
-            "network manager connection lookup reply",
-        )),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
@@ -96,10 +102,7 @@ pub fn parse_activate_vpn_reply(reply: &Message) -> FlameResult<String> {
     if reply.msg_type() != MessageType::MethodReturn {
         return Err(FlameError::invalid("network manager activate reply"));
     }
-    match reply.get_items().as_slice() {
-        [MessageItem::ObjectPath(path)] => Ok(path.to_string()),
-        _ => Err(FlameError::invalid("network manager activate reply")),
-    }
+    single_object_path(&reply.get_items(), "network manager activate reply")
 }
 
 #[cfg(test)]
@@ -152,6 +155,20 @@ mod tests {
             Path::new(ACTIVE_PATH.to_owned()).expect("path"),
         )]);
         assert_eq!(parse_activate_vpn_reply(&reply).as_deref(), Ok(ACTIVE_PATH));
+    }
+
+    #[test]
+    fn lookup_items_feed_activate_message_for_the_resolved_profile() {
+        let items = [MessageItem::ObjectPath(
+            Path::new(PROFILE_PATH.to_owned()).expect("path"),
+        )];
+        let profile = single_object_path(&items, "lookup").expect("one object path");
+        let message = activate_vpn_message(&profile).expect("settings path");
+        assert_eq!(message.member().as_deref(), Some(ACTIVATE_CONNECTION));
+        assert!(
+            single_object_path(&[MessageItem::Str(PROFILE_PATH.to_owned())], "lookup").is_err()
+        );
+        assert!(single_object_path(&[], "lookup").is_err());
     }
 
     #[test]

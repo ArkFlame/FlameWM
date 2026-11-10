@@ -417,6 +417,7 @@ fn run_session(
                         | SystemAction::SetBrightness(_)
                         | SystemAction::SetPowerProfile(_)
                         | SystemAction::BluetoothDevice(_)
+                        | SystemAction::VpnConnection(_)
                         | SystemAction::BatteryMenuOpened
                         | SystemAction::BatteryMenuClosed => integrations
                             .borrow_mut()

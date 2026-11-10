@@ -135,6 +135,8 @@ enum PendingRequest {
         generation: u64,
     },
     Action,
+    /// `GetConnectionByUuid` for a VPN activation; its reply queues the `ActivateConnection`.
+    VpnLookup,
     ActivateConnection {
         attempt: u64,
     },

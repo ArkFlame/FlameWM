@@ -1,5 +1,8 @@
 use super::*;
-use flamewm_api::system::{BluetoothDeviceAction, BluetoothDeviceOp};
+use flamewm_api::system::{
+    BluetoothDeviceAction, BluetoothDeviceOp, VpnConnectionAction, VpnConnectionOp,
+    VpnConnectionUuid,
+};
 
 pub(crate) fn workspace_index_request(
     call: &WireCall,
@@ -177,6 +180,19 @@ pub(crate) fn system_action_request(
                 required_u64(&call.args[2], "expectedRevision")?,
             )
         }
+        "VpnConnection" => {
+            expect_arity(call, 3)?;
+            let op = match required_string(&call.args[0], "op")? {
+                "activate" => VpnConnectionOp::Activate,
+                _ => return Err(invalid("unknown vpn connection operation")),
+            };
+            let uuid = VpnConnectionUuid::new(required_string(&call.args[1], "uuid")?)
+                .ok_or_else(|| invalid("vpn connection uuid"))?;
+            (
+                SystemAction::VpnConnection(VpnConnectionAction { op, uuid }),
+                required_u64(&call.args[2], "expectedRevision")?,
+            )
+        }
         "SetBrightness" => {
             expect_arity(call, 3)?;
             let percent = u8::try_from(required_u32(&call.args[0], "percent")?)
@@ -312,6 +328,18 @@ pub(crate) fn system_action_call(action: &SystemAction, expected_revision: u64) 
                 vec![
                     WireValue::String(op.to_owned()),
                     WireValue::String(action.address.clone()),
+                ],
+            )
+        }
+        SystemAction::VpnConnection(action) => {
+            let op = match action.op {
+                VpnConnectionOp::Activate => "activate",
+            };
+            (
+                "VpnConnection",
+                vec![
+                    WireValue::String(op.to_owned()),
+                    WireValue::String(action.uuid.as_str().to_owned()),
                 ],
             )
         }
