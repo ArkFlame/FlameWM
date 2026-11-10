@@ -50,3 +50,22 @@ reachable inputs, differing edge case), **different** (structurally distinct), *
   - Not run: the gate (no code change in this step), and any taskbar-off mode (no key used).
 
 Rows 4, 6b, 6c, 8, 12 are not moved; reasons are in the table. Row 8 (Grab state machine) is the largest remaining item.
+
+## Frame baseline X11 vs Wayland (decided: intended, no code change)
+
+Maximized xterm, Dock off, measured in both sessions. The harness printed signed `translate_coords` values, so the sign of the reported x/y is inverted; the table uses the on-screen origin.
+
+| Session | Frame (x,y,w,h) | Client (x,y,w,h) | Visible content (pixel scan) |
+|---|---|---|---|
+| X11 `flamewm-wm` | 2,2,1916,1032 | 3,33,1914,1000 | rim `#cccccc` at x=2 and x=1917, bottom y=1033; white from x=3 to 1916, y=33 to 1032 |
+| Wayland `flamewm-wm-wayland` | 2,2,1916,1032 | 2,33,1916,1001 | same rim pixels; the rim overlays client column x=2, row y=1033 and column x=1917 |
+
+Floating xterm, Dock off (screenshots `/tmp/claude-1000/wl-frame/run-*-dock0/shot.png`):
+- X11: frame 200,170,486x348; client 201,201,484x316. Rim 1 px `#cccccc` at x=200 and x=685; titlebar y=170..200 (31 px); client white from x=201.
+- Wayland: frame 60,60,484x347; client 60,91,484x316. Rim 1 px `#cccccc` at x=60 and x=543, overlaying client column 60; titlebar y=60..90 (31 px); client from y=91.
+
+Cause: the X11 frame-band path (no compositing manager, `outline_overlay_available == false`) subtracts the outline band (`windowOutlineWidth` = 1, `surface_outline_width`) from the client on left, right and bottom (`FrameExtents::with_inset`, `wm/window_state.rs:7`). The compositing-manager overlay path keeps the full client rect (`wm/window_state.rs:17`, test `frame_extents_publish_tests.rs:177`). Wayland always uses the overlay path: `render/titlebar.rs:567` `outline_elements` draws the ring on top of the client, and `model/geometry.rs:9` `client_from_frame` subtracts only the titlebar. The shared rim rule is `flamewm-render-core/src/outline.rs` (band at inset 0 of the silhouette), so visible pixels match.
+
+Decision: intended mechanism difference, not a shared-geometry bug. The 2 px width and 1 px height gap is the band that X11 reserves inside the client; Wayland paints it over the client. Titlebar 31 px, rim 1 px, frame outer rect identical in both. No code change. Re-open only if one backend adopts the other's band model.
+
+Open items (not investigated): the harness sign inversion in `measure.py` (`win.translate_coords(root,0,0)` returns negated coordinates); `flamewm-wm` binaries used were the existing `/run/media/linsaftw/SDD/target-shared/fast` build, not rebuilt from 80c35d0d.
