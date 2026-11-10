@@ -358,6 +358,8 @@ pub struct State {
     pub session_lock: Option<smithay::wayland::session_lock::SessionLockManagerState>,
     /// The surfaces a locking client drew, one per output, while the session is locked.
     pub locked_outputs: Vec<crate::session_lock::LockedOutput>,
+    /// Which outputs of the layout a live lock surface covers while the session is locked.
+    pub lock_cover: crate::lock_cover::LockCover,
     /// True from a lock request until unlock. It outlives the locker: a locker that dies leaves
     /// the output blank and the keyboard unfocused, never the desktop.
     pub session_locked: bool,
@@ -527,6 +529,7 @@ impl State {
         Ok(Self {
             session_lock,
             locked_outputs,
+            lock_cover: crate::lock_cover::LockCover::default(),
             session_locked: false,
             screencopy_pending: Vec::new(),
             display,

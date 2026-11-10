@@ -271,9 +271,11 @@ Known limitations that remain true are listed under "Remaining work".
    xdg-desktop-portal ScreenCast. Not proven: the Wayland branch of the portal backend and routing
    through a real xdg-desktop-portal (no run recorded) (`docs/BACKLOG.md` `wl-portal`, partial).
 3. Session lock: `ext-session-lock-v1` is advertised and paints the lock surface. A held lock blocks
-   WM shortcuts and routes pointer input only to the lock surface (`bf3af84a`). Open: multi-output
-   lock surfaces and outputs added while locked (the compositor drives one output). No runtime test
-   with a lock client yet.
+   WM shortcuts and routes pointer input only to the lock surface (`bf3af84a`). Per-output coverage
+   (`lock_cover.rs`) records which layout outputs have a live lock surface, uncovers a dead locker's
+   output, and resets on lock/unlock; it is unit-tested with no hardware. Open: the tty path still
+   drives one output, so lock surfaces on a second connector, outputs added while locked, and any
+   multi-output runtime run are unproven. No runtime test with a lock client yet.
 4. Native event sources: the compositor drives smithay's `EventLoop<State>` directly.
    `flamewm-reactor` wraps an `EventLoop<()>` whose callbacks take no state, so smithay's sources
    cannot be routed through it without a reactor change (owner decision). No

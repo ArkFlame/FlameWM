@@ -7,18 +7,22 @@
 //! reachable.
 
 use smithay::input::pointer::CursorImageStatus;
+use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
 
+use crate::lock_cover::LockCover;
 use crate::state::State;
 
 /// One locked output and the client surface covering it.
 pub struct LockedOutput {
     /// Kept for the protocol handshake and so a multi-output presenter can key on it later.
     pub _output: WlOutput,
+    /// Connector name of the output, the key `LockCover` tracks coverage by.
+    pub output_name: String,
     pub surface: LockSurface,
 }
 
@@ -32,6 +36,8 @@ impl State {
     /// Forgets every lock surface. Called on unlock, and when a locker dies mid-lock.
     pub fn clear_lock_surfaces(&mut self) {
         self.locked_outputs.clear();
+        // Coverage starts over: every output in the layout is uncovered until its surface arrives.
+        self.lock_cover = LockCover::new([self.output.name()]);
     }
 
     /// The size a lock surface covers: the whole output, as the protocol requires.
@@ -103,8 +109,13 @@ impl SessionLockHandler for State {
                 crate::state::next_serial(),
             );
         }
+        let output_name = Output::from_resource(&output)
+            .map(|output| output.name())
+            .unwrap_or_default();
+        self.lock_cover.cover(&output_name);
         self.locked_outputs.push(LockedOutput {
             _output: output,
+            output_name,
             surface,
         });
     }
@@ -154,6 +165,9 @@ pub const fn windows_reachable(session_locked: bool) -> bool {
 /// dead locker leaves a blank output rather than unlocking. Returns whether anything was removed.
 pub fn prune_dead_locks(state: &mut State) -> bool {
     let before = state.locked_outputs.len();
+    for dead in state.locked_outputs.iter().filter(|l| !l.surface.alive()) {
+        state.lock_cover.uncover(&dead.output_name);
+    }
     state.locked_outputs.retain(|locked| locked.surface.alive());
     let pruned = before != state.locked_outputs.len();
     if pruned && state.lock_surface().is_none() {

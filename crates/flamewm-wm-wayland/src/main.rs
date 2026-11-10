@@ -77,6 +77,7 @@ mod input;
 // feature-gated parts, which keeps the pause/resume state machine testable on any host.
 #[path = "protocols/compat.rs"]
 mod compat;
+mod lock_cover;
 mod lock_global;
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
 mod logind;

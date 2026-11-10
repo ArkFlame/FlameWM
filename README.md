@@ -86,7 +86,7 @@ tail -n 200 ~/.cache/flamewm/wayland-session.log
 ### Wayland known limitations
 
 - Native Wayland clients are shared-memory only: EGL/dmabuf clients fall back to software or SHM. X11 clients through XWayland are unaffected.
-- Session lock (`ext-session-lock`) is implemented in `crates/flamewm-wm-wayland/src/session_lock.rs`; runtime proof pending. No screenshot portal, per-output layout or per-output scale.
+- Session lock (`ext-session-lock`) is implemented in `crates/flamewm-wm-wayland/src/session_lock.rs`; runtime proof pending. The lock covers only the output the compositor drives; per-output lock coverage is tracked in `lock_cover.rs` but second-output lock surfaces are not yet rendered. No screenshot portal, per-output layout or per-output scale.
 - Shell, desktop and settings run as XWayland clients, not native Wayland clients.
 - At the default 80% terminal opacity the terminal body renders black. It renders correctly at `background_opacity = 100`.
 - At the default 80% terminal opacity the terminal body renders black. It renders correctly at `background_opacity = 100`.
