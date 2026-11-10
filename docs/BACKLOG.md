@@ -28,7 +28,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | pol-sessid | feature | Session-id source: `XDG_SESSION_ID` vs logind `GetSessionByPID` | `docs/backlog/polkit.md:40` | unresolved | S | open |
 | pol-proof | quality | Runtime proof with polkit daemon and `pkexec` | `docs/backlog/polkit.md:41` | mock-bus tests only | M | open |
 | bt-agent | feature | `org.bluez.Agent1` registration for PIN/passkey prompts (security-sensitive) | `docs/backlog/bluetooth.md:23` | Pair fails for most devices | L | open |
-| bt-ui | feature | Quick-controls Bluetooth row | `docs/backlog/bluetooth.md:25` | no UI | S | open |
+| bt-ui | feature | Quick-controls Bluetooth row (network popup; trust toggle via typed action) | `docs/backlog/bluetooth.md` (Landed: bt-ui) | done in `e80d4163`; no real BlueZ verification | S | done |
 | cmp-a11y | feature | Magnifier, colour filters (sticky keys partly: `26020113`) | `cmp-5` | absent | L | open |
 | cmp-alttab | feature | Alt+Tab live previews | `cmp-6`; no preview capture found | unverified | L | open |
 | cmp-volume | feature | Per-app volume wheel on taskbar button | `cmp-7`; `integrations-linux/src/pulse.rs:180` backend exists | partial | S | open |
