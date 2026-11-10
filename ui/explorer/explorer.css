@@ -85,8 +85,8 @@ button:active { background:var(--pressed-fill); }
 .progress-title { color:var(--text); font-size:14px; }
 .progress-percent { color:var(--accent); font-size:14px; }
 .progress-current { color:var(--muted); font-size:12px; width:274px; white-space:nowrap; overflow:hidden; }
-.progress-track { width:274px; height:8px; background:var(--card); border-radius:4px; }
-.progress-fill { width:0px; height:8px; background:var(--accent); border-radius:4px; }
+.progress-track { width:274px; height:8px; background:var(--card); border-radius:var(--r-sm); }
+.progress-fill { width:0px; height:8px; background:var(--accent); border-radius:var(--r-sm); }
 .progress-foot { display:flex; flex-direction:row; align-items:center; justify-content:space-between; width:274px; }
 .progress-bytes { color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; width:170px; }
 .progress-cancel { width:80px; height:28px; border-radius:6px; flex-grow:0; }

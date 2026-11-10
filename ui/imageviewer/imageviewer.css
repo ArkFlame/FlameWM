@@ -4,7 +4,7 @@ body { position:relative; width:100%; height:100%; margin:0; overflow:hidden; fo
 .photo { position:absolute; left:0px; top:0px; width:1px; height:1px; }
 .empty { position:absolute; left:0px; top:0px; right:0px; bottom:0px; display:flex; align-items:center; justify-content:center; }
 .empty-text { color:var(--muted); font-size:14px; }
-.bar { position:absolute; left:16px; right:16px; bottom:12px; height:34px; display:flex; flex-direction:row; align-items:center; gap:14px; padding:0px 14px; border-radius:12px; background-color:var(--key); }
+.bar { position:absolute; left:16px; right:16px; bottom:12px; height:34px; display:flex; flex-direction:row; align-items:center; gap:14px; padding:0px 14px; border-radius:var(--r-lg); background-color:var(--key); }
 .name { flex-grow:1; width:0px; min-width:0px; font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; }
 .meta { color:var(--muted); font-size:12px; white-space:nowrap; flex-grow:0; }
 .hint { color:var(--subtle); font-size:11px; white-space:nowrap; flex-grow:0; }
