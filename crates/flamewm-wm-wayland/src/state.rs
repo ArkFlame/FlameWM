@@ -1142,11 +1142,22 @@ impl State {
         if let Some(data) = client.get_data::<ClientState>() {
             return &data.compositor;
         }
-        &client
-            .get_data::<smithay::xwayland::XWaylandClientData>()
-            .expect("every client carries compositor data")
-            .compositor_state
+        if let Some(data) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &data.compositor_state;
+        }
+        missing_client_compositor_state()
     }
+}
+
+/// Fallback for a client that carries no compositor data. A misbehaving or half-initialised client
+/// must not panic the compositor, so it shares one default state and the miss is logged once.
+fn missing_client_compositor_state() -> &'static CompositorClientState {
+    static FALLBACK: std::sync::OnceLock<CompositorClientState> = std::sync::OnceLock::new();
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("flamewm-wayland: client without compositor data; using default state");
+    }
+    FALLBACK.get_or_init(CompositorClientState::default)
 }
 
 impl std::fmt::Debug for State {
@@ -1580,5 +1591,17 @@ mod tests {
         assert!(arm_retry(true, false, false));
         assert!(!arm_retry(true, false, true));
         assert!(!arm_retry(true, true, false));
+    }
+}
+
+#[cfg(test)]
+mod missing_client_state_tests {
+    use super::missing_client_compositor_state;
+
+    #[test]
+    fn missing_client_data_falls_back_to_one_shared_default() {
+        let first = missing_client_compositor_state() as *const _;
+        let second = missing_client_compositor_state() as *const _;
+        assert_eq!(first, second);
     }
 }
