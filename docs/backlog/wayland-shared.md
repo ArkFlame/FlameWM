@@ -14,18 +14,18 @@ reachable inputs, differing edge case), **different** (structurally distinct), *
 | 6 | Shortcut action-name parsers | `crates/flamewm-api/src/shortcuts.rs:71-112` (`workspace_activate_index`, `workspace_move_index`, `focus_direction`, `move_direction`, `workspace_direction`) | Wayland `input/shortcuts.rs` calls the same `flamewm_api` fns | **identical** (already shared) | none | `flamewm-api` |
 | 6b | Shortcut dispatch bodies | X11 `wm/*` (`workspace.rs`, `window_ops.rs:373`) | Wayland `input/shortcuts.rs:14-60` `dispatch_action` | **different** (per-backend effects) | not moved | per backend |
 | 6c | Media key mapping | none in X11 crates | `crates/flamewm-wm-wayland/src/input/mod.rs:52` `media_key` | Wayland-only, parses `flamewm_api` action names | not moved (no second user) | - |
-| 7 | Keyboard tiling (Super+arrows) | none in X11 (no `ACTION_TILE_*` use under `crates/flamewm-wm-x11`) | `crates/flamewm-wm-wayland/src/input/keyboard_tile.rs` uses core `next_tile` | **different**: the module doc claims it matches X11, X11 has no tile handler | not moved; doc claim is wrong and should be corrected separately | - |
+| 7 | Keyboard tiling (Super+arrows) | `crates/flamewm-wm-x11/src/wm/keyboard_tile.rs` (core `next_tile`, `tile_state` now `SnapTarget::core()`) | `crates/flamewm-wm-wayland/src/input/keyboard_tile.rs` (core `next_tile`) | **identical transition**: both call core `next_tile`; the tile-state mapping was duplicated and is now single-owner on X11 | done in Step B (X11 side); Wayland `tile_state` still a local match, same fix possible | `flamewm-window-core` |
 | 8 | Grab state machine (Move/Resize) | X11 `frame/controller*`, `frame/geometry/moves.rs` (plan_move, plan_resize, `MOVE_ACTIVATION_THRESHOLD_PX`) | `crates/flamewm-wm-wayland/src/state.rs:58` `enum Grab {Move, Resize}` | **different**: X11 is a reducer over frame events, Wayland a pointer-state enum with `anchor_num/den` | not moved in this pass; needs a designed pure-transition model | candidate `flamewm-window-core` |
 | 9 | Keep-visible clamp | `crates/flamewm-wm-x11/src/frame/geometry/bounds.rs:10` delegates to core `keep_visible` | Wayland uses core too | **identical** (already shared) | none | `flamewm-window-core` |
 | 10 | Cursor theme env | `crates/flamewm-session-core` `cursor_environment` (shared) | `crates/flamewm-wm-wayland/src/cursor.rs` | **identical** source (already shared) | none | `flamewm-session-core` |
 | 11 | Workspace grid | `flamewm-api::workspace` | same | **identical** (already shared) | none | `flamewm-api` |
 | 12 | Lock, focus/urgency, media on X11 | unmeasured (scans truncated) | `crates/flamewm-wm-wayland/src/session_lock.rs` | unmeasured | not in this pass | - |
 
-## Steps and outcome
+## Steps and outcome (landed on main)
 
-- Step A: this doc (audit).
-- Step B: snap_rect to core snap_geometry (row 1).
-- Step C: cut_dock to core (row 2).
-- Step D: fit_into to core (row 3).
+- Step A `204d0281`: this audit doc.
+- Step B `1822dbcc`: X11 `snap_rect` delegates to core `snap_geometry`; `SnapTarget::core()` replaces the X11 tile-state match. Gate on rebased tree: EXIT_GUARD=0 EXIT_FMT=0 EXIT_CLIPPY=0 EXIT_TEST=0 GATE_DONE all=0. Deletions: 28 lines.
+- Step C `fef5f545`: `dock_reserve::cut_dock` shared by X11 `with_dock_reserve` and Wayland `cut_dock`. Gate: all 0. Deletions: 12 lines.
+- Step D `40aaa56d`: `fit_into(rect, area, min_extent)` shared by X11 `fit_restore_rect` (min 1) and Wayland `clamp_into_output` (min 0, empty-output guard kept). Gate: all 0. Deletions: 17 lines.
 
-Rows 4, 5, 7, 8, 12 are not moved. Reasons are in the table.
+Rows 4, 5, 6b, 6c, 8, 12 are not moved; reasons are in the table. Row 8 (Grab state machine) is the largest remaining item.
