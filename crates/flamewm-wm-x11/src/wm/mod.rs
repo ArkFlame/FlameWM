@@ -577,6 +577,11 @@ mod switcher;
 // Pure thumbnail policy; the capture path that consumes it lands in a later slice.
 #[allow(dead_code)]
 mod switcher_thumbs;
+// Thumbnail provider and X11 source: not yet called from the switcher (wiring is a later slice).
+#[allow(dead_code)]
+mod switcher_thumb_provider;
+#[allow(dead_code)]
+mod switcher_thumb_x11;
 mod take_focus;
 mod trace;
 mod transient_placement;

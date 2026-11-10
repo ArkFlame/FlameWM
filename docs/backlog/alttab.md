@@ -127,4 +127,13 @@ are not covered by this number.
 6. Evidence: `FLAMEWM_TOOLCHAIN_BIN` gate per crate plus a live Xvfb switcher run with at least three
    windows, one occluded, recording capture ms and RSS delta.
 
+3. (slice 3 landed: `switcher_thumb_provider.rs`, pure `ThumbProvider` over a `ThumbSource` seam. `request`
+   returns the cached thumb or `None` and schedules (one pending entry per window, no X call). `CaptureBudget`
+   caps captures per event-loop turn (`begin_turn` + `pump`). Skip rules: unmapped, unviewable, iconic, or
+   vanished windows are dropped without spending budget. `damage` drops thumbs and blocks serving until
+   recapture; a resize is a new key and the capture replaces the old size. `switcher_thumb_x11.rs` is the
+   real source (GetWindowAttributes, GetGeometry, GetImage; occlusion not handled). 11 unit tests with a fake
+   source. Still not wired to the switcher UI: both modules keep `allow(dead_code)`.)
+   Next: wire `pump` into the loop and `request` into the switcher open path (slice 4 or 3b).
+
 Open unknowns: scale cost on the X11 path, composite pixmap server memory, shell pixel transport.
