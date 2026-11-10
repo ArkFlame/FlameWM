@@ -19,9 +19,9 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-E2 | reliability | Removable-mount save and auto-mount failures silent | `read.md:37`; no `let _ =` hits in `removable_mounts.rs` | silent mount failure | S | done e96156bc |
 | read-E3 | reliability | Desktop settings sync `on_ready` error dropped | `read.md:38`; `desktop/src/main.rs:567` now binds `ready` | stale settings UI | S | done e96156bc |
 | read-P1 | reliability | `unreachable!()` on D-Bus string-array input | `read.md:16`; `control-dbus/src/lib.rs:482` now `from_item` with `?` | desktop/shell panic | S | done e96156bc |
-| read-E4 | reliability | Icon submit error dropped when queue full | `desktop/src/projection.rs:418` `let _ = self.service.submit(` | missing icons, no log | S | open |
-| read-E5 | reliability | Empty `Err(_) => {}` arms in icon loader | `shell/src/icon_loader.rs:269,316,335` | unknown until read | S | open |
-| read-E6 | reliability | Lock session settings `connect().ok()` falls back silently | `lock/src/session.rs:36,79` | silent default settings | S | open |
+| read-E4 | reliability | Icon submit error dropped when queue full | `desktop/src/projection.rs:418` `let _ = self.service.submit(` | missing icons, no log | S | done 093a850c |
+| read-E5 | reliability | Empty `Err(_) => {}` arms in icon loader | `shell/src/icon_loader.rs:269,316,335` | unknown until read | S | done 093a850c |
+| read-E6 | reliability | Lock session settings `connect().ok()` falls back silently | `lock/src/session.rs:36,79` | silent default settings | S | done 093a850c |
 | read-P2 | reliability | `expect` on client compositor data | `wm-wayland/src/state.rs:1132` | compositor panic, hard to reach | S | open |
 | read-P3 | reliability | `expect` in XWayland callback after teardown | `wm-wayland/src/xwayland.rs:690` (per read.md) | compositor panic, timing unverified | M | open |
 | dock-wl | visual | Dock translucency on Wayland not runtime-verified | `dock-translucency.md:32,63`; `docs/DOCK_BACKDROP.md:109` | visual regression risk | M | open |
