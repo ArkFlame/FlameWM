@@ -30,7 +30,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | bt-agent | feature | `org.bluez.Agent1` registration for PIN/passkey prompts (security-sensitive) | `docs/backlog/bluetooth.md:23` | Pair fails for most devices | L | open |
 | bt-ui | feature | Quick-controls Bluetooth row (network popup; trust toggle via typed action) | `docs/backlog/bluetooth.md` (Landed: bt-ui) | done in `e80d4163`; no real BlueZ verification | S | done |
 | cmp-a11y | feature | Magnifier, colour filters (sticky keys partly: `26020113`) | `cmp-5` | absent | L | open |
-| cmp-alttab | feature | Alt+Tab live previews | `cmp-6`; no preview capture found | unverified | L | open |
+| cmp-alttab | feature | Alt+Tab live previews | `cmp-6`; `docs/backlog/alttab.md`; slice 1 pure thumbnail policy + bounded LRU in `crates/flamewm-wm-x11/src/wm/switcher_thumbs.rs` (8 tests, not yet consumed); capture/wire/card open | slice 1 verified by gate; no runtime preview | L | in progress |
 | cmp-volume | feature | Per-app volume wheel on taskbar button | `cmp-7`; `integrations-linux/src/pulse.rs:180` backend exists | partial | S | done in `5320c11a`; no real audio server verification |
 | read-P4 | quality | `unreachable!()` in MPRIS (provably unreachable) | `integrations-linux/src/mpris.rs:575` | cosmetic | S | won't-fix: let-else rewrite does not reduce code; the early return already guarantees both Options |
 | read-P5 | quality | `pub` test oracle with `expect` in production file | `control-dbus/src/mutation_queue.rs:196` | limited | S | done d8dfa39e (oracle under cfg(test)) |

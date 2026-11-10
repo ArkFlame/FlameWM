@@ -574,6 +574,9 @@ mod show_desktop;
 mod stack_layer;
 mod super_tap;
 mod switcher;
+// Pure thumbnail policy; the capture path that consumes it lands in a later slice.
+#[allow(dead_code)]
+mod switcher_thumbs;
 mod take_focus;
 mod trace;
 mod transient_placement;
