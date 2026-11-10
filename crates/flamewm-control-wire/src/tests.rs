@@ -1120,6 +1120,48 @@ fn power_profile_action_round_trips_and_rejects_unknown_profile_names() {
 }
 
 #[test]
+fn bluetooth_device_actions_round_trip_and_reject_malformed_input() {
+    use flamewm_api::system::{BluetoothDeviceAction, BluetoothDeviceOp};
+    const MAC: &str = "AA:BB:CC:DD:EE:FF";
+    for op in [
+        BluetoothDeviceOp::Pair,
+        BluetoothDeviceOp::SetTrusted(true),
+        BluetoothDeviceOp::SetTrusted(false),
+        BluetoothDeviceOp::Remove,
+    ] {
+        let request = ControlRequest::SystemAction {
+            action: SystemAction::BluetoothDevice(
+                BluetoothDeviceAction::new(op, MAC).expect("valid address"),
+            ),
+            expected_revision: 4,
+        };
+        let call = assert_request_round_trip(&request);
+        assert_eq!(call.member, "BluetoothDevice");
+    }
+    let bad_op = WireCall::new(
+        IFACE_SYSTEM,
+        "BluetoothDevice",
+        vec![
+            WireValue::String("connect".to_owned()),
+            WireValue::String(MAC.to_owned()),
+            WireValue::U64(4),
+        ],
+    );
+    assert!(decode_call(&bad_op).is_err());
+    let bad_address = WireCall::new(
+        IFACE_SYSTEM,
+        "BluetoothDevice",
+        vec![
+            WireValue::String("pair".to_owned()),
+            WireValue::String("AA:BB:CC:DD:EE:FF/..".to_owned()),
+            WireValue::U64(4),
+        ],
+    );
+    assert!(decode_call(&bad_address).is_err());
+    assert!(BluetoothDeviceAction::new(BluetoothDeviceOp::Pair, "AA_BB_CC_DD_EE_FF").is_none());
+}
+
+#[test]
 fn power_profiles_snapshot_round_trips_including_absent_defaults() {
     use flamewm_api::system::{PowerProfile, PowerProfilesSnapshot};
     let offered = SystemSnapshot {

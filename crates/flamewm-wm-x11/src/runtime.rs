@@ -156,6 +156,7 @@ fn run_session(
     let mut mpris_registration = register(LinuxIntegrationSource::Mpris)?;
     let mut power_registration = register(LinuxIntegrationSource::Power)?;
     let mut power_profiles_registration = register(LinuxIntegrationSource::PowerProfiles)?;
+    let _bluetooth_registration = register(LinuxIntegrationSource::Bluetooth)?;
     let (audio_sender, audio_receiver) = mpsc::sync_channel::<AudioSnapshot>(32);
     let (audio_reader, mut audio_writer) = UnixStream::pair()
         .and_then(|(reader, writer)| {
@@ -415,6 +416,7 @@ fn run_session(
                         | SystemAction::Previous { .. }
                         | SystemAction::SetBrightness(_)
                         | SystemAction::SetPowerProfile(_)
+                        | SystemAction::BluetoothDevice(_)
                         | SystemAction::BatteryMenuOpened
                         | SystemAction::BatteryMenuClosed => integrations
                             .borrow_mut()

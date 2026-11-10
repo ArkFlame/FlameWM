@@ -48,6 +48,7 @@ pub use portal_file_chooser::PortalFileChooser;
 pub use power::PowerProvider;
 pub use power_profiles::{PowerProfile, PowerProfilesProvider, PowerProfilesSnapshot};
 
+use bluetooth::BluetoothDeviceControl;
 use flamewm_api::FlameResult;
 use flamewm_api::system::{
     BrightnessAction, BrightnessSnapshot, MediaSnapshot, NetworkSnapshot, PowerSnapshot,
@@ -63,6 +64,7 @@ pub enum LinuxIntegrationSource {
     Mpris,
     Power,
     PowerProfiles,
+    Bluetooth,
 }
 
 /// The single owner of Linux integration provider lifecycles.
@@ -71,6 +73,7 @@ pub struct LinuxIntegrationRuntime {
     mpris: MprisProvider,
     power: PowerProvider,
     power_profiles: PowerProfilesProvider,
+    bluetooth: BluetoothDeviceControl,
     brightness: BacklightProvider,
     removable_mounts: Option<RemovableMountWorker>,
     started: bool,
@@ -84,6 +87,7 @@ impl LinuxIntegrationRuntime {
             mpris: MprisProvider::connect()?,
             power: PowerProvider::connect()?,
             power_profiles: PowerProfilesProvider::connect()?,
+            bluetooth: BluetoothDeviceControl::connect()?,
             brightness: BacklightProvider::connect(),
             removable_mounts: None,
             started: false,
@@ -138,6 +142,7 @@ impl LinuxIntegrationRuntime {
             LinuxIntegrationSource::Mpris => self.mpris.watch(),
             LinuxIntegrationSource::Power => self.power.watch(),
             LinuxIntegrationSource::PowerProfiles => self.power_profiles.watch(),
+            LinuxIntegrationSource::Bluetooth => self.bluetooth.watch(),
         }
     }
 
@@ -148,6 +153,7 @@ impl LinuxIntegrationRuntime {
             LinuxIntegrationSource::Mpris => self.mpris.on_ready(),
             LinuxIntegrationSource::Power => self.power.on_ready(),
             LinuxIntegrationSource::PowerProfiles => self.power_profiles.on_ready(),
+            LinuxIntegrationSource::Bluetooth => self.bluetooth.on_ready(),
         }
     }
 
@@ -228,6 +234,10 @@ impl LinuxIntegrationRuntime {
                 Ok(())
             }
             SystemAction::SetPowerProfile(profile) => self.power_profiles.set_active(profile),
+            SystemAction::BluetoothDevice(action) => self
+                .bluetooth
+                .request(action.op, bluetooth::DEFAULT_ADAPTER, &action.address)
+                .map(|_| ()),
             SystemAction::BatteryMenuClosed => {
                 self.power.set_battery_menu_open(false);
                 Ok(())

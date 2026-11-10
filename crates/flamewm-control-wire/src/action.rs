@@ -1,4 +1,5 @@
 use super::*;
+use flamewm_api::system::{BluetoothDeviceAction, BluetoothDeviceOp};
 
 pub(crate) fn workspace_index_request(
     call: &WireCall,
@@ -159,6 +160,23 @@ pub(crate) fn system_action_request(
                 required_u64(&call.args[1], "expectedRevision")?,
             )
         }
+        "BluetoothDevice" => {
+            expect_arity(call, 3)?;
+            let op = match required_string(&call.args[0], "op")? {
+                "pair" => BluetoothDeviceOp::Pair,
+                "trust" => BluetoothDeviceOp::SetTrusted(true),
+                "untrust" => BluetoothDeviceOp::SetTrusted(false),
+                "remove" => BluetoothDeviceOp::Remove,
+                _ => return Err(invalid("unknown bluetooth device operation")),
+            };
+            let address = required_string(&call.args[1], "address")?;
+            let action = BluetoothDeviceAction::new(op, address)
+                .ok_or_else(|| invalid("bluetooth device address"))?;
+            (
+                SystemAction::BluetoothDevice(action),
+                required_u64(&call.args[2], "expectedRevision")?,
+            )
+        }
         "SetBrightness" => {
             expect_arity(call, 3)?;
             let percent = u8::try_from(required_u32(&call.args[0], "percent")?)
@@ -282,6 +300,21 @@ pub(crate) fn system_action_call(action: &SystemAction, expected_revision: u64) 
             "SetPowerProfile",
             vec![WireValue::String(profile.wire().to_owned())],
         ),
+        SystemAction::BluetoothDevice(action) => {
+            let op = match action.op {
+                BluetoothDeviceOp::Pair => "pair",
+                BluetoothDeviceOp::SetTrusted(true) => "trust",
+                BluetoothDeviceOp::SetTrusted(false) => "untrust",
+                BluetoothDeviceOp::Remove => "remove",
+            };
+            (
+                "BluetoothDevice",
+                vec![
+                    WireValue::String(op.to_owned()),
+                    WireValue::String(action.address.clone()),
+                ],
+            )
+        }
         SystemAction::SetBrightness(action) => (
             "SetBrightness",
             vec![

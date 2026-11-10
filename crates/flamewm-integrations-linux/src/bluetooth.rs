@@ -6,11 +6,17 @@
 //! without a bus. Reply tracking, agent prompts and the quick-controls row are not implemented
 //! (see `docs/backlog/bluetooth.md`).
 
-use dbus::Message;
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
+
 use dbus::arg::messageitem::MessageItem;
 use dbus::strings::Path;
+use dbus::{Message, MessageType};
+use flamewm_api::ports::FdEvents;
 use flamewm_api::{FlameError, FlameResult};
-use flamewm_dbus_reactor::{BusKind, BusPump};
+use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
+
+pub use flamewm_api::system::BluetoothDeviceOp as DeviceOp;
 
 pub const BLUEZ_SERVICE: &str = "org.bluez";
 pub const ADAPTER_INTERFACE: &str = "org.bluez.Adapter1";
@@ -19,14 +25,6 @@ const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 const SET: &str = "Set";
 const TRUSTED: &str = "Trusted";
 pub const DEFAULT_ADAPTER: &str = "hci0";
-
-/// One write against a known device object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceOp {
-    Pair,
-    SetTrusted(bool),
-    Remove,
-}
 
 /// Validates an adapter name (`hciN`) so it cannot inject path segments.
 fn is_adapter_name(adapter: &str) -> bool {
@@ -94,20 +92,72 @@ pub fn device_op_message(op: DeviceOp, adapter: &str, address: &str) -> FlameRes
     }
 }
 
+/// Failure line for an error reply, `None` for anything else. Pure, so the consumer is testable.
+#[must_use]
+pub fn reply_log_line(message: &Message) -> Option<String> {
+    if message.msg_type() != MessageType::Error {
+        return None;
+    }
+    let detail = message.get1::<&str>().unwrap_or("no detail");
+    Some(format!("bluetooth request failed: {detail}"))
+}
+
+fn is_reply(message: &Message) -> bool {
+    matches!(
+        message.msg_type(),
+        MessageType::MethodReturn | MessageType::Error
+    )
+}
+
 /// Fail-soft device-control facade. An unreachable system bus yields `unavailable` per request.
 pub struct BluetoothDeviceControl {
     pump: Option<BusPump>,
+    dormant: UnixStream,
+    _peer: UnixStream,
 }
 
 impl BluetoothDeviceControl {
-    #[must_use]
-    pub fn connect() -> Self {
-        Self {
+    pub fn connect() -> FlameResult<Self> {
+        let (peer, dormant) = UnixStream::pair()
+            .map_err(|io| FlameError::unavailable(format!("socketpair failed: {io}")))?;
+        Ok(Self {
             pump: BusPump::connect(BusKind::System).ok(),
+            dormant,
+            _peer: peer,
+        })
+    }
+
+    /// Bus readiness; a dormant socket stands in while the system bus is absent.
+    #[must_use]
+    pub fn watch(&self) -> BusWatch {
+        match &self.pump {
+            Some(pump) => pump.watch(),
+            None => BusWatch {
+                fd: self.dormant.as_raw_fd(),
+                events: FdEvents::READABLE,
+            },
         }
     }
 
-    /// Sends one operation and returns its serial. The reply is not tracked yet.
+    /// Consumes every queued reply in one bounded turn so none stays queued on the connection.
+    /// Error replies are logged once each; successful replies are dropped as expected.
+    pub fn on_ready(&self) -> FlameResult<usize> {
+        let Some(pump) = self.pump.as_ref() else {
+            return Ok(0);
+        };
+        pump.on_ready(|message| {
+            if let Some(line) = reply_log_line(message) {
+                eprintln!("flamewm-integrations-linux: {line}");
+            }
+            if is_reply(message) {
+                MessageDisposition::Handled
+            } else {
+                MessageDisposition::Unhandled
+            }
+        })
+    }
+
+    /// Sends one operation and returns its serial. The reply is consumed by `on_ready`.
     pub fn request(&self, op: DeviceOp, adapter: &str, address: &str) -> FlameResult<u32> {
         let pump = self
             .pump
@@ -195,11 +245,35 @@ mod tests {
 
     #[test]
     fn absent_bus_rejects_requests_without_panicking() {
-        let control = BluetoothDeviceControl { pump: None };
+        let (peer, dormant) = UnixStream::pair().expect("pair");
+        let control = BluetoothDeviceControl {
+            pump: None,
+            dormant,
+            _peer: peer,
+        };
         assert!(
             control
                 .request(DeviceOp::Pair, DEFAULT_ADAPTER, MAC)
                 .is_err()
         );
+        assert_eq!(control.on_ready().expect("drain"), 0);
+    }
+
+    #[test]
+    fn replies_are_consumed_and_only_error_replies_are_logged() {
+        use dbus::strings::ErrorName;
+        let mut call = device_op_message(DeviceOp::Pair, DEFAULT_ADAPTER, MAC).expect("pair");
+        call.set_serial(1);
+        let ok = Message::new_method_return(&call).expect("return");
+        assert!(is_reply(&ok));
+        assert_eq!(reply_log_line(&ok), None);
+        let name = ErrorName::new("org.bluez.Error.AlreadyExists").expect("name");
+        let err = call.error(&name, c"Already Exists");
+        assert!(is_reply(&err));
+        assert_eq!(
+            reply_log_line(&err).as_deref(),
+            Some("bluetooth request failed: Already Exists")
+        );
+        assert!(!is_reply(&call));
     }
 }

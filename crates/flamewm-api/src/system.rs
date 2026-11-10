@@ -228,6 +228,41 @@ impl PowerProfilesSnapshot {
     }
 }
 
+/// One `BlueZ` write on a device: `Pair`, `Trusted` property, or `Adapter1.RemoveDevice`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BluetoothDeviceOp {
+    Pair,
+    SetTrusted(bool),
+    Remove,
+}
+
+/// Device write. `address` is a validated `AA:BB:CC:DD:EE:FF` string; build with [`Self::new`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BluetoothDeviceAction {
+    pub op: BluetoothDeviceOp,
+    pub address: String,
+}
+
+impl BluetoothDeviceAction {
+    /// Returns `None` unless `address` is six colon-separated hex octets.
+    #[must_use]
+    pub fn new(op: BluetoothDeviceOp, address: &str) -> Option<Self> {
+        let bytes = address.as_bytes();
+        let ok = bytes.len() == 17
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                if index % 3 == 2 {
+                    *byte == b':'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            });
+        ok.then(|| Self {
+            op,
+            address: address.to_owned(),
+        })
+    }
+}
+
 /// Backlight state of the panel device. `percent` is `0..=100`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BrightnessSnapshot {
@@ -365,6 +400,7 @@ pub enum SystemAction {
     SetMute(AudioMuteAction),
     SetBrightness(BrightnessAction),
     SetPowerProfile(PowerProfile),
+    BluetoothDevice(BluetoothDeviceAction),
     BatteryMenuOpened,
     BatteryMenuClosed,
 }
@@ -425,6 +461,9 @@ impl core::fmt::Debug for SystemAction {
             Self::SetBrightness(action) => f.debug_tuple("SetBrightness").field(action).finish(),
             Self::SetPowerProfile(profile) => {
                 f.debug_tuple("SetPowerProfile").field(profile).finish()
+            }
+            Self::BluetoothDevice(action) => {
+                f.debug_tuple("BluetoothDevice").field(action).finish()
             }
             Self::BatteryMenuOpened => f.write_str("BatteryMenuOpened"),
             Self::BatteryMenuClosed => f.write_str("BatteryMenuClosed"),

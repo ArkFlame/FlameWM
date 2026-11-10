@@ -211,6 +211,7 @@ impl SystemService {
                     ));
                 }
             }
+            SystemAction::BluetoothDevice(_) => {}
             SystemAction::SetBrightness(action) => {
                 if action.percent > MAX_BRIGHTNESS_PERCENT {
                     return Err(FlameError::new(
@@ -499,6 +500,27 @@ mod tests {
     }
 
     #[test]
+    fn bluetooth_device_action_bypasses_revision_fence_and_reaches_handler() {
+        use flamewm_api::system::{BluetoothDeviceAction, BluetoothDeviceOp};
+        let mut service = SystemService::default();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        service.set_action_handler(Box::new(move |action, _| {
+            sink.borrow_mut().push(action);
+            Ok(())
+        }));
+        let action = SystemAction::BluetoothDevice(
+            BluetoothDeviceAction::new(BluetoothDeviceOp::Pair, "AA:BB:CC:DD:EE:FF")
+                .expect("valid address"),
+        );
+        let stale = service.snapshot().revision.wrapping_add(7);
+        service
+            .perform_action(action.clone(), stale)
+            .expect("bluetooth write is not revision-fenced");
+        assert_eq!(seen.borrow().as_slice(), [action]);
+    }
+
+    #[test]
     fn battery_menu_actions_bypass_revision_fence_but_still_reach_handler() {
         let mut service = SystemService::default();
         let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -670,6 +692,7 @@ fn bypasses_revision_fence(action: &SystemAction) -> bool {
             | SystemAction::SetMute(_)
             | SystemAction::SetBrightness(_)
             | SystemAction::SetPowerProfile(_)
+            | SystemAction::BluetoothDevice(_)
             | SystemAction::BatteryMenuOpened
             | SystemAction::BatteryMenuClosed
             | SystemAction::Scan
