@@ -631,36 +631,27 @@ mod partial_fill_clip_tests {
     use super::partial_fill_clip;
     use flamewm_render_core::Rect;
 
-    fn r(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     #[test]
     fn partial_fill_without_region_keeps_its_visible_part() {
-        let part = r(10.0, 85.0, 20.0, 5.0);
+        let part = Rect::new(10.0, 85.0, 20.0, 5.0);
         assert_eq!(partial_fill_clip(part, None), Some(part));
     }
 
     #[test]
     fn partial_fill_in_region_paint_is_cut_to_the_region() {
         // The corner radius is kept by the picture clip; the clip must not leave the region.
-        let region = r(0.0, 80.0, 50.0, 20.0);
+        let region = Rect::new(0.0, 80.0, 50.0, 20.0);
         assert_eq!(
-            partial_fill_clip(r(10.0, 85.0, 60.0, 5.0), Some(region)),
-            Some(r(10.0, 85.0, 40.0, 5.0))
+            partial_fill_clip(Rect::new(10.0, 85.0, 60.0, 5.0), Some(region)),
+            Some(Rect::new(10.0, 85.0, 40.0, 5.0))
         );
     }
 
     #[test]
     fn partial_fill_outside_region_paint_is_dropped() {
-        let region = r(0.0, 80.0, 50.0, 20.0);
+        let region = Rect::new(0.0, 80.0, 50.0, 20.0);
         assert_eq!(
-            partial_fill_clip(r(60.0, 85.0, 20.0, 5.0), Some(region)),
+            partial_fill_clip(Rect::new(60.0, 85.0, 20.0, 5.0), Some(region)),
             None
         );
     }

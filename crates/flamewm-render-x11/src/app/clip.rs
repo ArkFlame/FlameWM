@@ -45,28 +45,28 @@ pub(crate) fn border_bands(rect: Rect, width: f32) -> [Rect; 4] {
 mod tests {
     use super::*;
 
-    fn r(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     #[test]
     fn intersect_returns_overlap_and_none_for_disjoint_or_touching() {
         assert_eq!(
-            intersect(r(0.0, 0.0, 10.0, 10.0), r(5.0, 2.0, 10.0, 4.0)),
-            Some(r(5.0, 2.0, 5.0, 4.0))
+            intersect(
+                Rect::new(0.0, 0.0, 10.0, 10.0),
+                Rect::new(5.0, 2.0, 10.0, 4.0)
+            ),
+            Some(Rect::new(5.0, 2.0, 5.0, 4.0))
         );
         assert_eq!(
-            intersect(r(0.0, 0.0, 10.0, 10.0), r(10.0, 0.0, 5.0, 5.0)),
+            intersect(
+                Rect::new(0.0, 0.0, 10.0, 10.0),
+                Rect::new(10.0, 0.0, 5.0, 5.0)
+            ),
             None,
             "edge contact has no area"
         );
         assert_eq!(
-            intersect(r(0.0, 0.0, 10.0, 10.0), r(20.0, 20.0, 1.0, 1.0)),
+            intersect(
+                Rect::new(0.0, 0.0, 10.0, 10.0),
+                Rect::new(20.0, 20.0, 1.0, 1.0)
+            ),
             None
         );
     }
@@ -74,35 +74,41 @@ mod tests {
     #[test]
     fn stack_bounds_is_the_nested_intersection() {
         let stack = [
-            r(0.0, 0.0, 100.0, 100.0),
-            r(10.0, 10.0, 50.0, 80.0),
-            r(0.0, 40.0, 200.0, 200.0),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            Rect::new(10.0, 10.0, 50.0, 80.0),
+            Rect::new(0.0, 40.0, 200.0, 200.0),
         ];
-        assert_eq!(stack_bounds(&stack), Some(r(10.0, 40.0, 50.0, 50.0)));
+        assert_eq!(
+            stack_bounds(&stack),
+            Some(Rect::new(10.0, 40.0, 50.0, 50.0))
+        );
         assert_eq!(stack_bounds(&[]), None);
         assert_eq!(
-            stack_bounds(&[r(0.0, 0.0, 5.0, 5.0), r(9.0, 9.0, 5.0, 5.0)]),
+            stack_bounds(&[Rect::new(0.0, 0.0, 5.0, 5.0), Rect::new(9.0, 9.0, 5.0, 5.0)]),
             None
         );
     }
 
     #[test]
     fn visible_under_classifies_whole_part_and_hidden() {
-        let clip = [r(0.0, 0.0, 100.0, 100.0), r(0.0, 0.0, 100.0, 90.0)];
+        let clip = [
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            Rect::new(0.0, 0.0, 100.0, 90.0),
+        ];
         assert_eq!(
-            visible_under(r(10.0, 10.0, 20.0, 20.0), &clip),
+            visible_under(Rect::new(10.0, 10.0, 20.0, 20.0), &clip),
             Visible::Whole
         );
         assert_eq!(
-            visible_under(r(10.0, 85.0, 20.0, 20.0), &clip),
-            Visible::Part(r(10.0, 85.0, 20.0, 5.0))
+            visible_under(Rect::new(10.0, 85.0, 20.0, 20.0), &clip),
+            Visible::Part(Rect::new(10.0, 85.0, 20.0, 5.0))
         );
         assert_eq!(
-            visible_under(r(10.0, 95.0, 20.0, 5.0), &clip),
+            visible_under(Rect::new(10.0, 95.0, 20.0, 5.0), &clip),
             Visible::Hidden
         );
         assert_eq!(
-            visible_under(r(10.0, 95.0, 20.0, 5.0), &[]),
+            visible_under(Rect::new(10.0, 95.0, 20.0, 5.0), &[]),
             Visible::Whole,
             "no clip leaves it whole"
         );
@@ -111,23 +117,23 @@ mod tests {
     #[test]
     fn visible_under_keeps_whole_for_sub_pixel_edge_rounding() {
         // A hover fill that exactly fills its capsule's clip, off by float rounding.
-        let clip = [r(10.0, 20.0, 42.5, 40.0)];
-        let fill = r(10.0 + 1e-4, 20.0 - 1e-4, 42.5 - 2e-4, 40.0);
+        let clip = [Rect::new(10.0, 20.0, 42.5, 40.0)];
+        let fill = Rect::new(10.0 + 1e-4, 20.0 - 1e-4, 42.5 - 2e-4, 40.0);
         assert_eq!(visible_under(fill, &clip), Visible::Whole);
         assert_eq!(
-            visible_under(r(10.0, 20.0, 42.5, 41.0), &clip),
-            Visible::Part(r(10.0, 20.0, 42.5, 40.0)),
+            visible_under(Rect::new(10.0, 20.0, 42.5, 41.0), &clip),
+            Visible::Part(Rect::new(10.0, 20.0, 42.5, 40.0)),
             "a real overhang is still cut"
         );
     }
 
     #[test]
     fn border_bands_tile_the_ring_without_covering_the_interior() {
-        let bands = border_bands(r(0.0, 0.0, 10.0, 8.0), 1.0);
-        assert_eq!(bands[0], r(0.0, 0.0, 10.0, 1.0));
-        assert_eq!(bands[1], r(0.0, 7.0, 10.0, 1.0));
-        assert_eq!(bands[2], r(0.0, 1.0, 1.0, 6.0));
-        assert_eq!(bands[3], r(9.0, 1.0, 1.0, 6.0));
+        let bands = border_bands(Rect::new(0.0, 0.0, 10.0, 8.0), 1.0);
+        assert_eq!(bands[0], Rect::new(0.0, 0.0, 10.0, 1.0));
+        assert_eq!(bands[1], Rect::new(0.0, 7.0, 10.0, 1.0));
+        assert_eq!(bands[2], Rect::new(0.0, 1.0, 1.0, 6.0));
+        assert_eq!(bands[3], Rect::new(9.0, 1.0, 1.0, 6.0));
         let area: f32 = bands.iter().map(|b| b.width * b.height).sum();
         assert_eq!(
             area,

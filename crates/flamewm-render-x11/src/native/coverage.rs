@@ -165,15 +165,6 @@ mod tests {
     use super::*;
     use flamewm_render_core::Color;
 
-    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     fn red(a: u8) -> Color {
         Color {
             r: 255,
@@ -185,7 +176,7 @@ mod tests {
 
     fn fill(x: f32, y: f32, w: f32, h: f32, a: u8, radius: f32) -> PaintCommand {
         PaintCommand::FillRect {
-            rect: rect(x, y, w, h),
+            rect: Rect::new(x, y, w, h),
             color: red(a),
             radius,
         }
@@ -193,7 +184,7 @@ mod tests {
 
     fn stroke(x: f32, y: f32, w: f32, h: f32, width: f32, radius: f32) -> PaintCommand {
         PaintCommand::StrokeRect {
-            rect: rect(x, y, w, h),
+            rect: Rect::new(x, y, w, h),
             color: red(255),
             width,
             radius,
@@ -202,7 +193,7 @@ mod tests {
 
     fn clip(x: f32, y: f32, w: f32, h: f32) -> PaintCommand {
         PaintCommand::PushClip {
-            rect: rect(x, y, w, h),
+            rect: Rect::new(x, y, w, h),
         }
     }
 
@@ -224,7 +215,7 @@ mod tests {
 
     fn image_at(x: f32, y: f32, w: f32, h: f32) -> PaintCommand {
         PaintCommand::Image {
-            rect: rect(x, y, w, h),
+            rect: Rect::new(x, y, w, h),
             asset: 0,
             node: 0,
             revision: 0,

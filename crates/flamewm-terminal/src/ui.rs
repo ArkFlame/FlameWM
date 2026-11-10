@@ -18,15 +18,6 @@ pub struct UiCache {
     surface_stroke: Option<UiColor>,
 }
 
-const fn rgb(value: u32) -> UiColor {
-    UiColor {
-        r: (value >> 16) as u8,
-        g: (value >> 8) as u8,
-        b: value as u8,
-        a: 255,
-    }
-}
-
 /// Fits a row into the pool: when a row has more runs than slots, the tail merges into the last slot. Those cells
 /// take the first merged run's colours, the one visible limit of the pooled layout. A row that already fits is
 /// borrowed, not copied.
@@ -66,7 +57,7 @@ impl App {
         }
         let color = UiColor {
             a: self.surface_alpha,
-            ..rgb(self.palette.background)
+            ..UiColor::from_rgb(self.palette.background, 255)
         };
         // The window's root node carries the surface fill (the explorer does the same with its root). The grid node is
         // transparent, so the translucent fill shows through it.
@@ -190,9 +181,9 @@ impl UiCache {
         };
         doc.position(id, x, y)?;
         doc.size(id, w, h)?;
-        doc.foreground(id, rgb(run.fg))?;
+        doc.foreground(id, UiColor::from_rgb(run.fg, 255))?;
         match run.bg {
-            Some(bg) => doc.background(id, rgb(bg))?,
+            Some(bg) => doc.background(id, UiColor::from_rgb(bg, 255))?,
             None => doc.background_clear(id)?,
         }
         doc.font_weight(id, if run.bold { 700 } else { 400 })?;

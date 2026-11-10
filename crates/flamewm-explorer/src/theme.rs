@@ -94,14 +94,6 @@ pub fn window_backdrop(snapshot: &SettingsSnapshot, packaged_root: &Path) -> Win
         .1,
     }
 }
-const fn rgb(value: u32) -> UiColor {
-    UiColor {
-        r: (value >> 16) as u8,
-        g: (value >> 8) as u8,
-        b: value as u8,
-        a: 255,
-    }
-}
 const fn white(alpha: u8) -> UiColor {
     UiColor {
         r: 255,
@@ -113,8 +105,8 @@ const fn white(alpha: u8) -> UiColor {
 impl ExplorerTheme {
     pub fn from_snapshot(snapshot: &SettingsSnapshot) -> Self {
         let mut theme = Self {
-            accent: rgb(flamewm_ui_core::accent::accent(snapshot).0),
-            surface: rgb(0),
+            accent: UiColor::from_rgb(flamewm_ui_core::accent::accent(snapshot).0, 255),
+            surface: UiColor::from_rgb(0, 255),
             surface_alpha: 0,
             stroke: white(63),
             font_family: None,
@@ -139,7 +131,7 @@ impl ExplorerTheme {
         // Same surfaceColor mapping as the taskbar and popups (single owner: ui-core). The alpha is the
         // opacity percent (dev override included) so it matches the backdrop's opacity exactly.
         let fill = surface_fill(snapshot);
-        theme.surface = rgb(fill.rgb);
+        theme.surface = UiColor::from_rgb(fill.rgb, 255);
         // Shared glass alpha (ui-core `surface_fill`); the dev override keeps its percent mapping.
         theme.surface_alpha = match dev_surface_percent_override() {
             Some(percent) => ((u16::from(percent) * 255) / 100) as u8,
@@ -177,11 +169,11 @@ impl ExplorerTheme {
     }
     /// Primary text ink of the active appearance, opaque (Dark light text, Light dark text).
     pub fn text(&self) -> UiColor {
-        rgb(self.ink.text.0)
+        UiColor::from_rgb(self.ink.text.0, 255)
     }
     /// Secondary text: the appearance's muted ink, opaque. Light theme gets dark ink, Dark gets light.
     pub fn muted(&self) -> UiColor {
-        rgb(self.ink.muted.0)
+        UiColor::from_rgb(self.ink.muted.0, 255)
     }
     /// Selection and highlight fills use the accent at 50% opacity, blended over the surface.
     pub fn selection_fill(&self) -> UiColor {
@@ -219,7 +211,7 @@ impl ExplorerTheme {
             ("--line", self.card()),
             ("--menu", self.menu()),
             ("--muted", self.muted()),
-            ("--text", rgb(self.ink.text.0)),
+            ("--text", UiColor::from_rgb(self.ink.text.0, 255)),
         ] {
             doc.color_variable(name, color)?;
         }

@@ -846,15 +846,6 @@ mod region_tests {
 mod tests {
     use super::*;
 
-    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     fn input(damage: SurfaceDamage) -> PlanInput {
         PlanInput {
             damage,
@@ -868,7 +859,7 @@ mod tests {
 
     #[test]
     fn one_cell_region_plans_region_and_touches_far_fewer_pixels() {
-        let cell = rect(100.4, 200.2, 9.0, 18.0);
+        let cell = Rect::new(100.4, 200.2, 9.0, 18.0);
         let RedrawPlan::Region(region) = plan_redraw(input(SurfaceDamage::Region(cell))) else {
             panic!("one-cell damage must plan a region repaint");
         };
@@ -893,7 +884,7 @@ mod tests {
 
     #[test]
     fn any_staleness_condition_forces_full() {
-        let damage = SurfaceDamage::Region(rect(0.0, 0.0, 10.0, 10.0));
+        let damage = SurfaceDamage::Region(Rect::new(0.0, 0.0, 10.0, 10.0));
         let stale = [
             PlanInput {
                 fingerprint_unchanged: false,
@@ -925,9 +916,9 @@ mod tests {
 
     #[test]
     fn offscreen_and_negative_regions_clip_to_viewport() {
-        let offscreen = rect(-50.0, -20.0, 30.0, 40.0);
+        let offscreen = Rect::new(-50.0, -20.0, 30.0, 40.0);
         assert_eq!(pixel_region(offscreen, (1920, 1080)), None);
-        let straddle = rect(-5.5, 1070.0, 20.0, 20.0);
+        let straddle = Rect::new(-5.5, 1070.0, 20.0, 20.0);
         assert_eq!(
             pixel_region(straddle, (1920, 1080)),
             Some(PixelRegion {
