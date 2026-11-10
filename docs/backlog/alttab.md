@@ -1,7 +1,8 @@
 # Alt+Tab live previews (`cmp-alttab`, competitor gap `cmp-6`)
 
-Status: slices 1 (pure thumbnail policy) and 2 (capture-to-thumbnail, pure, measured) landed; wire and card are open. Measured 2026-11-10 on
-private Xvfb (`:97`, `-noreset`, 1280x1024x24). No runtime proof of the switcher UI yet.
+Status: slices 1-4 landed. Slice 4 (X11 end to end): the WM drives the thumbnail provider while the switcher is open,
+the snapshot carries previews (`SwitcherEntry.thumb`, control wire and D-Bus), and the shell card paints them.
+Runtime proof on a private Xvfb with three windows (section 7). Wayland (option D) and per-window occlusion are open.
 
 ## 1. Current behaviour (FlameWM)
 
@@ -134,6 +135,30 @@ are not covered by this number.
    recapture; a resize is a new key and the capture replaces the old size. `switcher_thumb_x11.rs` is the
    real source (GetWindowAttributes, GetGeometry, GetImage; occlusion not handled). 11 unit tests with a fake
    source. Still not wired to the switcher UI: both modules keep `allow(dead_code)`.)
-   Next: wire `pump` into the loop and `request` into the switcher open path (slice 4 or 3b).
+   Wired in slice 4 (section 7).
 
 Open unknowns: scale cost on the X11 path, composite pixmap server memory, shell pixel transport.
+
+## 7. Slice 4: X11 end-to-end wire and card
+
+- WM: `Wm::publish_switcher` calls `ThumbProvider::request` for the first `MAX_THUMBS` (24) entries (geometry
+  round trip only; pixels are never read there). `Wm::pump_switcher_thumbs` runs once per event-loop turn
+  from `runtime.rs` with `SWITCHER_CAPTURES_PER_TURN = 1` and republishes when a preview lands; the loop wakes
+  at 1 ms while captures are queued. Closing the switcher drops the provider (lazy, nothing resident at idle).
+  Unmanage calls `forget`; a damage notify on a watched client calls `damage` and republishes.
+- Pixels: `thumb_rgba` converts X BGRX to RGBA8 with opaque alpha. Transport: `flamewm_api::switcher::SwitcherThumb`,
+  `SwitcherEntry.thumb: Option<_>`, encoded as an optional `thumb` dict key with `WireValue::Bytes` (D-Bus `ay`).
+  A payload without `thumb` decodes to `None` (legacy regression test in `flamewm-control-wire`).
+  Pixels ride every `WindowSwitcherChanged`, so a Tab press resends up to 24 previews (about 1.5 MB); the per-open
+  id transport in section 5 is still the follow-up if this shows up in profiles.
+- Shell: `ui/shell/switcher.html` rows gain `-icon` and `-thumb` images. A preview replaces the icon, fitted into
+  64x36 and never upscaled (`thumb_fit`); rows without a preview paint exactly as before. No new colours, no animation.
+- Runtime (private Xvfb `:98`, `-noreset`, 1280x1024x24, debug build, three non-overlapping 300x200 solid windows
+  red/green/blue, Alt_L held, Tab twice): the screenshot shows three rows, each painted with its window colour
+  (blue, green, red top to bottom), and the highlight on the last row. Pixel check against the window-only
+  baseline: each colour 1942 px (54x36) in its own row, same column. Reproduced on two runs.
+- WM CPU (`/proc` ticks of the WM process): idle 0.00%; switcher open 7.08% and 9.91% over about 2.1 s (debug
+  build); after close 0.00% and 0.50%. One earlier run read 99.43% for the same window; not reproduced, not explained.
+- Not measured: the maximum single event-loop turn with capture (no per-turn instrumentation; release build not
+  timed); occluded windows (the card does not cover the test windows; an overlapped window would return cover
+  pixels); content damage outside lingering windows (the existing damage watch only covers lingering clients).

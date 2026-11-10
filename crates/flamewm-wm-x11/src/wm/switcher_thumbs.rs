@@ -13,6 +13,7 @@ pub(crate) const THUMB_MAX_W: u32 = 160;
 pub(crate) const THUMB_MAX_H: u32 = 100;
 
 /// Bytes per thumbnail pixel (32-bit `ZPixmap` after conversion).
+#[cfg(test)]
 pub(crate) const THUMB_BYTES_PER_PIXEL: u64 = 4;
 
 /// Upper bound on resident thumbnails. `24 * 160 * 100 * 4` = `1_536_000` bytes (about 1.46 MiB),
@@ -42,6 +43,7 @@ pub(crate) fn thumb_size(src_w: u32, src_h: u32) -> Option<(u32, u32)> {
 }
 
 /// Bytes one thumbnail of `(w, h)` occupies.
+#[cfg(test)]
 pub(crate) fn thumb_bytes(w: u32, h: u32) -> u64 {
     u64::from(w) * u64::from(h) * THUMB_BYTES_PER_PIXEL
 }
@@ -142,6 +144,7 @@ impl<V> ThumbCache<V> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }

@@ -431,6 +431,7 @@ fn to_item(value: &WireValue) -> Result<MessageItem, String> {
             v.iter().map(|v| MessageItem::Str(v.clone())).collect(),
             "as",
         ),
+        WireValue::Bytes(v) => array(v.iter().map(|b| MessageItem::Byte(*b)).collect(), "ay"),
         WireValue::Array(v) => {
             let items = v.iter().map(to_item).collect::<Result<Vec<_>, _>>()?;
             // The element signature follows the items (dict rows, or `u` for occupancy counts);
@@ -479,6 +480,17 @@ fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
         MessageItem::Int32(v) => Ok(WireValue::I32(v)),
         MessageItem::Int64(v) => Ok(WireValue::I64(v)),
         MessageItem::Str(v) => Ok(WireValue::String(v)),
+        MessageItem::Array(values) if signature == "ay" => {
+            let bytes = values
+                .into_vec()
+                .into_iter()
+                .map(|item| match item {
+                    MessageItem::Byte(byte) => Ok(byte),
+                    _ => Err(FlameError::invalid("D-Bus byte array element must be byte")),
+                })
+                .collect::<Result<Vec<u8>, _>>()?;
+            Ok(WireValue::Bytes(bytes))
+        }
         MessageItem::Array(values) => {
             let string_array = signature == "as";
             let values = values
@@ -760,6 +772,7 @@ mod tests {
             entries: vec![SwitcherEntry {
                 title: "Terminal".to_owned(),
                 app_id: "terminal".to_owned(),
+                thumb: None,
             }],
         });
     }

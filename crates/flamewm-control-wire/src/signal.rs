@@ -5,6 +5,8 @@ use super::*;
 pub struct SwitcherEntry {
     pub title: String,
     pub app_id: String,
+    /// Window preview when the WM has one ready. Absent (`None`) keeps the `title`/`app_id` row.
+    pub thumb: Option<flamewm_api::switcher::SwitcherThumb>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,10 +289,22 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
 }
 
 pub(crate) fn switcher_entry_wire_value(entry: &SwitcherEntry) -> WireValue {
-    WireValue::Dict(dict_of([
+    let mut dict = dict_of([
         ("title", WireValue::String(entry.title.clone())),
         ("appId", WireValue::String(entry.app_id.clone())),
-    ]))
+    ]);
+    // The `thumb` key is written only when a preview exists; older shells ignore unknown keys.
+    if let Some(thumb) = &entry.thumb {
+        dict.insert(
+            "thumb".to_owned(),
+            WireValue::Dict(dict_of([
+                ("width", WireValue::U32(thumb.width)),
+                ("height", WireValue::U32(thumb.height)),
+                ("rgba", WireValue::Bytes(thumb.rgba.clone())),
+            ])),
+        );
+    }
+    WireValue::Dict(dict)
 }
 
 pub(crate) fn switcher_entry(value: &WireValue) -> Result<SwitcherEntry, ControlError> {
@@ -298,7 +312,25 @@ pub(crate) fn switcher_entry(value: &WireValue) -> Result<SwitcherEntry, Control
     Ok(SwitcherEntry {
         title: dict_string(dict, "title")?.to_owned(),
         app_id: dict_string(dict, "appId")?.to_owned(),
+        // A payload without `thumb` (the legacy shape) decodes to no preview.
+        thumb: dict.get("thumb").map(switcher_thumb).transpose()?,
     })
+}
+
+fn switcher_thumb(value: &WireValue) -> Result<flamewm_api::switcher::SwitcherThumb, ControlError> {
+    let dict = required_dict(value, "switcher thumb")?;
+    let thumb = flamewm_api::switcher::SwitcherThumb {
+        width: dict_u32(dict, "width")?,
+        height: dict_u32(dict, "height")?,
+        rgba: match dict_value(dict, "rgba")? {
+            WireValue::Bytes(bytes) => bytes.clone(),
+            _ => return Err(invalid("switcher thumb rgba must be bytes")),
+        },
+    };
+    if !thumb.is_well_formed() {
+        return Err(invalid("switcher thumb size does not match its pixels"));
+    }
+    Ok(thumb)
 }
 
 pub(crate) fn weather_feed_dict(snapshot: &flamewm_api::weather::WeatherFeedSnapshot) -> WireDict {

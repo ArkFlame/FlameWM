@@ -29,6 +29,7 @@ pub mod settings_groups;
 pub mod shell;
 pub mod shell_bootstrap;
 pub mod shortcuts;
+pub mod switcher;
 pub mod system;
 pub mod weather;
 pub mod window;

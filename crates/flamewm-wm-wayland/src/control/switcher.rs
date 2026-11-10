@@ -66,10 +66,12 @@ impl Service {
                                 SwitcherEntry {
                                     title: String::new(),
                                     app_id: String::new(),
+                                    thumb: None,
                                 },
                                 |window| SwitcherEntry {
                                     title: window.title.clone(),
                                     app_id: window.app_id.as_str().to_owned(),
+                                    thumb: None,
                                 },
                             )
                     })

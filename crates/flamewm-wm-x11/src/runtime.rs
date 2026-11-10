@@ -583,6 +583,8 @@ fn run_session(
                     },
                 );
             }
+            // Alt+Tab previews: at most one capture per turn, and only while the switcher is open.
+            wm.pump_switcher_thumbs();
             // Alt+Tab overlay snapshot: queued by the switcher on each change, emitted once here.
             if let Some(signal) = wm.take_switcher_signal() {
                 emit_control(&control_for_hook, &signal);
@@ -605,6 +607,11 @@ fn run_session(
             }
             // Armed only by a close request: the one ping deadline, never a periodic timer.
             if let Some(delay) = wm.ping_wait_timeout(std::time::Instant::now()) {
+                wait = Some(wait.map_or(delay, |current| current.min(delay)));
+            }
+            // Queued switcher captures run on the next turn, not on the next input event.
+            if wm.switcher_thumbs_pending() {
+                let delay = std::time::Duration::from_millis(1);
                 wait = Some(wait.map_or(delay, |current| current.min(delay)));
             }
             drop(host_guard);

@@ -11,6 +11,8 @@ pub enum WireValue {
     I64(i64),
     String(String),
     StringArray(Vec<String>),
+    /// Raw byte blob (D-Bus `ay`): thumbnail pixels.
+    Bytes(Vec<u8>),
     Array(Vec<WireValue>),
     Dict(WireDict),
 }

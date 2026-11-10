@@ -131,6 +131,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             switcher: switcher::Switcher::default(),
             mru: switcher::Mru::default(),
             switcher_signal: None,
+            switcher_thumbs: Default::default(),
+            switcher_budget: switcher_thumb_provider::CaptureBudget::new(
+                switcher::SWITCHER_CAPTURES_PER_TURN,
+            ),
             dock_struts: HashMap::new(),
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),

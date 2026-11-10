@@ -278,6 +278,11 @@ impl<C: Connection> Wm<'_, C> {
         else {
             return;
         };
+        // A damaged preview is dropped until recaptured; the open switcher re-requests it.
+        self.switcher_thumbs.damage(client);
+        if self.switcher.is_open() {
+            self.publish_switcher();
+        }
         self.release_linger(client, "damage");
     }
 

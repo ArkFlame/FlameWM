@@ -631,6 +631,7 @@ impl<C: Connection> Wm<'_, C> {
         self.stack_layers.remove(&window);
         self.outline_overlays.remove(&window);
         self.release_damage_watch(window);
+        self.switcher_thumbs.forget(window);
         self.minimized_captures.remove(window);
         self.open_gate.clear(window);
         // Abort any in-progress interaction through the reducer so session

@@ -5,6 +5,8 @@
 //! the card hidden. A snapshot without `immediate` shows after [`HOLD_DELAY`]; a quick tap that
 //! closes first never paints. The shell loop wakes at [`SwitcherController::deadline`].
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -12,8 +14,8 @@ use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::Rect;
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_ui_x11::{
-    decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
-    UiBackendError, UiDocumentAccess, UiTemplate,
+    decode_document, RuntimeImage, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
+    SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 use crate::settings_projection::{self, SurfaceKind};
@@ -215,6 +217,18 @@ fn create(runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError>
     )
 }
 
+/// Largest preview box inside a row; the row keeps its height, a thumbnail never grows it.
+const THUMB_BOX_W: f32 = 64.0;
+const THUMB_BOX_H: f32 = 36.0;
+
+/// Display size for a `w` x `h` preview fitted into the row box. Never upscales.
+#[must_use]
+pub fn thumb_fit(w: u32, h: u32) -> (f32, f32) {
+    let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+    let scale = (THUMB_BOX_W / w).min(THUMB_BOX_H / h).min(1.0);
+    (w * scale, h * scale)
+}
+
 fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<(), String> {
     let window = visible_window(frame.entries.len(), frame.selected);
     let highlight = frame.selected.saturating_sub(window.start);
@@ -227,6 +241,8 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
         let row = slot + 1;
         let row_id = format!("switcher-row-{row}");
         let label_id = format!("switcher-row-{row}-label");
+        let icon_id = format!("switcher-row-{row}-icon");
+        let thumb_id = format!("switcher-row-{row}-thumb");
         match frame
             .entries
             .get(window.start + slot)
@@ -235,6 +251,29 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
             Some(entry) => {
                 document.text_ref(&label_id, row_label(entry))?;
                 document.visible(&row_id, true)?;
+                if let Some(thumb) = entry.thumb.as_ref().filter(|t| t.is_well_formed()) {
+                    let (w, h) = thumb_fit(thumb.width, thumb.height);
+                    let mut hasher = DefaultHasher::new();
+                    thumb.rgba.hash(&mut hasher);
+                    let image = RuntimeImage {
+                        source: format!(
+                            "switcher-thumb-{row}-{}x{}-{:x}",
+                            thumb.width,
+                            thumb.height,
+                            hasher.finish()
+                        ),
+                        width: thumb.width,
+                        height: thumb.height,
+                        pixels: thumb.rgba.clone(),
+                    };
+                    document.image_rgba8(&thumb_id, image)?;
+                    document.size(&thumb_id, w, h)?;
+                    document.visible(&icon_id, false)?;
+                    document.visible(&thumb_id, true)?;
+                } else {
+                    document.visible(&icon_id, true)?;
+                    document.visible(&thumb_id, false)?;
+                }
             }
             None => document.visible(&row_id, false)?,
         }
@@ -250,6 +289,7 @@ mod tests {
         SwitcherEntry {
             title: title.to_owned(),
             app_id: app_id.to_owned(),
+            thumb: None,
         }
     }
 

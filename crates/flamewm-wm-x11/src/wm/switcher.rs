@@ -6,11 +6,19 @@
 //! fullscreen client holds the keyboard. The pure parts (`Mru`, `switcher_order`, `Switcher`)
 //! carry no X state and are unit tested; the `Wm` glue at the bottom performs the X calls.
 
+use super::switcher_thumb_provider::{CaptureBudget, ThumbProvider};
+use super::switcher_thumb_x11::X11ThumbSource;
+use super::switcher_thumbs::{MAX_THUMBS, THUMB_MAX_H, THUMB_MAX_W, ThumbKey};
 use super::*;
+use flamewm_api::switcher::SwitcherThumb;
 use flamewm_control_wire::{ControlSignal, SwitcherEntry};
 
 /// Most-recently-focused windows remembered for the switcher order.
 const MRU_LIMIT: usize = 64;
+
+/// Captures the event loop may run per turn while the switcher is open. One keeps a full-size
+/// window (about 10 ms to read and downscale at 1920x1080) under the 16 ms turn budget.
+pub(crate) const SWITCHER_CAPTURES_PER_TURN: u32 = 1;
 
 const XK_TAB: u32 = 0xff09;
 const XK_LEFT_TAB: u32 = 0xfe20;
@@ -168,6 +176,25 @@ pub(crate) fn classify_switcher_key(keysym: u32, shift: bool) -> SwitcherKey {
     }
 }
 
+/// Converts a downscaled X `ZPixmap` buffer (32-bit BGRX, rows packed) to straight RGBA8 with
+/// opaque alpha. `None` when the buffer length does not match the declared size.
+pub(crate) fn thumb_rgba(width: u32, height: u32, bgrx: &[u8]) -> Option<Vec<u8>> {
+    if width > THUMB_MAX_W || height > THUMB_MAX_H {
+        return None;
+    }
+    let len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    if bgrx.len() != len {
+        return None;
+    }
+    let mut out = Vec::with_capacity(len);
+    for px in bgrx.chunks_exact(4) {
+        out.extend_from_slice(&[px[2], px[1], px[0], 255]);
+    }
+    Some(out)
+}
+
 fn closed_signal() -> ControlSignal {
     ControlSignal::WindowSwitcherChanged {
         open: false,
@@ -214,19 +241,25 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     /// Records the overlay snapshot for the next reactor flush.
-    fn publish_switcher(&mut self) {
+    pub(super) fn publish_switcher(&mut self) {
         let immediate = self.switcher.immediate();
-        self.switcher_signal = Some(match self.switcher.view() {
-            Some((windows, selected)) => ControlSignal::WindowSwitcherChanged {
-                open: true,
-                immediate,
-                selected: u32::try_from(selected).unwrap_or(0),
-                entries: windows
-                    .iter()
-                    .map(|window| self.switcher_entry(*window))
-                    .collect(),
-            },
-            None => closed_signal(),
+        let Some((windows, selected)) = self.switcher.view().map(|(w, s)| (w.to_vec(), s)) else {
+            self.switcher_signal = Some(closed_signal());
+            return;
+        };
+        let mut entries = Vec::with_capacity(windows.len());
+        for (index, window) in windows.iter().enumerate() {
+            let mut entry = self.switcher_entry(*window);
+            if index < MAX_THUMBS {
+                entry.thumb = self.switcher_thumb(*window);
+            }
+            entries.push(entry);
+        }
+        self.switcher_signal = Some(ControlSignal::WindowSwitcherChanged {
+            open: true,
+            immediate,
+            selected: u32::try_from(selected).unwrap_or(0),
+            entries,
         });
     }
 
@@ -235,12 +268,59 @@ impl<C: Connection> Wm<'_, C> {
             Some(state) => SwitcherEntry {
                 title: state.title.to_string(),
                 app_id: state.wm_class.to_string(),
+                thumb: None,
             },
             None => SwitcherEntry {
                 title: String::new(),
                 app_id: String::new(),
+                thumb: None,
             },
         }
+    }
+
+    /// Ready preview for `window`, or `None` (and a capture is queued). Never reads pixels here:
+    /// only the geometry round trip, which yields the cache key's size.
+    fn switcher_thumb(&mut self, window: Window) -> Option<SwitcherThumb> {
+        let geom = self.conn.get_geometry(window).ok()?.reply().ok()?;
+        let key = ThumbKey {
+            window,
+            src_w: u32::from(geom.width),
+            src_h: u32::from(geom.height),
+        };
+        let (w, h, px) = self.switcher_thumbs.request(key)?;
+        let rgba = thumb_rgba(*w, *h, px)?;
+        Some(SwitcherThumb {
+            width: *w,
+            height: *h,
+            rgba,
+        })
+    }
+
+    /// Event-loop hook: runs up to `SWITCHER_CAPTURES_PER_TURN` captures while the switcher is
+    /// open. Republishes the snapshot when a preview landed. Returns the thumbnails stored.
+    pub(crate) fn pump_switcher_thumbs(&mut self) -> usize {
+        if !self.switcher.is_open() {
+            return 0;
+        }
+        self.switcher_budget.begin_turn();
+        let clients = &self.clients;
+        let iconic = |window: Window| clients.get(&window).is_some_and(|state| state.minimized);
+        let mut source = X11ThumbSource {
+            conn: self.conn,
+            iconic: &iconic,
+        };
+        let stored = self
+            .switcher_thumbs
+            .pump(&mut source, &mut self.switcher_budget);
+        if stored > 0 {
+            self.publish_switcher();
+        }
+        stored
+    }
+
+    /// True while an open switcher still has captures queued (the loop must not sleep).
+    pub(crate) fn switcher_thumbs_pending(&self) -> bool {
+        self.switcher.is_open() && self.switcher_thumbs.pending_len() > 0
     }
 
     /// Dispatches one key press while the switcher is open. Shared by both key feeds.
@@ -295,6 +375,9 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     fn end_switcher_session(&mut self) -> Result<(), ReplyError> {
+        // Previews are lazy: dropped when the switcher closes, so none stay resident while idle.
+        self.switcher_thumbs = ThumbProvider::default();
+        self.switcher_budget = CaptureBudget::new(SWITCHER_CAPTURES_PER_TURN);
         self.switcher_signal = Some(closed_signal());
         Ok(())
     }
@@ -403,6 +486,18 @@ mod tests {
         switcher.cancel();
         assert!(!switcher.is_open());
         assert_eq!(switcher.commit(), None);
+    }
+
+    #[test]
+    fn thumb_rgba_swaps_bgrx_to_opaque_rgba_and_checks_length() {
+        // One BGRX pixel per entry: blue, green, red, padding.
+        let bgrx = [1, 2, 3, 0, 4, 5, 6, 0];
+        assert_eq!(
+            thumb_rgba(2, 1, &bgrx),
+            Some(vec![3, 2, 1, 255, 6, 5, 4, 255])
+        );
+        assert_eq!(thumb_rgba(2, 2, &bgrx), None, "length must match w*h*4");
+        assert_eq!(thumb_rgba(THUMB_MAX_W + 1, 1, &[0; 4]), None);
     }
 
     #[test]

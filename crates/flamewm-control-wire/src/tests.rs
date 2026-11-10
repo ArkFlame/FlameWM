@@ -885,10 +885,12 @@ fn window_switcher_changed_round_trips_through_wire() {
             SwitcherEntry {
                 title: "Terminal".to_owned(),
                 app_id: "org.flame.terminal".to_owned(),
+                thumb: None,
             },
             SwitcherEntry {
                 title: "Files".to_owned(),
                 app_id: String::new(),
+                thumb: None,
             },
         ],
     };
@@ -912,6 +914,67 @@ fn window_switcher_changed_round_trips_through_wire() {
         args: vec![WireValue::Bool(true)],
     };
     assert!(decode_signal(&short).is_err());
+}
+
+// LEGACY-DEFAULT: an entry dict without `thumb` (the shape older WMs send) decodes to no preview.
+#[test]
+fn switcher_entry_without_thumb_key_decodes_as_legacy_row() {
+    let legacy = WireSignal {
+        interface: IFACE_ROOT.to_owned(),
+        member: "WindowSwitcherChanged".to_owned(),
+        args: vec![
+            WireValue::Bool(true),
+            WireValue::Bool(false),
+            WireValue::U32(0),
+            WireValue::Array(vec![WireValue::Dict(dict_of([
+                ("title", WireValue::String("Files".to_owned())),
+                ("appId", WireValue::String(String::new())),
+            ]))]),
+        ],
+    };
+    let Ok(ControlSignal::WindowSwitcherChanged { entries, .. }) = decode_signal(&legacy) else {
+        panic!("legacy switcher signal must decode");
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].title, "Files");
+    assert_eq!(entries[0].thumb, None);
+}
+
+#[test]
+fn switcher_thumb_round_trips_and_rejects_mismatched_pixels() {
+    use flamewm_api::switcher::SwitcherThumb;
+    let thumb = SwitcherThumb {
+        width: 2,
+        height: 1,
+        rgba: vec![255, 0, 0, 255, 0, 0, 255, 255],
+    };
+    let signal = ControlSignal::WindowSwitcherChanged {
+        open: true,
+        immediate: false,
+        selected: 0,
+        entries: vec![SwitcherEntry {
+            title: "Red".to_owned(),
+            app_id: String::new(),
+            thumb: Some(thumb.clone()),
+        }],
+    };
+    assert_eq!(decode_signal(&encode_signal(&signal)), Ok(signal));
+
+    let wire = encode_signal(&ControlSignal::WindowSwitcherChanged {
+        open: true,
+        immediate: false,
+        selected: 0,
+        entries: vec![SwitcherEntry {
+            title: String::new(),
+            app_id: String::new(),
+            thumb: Some(SwitcherThumb {
+                width: 2,
+                height: 2,
+                rgba: vec![0; 8],
+            }),
+        }],
+    });
+    assert!(decode_signal(&wire).is_err(), "2x2 needs 16 bytes, got 8");
 }
 
 // CONTRACT-REGRESSION: T05 SystemSnapshotChanged carries the complete authoritative snapshot.

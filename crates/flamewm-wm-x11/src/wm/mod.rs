@@ -513,6 +513,10 @@ pub(crate) struct Wm<'a, C: Connection> {
     mru: switcher::Mru,
     /// Overlay snapshot queued for the next reactor flush.
     switcher_signal: Option<flamewm_control_wire::ControlSignal>,
+    /// Alt+Tab previews: captured while the switcher is open, dropped when it closes.
+    switcher_thumbs: switcher_thumb_provider::ThumbProvider,
+    switcher_budget: switcher_thumb_provider::CaptureBudget,
+    /// Alt+Tab previews: captured while the switcher is open, dropped when it closes.
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
@@ -574,14 +578,10 @@ mod show_desktop;
 mod stack_layer;
 mod super_tap;
 mod switcher;
-// Pure thumbnail policy; the capture path that consumes it lands in a later slice.
-#[allow(dead_code)]
-mod switcher_thumbs;
-// Thumbnail provider and X11 source: not yet called from the switcher (wiring is a later slice).
-#[allow(dead_code)]
+// Alt+Tab thumbnail policy, provider and X11 source; driven by the switcher (see switcher.rs).
 mod switcher_thumb_provider;
-#[allow(dead_code)]
 mod switcher_thumb_x11;
+mod switcher_thumbs;
 mod take_focus;
 mod trace;
 mod transient_placement;
