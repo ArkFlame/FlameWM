@@ -44,7 +44,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | bt-reply | feature | Drain and track BlueZ replies (serials, errors) through `on_ready` | `docs/backlog/bluetooth.md:21` | replies queue unread on facade connection | S | open |
 | bt-plumb | feature | `BluetoothAction`, control-wire, platform routing, Pair/Trust/Remove control actions (mirror `4021f35f`) | `docs/backlog/bluetooth.md:22` | no control path to facade | M | open |
 | bt-agent | feature | `org.bluez.Agent1` registration for PIN/passkey prompts (security-sensitive) | `docs/backlog/bluetooth.md:23` | Pair fails for most devices | L | open |
-| bt-list | feature | Device list and adapter `Powered` state (`GetManagedObjects`, `PropertiesChanged`) | `docs/backlog/bluetooth.md:24` | no device list | M | open |
+| bt-list | feature | Device list and adapter `Powered` state (`GetManagedObjects`, `PropertiesChanged`, `InterfacesAdded/Removed`) | `docs/backlog/bluetooth.md` (Landed: bt-list) | device list and power state in facade snapshot; no UI | M | done |
 | bt-ui | feature | Quick-controls Bluetooth row | `docs/backlog/bluetooth.md:25` | no UI | S | open |
 | cmp-polkit | feature | Polkit authentication agent | `cmp-4`; core `1951e0df` on origin/main; `docs/backlog/polkit.md:26-34` | partial: core landed; `pol-*` open | L | partial |
 | pol-ui | feature | Polkit prompt window (needs design decision and dialog pattern) | `docs/backlog/polkit.md:37` | no prompt | M | open |
