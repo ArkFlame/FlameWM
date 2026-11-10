@@ -79,12 +79,14 @@ pub(crate) fn logical_size(physical: (i32, i32), percent: u16) -> (i32, i32) {
     (scale(physical.0), scale(physical.1))
 }
 
-/// Physical size of a logical size at `percent` scale, the inverse of [`logical_size`].
+/// Physical size of a logical size at `percent` scale, the inverse of [`logical_size`]: rounded to
+/// the nearest pixel like it, so `physical_size(logical_size(p))` returns `p` for every size the
+/// fractional scale can express exactly once rounded.
 pub(crate) fn physical_size(logical: (i32, i32), percent: u16) -> (i32, i32) {
     let percent = i64::from(percent.max(1));
     let scale = |value: i32| {
         let value = i64::from(value.max(0));
-        (value * percent / 100) as i32
+        ((value * percent + 50) / 100) as i32
     };
     (scale(logical.0), scale(logical.1))
 }
@@ -233,6 +235,16 @@ mod tests {
         assert_eq!(physical_size((2560, 1440), 150), (3840, 2160));
         assert_eq!(physical_size((1536, 864), 125), (1920, 1080));
         assert_eq!(physical_size((1920, 1080), 100), (1920, 1080));
+    }
+
+    #[test]
+    fn physical_size_round_trips_non_exact_scales() {
+        // 1919 / 1.25 = 1535.2 -> 1535; 1535 * 1.25 = 1918.75 must come back as 1919, not 1918.
+        let logical = logical_size((1919, 1079), 125);
+        assert_eq!(logical, (1535, 863));
+        assert_eq!(physical_size(logical, 125), (1919, 1079));
+        let logical = logical_size((1366, 768), 125);
+        assert_eq!(physical_size(logical, 125), (1366, 768));
     }
 
     #[test]
