@@ -58,6 +58,50 @@ pub fn parse_connection_by_uuid_reply(reply: &Message) -> FlameResult<String> {
     }
 }
 
+const ROOT_PATH: &str = "/org/freedesktop/NetworkManager";
+const ROOT_INTERFACE: &str = "org.freedesktop.NetworkManager";
+const ACTIVATE_CONNECTION: &str = "ActivateConnection";
+/// `/` is the `NetworkManager` wildcard for "no device" and "no specific object", as VPN profiles need.
+const NO_OBJECT_PATH: &str = "/";
+
+/// `ActivateConnection(o connection, o device, o specific_object) -> o active_connection` for a
+/// VPN profile. Takes a settings path from `GetConnectionByUuid`, so it must sit under the
+/// settings object. Device and specific object are both `/`: VPN profiles bind to no device.
+pub fn activate_vpn_message(profile_path: &str) -> FlameResult<Message> {
+    let profile = dbus::Path::new(profile_path.to_owned())
+        .map_err(|error| FlameError::invalid(format!("network manager profile path: {error}")))?;
+    if !profile_path.starts_with(&format!("{SETTINGS_PATH}/")) {
+        return Err(FlameError::invalid("network manager profile path"));
+    }
+    let no_object = dbus::Path::new(NO_OBJECT_PATH.to_owned())
+        .map_err(|error| FlameError::invalid(format!("network manager message: {error}")))?;
+    let mut message = Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        ROOT_PATH,
+        ROOT_INTERFACE,
+        ACTIVATE_CONNECTION,
+    )
+    .map_err(|error| FlameError::invalid(format!("network manager message: {error}")))?;
+    message.append_items(&[
+        MessageItem::ObjectPath(profile),
+        MessageItem::ObjectPath(no_object.clone()),
+        MessageItem::ObjectPath(no_object),
+    ]);
+    Ok(message)
+}
+
+/// Active-connection path from an `ActivateConnection` reply. Pure. Error replies and any reply
+/// that is not exactly one object path are rejected.
+pub fn parse_activate_vpn_reply(reply: &Message) -> FlameResult<String> {
+    if reply.msg_type() != MessageType::MethodReturn {
+        return Err(FlameError::invalid("network manager activate reply"));
+    }
+    match reply.get_items().as_slice() {
+        [MessageItem::ObjectPath(path)] => Ok(path.to_string()),
+        _ => Err(FlameError::invalid("network manager activate reply")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +110,63 @@ mod tests {
 
     const UUID: &str = "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
     const PROFILE_PATH: &str = "/org/freedesktop/NetworkManager/Settings/7";
+    const ACTIVE_PATH: &str = "/org/freedesktop/NetworkManager/ActiveConnection/3";
+
+    #[test]
+    fn activate_message_passes_profile_with_wildcard_device_and_object() {
+        let message = activate_vpn_message(PROFILE_PATH).expect("settings path");
+        assert_eq!(
+            message.destination().as_deref(),
+            Some(NETWORK_MANAGER_SERVICE)
+        );
+        assert_eq!(message.path().as_deref(), Some(ROOT_PATH));
+        assert_eq!(message.interface().as_deref(), Some(ROOT_INTERFACE));
+        assert_eq!(message.member().as_deref(), Some(ACTIVATE_CONNECTION));
+        let root = Path::new(NO_OBJECT_PATH.to_owned()).expect("path");
+        assert_eq!(
+            message.get_items(),
+            vec![
+                MessageItem::ObjectPath(Path::new(PROFILE_PATH.to_owned()).expect("path")),
+                MessageItem::ObjectPath(root.clone()),
+                MessageItem::ObjectPath(root),
+            ]
+        );
+    }
+
+    #[test]
+    fn activate_message_rejects_paths_outside_settings_or_malformed() {
+        assert!(activate_vpn_message(ROOT_PATH).is_err());
+        assert!(
+            activate_vpn_message("/org/freedesktop/NetworkManager/ActiveConnection/3").is_err()
+        );
+        assert!(activate_vpn_message(UUID).is_err());
+        assert!(activate_vpn_message("").is_err());
+    }
+
+    #[test]
+    fn activate_reply_parser_returns_active_connection_path() {
+        let mut call = activate_vpn_message(PROFILE_PATH).expect("settings path");
+        call.set_serial(1);
+        let mut reply = call.method_return();
+        reply.append_items(&[MessageItem::ObjectPath(
+            Path::new(ACTIVE_PATH.to_owned()).expect("path"),
+        )]);
+        assert_eq!(parse_activate_vpn_reply(&reply).as_deref(), Ok(ACTIVE_PATH));
+    }
+
+    #[test]
+    fn activate_reply_parser_rejects_error_and_wrong_shape() {
+        let mut call = activate_vpn_message(PROFILE_PATH).expect("settings path");
+        call.set_serial(1);
+        let name =
+            ErrorName::new("org.freedesktop.NetworkManager.UnknownConnection").expect("error name");
+        let text = CString::new("no such profile").expect("cstring");
+        assert!(parse_activate_vpn_reply(&call.error(&name, &text)).is_err());
+        assert!(parse_activate_vpn_reply(&call.method_return()).is_err());
+        let mut wrong = call.method_return();
+        wrong.append_items(&[MessageItem::Str(ACTIVE_PATH.to_owned())]);
+        assert!(parse_activate_vpn_reply(&wrong).is_err());
+    }
 
     /// Replies need a non-zero serial on the call, as on the wire; libdbus aborts otherwise.
     fn sent_call() -> Message {
