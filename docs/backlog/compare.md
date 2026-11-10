@@ -88,3 +88,7 @@ Runtime evidence (screenshots viewed, zoomed 3x):
 Not verified: a host without a backlight device (dashes path is unit-tested only: `brightness_row_shows_percent_and_dashes_when_absent`); the write path used (logind `SetBrightness` vs sysfs fallback) was not instrumented; 5% vs 10% key-step mismatch is by design (`MEDIA_BRIGHTNESS_STEP` 5 for keys, popup 10).
 
 Microphone mute row: not added. The audio popup Devices tab already lists input endpoints with a per-row mute button (`audio.slot.N.mute` in `ui/shell/audio.html`), so a battery-popup row would duplicate it and grow the popup beyond 160px. Needs an owner decision on placement before implementation.
+
+## Battery tray missing on fresh start (not reproduced)
+
+Root-cause candidate: `flamewm-shell` `main.rs` loaded the `GetShellBootstrap` snapshot before subscribing to control signals (`execute()` and `attach_control_bus()`). A `SystemSnapshot` (power/battery) change between the two was never delivered, so the tray could stay stale. Fixed by subscribing first (`load_bus_bootstrap`, `subscribe_then_load`), same ordering as `db42c3b6`. Regression: `bootstrap_order_tests`. Fresh-start reproduction count was not measured in this change; status UNVERIFIED at runtime.

@@ -592,15 +592,15 @@ fn execute() -> Result<(), String> {
     let total = flamewm_profiler::ProfilePoint::new("shell.startup.total");
     let total_guard = total.start();
     let root = flamewm_ui_x11::root_geometry().unwrap_or((0, 0));
-    let (snapshot, startup_settings, bus_offline) = match load_bus_bootstrap() {
-        Ok((snapshot, settings)) => (snapshot, settings, false),
+    let (snapshot, startup_settings, signal_client, bus_offline) = match load_bus_bootstrap() {
+        Ok((snapshot, settings, signal_client)) => (snapshot, settings, Some(signal_client), false),
         Err(error) => {
             // Logged once. The retry timer below attaches the bus if it appears later.
             eprintln!(
                 "flamewm-shell: session control bus unavailable, running without it (retry every {}s): {error}",
                 BUS_RETRY_INTERVAL.as_secs()
             );
-            (bus_offline::offline_snapshot(root), None, true)
+            (bus_offline::offline_snapshot(root), None, None, true)
         }
     };
     flamewm_ui_x11::install_default_layout_measure();
@@ -800,9 +800,8 @@ fn execute() -> Result<(), String> {
     // their payload directly in `mark_signal` (zero fetch); legacy
     // revision-only signals are ignored for normal refresh. The tick
     // drains applied domains once per turn.
-    if !bus_offline {
-        let signal_client = ControlSignalClient::connect(BusKind::Session)
-            .map_err(|error| format!("subscribe control signals: {error}"))?;
+    // The client was subscribed before the bootstrap load (see `load_bus_bootstrap`).
+    if let Some(signal_client) = signal_client {
         register_signal_source(&reactor.handle(), &state, signal_client)?;
     }
     if let Some(observer) = badge.as_ref() {
@@ -933,9 +932,69 @@ fn execute() -> Result<(), String> {
 
 /// Parent helper program: re-exec this binary with the helper role flag so
 /// no second binary or install path is required.
+/// Subscribes before the bootstrap load. A signal emitted between a load and a later subscribe is
+/// never delivered, so the shell would keep a stale power/system snapshot until the next change.
+fn subscribe_then_load<S, T>(
+    subscribe: impl FnOnce() -> Result<S, String>,
+    load: impl FnOnce() -> Result<T, String>,
+) -> Result<(S, T), String> {
+    let subscription = subscribe()?;
+    Ok((subscription, load()?))
+}
+
+/// Control signal subscription first, then the bootstrap snapshot and startup settings.
+fn load_bus_bootstrap(
+) -> Result<(ShellSnapshot, Option<SettingsSnapshot>, ControlSignalClient), String> {
+    let (signal_client, (snapshot, settings)) = subscribe_then_load(
+        || {
+            ControlSignalClient::connect(BusKind::Session)
+                .map_err(|error| format!("subscribe control signals: {error}"))
+        },
+        load_bootstrap_and_settings,
+    )?;
+    Ok((snapshot, settings, signal_client))
+}
+
+#[cfg(test)]
+mod bootstrap_order_tests {
+    use super::subscribe_then_load;
+    use std::cell::RefCell;
+
+    #[test]
+    fn subscribes_before_loading() {
+        let log = RefCell::new(Vec::new());
+        let result = subscribe_then_load(
+            || {
+                log.borrow_mut().push("subscribe");
+                Ok::<_, String>(7)
+            },
+            || {
+                log.borrow_mut().push("load");
+                Ok::<_, String>("snapshot")
+            },
+        );
+        assert_eq!(result, Ok((7, "snapshot")));
+        assert_eq!(*log.borrow(), ["subscribe", "load"]);
+    }
+
+    #[test]
+    fn failed_subscribe_skips_load() {
+        let loaded = RefCell::new(false);
+        let result: Result<(u8, u8), String> = subscribe_then_load(
+            || Err("no bus".to_owned()),
+            || {
+                *loaded.borrow_mut() = true;
+                Ok(1)
+            },
+        );
+        assert_eq!(result, Err("no bus".to_owned()));
+        assert!(!*loaded.borrow());
+    }
+}
+
 /// Control bootstrap and startup settings. Settings are not part of the bootstrap aggregate; a
 /// failed settings fetch is nonfatal and leaves defaults in effect.
-fn load_bus_bootstrap() -> Result<(ShellSnapshot, Option<SettingsSnapshot>), String> {
+fn load_bootstrap_and_settings() -> Result<(ShellSnapshot, Option<SettingsSnapshot>), String> {
     let client = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.control_connect");
         let _s = scope.start();
@@ -969,9 +1028,7 @@ fn attach_control_bus(
     state: &Rc<RefCell<ShellLoop>>,
     reactor: &flamewm_reactor::ReactorHandle,
 ) -> Result<(), String> {
-    let (snapshot, settings) = load_bus_bootstrap()?;
-    let signal_client = ControlSignalClient::connect(BusKind::Session)
-        .map_err(|error| format!("subscribe control signals: {error}"))?;
+    let (snapshot, settings, signal_client) = load_bus_bootstrap()?;
     register_signal_source(reactor, state, signal_client)?;
     state.borrow_mut().apply_bus_bootstrap(snapshot, settings);
     Ok(())
