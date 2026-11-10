@@ -90,3 +90,11 @@ Measured at the flat titlebar pixel (x=900, one row inside the bar) with the wal
 - Window placement: the Wayland terminal sits 30 px lower than the X11 one in this harness (bar at y 60 vs 30). This is the placement difference already recorded above and is not part of this change.
 - Unit guard: `translucent_bar_composites_known_wallpaper_in_rgb_order` (titlebar.rs) asserts `(4,0,60)` for black glass at alpha 191 over `(240,0,15)`. It covers the blend path only. The readback order is not unit-testable without GL, and is verified by the harness numbers above.
 - Not verified: other GPUs or drivers. The same `Abgr8888` readback is used by the screencopy path in `render/mod.rs` (`render_rgba`) and was not measured here; it may show the same swap.
+
+## Screencopy readback channel order (measured)
+
+- Path: `flamewm-wm-wayland` `render/mod.rs` `offscreen_pixels` (`Abgr8888` create and copy) → `screencopy::serve` → `flamewm-screenshot --full` Wayland branch.
+- Stack: origin/main `f9c1b491`, release build, nested `flamewm-wayland` (winit) on private Xvfb `:381` (`-noreset`), no desktop autostart, so the frame is the compositor clear colour `[0.07, 0.08, 0.11]`.
+- Measured: `flamewm-screenshot --full --no-save --output` PNG (1350x641, RGB) top-left and centre pixels read `[18, 20, 28]`, which is R=18 G=20 B=28 in RGB order. A swapped channel order would read `[28, 20, 18]`. Not swapped.
+- Conclusion: the screencopy path stays `Abgr8888`. Only the backdrop blur readback (`read_reduced`) needed `Argb8888`, per `f9c1b491`.
+- Not measured: a red wallpaper sample; the check relies on the screenshot decoder's `Xrgb8888` to RGB conversion being correct.
