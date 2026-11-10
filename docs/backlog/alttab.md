@@ -167,4 +167,55 @@ Open unknowns: scale cost on the X11 path, composite pixmap server memory, shell
 
 `SwitcherThumb` carries a `generation`. The X11 WM keeps a per-window ledger of pixel hashes; an unchanged preview is sent as generation only (no `rgba`). A preview that changed gets a new generation and its pixels. The shell caches pixels by generation and resolves references from that cache, pruning generations the latest snapshot does not name.
 
-Verified: unit and wire round-trip tests, scoped gate `all=0`. Not verified: bytes per Tab press on Xvfb and event-loop turn timing (no key-injection tool was available).
+Verified: unit and wire round-trip tests, scoped gate `all=0`. Bytes per Tab press and turn timing: measured in section 9 (the earlier "no key-injection tool" note is superseded; XTEST injection works on a private Xvfb).
+
+## 9. Measured: bytes per Tab press, turn length, WM CPU (slices 4 and 5)
+
+Method: private `Xvfb :150 -noreset` 1280x1024x24, python-xlib XTEST (`Alt_L` held, five `Tab` presses 0.8 s apart,
+Alt released), `dbus-monitor --session --pcap` for wire bytes (full D-Bus message length, header + body, filtered to
+`WindowSwitcherChanged`), `/proc` ticks of the WM for CPU. Solid 300x200 windows in a grid. Builds are release, with a
+temporary local per-turn timer (`ALTTAB_TURN_US`, `Instant` around the `runtime.rs` turn hook; not committed). Before is
+`8f4676be` (slice 4), after is `2b90bd64`/origin/main at the time of the run (slice 5). Two runs per cell. Machine load
+average was about 29 on 12 cores (other workers), so the timing and CPU columns are noisy.
+
+Wire bytes per open cycle (5 presses; bucketed by press time, so per-press split is approximate):
+
+| windows | build | total bytes (r1 = r2) | first press | later presses |
+|---|---|---|---|---|
+| 3 | before (8f4676be) | 1,084,205 | 361,569 | 180,619 to 180,779 each |
+| 3 | after (slice 5) | 184,421 | 181,689 | 643 to 803 each |
+| 8 | before (8f4676be) | 4,094,020 | up to 2,168,344 (bucket split varies by run) | 0 to 962,918 per press |
+| 8 | after (slice 5) | 494,756 | 488,824 | 1,443 to 1,603 each |
+
+Per Tab press after the first, slice 5 sends about 0.6 to 0.8 KB (3 windows) and 1.4 to 1.6 KB (8 windows). Slice 4 resent
+the pixels on every press (about 181 KB per press for 3 windows; about 481 KB per full-preview signal for 8 windows, 963 KB when two land in one press). The open cycle
+total drops by 83.0% (3 windows) and 87.9% (8 windows). The first press still carries the pixels (one full-preview
+signal, not avoidable with the current transport).
+
+Longest WM event-loop turn (per run, 24 to 40 turns per cycle):
+
+| windows | build | max turn r1 / r2 | turns over 16 ms r1 / r2 |
+|---|---|---|---|
+| 3 | before | 25.2 ms / 59.1 ms | 4 / 6 |
+| 3 | after | 12.6 ms / 42.3 ms | 0 / 5 |
+| 8 | before | 50.0 ms / 149.7 ms | 12 / 14 |
+| 8 | after | 18.4 ms / 89.5 ms | 1 / 6 |
+
+Turns over 16 ms occur in both builds, at WM startup and during the switcher-open turns. Their cause is not isolated (no
+per-phase breakdown; load was high). The slice 5 change does not show a clear regression in these numbers; it lowers the
+p50 turn (8 windows: 1.9 ms before vs 0.5 ms after in r2). A frame-budget claim needs a quiet machine and a per-phase timer.
+
+WM CPU (percent of one core, `/proc` ticks):
+
+| build | idle | switcher open (about 4.4 s) | after close (3 s) |
+|---|---|---|---|
+| before, 3 windows | 0.00 | 2.95 / 3.63 | 0.00 |
+| after, 3 windows | 0.00 | 0.68 / 0.91 | 0.00 |
+| before, 8 windows | 0.00 | 8.86 / 13.35 | 0.00 |
+| after, 8 windows | 0.00 | 1.36 / 1.81 | 0.00 |
+
+Not measured or open: shell rendering of the card (no `flamewm-shell` was running; the numbers are WM side only); occluded
+windows; Wayland; a clean-machine repeat of the turn maxima; the cause of individual turns over 16 ms. The temporary timer
+adds one `Instant` pair and one `eprintln!` per turn, so the CPU numbers include that small cost. Harness scripts are kept
+outside the repo.
+
