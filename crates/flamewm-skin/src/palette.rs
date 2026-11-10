@@ -23,14 +23,6 @@ pub const ACCENT_SOFT: AlphaColor = AlphaColor {
     color: ACCENT,
     alpha: 0x38,
 };
-pub const DESKTOP_HOVER: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0x26,
-};
-pub const DESKTOP_SELECTED: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0x47,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
@@ -238,8 +230,6 @@ pub fn ink_palette_on(surface: Rgb) -> Palette {
 
 /// WCAG AA contrast for body text.
 pub const BODY_MIN_CONTRAST: f64 = 4.5;
-/// WCAG AA contrast for large text and non-text ink.
-pub const LARGE_MIN_CONTRAST: f64 = 3.0;
 
 /// Mean colour of backdrop samples (for example a 16x16 wallpaper downsample), averaged per
 /// sRGB channel. Empty input returns black. Computed once per backdrop change, never per frame.

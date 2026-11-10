@@ -21,12 +21,6 @@ use flamewm_skin::palette::{
 /// Default `surfaceColor` RGB (neutral black, chroma zero), parsed from the single owner.
 pub const DEFAULT_SURFACE_RGB: u32 = 0x0000_0000;
 
-/// Tahoe corner radii (px at 1x). Consumers pick the one matching their surface.
-/// The window frame radius has a single owner: `flamewm_skin::recipes::decoration::ROUNDED_RADIUS`.
-pub const POPOVER_RADIUS: u16 = 12;
-pub const MENU_RADIUS: u16 = 12;
-pub const BUTTON_RADIUS: u16 = 9;
-
 /// Blur percent to radius scale: `blur_percent / 100 * BLUR_MAX_PX` at 1x.
 pub const BLUR_MAX_PX: f32 = 40.0;
 

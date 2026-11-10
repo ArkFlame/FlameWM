@@ -154,6 +154,20 @@ pub fn clamp_worker_count(requested: usize) -> usize {
     requested.clamp(1, ICON_RESOLVE_CONCURRENCY)
 }
 
+/// Spawns one service thread. A failed spawn is logged and yields `None` instead of panicking.
+fn spawn_background(
+    builder: thread::Builder,
+    body: impl FnOnce() + Send + 'static,
+) -> Option<JoinHandle<()>> {
+    match builder.spawn(body) {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            eprintln!("icon service: background thread not started: {err}");
+            None
+        }
+    }
+}
+
 /// Priority icon service. Results are keyed only by [`IconKey`], never UI slots.
 ///
 /// Owns one shared [`IconLookupIndex`], one shared result/raster cache
@@ -253,15 +267,13 @@ impl<R: IconResolve> IconService<R> {
             let cache = Arc::clone(&result_cache);
             let completed = Arc::clone(&completed);
             let factory = Arc::clone(&factory);
-            workers.push(
-                thread::Builder::new()
-                    .name(format!("icon-resolver-{number}"))
-                    .spawn(move || {
-                        background::lower_current_thread();
-                        worker_loop(shared, result_tx, wake_tx, cache, completed, factory());
-                    })
-                    .expect("spawn icon resolver worker"),
-            );
+            let builder = thread::Builder::new().name(format!("icon-resolver-{number}"));
+            if let Some(handle) = spawn_background(builder, move || {
+                background::lower_current_thread();
+                worker_loop(shared, result_tx, wake_tx, cache, completed, factory());
+            }) {
+                workers.push(handle);
+            }
         }
         Self {
             worker_count: workers_n,
@@ -613,17 +625,18 @@ impl ThemeRebuilder {
             ready: Mutex::new(None),
         });
         let thread_state = Arc::clone(&state);
-        let handle = thread::Builder::new()
-            .name("icon-theme-rebuild".to_owned())
-            .spawn(move || {
+        let handle = spawn_background(
+            thread::Builder::new().name("icon-theme-rebuild".to_owned()),
+            move || {
                 background::lower_current_thread();
                 rebuild_loop(&rx, &thread_state, wake.as_ref());
-            })
-            .expect("spawn icon theme rebuild thread");
+            },
+        );
+        // No thread means no sender: `request` then reports that no check was queued.
         Self {
-            tx: Some(tx),
+            tx: handle.as_ref().map(|_| tx),
             state,
-            handle: Some(handle),
+            handle,
         }
     }
 
@@ -1401,5 +1414,29 @@ mod tests {
             }),
             Ok(IconSubmit::Enqueued)
         );
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn failed_spawn_returns_none_instead_of_panicking() {
+        // 2^50 bytes of stack cannot be mapped, so the spawn fails; it must not abort.
+        let huge = thread::Builder::new().stack_size(1_usize << 50);
+        assert!(spawn_background(huge, || {}).is_none());
+    }
+
+    #[test]
+    fn successful_spawn_runs_body() {
+        let (tx, rx) = mpsc::channel();
+        assert!(
+            spawn_background(thread::Builder::new(), move || {
+                let _ = tx.send(());
+            })
+            .is_some()
+        );
+        assert!(rx.recv().is_ok());
     }
 }

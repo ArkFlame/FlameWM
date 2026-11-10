@@ -13,7 +13,7 @@
 | P3 | `wm-wayland/src/xwayland.rs:687-690` | open | `xwm_state` still `expect`s; Smithay trait returns `&mut X11Wm`, no `Option`. Runtime timing unverified |
 | P4 | `integrations-linux/src/mpris.rs:568,575` | won't-fix | `575` `unwrap_or_else(unreachable!)` is guarded by the early return at `568`; `let-else` would not shrink code |
 | P5 | `control-dbus/src/mutation_queue.rs:183-197` | done | `d8dfa39e`; `drain_queue_inline` sits under `#[cfg(test)]` |
-| P6 | `integrations-linux/src/icon_service.rs:263,622` | open | `expect` on thread spawn remains. Shell `icon_loader.rs` expects are gone |
+| P6 | `integrations-linux/src/icon_service.rs:263,622` | done | Worker and theme-rebuild spawns log and skip instead of panicking (`spawn_background`, regression tests) |
 
 Not findings (kept from discovery): reactor tests at `reactor/src/lib.rs:482-546`, `settings_sync.rs` test-only `panic!`, `network_manager/mod.rs:445`, `control_actions.rs:214`, `shell/src/main.rs:687`.
 Other workers' areas, not reviewed: `shell/src/launch_feedback.rs:231`, `shell/src/app/dock.rs`.
@@ -47,7 +47,7 @@ Excluded by design: `shell/src/quick_controls/supervisor.rs:310,321`; dock `let 
 | D2 | `ui-document/src/template.rs:94` `runtime_document` | open | zero callers of `.runtime_document(` (only the definition) |
 | D3 | `integrations-linux/src/themes/mod.rs:132` `icon_chain` | open | called only from `tests/theme_catalog.rs:134` |
 | D4 | `platform/src/host.rs:364` `flush_settings` | open | called only from `control-core/tests/platform_control.rs:451`; confirm before gating |
-| D5 | `ui-core/src/glass.rs:26-28`; `skin/src/palette.rs:26,30,242`; `skin/src/recipes/{button.rs:12,sticky.rs:13,taskbar.rs:10}` | open | each name has exactly one occurrence (its definition) |
+| D5 | `ui-core/src/glass.rs:26-28`; `skin/src/palette.rs:26,30,242`; `skin/src/recipes/{button.rs:12,sticky.rs:13,taskbar.rs:10}` | done | Nine names deleted; each had only its definition (whole-word grep) |
 | D6 | `render-x11/src/surface_controller/dock.rs:153` `set_ring_mask` | open | zero callers; dock owner |
 | D7 | `skin/src/recipes/window_chrome.rs:82` `titlebar_rect`; `wm-wayland/src/lock_global.rs:13` `SESSION_LOCK_INTERFACE` | open | zero callers |
 
