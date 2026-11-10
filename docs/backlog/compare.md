@@ -72,3 +72,19 @@ Status: runtime-verified for the power-profile row (display, alignment, cycle, s
 - The startup race fix has no deterministic regression test; verified by before/after runtime session only.
 
 Rebased evidence (tree `db42c3b6` on `8f4676be`): gate `scripts/gate flamewm-shell flamewm-render-core flamewm-render-compiler` with `EXIT_GUARD=0 EXIT_FMT=0 EXIT_CLIPPY=0 EXIT_TEST=0 GATE_DONE all=0`. Runtime re-run on the rebased binaries: fresh session with profile `performance` shows `Performance` in the battery popup; click on the row set `power-saver`. Battery tray icon visibility is a shell-side snapshot, not part of this row; one fresh session showed no battery tray item (the shell's own power copy was not refreshed in time), and a second fresh session showed it. Not root-caused; unverified.
+
+## Brightness row runtime pass (2026-11-10)
+
+Code: `566c2282` (brightness row, battery popup, 160px). Defect fix: `SetBrightness` was missing from the unit-reply arm in `crates/flamewm-control-wire/src/reply.rs`, so every successful `-`/`+` press logged `mutation failed: unknown Flame Control reply ...SetBrightness` in the shell. Fixed in the same arm as `SetPowerProfile`, with `brightness_action_reply_decodes_as_unit` in `tests.rs`.
+
+Runtime: private Xvfb `:93` (`-noreset`), dbus session, `flamewm` + `flamewm-desktop` + `flamewm-shell` built from the rebased tree into `/run/media/linsaftw/SDD/gate-targets/battery-run`. Host has `/sys/class/backlight/intel_backlight` (max 48000, value 48000 = 100%). Battery popup opened by XTest click on the panel `tray-battery` button.
+
+Runtime evidence (screenshots viewed, zoomed 3x):
+- Layout: `Brightness  −  100%  +` sits on one row under `CPU usage` / `Power saver`; no clipping; bottom edge of the row about 6px above the 160px popup bottom. Label, step glyphs and value are centred on one baseline.
+- `−` click at 100%: popup re-projected `90%`; sysfs `48000 -> 43200`; shell log had no `mutation` failure line (pre-fix build logged one per press).
+- `+` click restored `100%` (sysfs `43200 -> 48000`).
+- Pre-fix run: `−` also changed sysfs to 43200, so the write path works; only the reply decode was wrong.
+
+Not verified: a host without a backlight device (dashes path is unit-tested only: `brightness_row_shows_percent_and_dashes_when_absent`); the write path used (logind `SetBrightness` vs sysfs fallback) was not instrumented; 5% vs 10% key-step mismatch is by design (`MEDIA_BRIGHTNESS_STEP` 5 for keys, popup 10).
+
+Microphone mute row: not added. The audio popup Devices tab already lists input endpoints with a per-row mute button (`audio.slot.N.mute` in `ui/shell/audio.html`), so a battery-popup row would duplicate it and grow the popup beyond 160px. Needs an owner decision on placement before implementation.

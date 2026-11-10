@@ -753,6 +753,16 @@ fn brightness_action_round_trips_and_rejects_a_percent_above_100() {
 }
 
 #[test]
+fn brightness_action_reply_decodes_as_unit() {
+    let call = WireCall::new(
+        IFACE_SYSTEM,
+        "SetBrightness",
+        vec![WireValue::U32(65), WireValue::U64(4), WireValue::U64(9)],
+    );
+    assert_reply_round_trip(&call, &ControlResponse::Unit);
+}
+
+#[test]
 fn audio_volume_above_provider_range_is_rejected() {
     let call = WireCall::new(
         IFACE_SYSTEM,
