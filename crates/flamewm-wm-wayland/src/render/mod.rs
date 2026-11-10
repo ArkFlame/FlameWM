@@ -184,6 +184,26 @@ fn surface_elements(
 /// Front-to-back element list: Smithay draws the first element on top. Input consumes the same
 /// `scene::front_to_back` traversal, so every surface that can visually cover another is tested
 /// before the covered owner receives pointer input.
+/// Elements for the live lock surface covering `output`, placed at the output's origin. Empty when
+/// no live lock surface covers it, so that output shows nothing rather than the desktop.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub fn output_lock_elements(
+    state: &State,
+    output: &smithay::output::Output,
+    renderer: &mut GlowRenderer,
+) -> Vec<Elem> {
+    match state.lock_surface_on(output) {
+        Some(surface) => surface_elements(
+            renderer,
+            surface.wl_surface(),
+            0,
+            0,
+            output.current_scale().fractional_scale(),
+        ),
+        None => Vec::new(),
+    }
+}
+
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     let scale = state.output_scale();
     let mut out: Vec<Elem> = Vec::new();

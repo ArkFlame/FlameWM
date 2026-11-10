@@ -483,6 +483,12 @@ impl Drm {
             if out.frames.plan(has_callback, self.paused) != FrameDecision::Draw {
                 continue;
             }
+            // While locked each output shows its own lock surface, or nothing: never the shared
+            // desktop scene, which `elements` holds.
+            let lock_frame = state
+                .session_locked
+                .then(|| render::output_lock_elements(state, &out.output, &mut self.renderer));
+            let elements = lock_frame.as_deref().unwrap_or(elements);
             let already_waited = out.frames.sync_waited_ms;
             match out.compositor.render_frame(
                 &mut self.renderer,

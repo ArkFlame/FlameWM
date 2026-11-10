@@ -64,6 +64,53 @@ impl State {
     }
 }
 
+impl State {
+    /// The logical size a lock surface on `output` must cover. Falls back to the primary output's
+    /// size while the output has no mode yet.
+    #[must_use]
+    pub fn lock_size_for(&self, output: &WlOutput) -> Size<u32, Logical> {
+        Output::from_resource(output)
+            .and_then(|out| {
+                let mode = out.current_mode()?;
+                let scale = out.current_scale().fractional_scale();
+                Some(Size::from((
+                    (f64::from(mode.size.w) / scale).round() as u32,
+                    (f64::from(mode.size.h) / scale).round() as u32,
+                )))
+            })
+            .unwrap_or_else(|| self.lock_size())
+    }
+
+    /// The live lock surface covering `output`, matched by connector name.
+    #[must_use]
+    #[cfg_attr(not(feature = "drm"), allow(dead_code))]
+    pub fn lock_surface_on(&self, output: &Output) -> Option<&LockSurface> {
+        newest_live_for(
+            &self.locked_outputs,
+            |locked| locked.output_name.as_str(),
+            |locked| locked.surface.alive(),
+            &output.name(),
+        )
+        .map(|locked| &locked.surface)
+    }
+}
+
+/// The newest live entry whose output name is `output`. Pure over any entry type, so the per-output
+/// choice is tested without a Wayland client.
+#[must_use]
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub fn newest_live_for<'a, S>(
+    locks: &'a [S],
+    name_of: impl Fn(&S) -> &str,
+    is_live: impl Fn(&S) -> bool,
+    output: &str,
+) -> Option<&'a S> {
+    locks
+        .iter()
+        .rev()
+        .find(|lock| name_of(lock) == output && is_live(lock))
+}
+
 impl SessionLockHandler for State {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {
         // `init_session_lock` runs during startup, before any client can send a request.
@@ -97,7 +144,7 @@ impl SessionLockHandler for State {
     }
 
     fn new_surface(&mut self, surface: LockSurface, output: WlOutput) {
-        let size = self.lock_size();
+        let size = self.lock_size_for(&output);
         surface.with_pending_state(|state| state.size = Some(size));
         surface.send_configure();
         // The lock client's keyboard must be focused or the password it draws can never be
@@ -215,6 +262,27 @@ mod tests {
         assert!(!windows_reachable(true));
         assert!(shortcuts_active(false));
         assert!(windows_reachable(false));
+    }
+
+    #[test]
+    fn each_output_gets_its_own_newest_live_lock_surface() {
+        // (output, surface id, live). DP-1 has a newer dead surface that must be skipped.
+        let locks = [
+            ("DP-1", 1u8, true),
+            ("HDMI-A-1", 2, true),
+            ("DP-1", 3, false),
+        ];
+        let pick = |output| newest_live_for(&locks[..], |l| l.0, |l| l.2, output).map(|l| l.1);
+        assert_eq!(pick("DP-1"), Some(1));
+        assert_eq!(pick("HDMI-A-1"), Some(2));
+        assert_eq!(pick("eDP-1"), None);
+    }
+
+    #[test]
+    fn a_newer_live_surface_on_the_same_output_wins() {
+        let locks = [("DP-1", 1u8, true), ("DP-1", 2, true)];
+        let pick = |output| newest_live_for(&locks[..], |l| l.0, |l| l.2, output).map(|l| l.1);
+        assert_eq!(pick("DP-1"), Some(2));
     }
 
     #[test]
