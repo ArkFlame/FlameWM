@@ -39,7 +39,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | meas-tm | reliability | Task-manager startup probe never paints | `docs/backlog/measure.md:43` (3/3 `painted` None) | fixed by probe change | S | done c759a2a8 (not re-measured) |
 | meas-shadow | perf | Text-shadow image cache for cold settings paint | `docs/backlog/measure.md:62-70`; `819a2284` | cold settings painted median 463 ms baseline | S | done 819a2284 |
 | meas-blur-eq | quality | Blur 2x tier threshold recalibrated (`T_BLUR` 21) | `852f81ce`; `edd3d8ca` tiers; `docs/backlog/measure.md` | render drift bound set | S | done 852f81ce |
-| cmp-wm-session-lock | quality | README says "No session lock"; code has it | `README.md:89`; `wm-wayland/src/session_lock.rs` | doc drift | S | open |
+| cmp-wm-session-lock | quality | README says "No session lock"; code has it | `README.md:89`; `wm-wayland/src/session_lock.rs` | doc drift | S | done (README limitation corrected; runtime proof still open) |
 | cmp-bt | feature | Bluetooth pairing and in-shell prompts | `cmp-3`; Vela `bluetooth/` 25 files; facade `b6bddef9` on origin/main | partial: device-control facade only; `bt-*` open | L | partial |
 | bt-reply | feature | Drain and track BlueZ replies (serials, errors) through `on_ready` | `docs/backlog/bluetooth.md:21` | replies queue unread on facade connection | S | open |
 | bt-plumb | feature | `BluetoothAction`, control-wire, platform routing, Pair/Trust/Remove control actions (mirror `4021f35f`) | `docs/backlog/bluetooth.md:22` | no control path to facade | M | open |
