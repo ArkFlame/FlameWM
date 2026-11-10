@@ -46,6 +46,73 @@ pub(crate) fn thumb_bytes(w: u32, h: u32) -> u64 {
     u64::from(w) * u64::from(h) * THUMB_BYTES_PER_PIXEL
 }
 
+/// Box-filter downscale of a 32-bit pixel buffer (BGRA or RGBA; channel order is irrelevant) to
+/// `dst_w` x `dst_h`. `stride` is the source row pitch in bytes and may exceed `src_w * 4`; padding
+/// is skipped. Returns `None` on any zero size, a stride or buffer too small for the image, or a
+/// destination larger than the source (this filter never upscales).
+pub(crate) fn downscale_box(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    stride: usize,
+    dst_w: u32,
+    dst_h: u32,
+) -> Option<Vec<u8>> {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return None;
+    }
+    let (sw, sh) = (src_w as usize, src_h as usize);
+    let (dw, dh) = (dst_w as usize, dst_h as usize);
+    if dw > sw || dh > sh {
+        return None;
+    }
+    let row_bytes = sw.checked_mul(4)?;
+    if stride < row_bytes {
+        return None;
+    }
+    let needed = stride.checked_mul(sh - 1)?.checked_add(row_bytes)?;
+    if src.len() < needed {
+        return None;
+    }
+    let mut out = vec![0u8; dw * dh * 4];
+    for dy in 0..dh {
+        let y0 = dy * sh / dh;
+        let y1 = ((dy + 1) * sh / dh).max(y0 + 1);
+        for dx in 0..dw {
+            let x0 = dx * sw / dw;
+            let x1 = ((dx + 1) * sw / dw).max(x0 + 1);
+            let mut acc = [0u32; 4];
+            for sy in y0..y1 {
+                let row = &src[sy * stride..sy * stride + row_bytes];
+                for px in row[x0 * 4..x1 * 4].chunks_exact(4) {
+                    for (a, c) in acc.iter_mut().zip(px) {
+                        *a += u32::from(*c);
+                    }
+                }
+            }
+            let n = ((x1 - x0) * (y1 - y0)) as u32;
+            let o = (dy * dw + dx) * 4;
+            for (c, a) in acc.iter().enumerate() {
+                out[o + c] = (a / n) as u8;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Capture-to-thumbnail: sizes the source with `thumb_size` and box-downscales it to that size.
+/// Returns `(w, h, pixels)` or `None` when the source is empty or malformed.
+pub(crate) fn capture_to_thumb(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    stride: usize,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let (w, h) = thumb_size(src_w, src_h)?;
+    let pixels = downscale_box(src, src_w, src_h, stride, w, h)?;
+    Some((w, h, pixels))
+}
+
 /// Cache key: a window plus its source size. A resize changes the key, so stale pixels miss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ThumbKey {
@@ -211,5 +278,200 @@ mod tests {
         }
         assert_eq!(cache.len(), MAX_THUMBS);
         assert_eq!(cache.get(key(0)), None);
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn downscale_2x2_to_1x1_is_exact_channel_mean() {
+        // Pixels [0,4,8,255], [4,8,12,255], [8,12,16,255], [12,16,20,255]: means 6, 10, 14, 255.
+        let src = [0, 4, 8, 255, 4, 8, 12, 255, 8, 12, 16, 255, 12, 16, 20, 255];
+        assert_eq!(
+            downscale_box(&src, 2, 2, 8, 1, 1),
+            Some(vec![6, 10, 14, 255])
+        );
+    }
+
+    #[test]
+    fn downscale_ignores_stride_padding() {
+        // 2x2 image, stride 16 (8 bytes of 0xEE padding per row): same result as the tight case.
+        let mut src = Vec::new();
+        for row in [
+            [0u8, 4, 8, 255, 4, 8, 12, 255],
+            [8, 12, 16, 255, 12, 16, 20, 255],
+        ] {
+            src.extend_from_slice(&row);
+            src.extend_from_slice(&[0xEE; 8]);
+        }
+        assert_eq!(
+            downscale_box(&src, 2, 2, 16, 1, 1),
+            Some(vec![6, 10, 14, 255])
+        );
+    }
+
+    #[test]
+    fn capture_keeps_aspect_and_fits_the_box() {
+        for &(w, h, tw, th) in &[
+            (1280u32, 800u32, 160u32, 100u32),
+            (1920, 1080, 160, 90),
+            (640, 400, 160, 100),
+        ] {
+            let stride = w as usize * 4;
+            let src = vec![0x80u8; stride * h as usize];
+            let (ow, oh, px) = capture_to_thumb(&src, w, h, stride).expect("thumb");
+            assert_eq!((ow, oh), (tw, th));
+            assert_eq!(px.len(), (tw * th * 4) as usize);
+            assert!(px.iter().all(|&b| b == 0x80));
+        }
+    }
+
+    #[test]
+    fn small_source_is_copied_not_upscaled() {
+        let src: Vec<u8> = (0..(3 * 2 * 4)).map(|i| i as u8).collect();
+        let (w, h, px) = capture_to_thumb(&src, 3, 2, 12).expect("thumb");
+        assert_eq!((w, h), (3, 2));
+        assert_eq!(px, src);
+    }
+
+    #[test]
+    fn malformed_input_never_panics() {
+        assert_eq!(capture_to_thumb(&[], 0, 0, 0), None);
+        assert_eq!(capture_to_thumb(&[0; 64], 0, 4, 16), None);
+        assert_eq!(capture_to_thumb(&[0; 64], 4, 0, 16), None);
+        assert_eq!(
+            capture_to_thumb(&[0; 64], 4, 4, 15),
+            None,
+            "stride below row width"
+        );
+        assert_eq!(capture_to_thumb(&[0; 63], 4, 4, 16), None, "short buffer");
+        assert_eq!(downscale_box(&[0; 16], 2, 2, 8, 0, 1), None);
+        assert_eq!(downscale_box(&[0; 16], 2, 2, 8, 3, 1), None, "no upscale");
+        assert_eq!(
+            downscale_box(&[0; 16], 2, 2, usize::MAX, 1, 1),
+            None,
+            "stride overflow"
+        );
+    }
+
+    #[test]
+    fn stride_padding_on_last_row_is_not_required() {
+        // Buffer ends at the last row's pixel data; no trailing pad needed.
+        let src = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(downscale_box(&src, 1, 2, 4, 1, 1), Some(vec![3, 4, 5, 6]));
+    }
+
+    #[cfg(test)]
+    mod bench {
+        use super::super::*;
+        use std::time::Instant;
+        use x11rb::COPY_FROM_PARENT;
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{
+            ConnectionExt, CreateGCAux, CreateWindowAux, ImageFormat, WindowClass,
+        };
+
+        /// Measures `XGetImage` + downscale + cache insert on a mapped, unobscured window of known
+        /// pattern. Run: `DISPLAY=:520 cargo test --release -p flamewm-wm-x11 -- --ignored --nocapture`.
+        #[test]
+        #[ignore = "needs DISPLAY; measurement only"]
+        fn measure_capture_to_thumb_cost() {
+            let (conn, screen_num) = x11rb::connect(None).expect("DISPLAY");
+            let screen = conn.setup().roots[screen_num].clone();
+            let depth = screen.root_depth;
+            for &(w, h) in &[(640u16, 400u16), (1280, 800), (1920, 1080)] {
+                let win = conn.generate_id().unwrap();
+                conn.create_window(
+                    depth,
+                    win,
+                    screen.root,
+                    0,
+                    0,
+                    w,
+                    h,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    COPY_FROM_PARENT,
+                    &CreateWindowAux::new(),
+                )
+                .unwrap();
+                conn.map_window(win).unwrap();
+                let gc = conn.generate_id().unwrap();
+                conn.create_gc(gc, win, &CreateGCAux::new()).unwrap();
+                let (wu, hu) = (usize::from(w), usize::from(h));
+                let mut rows = vec![0u8; wu * 16 * 4];
+                for y0 in (0..hu).step_by(16) {
+                    let y1 = (y0 + 16).min(hu);
+                    for (ry, y) in (y0..y1).enumerate() {
+                        for x in 0..wu {
+                            let o = (ry * wu + x) * 4;
+                            rows[o..o + 4].copy_from_slice(&[
+                                (x * 7) as u8,
+                                (y * 5) as u8,
+                                ((x ^ y) & 0xff) as u8,
+                                0,
+                            ]);
+                        }
+                    }
+                    let n = (y1 - y0) * wu * 4;
+                    conn.put_image(
+                        ImageFormat::Z_PIXMAP,
+                        win,
+                        gc,
+                        w,
+                        (y1 - y0) as u16,
+                        0,
+                        y0 as i16,
+                        0,
+                        depth,
+                        &rows[..n],
+                    )
+                    .unwrap();
+                }
+                conn.get_input_focus().unwrap().reply().unwrap();
+
+                let key = ThumbKey {
+                    window: win,
+                    src_w: u32::from(w),
+                    src_h: u32::from(h),
+                };
+                let mut cache: ThumbCache<(u32, u32, Vec<u8>)> = ThumbCache::default();
+                let mut times = Vec::new();
+                let mut last = (0, 0);
+                for i in 0..=50 {
+                    let t = Instant::now();
+                    let img = conn
+                        .get_image(ImageFormat::Z_PIXMAP, win, 0, 0, w, h, !0)
+                        .unwrap()
+                        .reply()
+                        .unwrap();
+                    let stride = img.data.len() / usize::from(h);
+                    let thumb = capture_to_thumb(&img.data, u32::from(w), u32::from(h), stride)
+                        .expect("thumb");
+                    last = (thumb.0, thumb.1);
+                    cache.insert(key, (thumb.0, thumb.1, thumb.2));
+                    let el = t.elapsed().as_secs_f64() * 1e3;
+                    if i > 0 {
+                        times.push(el);
+                    }
+                }
+                times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                println!(
+                    "THUMB_BENCH src={w}x{h} n=50 median_ms={:.3} min_ms={:.3} max_ms={:.3} thumb={}x{} stride={} resident={}",
+                    times[25],
+                    times[0],
+                    times[49],
+                    last.0,
+                    last.1,
+                    usize::from(w) * 4,
+                    cache.len()
+                );
+                conn.free_gc(gc).unwrap();
+                conn.destroy_window(win).unwrap();
+                conn.get_input_focus().unwrap().reply().unwrap();
+            }
+        }
     }
 }

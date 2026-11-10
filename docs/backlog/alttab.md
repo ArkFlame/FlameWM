@@ -1,6 +1,6 @@
 # Alt+Tab live previews (`cmp-alttab`, competitor gap `cmp-6`)
 
-Status: slice 1 (pure thumbnail policy) landed; capture, wire and card are open. Measured 2026-11-10 on
+Status: slices 1 (pure thumbnail policy) and 2 (capture-to-thumbnail, pure, measured) landed; wire and card are open. Measured 2026-11-10 on
 private Xvfb (`:97`, `-noreset`, 1280x1024x24). No runtime proof of the switcher UI yet.
 
 ## 1. Current behaviour (FlameWM)
@@ -96,12 +96,29 @@ unmeasured.
   card, transparency kept (the card's translucent background is optimised, not disabled), and a
   fallback to the current title/app_id row when no thumbnail exists.
 
+## 3b. Slice 2 measured cost (capture + downscale + cache insert, X11)
+
+Command: `DISPLAY=:520 cargo test --release -p flamewm-wm-x11 measure_capture_to_thumb_cost -- --ignored --nocapture`
+(private Xvfb `:520`, `-screen 0 1920x1200x24 -noreset`, own test client creating a mapped unobscured window
+with a known pattern via `PutImage`; 1 warm-up + 50 samples; load average 5.6 on 12 cores at run time).
+Each sample: `XGetImage(ZPixmap)` + `capture_to_thumb` (`thumb_size` + box-filter `downscale_box`) + `ThumbCache::insert`.
+
+| Source window | median ms | min ms | max ms | Thumb | Resident entries |
+|---|---|---|---|---|---|
+| 640x400 | 1.057 | 0.649 | 1.651 | 160x100 | 1 |
+| 1280x800 | 4.791 | 2.414 | 6.330 | 160x100 | 1 |
+| 1920x1080 | 9.823 | 4.729 | 15.494 | 160x90 | 1 |
+
+Reading: the downscale is the bulk of the cost at 1280x800 and above (XGetImage alone measured 10 ms at 1280x800
+in section 3 from the earlier Python client). The composite path (option C) is still unmeasured, and occluded windows
+are not covered by this number.
+
 ## 6. Slice list
 
-1. (landed, this branch) `crates/flamewm-wm-x11/src/wm/switcher_thumbs.rs`: `thumb_size`, `ThumbKey`,
+1. (landed) `crates/flamewm-wm-x11/src/wm/switcher_thumbs.rs`: `thumb_size`, `ThumbKey`,
    `ThumbCache` (LRU, bounded, `remove_window`), 8 unit tests. Not yet consumed (`#[allow(dead_code)]`
    on the `mod` line in `wm/mod.rs`).
-2. X11 capture on open: option C if the composite path measures under the B baseline, else B. Captured
+2. (slice 2 landed: pure `downscale_box` + `capture_to_thumb`, 13 tests incl. exact 2x2, stride padding, zero-size; cost in 3b; `allow(dead_code)` kept because the capture path is not yet wired; no switcher UI hook.) X11 capture on open: option C if the composite path measures under the B baseline, else B. Captured
    into `ThumbCache`, freed on close. Needs a runtime test under Xvfb with a window overlapped by another.
 3. Wire: thumbnail handle per entry or per open, protocol test in `flamewm-control-wire` and
    `flamewm-control-dbus` round trip (`signal.rs`, `dbus lib.rs:755`).
