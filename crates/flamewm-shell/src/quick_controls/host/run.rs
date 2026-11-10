@@ -12,6 +12,10 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
     let _ = PACKAGED_ROOT.set(packaged_root);
     flamewm_profiler::init_process("flamewm-quick-control");
     flamewm_debug::init_process("flamewm-quick-control");
+    // Subscribe before the initial load: a change between a load and a later AddMatch is never
+    // delivered, so the host would keep a stale (e.g. unavailable) power-profile snapshot.
+    let signal_client = ControlSignalClient::connect(BusKind::Session)
+        .map_err(|error| HostError::Control(format!("subscribe control signals: {error}")))?;
     let client = ControlClient::connect(BusKind::Session).map_err(|error| {
         HostError::Control(format!("connect control session: {}", error.message))
     })?;
@@ -57,8 +61,6 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
         .map_err(|error| HostError::Control(format!("create reactor: {error}")))?;
     // One live control-signal client for the helper lifetime. Its pump owns
     // the watch FD; the existing reactor only borrows that descriptor.
-    let signal_client = ControlSignalClient::connect(BusKind::Session)
-        .map_err(|error| HostError::Control(format!("subscribe control signals: {error}")))?;
     let signal_client: &'static ControlSignalClient = Box::leak(Box::new(signal_client));
     {
         let signal_state = std::rc::Rc::clone(&state);
