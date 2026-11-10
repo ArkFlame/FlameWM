@@ -37,7 +37,9 @@ sandbox_new() { # name: sets S (dir), DISP, XPID
     cp "$BIN_SRC/$b" "$S/bin/$b"
   done
   DISP="$(pick_display)" || { log "no free display in :150-:199"; return 1; }
-  Xvfb ":$DISP" -screen 0 1280x800x24 -nolisten tcp +extension RANDR >"$S/xvfb.log" 2>&1 &
+  # -noreset: without it the server resets when the last client disconnects (the xprop probe
+  # above), and a client connecting during that reset gets EOF in x11rb setup (break-b2).
+  Xvfb ":$DISP" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RANDR >"$S/xvfb.log" 2>&1 &
   XPID=$!
   # The socket file appears before the server accepts setup; gate on a real X round-trip.
   export DISPLAY=":$DISP"
