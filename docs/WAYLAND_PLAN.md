@@ -284,9 +284,15 @@ Known limitations that remain true are listed under "Remaining work".
    Measured body luminance 9.5 vs 0.2 x wallpaper 9.5 (match). The backdrop is read from the
    wallpaper file, not the X root, so the earlier root-capture explanation no longer holds. Owner
    repro still wanted before this closes. At `background_opacity = 100` the prompt renders.
-6. Launcher settings parity with X11 is partial: the user's accent is applied, but the selection row
-   composes with the translucent accent tokens and reads darker than the X11 reference. Not
-   compared pixel-for-pixel.
+6. Launcher selection parity: measured, no cross-session drift at default settings. Harness:
+   Xvfb 1920x1080, Super+Space via XTEST, pointer hover on row 1 (selects it), `import` screenshot,
+   PIL RGB medians. Default accent, default wallpaper, `launcher.surface` #000000bf.
+   Selected row (x1000-1240, y268-296): X11 (20,46,59), Wayland (20,46,59). Unselected row 2 and
+   3 and surface: (9,10,10) in both sessions, open and hover states. Row backgrounds x900-1250 are
+   bit-identical (max diff 0). Differences (max 245) sit only on glyphs and icons (x<900).
+   Not measured: custom accent, non-black backdrop or wallpaper under the translucent surface
+   (the darker-row claim may depend on those). Screenshots: `/tmp/claude-1000/launcher-harness/`.
+   Owner: `docs/BACKLOG.md` `wsh-launcher-select`.
 7. Resize parity and taskbar middle-click. Unit coverage now exists: the model tests cover every
    `Grab::Resize` edge and corner geometry (right, bottom, bottom-right, top-left, with minimum
    clamping), and the shell `event_router` test covers the taskbar middle-click drop. Still not

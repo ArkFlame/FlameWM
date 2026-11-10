@@ -88,3 +88,4 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | wsh-grab | quality | Grab state machine (Move/Resize) differs X11 vs Wayland | `docs/backlog/wayland-shared.md:18` row 8 | largest remaining shared-logic item | L | open |
 | wsh-strut | quality | Dock strut on work area differs (X11 raw struts vs Wayland unmanaged struts and layer zone) | `docs/backlog/wayland-shared.md:14` row 4 | different inputs, not shared | M | open |
 | wsh-lock-x11 | quality | Lock, focus/urgency, media on X11 unmeasured | `docs/backlog/wayland-shared.md:22` row 12 | X11 side unknown | M | open |
+| wsh-launcher-select | quality | Launcher selected row: default settings match X11 (20,46,59 both); custom accent and non-black backdrop unmeasured | `WAYLAND_PLAN.md` item 6 (measured table) | darker-row claim unconfirmed beyond defaults | S | open |
