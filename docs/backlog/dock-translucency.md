@@ -63,3 +63,43 @@ Not covered: the dock pill itself. With `dock.enabled=true` and `dock.surfaceCus
 stayed at the default taskbar fill (32,0,32 on both backends at dock opacity 30 and 70), so the
 `dock.surfaceOpacity` override did not reach this band. The pill over a bright window beneath
 (`docs/DOCK_BACKDROP.md:109`) stays unverified on Wayland.
+
+## Wayland runtime (2026-11-10b): dock pill parity
+
+Correction to the section above: its harness wrote `surfaceCustom` / `surfaceOpacity` without the `dock.`
+prefix, so the Dock never took the override and the 32,0,32 band was the taskbar, not the pill. The
+settings that paint the pill are `dock.enabled=true`, `dock.surfaceCustom=true`, `dock.surfaceOpacity`,
+`dock.surfaceBlurPercent` (`crates/flamewm-api/src/settings_groups.rs` `dock_surface_custom`,
+`DOCK_SURFACE_OVERRIDES`). The taskbar keeps the global surface and is unaffected by them.
+
+Build: `cargo build --profile fast -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-wm-wayland`
+at `4eed3b8b` (origin/main). Private Xvfb 1920x1080. Harness: `/tmp/claude-1000/dockpill/run3.sh`
+(parity harness, dock keys above, `dock.surfaceOpacity=70`). Measure: pill interior strip x 941-946,
+y 992-1012 (left of the trash icon, inside the pill), mean RGB, 3 runs each.
+
+Backdrop: purple wallpaper `127,0,128` (fill). Bright: solid white wallpaper `255,255,255` (fill).
+
+| Case | Backend | Run 1 | Run 2 | Run 3 | Expected (black fill, alpha 0.70) |
+|---|---|---|---|---|---|
+| purple | X11 | 38,0,38 | 38,0,38 | 38,0,38 | 38.1, 0, 38.4 |
+| purple | Wayland | 38,0,38 | 38,0,38 | 38,0,38 | 38.1, 0, 38.4 |
+| white | X11 | 76,76,76 | 76,76,76 | 76,76,76 | 76.5 |
+| white | Wayland | 76,76,76 | 76,76,76 | 76,76,76 | 76.5 |
+
+Max per-channel diff X11 vs Wayland: pill strip 0 levels (purple and white), taskbar band 1040-1076
+x 0-1600 0 levels (purple and white). Pill spread within a run: 0.
+
+Result: the dock pill is translucent on both backends and matches the alpha-over-backdrop expectation
+over purple and over a bright backdrop. Within the 2-level bar.
+
+Not covered (still open):
+- Bright window beneath the pill, as a managed window. A bright wallpaper proves the blend, not the
+  window path. The X11 live path covers managed Normal frames (F4), and Wayland windows are not in the X
+  root (F11). Needs a managed window that sits under the pill; the WM clamps windows to the work area,
+  and no Wayland client was used as a white window in this run.
+- X11 unmanaged override-redirect white window: in one probe (`python-xlib` override window, 1920x1080, mapped
+  before the WM) the pill still read purple-based 38,0,38 while the white window was visible at the same
+  screen position outside the pill. Scope: unmanaged windows are not in `_FLAMEWM_REDIRECTED_FRAMES`, so
+  this is a known limit of F4, not a regression. The Wayland probe window did not reach the screen, so
+  there is no Wayland number for it.
+- Opacity 30 and blur changes on the pill: not measured in this run.
