@@ -139,3 +139,20 @@ Measurement only. No product code changed. Base: origin/main `be106c4d`, `flamew
 | Median | 117.7 | 140.2 | **24.3** (median of per-run differences) |
 
 Result: median map-to-paint 24.3 ms, below the 100 ms threshold, so no startup span was profiled and no code was changed. The earlier 276/618 ms figures and the ~340 ms map-to-paint gap in this row are stale. The f528ab83 change holds: the terminal paints about 24 ms after map on an idle-ish host.
+
+## meas-build: compile-cost levers (gate scope)
+
+Base: origin/main `01e8ac84`. Command: `cargo test --no-run --all-targets -p flamewm-render-core -p flamewm-api`, `CARGO_BUILD_JOBS=2`, cold fresh `CARGO_TARGET_DIR`, held under `/tmp/opencode/flamewm-terra-cargo.lock` like `scripts/gate`. Compile only, no test run. Load (1 min) at start: 6.0 to 10.6.
+
+| Run | Wall (s) |
+|---|---|
+| Base, timed `--timings` run | 26.8 |
+| Base 1, 2, 3 | 31.6, 17.2, 19.9 (median 19.9) |
+| Lever `[profile.dev.build-override] opt-level` 2 to 0, 1, 2, 3 | 18.6, 20.3, 17.0 (median 18.6, -6.5%) |
+
+Top units from the timed run (`--timings`, 66 units, 52 crates compiled, unit sum 51.3 s): `flamewm-render-core` build 3.59 s, `usvg` 2.96, `tiny-skia` 2.30, `kurbo` 2.12, `image-webp` 2.10, `libm` build script 2.01, `ttf-parser` 1.95, `png` 1.82, `flamewm-render-core` 1.57 and 1.37. Critical path ends at 26.8 s, the wall time.
+
+- `syn` and `x11rb-protocol` are not in this scope: neither appears in the timing units, and `cargo tree -i x11rb-protocol` prints nothing for these packages. The 50 to 110 s single-unit costs above are from a wider workspace build, so these levers cannot move gate wall time.
+- Build-override lever: median -6.5%, spread overlaps base (17.0 to 20.3 vs 17.2 to 31.6). Below the 10% bar, not applied.
+- Not tested: fast profile (not the gate profile; release is never touched), `debug = 0` for workspace crates (changes panic line info and backtraces, so excluded by the test-semantics rule), feature removal (no `x11rb` in scope).
+- Verdict: no lever qualifies for gate scope. Cargo.toml unchanged.
