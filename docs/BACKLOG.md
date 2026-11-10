@@ -32,7 +32,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | look-radius | visual | Two radius scales in `ui/base/tokens.css` | `docs/backlog/look.md:35`; radius pass dropped | token drift | M | open |
 | look-radius-large | visual | 14-28 px radii on cards outside scale | `docs/backlog/look.md:29-34` (design decisions, not defects) | decision needed | S | open |
 | look-harness | quality | Archiver blank, assistant black, task-manager never settles in harness | `docs/backlog/look.md:45-48` | blocks visual verification | M | open |
-| gap-accent | visual | Shared accent token: route active colours through one accessor | `docs/competitors/vela/GAP_PLAN.md` P1; `flamewm-wm-wayland/src/snap_preview.rs:58` | consistency | S | open |
+| gap-accent | visual | Shared accent token: route active colours through one accessor | `docs/competitors/vela/GAP_PLAN.md` P1; `flamewm-wm-wayland/src/snap_preview.rs:58` | consistency | S | done 75e9fc15 (lock and settings default routed via flamewm_api; snap preview already live via mirror.rs) |
 | cmp-quick | feature | Quick settings in one surface (Wi-Fi, BT, power, brightness) | `cmp-2`; `shell/src/quick_controls/host/run.rs` exists | partial | M | open |
 | cmp-power | feature | Power profile switch (UPower PowerProfiles) | `integrations-linux/src/power_profiles.rs`; facade `bd8c55ba`, plumbing `4021f35f` | UI toggle/tile not verified | M | done bd8c55ba, 4021f35f |
 | cmp-dnd | feature | Do Not Disturb toggle | `integrations-linux/src/notifications.rs:178` `set_dnd`; `shell/src/main.rs:280` | stale GAP_PLAN:77 claim | S | done (pre-existing, no sha) |
