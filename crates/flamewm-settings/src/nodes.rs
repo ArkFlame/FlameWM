@@ -29,7 +29,7 @@ pub(crate) fn accent_for_swatch(name: &str) -> Option<&'static str> {
         "black" => Some("#191B1D"),
         "white" => Some("#FFFFFF"),
         "red" => Some("#EF4048"),
-        "blue" => Some("#3DAEE9"),
+        "blue" => Some(flamewm_api::settings::DEFAULT_ACCENT),
         "purple" => Some("#9B59B6"),
         "teal" => Some("#1ABC9C"),
         _ => None,

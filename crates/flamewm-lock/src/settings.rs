@@ -71,7 +71,8 @@ impl Default for SaverConfig {
 }
 
 pub const DEFAULT_BACKGROUND: [u8; 3] = [0x23, 0x26, 0x29];
-pub const DEFAULT_ACCENT: &str = "#3DAEE9";
+/// Shared product default accent (one owner: `flamewm_api::settings`).
+pub const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 pub const DEFAULT_FONT_FAMILY: &str = "Noto Sans";
 
 impl Default for LockSettings {
@@ -407,5 +408,20 @@ mod tests {
         assert_eq!(flamewm_api::color::parse_hex_rgb("#fff"), None);
         assert_eq!(flamewm_api::color::parse_hex_rgb("#gg0000"), None);
         assert_eq!(flamewm_api::color::parse_hex_rgb("#1234567"), None);
+    }
+}
+
+#[cfg(test)]
+mod default_accent_tests {
+    use super::{DEFAULT_ACCENT, LockSettings};
+
+    #[test]
+    fn default_accent_is_the_shared_breeze_blue() {
+        assert_eq!(DEFAULT_ACCENT, "#3DAEE9");
+        assert_eq!(LockSettings::default().accent, "#3DAEE9");
+        assert_eq!(
+            flamewm_api::settings::accent_rgb(&flamewm_api::settings::SettingsSnapshot::new(0)),
+            0x003d_aee9
+        );
     }
 }
