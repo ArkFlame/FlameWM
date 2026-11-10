@@ -266,7 +266,7 @@ impl IconLoader {
         match self.req_tx.try_send(WorkerMsg::Theme(theme)) {
             Ok(()) => {}
             Err(TrySendError::Full(WorkerMsg::Theme(theme))) => self.theme_outbox = Some(theme),
-            Err(_) => {}
+            Err(error) => eprintln!("shell: icon theme update not sent: {error}"),
         }
     }
 
@@ -313,7 +313,7 @@ impl IconLoader {
                 self.queue_full_drops += 1;
                 self.pending.remove(&pending_key(&returned));
             }
-            Err(_) => {}
+            Err(error) => eprintln!("shell: icon request not sent: {error}"),
         }
     }
 
@@ -332,7 +332,7 @@ impl IconLoader {
                 Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
                     self.pending.remove(&pending_key(&returned));
                 }
-                Err(_) => {}
+                Err(error) => eprintln!("shell: icon retry not sent: {error}"),
             }
         }
     }

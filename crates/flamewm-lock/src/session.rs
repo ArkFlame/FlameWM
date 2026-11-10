@@ -33,11 +33,21 @@ pub(crate) fn lock_settings_from_snapshot(
 }
 
 fn fetch_snapshot() -> Option<flamewm_api::settings::SettingsSnapshot> {
-    let client = ControlClient::connect(BusKind::Session).ok()?;
-    match client
-        .call_with_timeout(&ControlRequest::GetSettings, SETTINGS_TIMEOUT)
-        .ok()?
-    {
+    let client = match ControlClient::connect(BusKind::Session) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("flamewm-lock: settings service unavailable, using defaults: {error:?}");
+            return None;
+        }
+    };
+    let response = match client.call_with_timeout(&ControlRequest::GetSettings, SETTINGS_TIMEOUT) {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("flamewm-lock: settings request failed, using defaults: {error:?}");
+            return None;
+        }
+    };
+    match response {
         ControlResponse::Settings(snapshot) => Some(snapshot),
         _ => None,
     }
@@ -76,11 +86,21 @@ pub(crate) fn lock_output_rects_from_snapshot(snapshot: &DisplaySnapshot, root: 
 }
 
 fn fetch_displays() -> Option<DisplaySnapshot> {
-    let client = ControlClient::connect(BusKind::Session).ok()?;
-    match client
-        .call_with_timeout(&ControlRequest::GetDisplays, SETTINGS_TIMEOUT)
-        .ok()?
-    {
+    let client = match ControlClient::connect(BusKind::Session) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("flamewm-lock: display service unavailable, using full root: {error:?}");
+            return None;
+        }
+    };
+    let response = match client.call_with_timeout(&ControlRequest::GetDisplays, SETTINGS_TIMEOUT) {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("flamewm-lock: display request failed, using full root: {error:?}");
+            return None;
+        }
+    };
+    match response {
         ControlResponse::Displays(snapshot) => Some(snapshot),
         _ => None,
     }

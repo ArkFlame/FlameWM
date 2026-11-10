@@ -23,7 +23,7 @@ use crate::entry::wallpaper_stamp::{
 };
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Mirror of the shared icon theme generation for [`ParallelIconService::icon_key`],
 /// which stays a static constructor for its existing callers. Written only by
@@ -415,10 +415,15 @@ impl ParallelIconService {
     }
 
     pub fn request_high(&mut self, key: IconKey) {
-        let _ = self.service.submit(IconJob {
+        if let Err(error) = self.service.submit(IconJob {
             key,
             priority: IconPriority::High,
-        });
+        }) {
+            static LOGGED: AtomicBool = AtomicBool::new(false);
+            if !LOGGED.swap(true, Ordering::Relaxed) {
+                eprintln!("desktop: icon request dropped ({error:?}); further drops not logged");
+            }
+        }
     }
 
     #[must_use]
