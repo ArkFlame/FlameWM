@@ -11,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
 
+use flamewm_render_core::lower::node_backdrop_clip;
+
 use super::X11App;
 use super::window_backdrop::{MirrorFill, MirrorKey};
 
@@ -372,27 +374,6 @@ pub(crate) fn node_device_rect(
         rect.width.round().max(1.0) as u32,
         rect.height.round().max(1.0) as u32,
     )
-}
-
-/// Device rect clipped to a scene of `scene` size; `None` when nothing is visible.
-pub(crate) fn node_backdrop_clip(
-    rect: (i32, i32, u32, u32),
-    scene: (u32, u32),
-) -> Option<(i32, i32, u32, u32)> {
-    let (x, y, width, height) = rect;
-    let left = i64::from(x).max(0);
-    let top = i64::from(y).max(0);
-    let right = (i64::from(x) + i64::from(width)).min(i64::from(scene.0));
-    let bottom = (i64::from(y) + i64::from(height)).min(i64::from(scene.1));
-    if right <= left || bottom <= top {
-        return None;
-    }
-    Some((
-        left as i32,
-        top as i32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ))
 }
 
 /// Whether pixel `(px, py)` (device px) lies inside the node's rounded rect `node`.

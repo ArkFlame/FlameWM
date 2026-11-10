@@ -201,7 +201,7 @@ fn stroke_op(
 }
 
 /// Device rect of a node backdrop, clipped to the scene.
-fn node_backdrop_clip(
+pub fn node_backdrop_clip(
     rect: (i32, i32, u32, u32),
     scene: (u32, u32),
 ) -> Option<(i32, i32, u32, u32)> {

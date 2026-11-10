@@ -108,14 +108,7 @@ impl X11App {
     }
 }
 
-pub(crate) fn scale_rect(rect: Rect, scale: f32) -> Rect {
-    Rect {
-        x: rect.x * scale,
-        y: rect.y * scale,
-        width: rect.width * scale,
-        height: rect.height * scale,
-    }
-}
+pub(crate) use flamewm_render_core::lower::scale_rect;
 
 /// Device-pixel box for a logical rect. The origin and far edge are each rounded once
 /// in device space, so neighbouring edges agree and the size is their difference, not a
