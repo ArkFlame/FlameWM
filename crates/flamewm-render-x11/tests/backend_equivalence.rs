@@ -16,8 +16,11 @@ const COLOR: [u8; 4] = [200, 40, 40, 255];
 // Calibrated on the helper against CPU, threshold = observed + 1; edit only in review.
 // T_FILL: observed 0 on NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2.
 const T_FILL: u8 = 1;
-// T_BLUR: observed 16 (blur 12, batch) and 14 (blur 28) on NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2.
-const T_BLUR: u8 = 17;
+// T_BLUR: observed 20 (blur 12, 2x tier, after edd3d8ca) and 14 (blur 28) on NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2.
+// Was 17 (observed 16 before the 2x downscale). Recalibrated: the 2x path alone vs full-res CPU at
+// radius 12 is max 9, mean 0.43, p99 4 (800x500 scene); the peak adds to GPU error (16) at other pixels.
+// Mean-based M_BLUR still passes (blur 12 mean 0.59). Revisit if radius 7-8 gets an equivalence check (2x-only mean 1.9/1.1).
+const T_BLUR: u8 = 21;
 // M_BLUR: observed 0.7153 (blur 28) on NVIDIA GeForce RTX 3050 Ti Laptop GPU/PCIe/SSE2.
 const M_BLUR: f64 = 1.7153;
 
