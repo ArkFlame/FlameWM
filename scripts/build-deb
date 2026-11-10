@@ -131,11 +131,12 @@ python3 -I scripts/package-source-archive --check "$ROOT" packaging/source-manif
     || fail 'source manifest preflight failed; register or remove the file above and rerun'
 
 # Fail-closed native-backend preflight: the Wayland drm feature compiles against
-# libinput/gbm/libdrm/libudev and execs Xwayland. Nothing is installed here.
+# libinput/gbm/libdrm/libudev and execs Xwayland. smithay's use_system_lib (EGL bind of the
+# wl_display for dmabuf clients) links the system libwayland-server. Nothing is installed here.
 preflight_missing=()
 command -v pkg-config >/dev/null 2>&1 || preflight_missing+=('pkg-config')
-if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists libinput gbm libdrm libudev; then
-    preflight_missing+=('libinput, gbm, libdrm, libudev development files')
+if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists libinput gbm libdrm libudev wayland-server; then
+    preflight_missing+=('libinput, gbm, libdrm, libudev, wayland-server development files')
 fi
 command -v Xwayland >/dev/null 2>&1 || preflight_missing+=('Xwayland')
 (( ${#preflight_missing[@]} == 0 )) \

@@ -65,6 +65,7 @@ mod chrome_buttons;
 mod clip;
 mod control;
 mod cursor;
+mod dmabuf;
 #[cfg(feature = "drm")]
 #[allow(unsafe_code)]
 // EGL display and renderer creation are unsafe in smithay; no other module may.
@@ -844,6 +845,7 @@ fn init_winit(
     let (mut backend, winit_source) =
         init_from_attributes::<GlowRenderer>(nested_window_attributes())?;
     render::log_gl_renderer(backend.renderer(), "winit");
+    dmabuf::init(state, backend.renderer());
     let size = backend.window_size();
     let mode = smithay::output::Mode {
         size,

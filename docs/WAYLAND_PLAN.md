@@ -285,6 +285,18 @@ Known limitations that remain true are listed under "Remaining work".
    clamping), and the shell `event_router` test covers the taskbar middle-click drop. Still not
    covered: a pointer-driven Ctrl+Super+drag through the compositor input path, and any runtime
    check of either behaviour.
-8. Native Wayland clients are shared-memory only: `renderer.bind_wl_display` and a
-   `zwp_linux_dmabuf_v1` global are not wired (`smithay/use_system_lib` is not enabled), so
-   EGL/dmabuf clients fall back to software or SHM. X11 clients through XWayland are unaffected.
+8. Native Wayland clients: wired, hardware path not yet proven. `smithay/use_system_lib` is enabled
+   (links `libwayland-server` at build time, `libwayland-dev` in CI and `scripts/install-deps-ubuntu.sh`,
+   preflight in `scripts/build-deb`, runtime `libwayland-server0`). `dmabuf::init` binds the renderer's
+   EGL display to the wl_display and offers `zwp_linux_dmabuf_v1` with the renderer's RGB formats and
+   the render node as main device (default feedback only, no per-scanout tranche). Client imports are
+   answered by the renderer (nested now, native on the next paint), so a failed import is rejected.
+   Proven: `scripts/gate flamewm-wm-wayland` all=0 (fmt, clippy, all crate tests incl. the new `dmabuf`
+   unit tests); `cargo clippy --features drm -p flamewm-wm-wayland --all-targets -D warnings` exit 0;
+   `cargo build --features drm --bin flamewm-wayland` exit 0; `--capabilities` prints `drm_compiled=true`.
+   Private Xvfb nested run (llvmpipe, X11 EGL): `EGL_WL_bind_wayland_display` is missing and there is
+   no render node, so the bind and the global are both skipped with one log line each; a Wayland
+   client sees the globals and `zwp_linux_dmabuf_v1` is absent, while `wl_shm` and XWayland (`ready`)
+   are unaffected. NOT proven: dmabuf advertised, a dmabuf client buffer imported and drawn, and the
+   native drm backend on hardware. Those need a GPU host with a render node
+   (`/dev/dri/renderD*`) and an EGL/dmabuf client.

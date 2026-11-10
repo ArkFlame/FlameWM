@@ -1,11 +1,13 @@
 //! Smithay protocol handlers and delegate registrations for `State`.
 
 use flamewm_wm_wayland::protocols::toplevel::ToplevelFacts;
+use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::utils::{
     import_surface, on_commit_buffer_handler, with_renderer_surface_state,
 };
 use smithay::delegate_compositor;
 use smithay::delegate_data_device;
+use smithay::delegate_dmabuf;
 use smithay::delegate_layer_shell;
 use smithay::delegate_output;
 use smithay::delegate_pointer_constraints;
@@ -32,6 +34,7 @@ use smithay::wayland::compositor::{
     CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction, with_states,
     with_surface_tree_upward,
 };
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::foreign_toplevel_list::{
     ForeignToplevelListHandler, ForeignToplevelListState,
 };
@@ -208,6 +211,31 @@ impl BufferHandler for State {
 }
 
 delegate_shm!(State);
+
+impl DmabufHandler for State {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        // Nested: the winit backend owns the renderer, so the import is answered now.
+        if let Some(backend) = self.backend.as_mut() {
+            crate::dmabuf::settle_import(backend.renderer(), &dmabuf, notifier);
+            return;
+        }
+        // Native: the renderer lives in `drm::Drm`. The queue is settled on the next paint, and
+        // this wake-up guarantees that paint happens even when no other client is drawing.
+        self.pending_dmabufs.push((dmabuf, notifier));
+        self.request_redraw();
+    }
+}
+
+delegate_dmabuf!(State);
 
 impl XdgShellHandler for State {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {

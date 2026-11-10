@@ -89,9 +89,10 @@
 //!
 //! # Client GPU buffers
 //!
-//! Not wired yet: clients use `wl_shm`. dmabuf import needs smithay's `ImportEgl::bind_wl_display`,
-//! which is compiled only with smithay's `use_system_lib` feature, plus a `zwp_linux_dmabuf_v1`
-//! global. Neither is available here, so no dmabuf global is offered.
+//! Client GPU buffers: `dmabuf::init` binds the renderer's EGL display to the `wl_display` and offers
+//! `zwp_linux_dmabuf_v1` with the renderer's formats; imports queued by the handler are settled in
+//! `paint`. Without a render node or importable RGB formats no global is offered and clients stay
+//! on `wl_shm`.
 
 use std::cell::RefCell;
 use std::error::Error;
@@ -297,6 +298,8 @@ impl Drm {
         if gate.is_some() || self.surfaces.is_empty() {
             return;
         }
+        // Client dmabufs queued by `DmabufHandler` are imported here, where the renderer is.
+        crate::dmabuf::settle_pending(state, &mut self.renderer);
         // A paint answers the frame callbacks, and a client that wants another frame commits a
         // buffer, which calls `State::request_redraw` (see `handlers::commit`). The dirty flag is
         // therefore this compositor's "a client frame callback is outstanding" signal, read before

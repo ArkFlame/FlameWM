@@ -13,6 +13,7 @@ const WINIT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 use flamewm_platform::shortcuts::ShortcutRegistry;
 use flamewm_window_core::dock_reserve::{self, ReserveEdge};
 use flamewm_wm_wayland::protocols::toplevel::{ToplevelFacts, diff as diff_toplevel_facts};
+use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::WinitGraphicsBackend;
@@ -30,6 +31,7 @@ use smithay::reexports::wayland_server::{Client, DisplayHandle, protocol::wl_sur
 use smithay::utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
+use smithay::wayland::dmabuf::{DmabufState, ImportNotifier};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -362,6 +364,11 @@ pub struct State {
     pub xdg_shell: XdgShellState,
     pub layer_shell: WlrLayerShellState,
     pub shm: ShmState,
+    /// `zwp_linux_dmabuf_v1` state. The global is created by `dmabuf::init` once a renderer exists.
+    pub dmabuf_state: DmabufState,
+    /// Client dmabufs waiting for the native renderer, which lives in `drm::Drm` rather than here.
+    /// Settled by `dmabuf::settle_pending` on the next paint.
+    pub pending_dmabufs: Vec<(Dmabuf, ImportNotifier)>,
     pub seat_state: SeatState<State>,
     pub data_device: DataDeviceState,
     /// Primary selection, xdg-activation and idle-inhibit state (see `compat`).
@@ -526,6 +533,8 @@ impl State {
             xdg_shell,
             layer_shell,
             shm,
+            dmabuf_state: DmabufState::new(),
+            pending_dmabufs: Vec::new(),
             seat_state,
             data_device,
             compat,

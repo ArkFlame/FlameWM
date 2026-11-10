@@ -27,7 +27,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libdbus-1-dev libpulse-dev \
-            libx11-dev libxi-dev libxft-dev libxkbcommon-dev libinput-dev libgbm-dev libdrm-dev libudev-dev
+            libx11-dev libxi-dev libxft-dev libxkbcommon-dev libinput-dev libgbm-dev libdrm-dev libudev-dev libwayland-dev
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.89.0

@@ -98,6 +98,7 @@ pub(super) fn init_backend(
     // SAFETY: the context is current only on this thread, the single compositor thread.
     let mut renderer = unsafe { GlowRenderer::new(context)? };
     crate::render::log_gl_renderer(&mut renderer, "drm");
+    crate::dmabuf::init(state, &mut renderer);
     let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
     timing.renderer_ms = step.elapsed().as_millis();
     stage_line(

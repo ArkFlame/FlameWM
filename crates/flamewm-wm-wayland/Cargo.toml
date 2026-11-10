@@ -55,6 +55,10 @@ smithay = { version = "0.7", default-features = false, features = [
     "wayland_frontend",
     "desktop",
     "xwayland",
+    # Links the system libwayland-server (pkg-config wayland-server). Needed by
+    # `ImportEgl::bind_wl_display`, which is compiled only with it: EGL and dmabuf clients use the
+    # renderer's EGL display bound to this compositor's wl_display.
+    "use_system_lib",
 ] }
 fontdue = { version = "0.9", default-features = false }
 
