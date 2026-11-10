@@ -12,16 +12,7 @@ fn tile_state(mode: PlacementMode) -> Option<CoreTile> {
     Some(match mode {
         PlacementMode::Floating => CoreTile::None,
         PlacementMode::Maximized => CoreTile::Maximize,
-        PlacementMode::Snapped(target) => match target {
-            FrameSnap::Left => CoreTile::LeftHalf,
-            FrameSnap::Right => CoreTile::RightHalf,
-            FrameSnap::Top => CoreTile::TopHalf,
-            FrameSnap::Bottom => CoreTile::BottomHalf,
-            FrameSnap::TopLeft => CoreTile::TopLeftQuarter,
-            FrameSnap::TopRight => CoreTile::TopRightQuarter,
-            FrameSnap::BottomLeft => CoreTile::BottomLeftQuarter,
-            FrameSnap::BottomRight => CoreTile::BottomRightQuarter,
-        },
+        PlacementMode::Snapped(target) => target.core(),
         PlacementMode::Fullscreen => return None,
     })
 }

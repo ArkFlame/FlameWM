@@ -182,6 +182,25 @@ pub enum SnapTarget {
     BottomRight,
 }
 
+impl SnapTarget {
+    /// The shared window-core target. Core owns the snap rectangles, so X11 snapped placement
+    /// and preview reach them through this one mapping.
+    #[must_use]
+    pub const fn core(self) -> flamewm_window_core::SnapTarget {
+        use flamewm_window_core::SnapTarget as Core;
+        match self {
+            Self::Left => Core::LeftHalf,
+            Self::Right => Core::RightHalf,
+            Self::Top => Core::TopHalf,
+            Self::Bottom => Core::BottomHalf,
+            Self::TopLeft => Core::TopLeftQuarter,
+            Self::TopRight => Core::TopRightQuarter,
+            Self::BottomLeft => Core::BottomLeftQuarter,
+            Self::BottomRight => Core::BottomRightQuarter,
+        }
+    }
+}
+
 /// Window placement mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlacementMode {

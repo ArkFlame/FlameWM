@@ -107,25 +107,15 @@ pub(super) fn margined_rect(tile: RootRect, work_area: RootRect, margin: i32) ->
     RootRect::new(rect.x, rect.y, rect.width, rect.height)
 }
 
+/// Snapped rectangle for `target`, from the shared window-core snap geometry.
 pub(super) fn snap_rect(work_area: RootRect, target: SnapTarget) -> RootRect {
-    let (x, y, w, h) = (work_area.x, work_area.y, work_area.w, work_area.h);
-    let hw = (w / 2).max(1);
-    let hh = (h / 2).max(1);
-    match target {
-        SnapTarget::Left => RootRect::new(x, y, hw, h),
-        SnapTarget::Right => RootRect::new(x.saturating_add(w.saturating_sub(hw)), y, hw, h),
-        SnapTarget::Top => RootRect::new(x, y, w, hh),
-        SnapTarget::Bottom => RootRect::new(x, y.saturating_add(h.saturating_sub(hh)), w, hh),
-        SnapTarget::TopLeft => RootRect::new(x, y, hw, hh),
-        SnapTarget::TopRight => RootRect::new(x.saturating_add(w.saturating_sub(hw)), y, hw, hh),
-        SnapTarget::BottomLeft => RootRect::new(x, y.saturating_add(h.saturating_sub(hh)), hw, hh),
-        SnapTarget::BottomRight => RootRect::new(
-            x.saturating_add(w.saturating_sub(hw)),
-            y.saturating_add(h.saturating_sub(hh)),
-            hw,
-            hh,
-        ),
-    }
+    let work = flamewm_api::Rect::new(work_area.x, work_area.y, work_area.w, work_area.h);
+    let rect = flamewm_window_core::snap_geometry(
+        target.core(),
+        work,
+        flamewm_api::Size::new(work.width, work.height),
+    );
+    RootRect::new(rect.x, rect.y, rect.width, rect.height)
 }
 
 pub(super) fn move_anchor(pointer: RootPoint, rect: RootRect, titlebar_h: i32) -> MoveAnchor {
@@ -288,4 +278,34 @@ pub(super) fn resize_step(
         effects
     };
     (state, effects)
+}
+
+#[cfg(test)]
+mod snap_vector_tests {
+    use super::*;
+
+    /// Odd-sized work area: halves are `floor(size / 2)`, right/bottom start at `size - half`.
+    /// The same vectors pin `flamewm_window_core::snap_geometry`, which the Wayland model also uses.
+    #[test]
+    fn snap_rect_matches_shared_window_core_vectors() {
+        let work = RootRect::new(3, 5, 1281, 801);
+        let expect = |target| snap_rect(work, target);
+        assert_eq!(expect(SnapTarget::Left), RootRect::new(3, 5, 640, 801));
+        assert_eq!(expect(SnapTarget::Right), RootRect::new(644, 5, 640, 801));
+        assert_eq!(expect(SnapTarget::Top), RootRect::new(3, 5, 1281, 400));
+        assert_eq!(expect(SnapTarget::Bottom), RootRect::new(3, 406, 1281, 400));
+        assert_eq!(expect(SnapTarget::TopLeft), RootRect::new(3, 5, 640, 400));
+        assert_eq!(
+            expect(SnapTarget::TopRight),
+            RootRect::new(644, 5, 640, 400)
+        );
+        assert_eq!(
+            expect(SnapTarget::BottomLeft),
+            RootRect::new(3, 406, 640, 400)
+        );
+        assert_eq!(
+            expect(SnapTarget::BottomRight),
+            RootRect::new(644, 406, 640, 400)
+        );
+    }
 }
