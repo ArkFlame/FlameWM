@@ -37,6 +37,9 @@ shell/dock.html 320x240 nodes=78 fnv=a76ed11b6ba9ee09
 shell/notification-center.html 1280x800 nodes=246 fnv=4eee886a3ff1cfee
 shell/notification-center.html 701x438 nodes=246 fnv=2288493c3ee0862a
 shell/notification-center.html 320x240 nodes=246 fnv=7dac0fd30797a78f
+shell/polkit.html 1280x800 nodes=19 fnv=da2c7bc199c30d5d
+shell/polkit.html 701x438 nodes=19 fnv=376fb454c4c63625
+shell/polkit.html 320x240 nodes=19 fnv=b8a4e7c9840f8ec5
 task-manager/task-manager.html 1280x800 nodes=1365 fnv=7e81fe24525f4dae
 task-manager/task-manager.html 701x438 nodes=1365 fnv=7fce18c862809492
 task-manager/task-manager.html 320x240 nodes=1365 fnv=e528771a8dea0e2a

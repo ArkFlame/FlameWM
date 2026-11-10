@@ -75,7 +75,7 @@ Constraints for the implementation row (not done here): the shell must not hold 
 
 ## Open (not in this step)
 
-1. Prompt window (visual; needs a design decision and an existing dialog pattern).
+1. Prompt window: projection and HTML landed (`pol-ui` partial). `flamewm-shell/src/polkit_dialog.rs` is pure state: `PolkitEvent` to `PolkitDialog` (one active, bounded FIFO of pending, cancel returns the cookie, submit yields a wiped `Submission`). `ui/shell/polkit.html` is static with ids and `data-action` hooks. Not wired into the shell runtime and not rendered; password zeroing is a minimal overwrite (no zeroize dependency).
 2. Password flow: `polkit-agent-helper-1` spawn, stdin/stdout protocol, PAM response. Security-sensitive; needs review.
 3. Session wiring: which process registers (shell or desktop), when, and unregister on exit.
 4. Session-id source: `XDG_SESSION_ID` vs logind `GetSessionByPID`.
