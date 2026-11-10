@@ -278,6 +278,34 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
         ),
     );
     out.insert(
+        "bluetoothAvailable".to_owned(),
+        WireValue::Bool(snapshot.bluetooth.available),
+    );
+    out.insert(
+        "bluetoothPowered".to_owned(),
+        WireValue::Bool(snapshot.bluetooth.powered),
+    );
+    let device_records: Vec<String> = snapshot
+        .bluetooth
+        .devices
+        .iter()
+        .map(|device| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                device.path,
+                device.address,
+                device.name.replace(['\t', '\n'], " "),
+                u8::from(device.paired),
+                u8::from(device.trusted),
+                u8::from(device.connected),
+            )
+        })
+        .collect();
+    out.insert(
+        "bluetoothDevices".to_owned(),
+        WireValue::String(device_records.join("\n")),
+    );
+    out.insert(
         "brightnessAvailability".to_owned(),
         WireValue::String(availability_name(snapshot.brightness.availability).to_owned()),
     );

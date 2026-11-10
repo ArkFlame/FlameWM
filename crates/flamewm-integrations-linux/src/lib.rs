@@ -191,6 +191,10 @@ impl LinuxIntegrationRuntime {
         self.power_profiles.snapshot()
     }
 
+    pub fn bluetooth_snapshot(&self) -> flamewm_api::system::BluetoothSnapshot {
+        self.bluetooth.snapshot()
+    }
+
     /// Reads the panel backlight on demand; the generation only moves when the observed
     /// percent changes, so a stale-key fence is stable between turns.
     pub fn brightness_snapshot(&mut self) -> BrightnessSnapshot {

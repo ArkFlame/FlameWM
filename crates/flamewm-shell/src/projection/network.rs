@@ -652,3 +652,213 @@ mod network_template_tests {
         );
     }
 }
+
+/// Names for the Bluetooth row status: alias when present, address otherwise.
+fn bluetooth_device_names(devices: Vec<&flamewm_api::system::BluetoothDevice>) -> String {
+    devices
+        .into_iter()
+        .map(|device| {
+            if device.name.is_empty() {
+                device.address.as_str()
+            } else {
+                device.name.as_str()
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join(", ")
+}
+
+/// Status line for the Bluetooth row in the network popup. `None` hides the row when no adapter
+/// exists. Connected devices lead, then paired devices.
+#[must_use]
+pub fn bluetooth_row_status(bluetooth: &flamewm_api::system::BluetoothSnapshot) -> Option<String> {
+    if !bluetooth.available {
+        return None;
+    }
+    if !bluetooth.powered {
+        return Some("Off".to_owned());
+    }
+    let connected = bluetooth_device_names(
+        bluetooth
+            .devices
+            .iter()
+            .filter(|device| device.connected)
+            .collect(),
+    );
+    if !connected.is_empty() {
+        return Some(format!("Connected: {connected}"));
+    }
+    let paired = bluetooth_device_names(
+        bluetooth
+            .devices
+            .iter()
+            .filter(|device| device.paired)
+            .collect(),
+    );
+    if !paired.is_empty() {
+        return Some(format!("Paired: {paired}"));
+    }
+    Some("On, no paired devices".to_owned())
+}
+
+/// The device a click on the Bluetooth row acts on: first connected, else first paired, else first.
+#[must_use]
+pub fn bluetooth_primary_device(
+    bluetooth: &flamewm_api::system::BluetoothSnapshot,
+) -> Option<&flamewm_api::system::BluetoothDevice> {
+    bluetooth
+        .devices
+        .iter()
+        .find(|device| device.connected)
+        .or_else(|| bluetooth.devices.iter().find(|device| device.paired))
+        .or_else(|| bluetooth.devices.first())
+}
+
+/// Typed trust toggle for the primary device, built through the validated device action. `None`
+/// while the adapter is absent or powered off, or when no device is known: the click does nothing.
+#[must_use]
+pub fn bluetooth_trust_action(
+    bluetooth: &flamewm_api::system::BluetoothSnapshot,
+) -> Option<flamewm_api::system::SystemAction> {
+    if !bluetooth.available || !bluetooth.powered {
+        return None;
+    }
+    let device = bluetooth_primary_device(bluetooth)?;
+    let action = flamewm_api::system::BluetoothDeviceAction::new(
+        flamewm_api::system::BluetoothDeviceOp::SetTrusted(!device.trusted),
+        &device.address,
+    )?;
+    Some(flamewm_api::system::SystemAction::BluetoothDevice(action))
+}
+
+pub fn project_bluetooth_row(
+    document: &mut impl UiDocumentAccess,
+    bluetooth: &flamewm_api::system::BluetoothSnapshot,
+) -> Result<(), String> {
+    let status = bluetooth_row_status(bluetooth);
+    document.visible("network-bluetooth-row", status.is_some())?;
+    document.text("network-bluetooth-status", status.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod bluetooth_row_tests {
+    use super::*;
+    use flamewm_api::system::{BluetoothDevice, BluetoothSnapshot, SystemAction};
+
+    fn device(
+        address: &str,
+        name: &str,
+        paired: bool,
+        trusted: bool,
+        connected: bool,
+    ) -> BluetoothDevice {
+        BluetoothDevice {
+            path: format!("/org/bluez/hci0/dev_{}", address.replace(':', "_")),
+            address: address.to_owned(),
+            name: name.to_owned(),
+            paired,
+            trusted,
+            connected,
+        }
+    }
+
+    fn snapshot(powered: bool, devices: Vec<BluetoothDevice>) -> BluetoothSnapshot {
+        BluetoothSnapshot {
+            available: true,
+            powered,
+            devices,
+        }
+    }
+
+    // REGRESSION: no adapter hides the row and offers no action.
+    // MUTATION: ignoring `available` shows "Off" on machines without BlueZ.
+    #[test]
+    fn absent_adapter_hides_row_and_offers_no_action() {
+        let bluetooth = BluetoothSnapshot::default();
+        assert_eq!(bluetooth_row_status(&bluetooth), None);
+        assert_eq!(bluetooth_trust_action(&bluetooth), None);
+    }
+
+    #[test]
+    fn powered_off_adapter_reads_off_and_offers_no_action() {
+        let bluetooth = snapshot(
+            false,
+            vec![device("AA:BB:CC:DD:EE:01", "Headset", true, true, true)],
+        );
+        assert_eq!(bluetooth_row_status(&bluetooth).as_deref(), Some("Off"));
+        assert_eq!(bluetooth_trust_action(&bluetooth), None);
+    }
+
+    // REGRESSION: connected names lead the status; paired-only devices are a fallback.
+    // MUTATION: listing paired before connected, or ignoring the connected flag, fails here.
+    #[test]
+    fn connected_devices_lead_then_paired_devices() {
+        let connected = snapshot(
+            true,
+            vec![
+                device("AA:BB:CC:DD:EE:02", "Mouse", true, false, false),
+                device("AA:BB:CC:DD:EE:01", "Headset", true, false, true),
+            ],
+        );
+        assert_eq!(
+            bluetooth_row_status(&connected).as_deref(),
+            Some("Connected: Headset")
+        );
+
+        let paired = snapshot(
+            true,
+            vec![device("AA:BB:CC:DD:EE:02", "Mouse", true, false, false)],
+        );
+        assert_eq!(
+            bluetooth_row_status(&paired).as_deref(),
+            Some("Paired: Mouse")
+        );
+
+        let bare = snapshot(true, Vec::new());
+        assert_eq!(
+            bluetooth_row_status(&bare).as_deref(),
+            Some("On, no paired devices")
+        );
+    }
+
+    #[test]
+    fn empty_alias_falls_back_to_address() {
+        let bluetooth = snapshot(
+            true,
+            vec![device("AA:BB:CC:DD:EE:03", "", true, false, true)],
+        );
+        assert_eq!(
+            bluetooth_row_status(&bluetooth).as_deref(),
+            Some("Connected: AA:BB:CC:DD:EE:03")
+        );
+    }
+
+    // REGRESSION: the click targets the primary device and inverts its current trust.
+    // MUTATION: sending the current trust instead of its negation, or the wrong device, fails here.
+    #[test]
+    fn click_toggles_trust_of_the_primary_device() {
+        let bluetooth = snapshot(
+            true,
+            vec![
+                device("AA:BB:CC:DD:EE:02", "Mouse", true, false, false),
+                device("AA:BB:CC:DD:EE:01", "Headset", true, true, true),
+            ],
+        );
+        let action = bluetooth_trust_action(&bluetooth).expect("trust action");
+        let SystemAction::BluetoothDevice(action) = action else {
+            panic!("expected a bluetooth device action");
+        };
+        assert_eq!(action.address, "AA:BB:CC:DD:EE:01");
+        assert_eq!(
+            action.op,
+            flamewm_api::system::BluetoothDeviceOp::SetTrusted(false)
+        );
+    }
+
+    #[test]
+    fn click_without_devices_or_with_malformed_address_does_nothing() {
+        assert_eq!(bluetooth_trust_action(&snapshot(true, Vec::new())), None);
+        let bad = snapshot(true, vec![device("not-an-address", "X", true, false, true)]);
+        assert_eq!(bluetooth_trust_action(&bad), None);
+    }
+}

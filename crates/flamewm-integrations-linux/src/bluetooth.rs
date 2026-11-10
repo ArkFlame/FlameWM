@@ -38,6 +38,15 @@ const MATCH_OBJECTS: &str =
     "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager'";
 
 /// Validates an adapter name (`hciN`) so it cannot inject path segments.
+/// Address of a device object path (`.../dev_AA_BB_CC_DD_EE_FF`), or empty when absent.
+fn address_from_path(path: &str) -> String {
+    path.rsplit("/dev_")
+        .next()
+        .filter(|segment| segment.len() == 17 && segment.contains('_'))
+        .map(|segment| segment.replace('_', ":"))
+        .unwrap_or_default()
+}
+
 fn is_adapter_name(adapter: &str) -> bool {
     adapter
         .strip_prefix("hci")
@@ -120,23 +129,7 @@ pub fn add_match_message(rule: &str) -> FlameResult<Message> {
     Ok(message)
 }
 
-/// One `org.bluez.Device1` object on the facade's adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Device {
-    pub path: String,
-    /// `Alias`, falling back to `Name`; empty when `BlueZ` sent neither.
-    pub name: String,
-    pub paired: bool,
-    pub trusted: bool,
-    pub connected: bool,
-}
-
-/// Adapter power state and the devices on that adapter, as last reported by `BlueZ`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BluetoothSnapshot {
-    pub powered: bool,
-    pub devices: Vec<Device>,
-}
+pub use flamewm_api::system::{BluetoothDevice as Device, BluetoothSnapshot};
 
 type Dict = [(MessageItem, MessageItem)];
 
@@ -166,6 +159,7 @@ impl DeviceEntry {
 #[derive(Debug, Clone)]
 struct BluetoothState {
     adapter_path: String,
+    available: bool,
     powered: bool,
     devices: BTreeMap<String, DeviceEntry>,
     /// Serial of the in-flight `GetManagedObjects`, if any.
@@ -204,6 +198,7 @@ impl BluetoothState {
     fn new(adapter_path: String) -> Self {
         Self {
             adapter_path,
+            available: false,
             powered: false,
             devices: BTreeMap::new(),
             pending: None,
@@ -217,6 +212,7 @@ impl BluetoothState {
 
     fn apply_interface(&mut self, path: &str, interface: &str, changed: &Dict) {
         if interface == ADAPTER_INTERFACE && path == self.adapter_path {
+            self.available = true;
             for (key, value) in named_values(changed) {
                 if let ("Powered", MessageItem::Bool(on)) = (key, value) {
                     self.powered = *on;
@@ -244,6 +240,7 @@ impl BluetoothState {
                 if interface == DEVICE_INTERFACE {
                     self.devices.remove(path);
                 } else if interface == ADAPTER_INTERFACE && path == self.adapter_path {
+                    self.available = false;
                     self.powered = false;
                 }
             }
@@ -326,12 +323,14 @@ impl BluetoothState {
 
     fn snapshot(&self) -> BluetoothSnapshot {
         BluetoothSnapshot {
+            available: self.available,
             powered: self.powered,
             devices: self
                 .devices
                 .iter()
                 .map(|(path, entry)| Device {
                     path: path.clone(),
+                    address: address_from_path(path),
                     name: entry
                         .alias
                         .clone()
@@ -667,6 +666,7 @@ mod tests {
             vec![
                 Device {
                     path: DEV_KEYBOARD.to_owned(),
+                    address: "AA:BB:CC:DD:EE:01".to_owned(),
                     name: "Keyboard".to_owned(),
                     paired: true,
                     trusted: true,
@@ -674,6 +674,7 @@ mod tests {
                 },
                 Device {
                     path: DEV_SPEAKER.to_owned(),
+                    address: "AA:BB:CC:DD:EE:02".to_owned(),
                     name: "Speaker".to_owned(),
                     paired: false,
                     trusted: false,

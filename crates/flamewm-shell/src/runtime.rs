@@ -84,6 +84,7 @@ impl Default for ShellSnapshot {
                 audio: Default::default(),
                 power: Default::default(),
                 brightness: Default::default(),
+                bluetooth: Default::default(),
             },
         }
     }

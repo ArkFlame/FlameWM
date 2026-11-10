@@ -129,6 +129,10 @@ impl SystemService {
         self.apply(|s| &mut s.power_profiles, update)
     }
 
+    pub fn update_bluetooth(&mut self, update: flamewm_api::system::BluetoothSnapshot) -> bool {
+        self.apply(|s| &mut s.bluetooth, update)
+    }
+
     pub fn update_brightness(&mut self, update: BrightnessSnapshot) -> bool {
         if update.generation < self.snapshot.brightness.generation {
             return false;

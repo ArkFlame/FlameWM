@@ -61,6 +61,14 @@ pub(crate) fn helper_control_request(
     snapshot: &QuickControlSnapshot,
 ) -> Option<ControlRequest> {
     let system = &snapshot.system;
+    if action == "bluetooth.trust.toggle" {
+        return crate::projection::bluetooth_trust_action(&system.bluetooth).map(|action| {
+            ControlRequest::SystemAction {
+                action,
+                expected_revision: system.revision,
+            }
+        });
+    }
     if action == "network.wifi.toggle" {
         return Some(ControlRequest::SystemAction {
             action: flamewm_api::system::SystemAction::SetWifiEnabled(!system.network.wifi_enabled),

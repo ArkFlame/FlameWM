@@ -349,6 +349,27 @@ pub struct AudioMuteAction {
     pub server_generation: u64,
 }
 
+/// One `org.bluez.Device1` object on the adapter. `address` is the `AA:BB:CC:DD:EE:FF` form.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BluetoothDevice {
+    pub path: String,
+    pub address: String,
+    /// `Alias`, falling back to `Name`; empty when `BlueZ` sent neither.
+    pub name: String,
+    pub paired: bool,
+    pub trusted: bool,
+    pub connected: bool,
+}
+
+/// Adapter presence, power state and devices, as last reported by `BlueZ`. `available` is false
+/// when no adapter object exists, in which case the UI hides Bluetooth controls.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BluetoothSnapshot {
+    pub available: bool,
+    pub powered: bool,
+    pub devices: Vec<BluetoothDevice>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SystemSnapshot {
     pub revision: u64,
@@ -358,6 +379,7 @@ pub struct SystemSnapshot {
     pub power: PowerSnapshot,
     pub power_profiles: PowerProfilesSnapshot,
     pub brightness: BrightnessSnapshot,
+    pub bluetooth: BluetoothSnapshot,
 }
 
 #[derive(Clone, PartialEq, Eq)]

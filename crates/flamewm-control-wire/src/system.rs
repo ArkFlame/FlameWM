@@ -162,6 +162,40 @@ pub(crate) fn power_profiles_snapshot(
     })
 }
 
+/// Absent Bluetooth keys (older peers) decode to the default snapshot. Device records are
+/// tab-separated fields, one device per line.
+pub(crate) fn bluetooth_snapshot(
+    dict: &WireDict,
+) -> Result<flamewm_api::system::BluetoothSnapshot, ControlError> {
+    use flamewm_api::system::BluetoothDevice;
+    if dict.get("bluetoothAvailable").is_none() {
+        return Ok(flamewm_api::system::BluetoothSnapshot::default());
+    }
+    let devices = dict_string(dict, "bluetoothDevices")?
+        .split('\n')
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            let fields: Vec<&str> = record.split('\t').collect();
+            let [path, address, name, paired, trusted, connected] = fields.as_slice() else {
+                return Err(invalid("bluetooth device record"));
+            };
+            Ok(BluetoothDevice {
+                path: (*path).to_owned(),
+                address: (*address).to_owned(),
+                name: (*name).to_owned(),
+                paired: *paired == "1",
+                trusted: *trusted == "1",
+                connected: *connected == "1",
+            })
+        })
+        .collect::<Result<Vec<_>, ControlError>>()?;
+    Ok(flamewm_api::system::BluetoothSnapshot {
+        available: dict_bool(dict, "bluetoothAvailable")?,
+        powered: dict_bool(dict, "bluetoothPowered")?,
+        devices,
+    })
+}
+
 pub(crate) fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
     let strength = dict_u32(dict, "networkStrength")?;
     let volume = dict_u32(dict, "audioVolume")?;
@@ -213,6 +247,7 @@ pub(crate) fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, Control
         },
         power: power_snapshot(dict)?,
         power_profiles: power_profiles_snapshot(dict)?,
+        bluetooth: bluetooth_snapshot(dict)?,
         brightness: brightness_snapshot(dict)?,
         audio: AudioSnapshot {
             availability: parse_availability(dict_string(dict, "audioAvailability")?)?,

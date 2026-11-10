@@ -23,13 +23,15 @@ Vela reference: `.vendor/vela-main/bluetooth/` (25 files), as in `docs/backlog/c
 
 - `bt-list`: `BluetoothDeviceControl::snapshot()` returns a typed `BluetoothSnapshot { powered, devices: Vec<Device{path,name,paired,trusted,connected}> }` for adapter `hci0`. Source: one `org.freedesktop.DBus.ObjectManager.GetManagedObjects` call sent in `connect`, its reply consumed in `on_ready` by serial (`pending`), then kept current by `PropertiesChanged` (`org.freedesktop.DBus.Properties`), `InterfacesAdded` and `InterfacesRemoved`. Two `AddMatch` rules (sender `org.bluez`) are sent before the list request. No polling, no new event source, no new dependency. Pure parser: `parse_managed_objects(&Message, adapter)`; pure state machine: `absorb`/`apply_signal`. Name is `Alias`, falling back to `Name`. Devices are kept only under the adapter path; GATT child objects are ignored. Pure tests: `managed_objects_reply_yields_powered_and_scoped_devices`, `properties_changed_updates_device_flags_and_adapter_power`, `interfaces_added_and_removed_track_devices`, `only_the_pending_serial_replaces_the_list`, `error_reply_to_pending_list_clears_pending_without_state_change`, `malformed_managed_objects_body_is_rejected`, `list_requests_are_pure_method_calls`. A failed list request is logged as an error reply, and the list stays empty.
 
+- `bt-ui`: `SystemSnapshot.bluetooth` (`BluetoothSnapshot { available, powered, devices }`, device `path`/`address`/`name`/`paired`/`trusted`/`connected`) is published by the WM and encoded on the control wire as tab/newline records. The network popup shows a Bluetooth row (`#network-bluetooth-row`, existing `network-row` class): hidden when no adapter exists, else `Off`, `Connected: ...`, `Paired: ...` or `On, no paired devices`. Click (`bluetooth.trust.toggle`) sends the typed `SystemAction::BluetoothDevice` trust toggle for the primary device (first connected, else first paired). Connect is not in the typed action set, so the row does not connect. Pure tests: `projection/network.rs` `bluetooth_row_tests`, control-wire `bluetooth_snapshot_round_trips_and_absent_keys_decode_to_default`.
+
 ## Open rows (ordered)
 
 1. `bt-agent`: `org.bluez.Agent1` registration for PIN/passkey prompts. Required before Pair succeeds for most devices. Security-sensitive.
-2. `bt-ui`: quick-controls row (plain, in the existing list). No visuals in scope yet. It consumes `snapshot()`.
 
 ## Unverified
 
+- `bt-ui`: no real BlueZ and no device; the row is verified by pure projection and wire tests only. The popup layout (slot list trimmed from 200px to 140px to fit the row in the fixed 453px popup) is not checked on screen.
 - `bt-list`: no real BlueZ; the `GetManagedObjects` reply and signal shapes are constructed in tests from the BlueZ API docs, not captured from `bluetoothd`. The `AddMatch` rules are not checked against a live bus. A `bluetoothd` restart is not re-listed (no `NameOwnerChanged` handling); the list stays as last seen until the next signal. On a machine without BlueZ, the list request logs one error reply at startup.
 - `bt-reply` and `bt-plumb` are verified by pure and mock tests only; no BlueZ round-trip, no real Pair/Trust/Remove.
 

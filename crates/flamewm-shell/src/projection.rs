@@ -45,8 +45,8 @@ pub use clock::{clock_time_text, local_date, project_clock, project_clock_at, Cl
 pub use context_menu::project_context_menu;
 pub use media::project_media;
 pub use network::{
-    project_network, project_network_details, project_network_full, project_network_secret,
-    project_network_status,
+    bluetooth_row_status, bluetooth_trust_action, project_bluetooth_row, project_network,
+    project_network_details, project_network_full, project_network_secret, project_network_status,
 };
 #[cfg(test)]
 pub(crate) use panel::pager_active_fill;

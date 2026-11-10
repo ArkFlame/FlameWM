@@ -473,6 +473,10 @@ fn run_session(
                 if host.system_mut().update_power_profiles(power_profiles) {
                     emit_system_signals(host, &control_for_hook);
                 }
+                let bluetooth = integrations.bluetooth_snapshot();
+                if host.system_mut().update_bluetooth(bluetooth) {
+                    emit_system_signals(host, &control_for_hook);
+                }
                 let brightness = integrations.brightness_snapshot();
                 if host.system_mut().update_brightness(brightness) {
                     emit_system_signals(host, &control_for_hook);

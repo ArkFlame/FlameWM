@@ -451,6 +451,7 @@ fn system_fixture() -> SystemSnapshot {
     SystemSnapshot {
         revision: 11,
         power_profiles: Default::default(),
+        bluetooth: Default::default(),
         network: NetworkSnapshot {
             availability: ServiceAvailability::Available,
             generation: 3,
@@ -1196,5 +1197,45 @@ fn power_profiles_snapshot_round_trips_including_absent_defaults() {
     assert_eq!(
         system_snapshot(&legacy).expect("decode").power_profiles,
         PowerProfilesSnapshot::default()
+    );
+}
+
+// REGRESSION: Bluetooth state crosses the wire as tab/newline records. A tab in a device alias
+// must not split a record, and a peer without Bluetooth keys decodes to the hidden default.
+// MUTATION: a record split on the alias tab, or a missing key failing decode, fails here.
+#[test]
+fn bluetooth_snapshot_round_trips_and_absent_keys_decode_to_default() {
+    use flamewm_api::system::{BluetoothDevice, BluetoothSnapshot};
+    let bluetooth = BluetoothSnapshot {
+        available: true,
+        powered: true,
+        devices: vec![BluetoothDevice {
+            path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01".to_owned(),
+            address: "AA:BB:CC:DD:EE:01".to_owned(),
+            name: "Head\tset".to_owned(),
+            paired: true,
+            trusted: false,
+            connected: true,
+        }],
+    };
+    let source = SystemSnapshot {
+        bluetooth: bluetooth.clone(),
+        ..system_fixture()
+    };
+    let decoded = system_snapshot(&system_dict(&source)).expect("decode");
+    assert_eq!(decoded.bluetooth.devices[0].name, "Head set");
+    assert_eq!(
+        decoded.bluetooth.devices[0].address,
+        bluetooth.devices[0].address
+    );
+    assert!(decoded.bluetooth.devices[0].connected);
+    assert!(decoded.bluetooth.available);
+    assert!(decoded.bluetooth.powered);
+
+    let mut legacy = system_dict(&system_fixture());
+    legacy.remove("bluetoothAvailable");
+    assert_eq!(
+        system_snapshot(&legacy).expect("decode").bluetooth,
+        BluetoothSnapshot::default()
     );
 }
