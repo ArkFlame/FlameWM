@@ -773,8 +773,12 @@ pub fn project_panel(
     }
     project_task_slots_extent(
         document,
-        task_slots_rendered(states.len(), view.items),
+        task_slots_extent_count(states.len(), view.items),
         taskbar_is_vertical(&view),
+    )?;
+    project_task_overflow(
+        document,
+        task_overflow_count(states.len(), view.items.activities),
     )?;
     document.visible("task-slot-insert", view.items.activities)?;
 
@@ -793,6 +797,42 @@ pub fn project_panel(
         tray_any_visible(&snapshot.system, view.items),
         view.items.clock,
     )
+}
+
+/// Windows past the rendered buttons; `#task-overflow` shows them as `+N` instead of clipping silently.
+pub(crate) fn task_overflow_count(states: usize, activities: bool) -> usize {
+    if activities {
+        states.saturating_sub(TASK_SLOT_COUNT)
+    } else {
+        0
+    }
+}
+
+/// Shows `#task-overflow` as `+N` when windows exceed the rendered buttons.
+pub(crate) fn project_task_overflow(
+    document: &mut impl UiDocumentAccess,
+    overflow: usize,
+) -> Result<(), String> {
+    document.visible("task-overflow", overflow > 0)?;
+    document.text_ref("task-overflow-label", &format!("+{overflow}"))
+}
+
+/// Cells `#task-slots` lays out: the rendered buttons plus the overflow cell when it shows.
+pub(crate) fn task_slots_extent_count(states: usize, items: TaskbarItems) -> usize {
+    task_slots_rendered(states, items)
+        + usize::from(task_overflow_count(states, items.activities) > 0)
+}
+
+#[cfg(test)]
+mod task_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn overflow_counts_windows_past_the_rendered_buttons() {
+        assert_eq!(task_overflow_count(TASK_SLOT_COUNT, true), 0);
+        assert_eq!(task_overflow_count(TASK_SLOT_COUNT + 3, true), 3);
+        assert_eq!(task_overflow_count(TASK_SLOT_COUNT + 3, false), 0);
+    }
 }
 
 /// Window buttons `#task-slots` renders: `taskbarActivities` off hides the whole area.

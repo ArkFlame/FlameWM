@@ -45,7 +45,13 @@ reproducing the failure requires interaction.
 - Flex inference (static, unverified at runtime): `#task-slots` has an explicit width,
   its slots cannot shrink below their 42px min-content, so excess width spills past the
   bar edge rather than clipping. Tray and clock can be pushed out of view.
-- Why no code change in this slice: a non-overlapping cap needs the real `#tray-group`
+- Slice 1 (landed): windows past `TASK_SLOT_COUNT` show as a `#task-overflow` `+N` cell
+  (role=status, text is the accessible name) and the cell adds to `#task-slots` width;
+  no clipping is silent. Precedent: KDE Plasma icon-tasks and COSMIC applet overflow
+  (`.vendor/cosmic-epoch/cosmic-applets`) both collapse excess items into an overflow
+  control; a popup is deferred because no popover route exists for it here. Width-aware
+  cap and runtime check remain open.
+- Earlier reasoning: a non-overlapping cap needs the real `#tray-group`
   width. That width depends on media, audio, network, battery, weather and SNI item
   visibility, which is split across `projection/panel.rs`, `tray_host.rs`,
   `taskbar/status/*` and the weather projection. Reserving the tray's maximum width

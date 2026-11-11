@@ -127,8 +127,12 @@ pub fn project_panel_geometry(
     }
     crate::projection::project_task_slots_extent(
         document,
-        crate::projection::task_slots_rendered(states.len(), view.items),
+        crate::projection::task_slots_extent_count(states.len(), view.items),
         crate::projection::taskbar_is_vertical(&view),
+    )?;
+    document.visible(
+        "task-overflow",
+        crate::projection::task_overflow_count(states.len(), view.items.activities) > 0,
     )?;
     document.visible("task-slot-insert", view.items.activities)?;
     crate::projection::project_pager_visibility(document, snapshot.workspaces.as_ref())?;

@@ -62,8 +62,9 @@ pub use panel::{
 pub(crate) use panel::{
     project_element_backgrounds, project_pager, project_pager_visibility, project_status_tray,
     project_task_line, project_task_progress, project_task_slots_extent, project_taskbar_height,
-    project_tray_button, set_taskbar_border, task_accent, task_slots_rendered, taskbar_is_vertical,
-    tray_any_visible, workspace_pager_visible, TASK_ATTENTION, TASK_NOT_RESPONDING,
+    project_tray_button, set_taskbar_border, task_accent, task_overflow_count,
+    task_slots_extent_count, task_slots_rendered, taskbar_is_vertical, tray_any_visible,
+    workspace_pager_visible, TASK_ATTENTION, TASK_NOT_RESPONDING,
 };
 pub use start::{
     project_start, project_start_error, start_application_for_slot,
