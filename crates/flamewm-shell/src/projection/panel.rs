@@ -1083,6 +1083,25 @@ pub fn project_brightness_row(
     document.text("battery-brightness-value", label)
 }
 
+/// Battery menu microphone row: default input level and the mute label. `--` and `Mute`
+/// when no default input exists; the row's actions then resolve to no request.
+pub fn project_input_row(
+    document: &mut impl UiDocumentAccess,
+    audio: &flamewm_api::system::AudioSnapshot,
+) -> Result<(), String> {
+    let row = crate::taskbar::status::audio::default_source_row(audio);
+    let value = row
+        .as_ref()
+        .map_or_else(|| "--".to_owned(), |row| format!("{}%", row.volume_percent));
+    let mute = if row.is_some_and(|row| row.muted) {
+        "Unmute"
+    } else {
+        "Mute"
+    };
+    document.text("battery-input-value", value)?;
+    document.text("battery-input-mute", mute.to_owned())
+}
+
 /// Click target of a battery brightness step: 10 percent down or up, clamped to `0..=100`.
 /// `None` when no device is available or the value is already at the bound.
 #[must_use]

@@ -214,6 +214,43 @@ fn row_mute_routes_to_the_projected_tab_row() {
     );
 }
 
+// The battery popup's microphone row routes to the default source, not the default sink.
+#[test]
+fn input_row_mute_and_step_target_the_default_source() {
+    let mut quick = quick(AudioTab::Devices, false);
+    quick.system.audio.endpoints.push(AudioEndpointSnapshot {
+        id: 7,
+        kind: AudioEndpointKind::Source,
+        name: "mic".to_owned(),
+        description: "Microphone".to_owned(),
+        volume_percent: 40,
+        muted: false,
+        is_default: true,
+    });
+    assert_eq!(
+        target_of(helper_control_request("input.mute", &quick)),
+        Some(AudioTarget::Endpoint {
+            id: 7,
+            kind: AudioEndpointKind::Source
+        })
+    );
+    let Some(ControlRequest::SystemAction {
+        action: SystemAction::SetVolume(volume),
+        ..
+    }) = helper_control_request("input.up", &quick)
+    else {
+        panic!("input.up must set the microphone volume");
+    };
+    assert_eq!(
+        volume.target,
+        AudioTarget::Endpoint {
+            id: 7,
+            kind: AudioEndpointKind::Source
+        }
+    );
+    assert_eq!(volume.percent, 45);
+}
+
 #[test]
 fn pointer_on_thumb_centre_reads_back_its_value_and_drag_clamps_at_both_ends() {
     use crate::taskbar::status::audio::{AUDIO_THUMB_SIZE, AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};

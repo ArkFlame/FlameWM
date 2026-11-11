@@ -1,5 +1,8 @@
 use super::*;
-use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+use flamewm_api::system::{
+    AudioEndpointKind, AudioEndpointSnapshot, AudioSnapshot, PowerSnapshot, PowerState,
+    ServiceAvailability,
+};
 use flamewm_ui_x11::test_support::RecordingUiDoc;
 
 fn power(cpu_percent: Option<u8>) -> PowerSnapshot {
@@ -97,11 +100,61 @@ fn battery_popup_brightness_row_fits_the_popup_and_is_wired() {
     assert!(html.contains("data-action=\"brightness.up\""));
     assert!(html.contains("id=\"battery-brightness-value\""));
     assert!(
-        html.contains("height:160px"),
-        "popup must grow to hold the brightness row"
+        html.contains("height:184px"),
+        "popup must grow to hold the microphone row"
     );
     // Row spans top 136..154, inside the 160px popup.
     assert!(html.contains("top:136px; width:260px; height:18px"));
+}
+
+#[test]
+fn battery_popup_microphone_row_fits_the_popup_and_is_wired() {
+    let html = include_str!("../../../../../ui/shell/battery.html");
+    for action in ["input.mute", "input.down", "input.up"] {
+        assert!(
+            html.contains(&format!("data-action=\"{action}\"")),
+            "{action}"
+        );
+    }
+    assert!(html.contains("id=\"battery-input-value\""));
+    assert!(html.contains("id=\"battery-input-mute\""));
+    // Each control names itself for assistive tech.
+    assert_eq!(html.matches("aria-label=\"").count(), 3);
+    // Row spans top 160..178, inside the 184px popup.
+    assert!(html.contains("top:160px; width:260px; height:18px"));
+}
+
+fn input_source(volume_percent: u8, muted: bool) -> AudioSnapshot {
+    let mut audio = AudioSnapshot::default();
+    audio.endpoints.push(AudioEndpointSnapshot {
+        id: 7,
+        kind: AudioEndpointKind::Source,
+        name: "mic".to_owned(),
+        description: "Microphone".to_owned(),
+        volume_percent,
+        muted,
+        is_default: true,
+    });
+    audio
+}
+
+#[test]
+fn input_row_shows_default_source_level_and_mute_label() {
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_input_row(&mut doc, &input_source(40, false)).expect("row projects");
+    assert_eq!(text_of(&doc, "battery-input-value"), Some("40%"));
+    assert_eq!(text_of(&doc, "battery-input-mute"), Some("Mute"));
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_input_row(&mut doc, &input_source(40, true)).expect("row projects");
+    assert_eq!(text_of(&doc, "battery-input-mute"), Some("Unmute"));
+}
+
+#[test]
+fn input_row_shows_dashes_without_a_default_source() {
+    let mut doc = RecordingUiDoc::default();
+    crate::projection::project_input_row(&mut doc, &AudioSnapshot::default())
+        .expect("row projects");
+    assert_eq!(text_of(&doc, "battery-input-value"), Some("--"));
 }
 
 fn profiles(

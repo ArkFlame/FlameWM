@@ -128,6 +128,8 @@ pub(crate) fn helper_control_request(
     }
     let row = if matches!(action, "volume.mute" | "volume.down" | "volume.up") {
         crate::taskbar::status::audio::default_endpoint_row(&system.audio)
+    } else if matches!(action, "input.mute" | "input.down" | "input.up") {
+        crate::taskbar::status::audio::default_source_row(&system.audio)
     } else if let Some((kind_slot, _)) = action
         .strip_prefix("audio.")
         .and_then(|value| value.rsplit_once('.'))

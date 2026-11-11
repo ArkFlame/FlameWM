@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="flamewm.css">
   <style>
     body { margin:0px; }
-    .tray-popup.battery-popup { position:absolute; left:0px; top:0px; width:300px; height:160px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:var(--r-md); background:var(--surface); }
+    .tray-popup.battery-popup { position:absolute; left:0px; top:0px; width:300px; height:184px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:var(--r-md); background:var(--surface); }
     .battery-icon { position:absolute; left:20px; top:20px; width:32px; height:32px; }
     .battery-percent { position:absolute; left:64px; top:6px; height:52px; font-size:44px; font-weight:400; color:var(--text); }
     .battery-track { position:absolute; left:20px; top:76px; width:260px; height:8px; border-radius:var(--r-sm); background:#3a3d40; }
@@ -21,6 +21,11 @@
     .battery-brightness-label { width:110px; height:18px; color:var(--muted); }
     .battery-brightness-step { width:24px; height:18px; display:flex; justify-content:center; color:var(--text); }
     .battery-brightness-value { width:76px; height:18px; display:flex; justify-content:center; color:var(--text); }
+    .battery-input { position:absolute; left:20px; top:160px; width:260px; height:18px; display:flex; font-size:14px; color:var(--text); }
+    .battery-input-label { width:90px; height:18px; color:var(--muted); }
+    .battery-input-mute { width:60px; height:18px; display:flex; justify-content:center; color:var(--text); }
+    .battery-input-step { width:24px; height:18px; display:flex; justify-content:center; color:var(--text); }
+    .battery-input-value { width:62px; height:18px; display:flex; justify-content:center; color:var(--text); }
   </style>
 </head>
 <body class="popup-body">
@@ -60,6 +65,13 @@
       <span id="battery-brightness-down" class="battery-brightness-step" data-action="brightness.down" title="Dim">&#8722;</span>
       <span id="battery-brightness-value" class="battery-brightness-value">&#8203;</span>
       <span id="battery-brightness-up" class="battery-brightness-step" data-action="brightness.up" title="Brighten">+</span>
+    </div>
+    <div id="battery-input" class="battery-input">
+      <span class="battery-input-label">Microphone</span>
+      <span id="battery-input-mute" class="battery-input-mute" data-action="input.mute" role="button" aria-label="Microphone mute" title="Microphone mute">Mute</span>
+      <span id="battery-input-down" class="battery-input-step" data-action="input.down" role="button" aria-label="Decrease microphone volume" title="Quieter">&#8722;</span>
+      <span id="battery-input-value" class="battery-input-value">&#8203;</span>
+      <span id="battery-input-up" class="battery-input-step" data-action="input.up" role="button" aria-label="Increase microphone volume" title="Louder">+</span>
     </div>
   </section>
 </body>

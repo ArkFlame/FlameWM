@@ -216,10 +216,20 @@ pub fn visible_rows(
 pub fn default_endpoint_row(snapshot: &AudioSnapshot) -> Option<RowSource> {
     // The default *output* sink only: `is_default` is also set on the default source (microphone),
     // and the media keys adjust the default sink, so the OSD must read that same endpoint.
+    default_row_of_kind(snapshot, AudioEndpointKind::Sink)
+}
+
+/// Default input (microphone) endpoint row for the battery popup's microphone row.
+#[must_use]
+pub fn default_source_row(snapshot: &AudioSnapshot) -> Option<RowSource> {
+    default_row_of_kind(snapshot, AudioEndpointKind::Source)
+}
+
+fn default_row_of_kind(snapshot: &AudioSnapshot, kind: AudioEndpointKind) -> Option<RowSource> {
     snapshot
         .endpoints()
         .iter()
-        .find(|endpoint| endpoint.is_default && endpoint.kind == AudioEndpointKind::Sink)
+        .find(|endpoint| endpoint.is_default && endpoint.kind == kind)
         .map(RowSource::from_endpoint)
 }
 
