@@ -10,7 +10,7 @@
 |---|---|---|---|
 | P1 | `control-dbus/src/lib.rs:473` `from_item` | done | `e96156bc`; now returns `Result`, no `unreachable!` in production |
 | P2 | `wm-wayland/src/state.rs:1145` | done | `94be79e1`; no `expect` left in `state.rs` |
-| P3 | `wm-wayland/src/xwayland.rs:687-690` | open | `xwm_state` still `expect`s; Smithay trait returns `&mut X11Wm`, no `Option`. Runtime timing unverified |
+| P3 | `wm-wayland/src/xwayland.rs:687-690` | open | Cannot safely replace the `expect` with an `Option`/early return: Smithay 0.7's required `XwmHandler::xwm_state(&mut self, XwmId) -> &mut X11Wm` is called before event handling (including its deferred selection callback and XWayland shell `serial_commit_hook`). `State::xwm` is `Option<X11Wm>` and teardown sets it to `None` (`xwayland.rs:866`); callback/source lifetime after teardown is not established by local app source. A fallback WM or fabricated reference is unsound; fix requires upstream fallible callback contract or proven cancellation/ordering fence. Runtime timing unverified. |
 | P4 | `integrations-linux/src/mpris.rs:568,575` | won't-fix | `575` `unwrap_or_else(unreachable!)` is guarded by the early return at `568`; `let-else` would not shrink code |
 | P5 | `control-dbus/src/mutation_queue.rs:183-197` | done | `d8dfa39e`; `drain_queue_inline` sits under `#[cfg(test)]` |
 | P6 | `integrations-linux/src/icon_service.rs:263,622` | done | Worker and theme-rebuild spawns log and skip instead of panicking (`spawn_background`, regression tests) |
