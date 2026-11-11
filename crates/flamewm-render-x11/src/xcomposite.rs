@@ -210,7 +210,6 @@ fn capture_clipped(
     width: u32,
     height: u32,
 ) -> Option<CapturedImage> {
-    use crate::xlib::{XDisplayHeight, XDisplayWidth};
     use crate::xlib_ext::XTranslateCoordinates;
     let screen = unsafe { XDefaultScreen(display) };
     let root = unsafe { XRootWindow(display, screen) };
@@ -221,13 +220,8 @@ fn capture_clipped(
     if ok == 0 {
         return None;
     }
-    let (sw, sh) = unsafe {
-        (
-            XDisplayWidth(display, screen),
-            XDisplayHeight(display, screen),
-        )
-    };
-    let (vx, vy, vw, vh) = visible_subrect(ox, oy, width, height, sw, sh)?;
+    let (sw, sh) = crate::app::display_extent(display, screen);
+    let (vx, vy, vw, vh) = visible_subrect(ox, oy, width, height, sw as i32, sh as i32)?;
     let BackdropCapture {
         width: cw,
         height: ch,

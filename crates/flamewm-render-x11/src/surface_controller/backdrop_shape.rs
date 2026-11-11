@@ -118,13 +118,7 @@ impl SurfaceController {
         opacity: u8,
         blur: u8,
     ) -> Option<Vec<u32>> {
-        // SAFETY: the controller owns a live display; these only read its cached screen size.
-        let root = unsafe {
-            (
-                XDisplayWidth(self.display, self.screen).max(0) as u32,
-                XDisplayHeight(self.display, self.screen).max(0) as u32,
-            )
-        };
+        let root = self.root_geometry();
         let desktop = self.desktop.as_mut()?;
         // SAFETY: the controller owns a live display.
         let outputs = unsafe { crate::backdrop::published_wallpaper_outputs(self.display) };

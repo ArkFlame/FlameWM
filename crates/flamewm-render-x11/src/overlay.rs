@@ -27,9 +27,8 @@ use crate::xcomposite::{CapturedImage, check_capture_size, upload_argb_pixmap};
 use crate::xlib::{
     ALLOC_NONE, CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display,
     INPUT_OUTPUT_CLASS, Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreatePixmap,
-    XCreateWindow, XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight,
-    XDisplayWidth, XFlush, XFreeColormap, XInternAtom, XMapWindow, XRaiseWindow, XRootWindow,
-    XSetWindowAttributes,
+    XCreateWindow, XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XFlush,
+    XFreeColormap, XInternAtom, XMapWindow, XRaiseWindow, XRootWindow, XSetWindowAttributes,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 use crate::xshape::{XShapeBridge, rounded_mask_spans};
@@ -921,10 +920,7 @@ fn screen_rect(display: *mut Display) -> WarpRect {
     // SAFETY: live display per the caller contract; default screen queries have no other preconditions.
     let (w, h) = unsafe {
         let screen = XDefaultScreen(display);
-        (
-            XDisplayWidth(display, screen),
-            XDisplayHeight(display, screen),
-        )
+        crate::app::display_extent(display, screen)
     };
     WarpRect {
         x: 0.0,
@@ -966,10 +962,7 @@ unsafe fn desktop_backdrop(
     // SAFETY: live display; the screen index is the default screen.
     let (screen_w, screen_h) = unsafe {
         let screen = XDefaultScreen(display);
-        (
-            XDisplayWidth(display, screen),
-            XDisplayHeight(display, screen),
-        )
+        crate::app::display_extent(display, screen)
     };
     let (x_end, y_end) = (
         i64::from(x) + i64::from(width),

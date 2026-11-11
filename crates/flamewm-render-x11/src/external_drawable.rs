@@ -539,8 +539,7 @@ impl ExternalDrawableTarget {
                 cached.pixmap
             }
             None => {
-                let root_w = unsafe { XDisplayWidth(view_display, view_screen) }.max(1) as u32;
-                let root_h = unsafe { XDisplayHeight(view_display, view_screen) }.max(1) as u32;
+                let (root_w, root_h) = crate::app::display_extent(view_display, view_screen);
                 let depth = if self.xrender.is_some() {
                     32
                 } else {
@@ -726,8 +725,7 @@ impl<'a> NativeDrawableRenderer<'a> {
         }
         let depth = if core { self.app.depth as u32 } else { 32 };
         let root = unsafe { XRootWindow(self.app.display, self.app.screen) };
-        let root_w = unsafe { XDisplayWidth(self.app.display, self.app.screen) }.max(1) as u32;
-        let root_h = unsafe { XDisplayHeight(self.app.display, self.app.screen) }.max(1) as u32;
+        let (root_w, root_h) = crate::app::display_extent(self.app.display, self.app.screen);
         let (pixmap, bytes) = unsafe {
             self.app
                 .allocator

@@ -43,32 +43,9 @@ impl SurfaceController {
         unsafe { XConnectionNumber(self.display) as RawFd }
     }
 
+    /// Live root size; see `crate::app::display_extent` for why the cached Xlib size is not used.
     pub fn root_geometry(&self) -> (u32, u32) {
-        let (mut root_return, mut x, mut y) = (0, 0, 0);
-        let (mut width, mut height, mut border, mut depth) = (0, 0, 0, 0);
-        let status = unsafe {
-            crate::xlib_ext::XGetGeometry(
-                self.display,
-                self.root_window(),
-                &mut root_return,
-                &mut x,
-                &mut y,
-                &mut width,
-                &mut height,
-                &mut border,
-                &mut depth,
-            )
-        };
-        if status != 0 {
-            (width, height)
-        } else {
-            unsafe {
-                (
-                    XDisplayWidth(self.display, self.screen).max(0) as u32,
-                    XDisplayHeight(self.display, self.screen).max(0) as u32,
-                )
-            }
-        }
+        crate::app::display_extent(self.display, self.screen)
     }
 
     /// Opt-in for surfaces created afterwards: wheel ticks over a node with an action also

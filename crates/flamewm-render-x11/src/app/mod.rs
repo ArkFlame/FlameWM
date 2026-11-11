@@ -837,13 +837,70 @@ fn composited_argb_for_surface<T>(
     }
 }
 
-/// Root window size of `screen`, clamped to at least 1x1.
-fn display_extent(display: *mut Display, screen: i32) -> (u32, u32) {
-    unsafe {
-        (
-            XDisplayWidth(display, screen).max(1) as u32,
-            XDisplayHeight(display, screen).max(1) as u32,
+/// Live root window size of `screen` (`XGetGeometry`), clamped to at least 1x1. The single owner
+/// of root-size reads: Xlib's cached screen size is not refreshed by a RandR mode change, so it is
+/// only the fallback when the query fails.
+pub(crate) fn display_extent(display: *mut Display, screen: i32) -> (u32, u32) {
+    let root = unsafe { XRootWindow(display, screen) };
+    let (mut root_return, mut x, mut y) = (0, 0, 0);
+    let (mut width, mut height, mut border, mut depth) = (0u32, 0u32, 0u32, 0u32);
+    let status = unsafe {
+        crate::xlib_ext::XGetGeometry(
+            display,
+            root,
+            &mut root_return,
+            &mut x,
+            &mut y,
+            &mut width,
+            &mut height,
+            &mut border,
+            &mut depth,
         )
+    };
+    let (cached_w, cached_h) = unsafe {
+        (
+            XDisplayWidth(display, screen),
+            XDisplayHeight(display, screen),
+        )
+    };
+    live_extent_or_cached(status != 0, (width, height), (cached_w, cached_h))
+}
+
+/// Picks the live query result when it succeeded with a non-empty size, else the cached size.
+/// Both results are clamped to at least 1x1.
+fn live_extent_or_cached(queried: bool, live: (u32, u32), cached: (i32, i32)) -> (u32, u32) {
+    let (w, h) = if queried && live.0 > 0 && live.1 > 0 {
+        live
+    } else {
+        (cached.0.max(0) as u32, cached.1.max(0) as u32)
+    };
+    (w.max(1), h.max(1))
+}
+
+#[cfg(test)]
+mod live_extent_tests {
+    use super::live_extent_or_cached;
+
+    #[test]
+    fn live_size_wins_after_xrandr_shrink() {
+        // Cached Xlib size still reports the pre-resize 1280x800; the server says 1024x768.
+        assert_eq!(
+            live_extent_or_cached(true, (1024, 768), (1280, 800)),
+            (1024, 768)
+        );
+    }
+
+    #[test]
+    fn cached_size_only_when_query_fails_or_is_empty() {
+        assert_eq!(
+            live_extent_or_cached(false, (1024, 768), (1280, 800)),
+            (1280, 800)
+        );
+        assert_eq!(
+            live_extent_or_cached(true, (0, 768), (1280, 800)),
+            (1280, 800)
+        );
+        assert_eq!(live_extent_or_cached(false, (0, 0), (-1, 0)), (1, 1));
     }
 }
 

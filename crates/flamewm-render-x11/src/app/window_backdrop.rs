@@ -201,10 +201,7 @@ impl X11App {
 
     /// Root (screen) size in device pixels.
     unsafe fn root_size(&self) -> (u32, u32) {
-        (
-            unsafe { XDisplayWidth(self.display, self.screen) }.max(0) as u32,
-            unsafe { XDisplayHeight(self.display, self.screen) }.max(0) as u32,
-        )
+        crate::app::display_extent(self.display, self.screen)
     }
 
     /// Crops the desktop canvas under the window's rect and uploads it as the window snapshot.
