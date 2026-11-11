@@ -145,8 +145,14 @@ fn run(rx: &Receiver<Command>, idle: Duration, max_defer: Duration, mut sink: Si
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    if let Some(text) = pending.take() {
-                        let _ = sink(&text);
+                    if let Some(text) = pending.take()
+                        && let Err(error) = sink(&text)
+                    {
+                        // No caller is left to receive this error once the channel is gone.
+                        eprintln!(
+                            "flamewm: settings write on shutdown failed: {}",
+                            error.message
+                        );
                     }
                     return;
                 }
@@ -303,5 +309,99 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         assert!(writer.flush().is_err(), "background failure must surface");
         assert!(writer.flush().is_ok(), "failure is reported once");
+    }
+
+    /// Scratch directory under the system temp dir, removed on drop. Tests never touch the real config dir.
+    struct ScratchDir(std::path::PathBuf);
+
+    impl ScratchDir {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("flamewm-persist-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("scratch dir");
+            Self(dir)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A path whose parent is a regular file, so no directory can be created for it. Root cannot bypass this,
+    /// unlike a 0o500 directory.
+    fn unwritable_path(scratch: &ScratchDir) -> std::path::PathBuf {
+        let blocker = scratch.0.join("not-a-dir");
+        std::fs::write(&blocker, "blocker").expect("blocker file");
+        blocker.join("settings.conf")
+    }
+
+    #[test]
+    fn write_now_under_unwritable_config_dir_reports_io_failure_and_writes_nothing() {
+        let scratch = ScratchDir::new("write-now-blocked");
+        let path = unwritable_path(&scratch);
+        let writer = SettingsWriter::spawn(path.clone());
+
+        let error = writer
+            .write_now("[ui]\n".to_owned())
+            .expect_err("unwritable config dir must fail the save");
+        assert_eq!(error.code, ErrorCode::IoFailure);
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("not-a-dir")).expect("blocker"),
+            "blocker"
+        );
+        // The writer thread survives the failure and keeps reporting it on later requests.
+        let again = writer
+            .write_now("again".to_owned())
+            .expect_err("still unwritable");
+        assert_eq!(again.code, ErrorCode::IoFailure);
+    }
+
+    #[test]
+    fn scheduled_save_under_unwritable_config_dir_surfaces_on_flush() {
+        let scratch = ScratchDir::new("scheduled-blocked");
+        let path = unwritable_path(&scratch);
+        let writer = SettingsWriter::spawn(path);
+
+        writer.schedule("live".to_owned());
+        let error = writer
+            .flush()
+            .expect_err("debounced save failure must surface on flush");
+        assert_eq!(error.code, ErrorCode::IoFailure);
+        assert!(writer.flush().is_ok(), "reported once, then clear");
+    }
+
+    #[test]
+    fn failed_rename_onto_directory_leaves_no_temp_file_behind() {
+        let scratch = ScratchDir::new("rename-onto-dir");
+        let path = scratch.0.join("settings.conf");
+        std::fs::create_dir(&path).expect("directory at target path");
+        let writer = SettingsWriter::spawn(path.clone());
+
+        let error = writer
+            .write_now("v".to_owned())
+            .expect_err("rename onto a directory must fail");
+        assert_eq!(error.code, ErrorCode::IoFailure);
+        assert!(path.is_dir(), "target left untouched");
+        let leftovers = std::fs::read_dir(&scratch.0)
+            .expect("scratch listing")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("settings.conf.") && name.ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "temp file must be removed on failure");
+    }
+
+    #[test]
+    fn drop_with_pending_save_to_unwritable_dir_does_not_panic() {
+        let scratch = ScratchDir::new("drop-blocked");
+        let path = unwritable_path(&scratch);
+        let writer = SettingsWriter::spawn(path.clone());
+        writer.schedule("on-exit".to_owned());
+        drop(writer);
+        assert!(!path.exists());
     }
 }

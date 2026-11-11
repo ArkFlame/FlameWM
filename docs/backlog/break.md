@@ -49,3 +49,7 @@ Evidence: raw X11 setup probe (`probe.py`, connect/setup/close then immediate co
 Fix: `scripts/break/lib.sh` `sandbox_new` adds `-noreset` (comment in place). No product code changed.
 Soak: `scripts/break/break.sh s6` x30 idle with the fix: 0 of 30 `failed to read whole buffer`; 60/60 s6/s6b verdicts PASS (`/run/media/linsaftw/SDD/gate-targets/b2-run/idle/`). One other session (it8) lost its server during s6 (`XIO: fatal IO error 2 ... X server ":240"`, Xvfb exited with no stderr; the socket vanished, likely an external teardown or kill, not reset): WM `Connection refused`, s6 session failed. Not the reported symptom; not reproduced in the other 29 runs.
 Baseline under `stress-ng --cpu 14 --io 2` (no fix): `failed to read whole buffer` / `WM exited before readiness` in the first 3 iterations (s6b FAIL in it1).
+
+## break-b4 coverage (settings save-error path)
+
+Driven through the real `SettingsWriter::spawn` save path in `crates/flamewm-platform/src/services/settings_persist.rs` tests: a config path under a regular file (root-proof, unlike 0o500) returns `IoFailure` from `write_now`, from a debounced `flush`, and leaves no temp file when the rename target is a directory. Defect found: a pending save that fails while the writer shuts down was dropped silently; it now logs `flamewm: settings write on shutdown failed` to stderr. Gate: see commit message.
