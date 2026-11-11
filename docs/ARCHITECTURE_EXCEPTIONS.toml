@@ -29,10 +29,10 @@ canonical_target = "crates/flamewm-wm-x11/src"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-applications/src/lib.rs"
+path = "crates/flamewm-applications/src/desktop_entry.rs"
 capability = "j11-g08-prefixed-env"
 reason = "Desktop-entry decoding reads `LC_MESSAGES` and `LANG` to pick a localized Name/Comment, which are standard POSIX locale variables rather than FlameWM settings."
-canonical_target = "crates/flamewm-applications/src/lib.rs"
+canonical_target = "crates/flamewm-applications/src/desktop_entry.rs"
 remove_by = "0.2.0"
 
 [[exception]]
