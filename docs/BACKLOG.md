@@ -1,6 +1,6 @@
 # Backlog index
 
-Single ranked index of open candidates and recent landings. Detail lives in `docs/backlog/*.md` and `docs/competitors/**`. Snapshot: origin/main `c4299baf`, 2026-11-11 (reconciled through `c4299baf`; this docs commit follows it). Landings since `fd00335d` are classified in the section below the table. Done rows cite the landing sha, checked as an ancestor of origin/main. Unknown or unverified status stays `open`. Static evidence only unless a row says otherwise. Rank = order within the table; open and partial rows first, then done rows.
+Single ranked index of open candidates and recent landings. Detail lives in `docs/backlog/*.md` and `docs/competitors/**`. Snapshot: origin/main `5e56c819`, 2026-11-11 (landings through `5e56c819` classified in "Landed since 9845cf86"). Landings since `fd00335d` are classified in the section below the table. Done rows cite the landing sha, checked as an ancestor of origin/main. Unknown or unverified status stays `open`. Static evidence only unless a row says otherwise. Rank = order within the table; open and partial rows first, then done rows.
 
 Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-rss.md, `look-*` = look.md, `dock-*` = dock-translucency.md, `cmp-*` = compare.md, `gap-*` = docs/competitors/vela/GAP_PLAN.md, `bt-*` = bluetooth.md, `pol-*` = polkit.md, `break-*` = break.md, `wsh-*` = wayland-shared.md, `disp-*` = displays.md.
 
@@ -172,6 +172,27 @@ Re-checked by grep and read of current source, not from memory. Evidence per row
 - Landed since `af02bb59`: render-x11 ring-mask removal `57ef1200` (see read-D5). Flaky under load: render-x11 `xdnd_two_windows_on_private_xvfb` (passes standalone).
 - Decisions needed (blocked, not decided here): cmp-quick mic row placement; cmp-sigblock sole signal waiter (`flamewm-wm/src/bin/flamewm-session.rs`, `flamewm-lock/src/signals.rs`); look-muted (close, or load `base/base.css`); read-U4 (close, or approve a shared production owner); cmp-dock-overflow placement; wrss-scratch status (open vs closed not-fixable); perf-bgaudit shared lowering owner.
 - Closing decisions list unchanged this cycle: cmp-quick mic row placement; cmp-sigblock; look-muted; read-U4; cmp-dock-overflow; wrss-scratch; perf-bgaudit lowering owner; read-U8 shared home; Displays per-output scale key decision.
+
+## Landed since 9845cf86
+
+Checked with `git merge-base --is-ancestor` on origin/main (`5e56c819`); all fifteen are ancestors. Subjects and claims are taken from each commit message (`git show -s`); nothing is re-verified here. No landing exists on origin/main after `5e56c819` at this snapshot (`git log 5e56c819..origin/main` empty).
+
+- `d3a9023a` docs: standing reference-first goal loop (`docs/GOAL_LOOP.md`; docs only).
+- `1491f400` feat(wm-wayland): per-open switcher preview cache for Alt+Tab, capped at 24 (`cmp-alttab`; unit only, no capture producer in this commit).
+- `5a7f6a0c` feat(wm-wayland): render-path producer for Alt+Tab previews (`cmp-alttab`; gate exit 0; runtime unverified; DRM thumbnail path unverified).
+- `8de9ae9c` test(wm-wayland): runtime proof script `scripts/break/alttab-thumb.sh` for Wayland previews (`cmp-alttab`; run 20261111-164718 PASS on private Xvfb with nested winit compositor, 3 entries with thumb pixels; not a DRM run; software GL).
+- `a2ba9ce0` fix(polkit): gate shell agent registration behind `POLKIT_AGENT_CAN_ANSWER` (false) (`pol-session`; polkit agent registration still gated off; mock-bus test not run).
+- `8f7cbbc4` fix(polkit): `BeginAuthentication` answered only with its outcome; unanswered prompts expire after `PROMPT_TIMEOUT` as Failed (`pol-session`; unit only; no prompt UI, so registration stays off).
+- `fc2c2686` feat(reactor): typed child-pipe source for helper stdio (`flamewm-reactor`; unit tests only).
+- `6125d536` feat(polkit): raw `polkit-agent-helper-1` conversation driver (`pol-helper`; helper path and real PAM framing unverified; fake-helper test only; token strings confirmed in `/usr/lib/polkit-1/polkit-agent-helper-1`).
+- `f5f94a69` fix(polkit): shell compiles against outcome-based finish; undisplayed prompts fail at once (`pol-session`; build fix; runtime unverified).
+- `acada0d0` feat(screenshot): ScreenCast portal surface with honest refusal (`wl-portal`; response 2 has no streams by design, decision D-portal; interactive Screenshot still refused; ScreenCast refusal is the expected behaviour, not a capture).
+- `2c601722` feat(applications): gated installed-app rescan on opener miss (`cmp-app-rescan` slice 2; gated on XDG application dir mtimes; unit test only; runtime rescan unverified).
+- `3678bd6d` refactor(icons): single `Rgba8Raster` to `RuntimeImage` bridge (`dup-color-rgb`; removes the two `runtime_image` copies; build/unit scope as the commit states).
+- `a8cff8e3` feat(wm-wayland): compositor colour filter model and `colourFilter` setting (colour-filter model only; render hook pending; no on-screen effect; filters unverified at runtime).
+- `5e56c819` a11y(settings): switch roles and KDE accent names (`cmp-a11y` slice 6; static tests only; runtime unverified).
+
+Rows above are not changed by this section. Status changes for `cmp-alttab`, `pol-session`, `pol-helper`, `wl-portal`, `cmp-app-rescan`, `dup-color-rgb` and `cmp-a11y` are left to their owning docs and the next reconcile.
 
 ## Landed since 9b2324be
 
