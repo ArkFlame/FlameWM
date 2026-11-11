@@ -14,7 +14,7 @@ Base: `origin/main` `7aa3156e`. Final suite run: `.agents/runtime/break/20261109
 | s1 kill -9 shell, then desktop | PASS | shell and desktop respawned (new pids); WM ready; 10 windows before and after; panics=0 |
 | s2 150 xterm/xeyes cycles + 40 windows | PASS (borderline) | WM RSS 11304 KB -> 19344 after churn -> 19480 with 40 windows -> 19488 after close (+8184 KB, threshold 8192); CPU with 40 windows 0%; no stale focus. Growth is a one-time step, not per-cycle |
 | s3 500 hover moves over 10 s | PASS | shell CPU 1%; shell RSS 21488 -> 21472 KB; label flicker UNVERIFIED |
-| s4 xrandr 1280x800 -> 1024x768 -> back | PASS | newmode/addmode/size exit 0; WM and shell/desktop alive; dock position UNVERIFIED (screenshots only) |
+| s4 xrandr 1280x800 -> 1024x768 -> back | FAIL (geometry, b6 assertion) | newmode/addmode/size exit 0; WM and shell/desktop alive; dock window correct (1024x44 at y=724) but its strut is `1024,0,0,0` (left) instead of `0,0,0,44` (bottom). Run `.agents/runtime/break/20261111-120945/s4/panel-after.txt` (before resize: 1280x44 at y=756, strut `0,0,0,44`, OK) |
 | s5 read-only config dir | UNVERIFIED | no save fired at startup, so the save-error path was not exercised |
 | s6 garbage / non-UTF-8 settings.toml | PASS (after fix 1) | before: WM exited (`IoFailure: stream did not contain valid UTF-8`), session failed; after: logged, defaults, session up |
 | s6b truncated settings.toml | PASS (3 of 4 runs) | one FAIL in the final suite (B2), passes on reruns |
@@ -30,7 +30,7 @@ Base: `origin/main` `7aa3156e`. Final suite run: `.agents/runtime/break/20261109
 | B3 | s2 | `crates/flamewm-wm-x11/src/runtime.rs` (not isolated) | WM RSS steps up 8.2 MB at the first 150 churn cycles and plateaus (40 windows +136 KB, after close +8 KB). Not a per-cycle leak at this size. | Soak 1000+ cycles to rule out slow growth; no code change yet. | S (measure) |
 | B4 | s5 | `crates/flamewm-platform/src/services/settings_persist.rs:56` | Save-error path is unexercised. Startup does not write settings, so the read-only config dir produced no save failure. | Drive a settings change through the control path under the read-only dir and check for a logged error. | S |
 | B5 | s3 | n/a | Label flicker (map count during hover) not measured; no map-count probe in the harness. | Add an xprop/xwininfo map-count sampler during the sweep. | S |
-| B6 | s4 | n/a | Dock/panel reposition after resize only checked by screenshot; no geometry assertion. | Compare panel/dock window geometry from `xwininfo -root -tree` before and after `xrandr -s`. | S |
+| B6 **asserted (finds bug)** | s4 | strut owner in `crates/flamewm-render-x11/src/app/mod.rs:946` (`DockStrut::from_edge_rect`, `config.rs:237`) | After `xrandr -s 1024x768` the panel window is correctly placed (1024x44 at y=724) but `_NET_WM_STRUT_PARTIAL` reads `left=1024` instead of `bottom=44`, so the WM reserves the full left edge. Not fixed in this slice. | Investigate strut recompute on RandR size change: edge/thickness taken from the wrong axis or stale edge after resize. | S (fix) |
 
 ## Fixed in this change
 

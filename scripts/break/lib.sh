@@ -75,6 +75,28 @@ cpu_ticks() { awk '{print $14+$15}' "/proc/$1/stat" 2>/dev/null; }
 wm_ready() { DISPLAY=":$DISP" xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q window; }
 window_count() { DISPLAY=":$DISP" xwininfo -root -children 2>/dev/null | grep -c '^ *0x'; }
 active_window() { DISPLAY=":$DISP" xprop -root _NET_ACTIVE_WINDOW 2>/dev/null | awk -F'# ' '{print $2}'; }
+# panel_geometry root_w root_h: one line per window owning a non-zero _NET_WM_STRUT_PARTIAL, then
+# "panels=N bad=M". Reads the real X geometry (xwininfo -id) and checks the panel sits on its strut
+# edge with the root's full width (top/bottom) or height (left/right) and thickness == strut value.
+panel_geometry() {
+  local rw=$1 rh=$2 id p g
+  for id in $(DISPLAY=":$DISP" xwininfo -root -tree 2>/dev/null | grep -o '0x[0-9a-f]*' | sort -u); do
+    p="$(DISPLAY=":$DISP" xprop -id "$id" _NET_WM_STRUT_PARTIAL 2>/dev/null | sed -n 's/.*= //p')"
+    [ -n "$p" ] || continue
+    g="$(DISPLAY=":$DISP" xwininfo -id "$id" 2>/dev/null | awk -F': *' '/Absolute upper-left X/{x=$2} /Absolute upper-left Y/{y=$2} /^ *Width:/{w=$2} /^ *Height:/{h=$2} END{print x, y, w, h}')"
+    echo "$id $(echo "$p" | tr -d ,) $g"
+  done | awk -v rw="$rw" -v rh="$rh" '
+    { n++; s[0]=$2; s[1]=$3; s[2]=$4; s[3]=$5; x=$14; y=$15; w=$16; h=$17; edge="none"; ok=1
+      if (s[3]>0)      { edge="bottom"; t=s[3]; ok=(y+h==rh && h==t && x==0 && w==rw) }
+      else if (s[2]>0) { edge="top";    t=s[2]; ok=(y==0 && h==t && x==0 && w==rw) }
+      else if (s[0]>0) { edge="left";   t=s[0]; ok=(x==0 && w==t && y==0 && h==rh) }
+      else if (s[1]>0) { edge="right";  t=s[1]; ok=(x+w==rw && w==t && y==0 && h==rh) }
+      if (edge=="none") { ok=1 }
+      if (!ok) bad++
+      printf "PANEL id=%s edge=%s abs=(%s,%s) size=%sx%s strut_thickness=%s want_span=%s strut_lrtb=%s,%s,%s,%s verdict=%s\n", $1, edge, x, y, w, h, t, (edge=="left"||edge=="right")?rh:rw, s[0], s[1], s[2], s[3], ok?"OK":"MISPLACED"
+    }
+    END { printf "panels=%d bad=%d\n", n+0, bad+0 }'
+}
 shot() { DISPLAY=":$DISP" import -window root "$S/shot-$1.png" 2>/dev/null; echo "$S/shot-$1.png"; }
 panic_count() { grep -rhc 'panicked at' "$S/session.out" "$S/home" 2>/dev/null | awk '{s+=$1} END {print s+0}'; }
 logs_grep() { grep -rhi "$1" "$S/session.out" "$S/home" 2>/dev/null | head -"${2:-5}"; }

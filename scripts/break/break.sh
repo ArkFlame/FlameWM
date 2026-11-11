@@ -18,6 +18,10 @@ ready_or_fail() { # scenario; settle past the 500ms startup grace so kills test 
   finish "$1" FAIL "session not ready; see $S/session.out"; return 1
 }
 
+panel_settled() { # root_w root_h file: 0 once a strut owner exists and every one is on its edge
+  panel_geometry "$1" "$2" >"$3"; grep -q 'panels=[1-9]' "$3" && grep -q 'bad=0' "$3"
+}
+
 s1_respawn() {
   sandbox_new s1 && start_session bus || { finish s1 FAIL "setup failed"; return; }
   ready_or_fail s1 || return
@@ -77,18 +81,24 @@ s3_hover() {
 s4_randr() {
   sandbox_new s4 && start_session bus || { finish s4 FAIL "setup failed"; return; }
   ready_or_fail s4 || return
-  local rc1 rc2 rc3 rc4 v=PASS
+  local rc1 rc2 rc3 rc4 v=PASS geom
   xrandr -q >"$S/randr-before.txt" 2>&1; shot s4-before >/dev/null
+  panel_geometry 1280 800 >"$S/panel-before.txt"
   xrandr --newmode "1024x768_brk" 63.50 1024 1072 1176 1328 768 771 775 798 -hsync +vsync >/dev/null 2>&1; rc1=$?
   xrandr --addmode screen "1024x768_brk" >/dev/null 2>&1; rc2=$?
   xrandr -s 1024x768 >"$S/randr-set.txt" 2>&1; rc3=$?
   sleep 3; wm_ready || v=FAIL
   have_proc flamewm-shell && have_proc flamewm-desktop || v=FAIL
+  # Geometry assertion: poll until the strut owner is on its edge at 1024x768 (<=10 s), keep last sample.
+  wait_until 10 panel_settled 1024 768 "$S/panel-after.txt"
   shot s4-resized >/dev/null
+  if grep -q 'panels=0 ' "$S/panel-after.txt"; then geom="UNVERIFIED(no strut-owning dock window found)"; [ "$v" = PASS ] && v=UNVERIFIED
+  elif grep -q 'bad=0' "$S/panel-after.txt"; then geom="PASS($(tail -1 "$S/panel-after.txt"))"
+  else geom="FAIL($(grep MISPLACED "$S/panel-after.txt" | tr '\n' ' ')$(tail -1 "$S/panel-after.txt"))"; v=FAIL; fi
   xrandr -s 1280x800 >/dev/null 2>&1; rc4=$?; sleep 3
   wm_ready || v=FAIL
   [ "$rc3" = 0 ] || v=UNVERIFIED
-  finish s4 "$v" "newmode=$rc1 addmode=$rc2 size1024=$rc3 size_back=$rc4 dock_position=UNVERIFIED(screenshots only) evidence=$S/randr-set.txt"
+  finish s4 "$v" "newmode=$rc1 addmode=$rc2 size1024=$rc3 size_back=$rc4 dock_geometry=$geom before=$(tail -1 "$S/panel-before.txt") evidence=$S/randr-set.txt panel=$S/panel-after.txt"
 }
 
 s5_disk() {
