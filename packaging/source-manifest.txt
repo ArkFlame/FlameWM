@@ -110,3 +110,9 @@ ui/
 @exec tools/test_bench_flamewm_memory_owners.py
 @exec tools/bench-flamewm-memory-owners.py
 @exec tools/audit-flamewm-dependencies.py
+@exec scripts/gate
+@exec scripts/look-capture
+@exec scripts/screenshot-acceptance
+@exec scripts/break/break.sh
+@exec scripts/break/lib.sh
+@exec scripts/break/pointer.py
