@@ -352,6 +352,100 @@ pub fn xdg_application_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Entries that differ between two catalog snapshots, keyed by desktop id.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CatalogDelta {
+    pub added: Vec<DesktopAppId>,
+    pub removed: Vec<DesktopAppId>,
+    pub changed: Vec<DesktopAppId>,
+}
+
+impl CatalogDelta {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
+impl ApplicationCatalog {
+    /// Entries of `next` compared against `self` by desktop id and full entry value.
+    #[must_use]
+    pub fn delta_to(&self, next: &Self) -> CatalogDelta {
+        let before: BTreeMap<&str, &DesktopEntry> = self
+            .applications
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect();
+        let after: BTreeMap<&str, &DesktopEntry> = next
+            .applications
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect();
+        let mut delta = CatalogDelta::default();
+        for (id, entry) in &after {
+            match before.get(id) {
+                None => delta.added.push(entry.id.clone()),
+                Some(old) if old != entry => delta.changed.push(entry.id.clone()),
+                Some(_) => {}
+            }
+        }
+        for (id, entry) in &before {
+            if !after.contains_key(id) {
+                delta.removed.push(entry.id.clone());
+            }
+        }
+        delta
+    }
+}
+
+/// Application catalog that can be re-read at runtime; readers take cheap `Arc` snapshots.
+#[derive(Debug)]
+pub struct SharedApplicationCatalog {
+    current: std::sync::RwLock<std::sync::Arc<ApplicationCatalog>>,
+}
+
+impl SharedApplicationCatalog {
+    #[must_use]
+    pub fn new(catalog: ApplicationCatalog) -> Self {
+        Self {
+            current: std::sync::RwLock::new(std::sync::Arc::new(catalog)),
+        }
+    }
+
+    #[must_use]
+    pub fn current(&self) -> std::sync::Arc<ApplicationCatalog> {
+        self.current
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Re-reads `dirs`, swaps the snapshot in, and reports what changed.
+    pub fn rescan_from_dirs(&self, dirs: &[PathBuf]) -> FlameResult<CatalogDelta> {
+        let next = ApplicationCatalog::from_dirs(dirs)?;
+        let mut guard = self
+            .current
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let delta = guard.delta_to(&next);
+        *guard = std::sync::Arc::new(next);
+        Ok(delta)
+    }
+}
+
+/// Process-wide catalog shared by launch paths; refreshed by `rescan_installed_applications`.
+pub fn shared_application_catalog() -> &'static SharedApplicationCatalog {
+    static SHARED: std::sync::OnceLock<SharedApplicationCatalog> = std::sync::OnceLock::new();
+    SHARED.get_or_init(|| {
+        SharedApplicationCatalog::new(ApplicationCatalog::discover().unwrap_or_default())
+    })
+}
+
+/// Explicit rescan of the XDG application directories. No watcher and no logout.
+pub fn rescan_installed_applications() -> FlameResult<CatalogDelta> {
+    shared_application_catalog().rescan_from_dirs(&xdg_application_dirs())
+}
+
 pub fn tokenize_exec(exec: &str) -> FlameResult<Vec<String>> {
     let mut result = Vec::new();
     let mut token = String::new();
@@ -838,6 +932,69 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(!proc_entry.exists(), "child {pid} was not reaped");
+    }
+
+    fn scratch_apps_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-rescan-{tag}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn desktop(name: &str) -> String {
+        format!("[Desktop Entry]\nType=Application\nName={name}\nExec=run-{name}\n")
+    }
+
+    #[test]
+    fn rescan_reports_added_changed_and_removed_entries() {
+        let dir = scratch_apps_dir("delta");
+        fs::write(dir.join("keep.desktop"), desktop("Keep")).unwrap();
+        fs::write(dir.join("gone.desktop"), desktop("Gone")).unwrap();
+        let shared = SharedApplicationCatalog::new(
+            ApplicationCatalog::from_dirs(std::slice::from_ref(&dir)).unwrap(),
+        );
+
+        fs::write(dir.join("keep.desktop"), desktop("Renamed")).unwrap();
+        fs::remove_file(dir.join("gone.desktop")).unwrap();
+        fs::write(dir.join("new.desktop"), desktop("New")).unwrap();
+        let delta = shared.rescan_from_dirs(std::slice::from_ref(&dir)).unwrap();
+
+        assert_eq!(delta.added, vec![DesktopAppId::new("new.desktop")]);
+        assert_eq!(delta.removed, vec![DesktopAppId::new("gone.desktop")]);
+        assert_eq!(delta.changed, vec![DesktopAppId::new("keep.desktop")]);
+        let current = shared.current();
+        assert_eq!(
+            current
+                .find(&DesktopAppId::new("keep.desktop"))
+                .unwrap()
+                .name(),
+            "Renamed"
+        );
+        assert!(current.find(&DesktopAppId::new("gone.desktop")).is_err());
+        let again = shared.rescan_from_dirs(std::slice::from_ref(&dir)).unwrap();
+        assert!(again.is_empty(), "unchanged dirs must yield an empty delta");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshots_taken_before_rescan_stay_valid() {
+        let dir = scratch_apps_dir("snapshot");
+        fs::write(dir.join("old.desktop"), desktop("Old")).unwrap();
+        let shared = SharedApplicationCatalog::new(
+            ApplicationCatalog::from_dirs(std::slice::from_ref(&dir)).unwrap(),
+        );
+        let before = shared.current();
+        fs::remove_file(dir.join("old.desktop")).unwrap();
+        shared.rescan_from_dirs(std::slice::from_ref(&dir)).unwrap();
+        assert_eq!(before.entries().len(), 1);
+        assert!(shared.current().entries().is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn fixture() -> PathBuf {

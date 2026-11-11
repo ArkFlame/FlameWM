@@ -121,7 +121,6 @@ pub(super) fn startup_identity_for_target(
     use std::sync::{Mutex, OnceLock};
     static DEFAULTS: OnceLock<Mutex<std::collections::BTreeMap<String, Option<String>>>> =
         OnceLock::new();
-    static CATALOG: OnceLock<ApplicationCatalog> = OnceLock::new();
     let target_text = target.to_str();
     let mime = if let Some((scheme, _)) = target_text.and_then(|value| value.split_once("://")) {
         if scheme.is_empty()
@@ -158,7 +157,7 @@ pub(super) fn startup_identity_for_target(
         defaults.lock().ok()?.insert(mime, id.clone());
         id
     }?;
-    let catalog = CATALOG.get_or_init(|| ApplicationCatalog::discover().unwrap_or_default());
+    let catalog = shared_application_catalog().current();
     let entry = catalog.find(&DesktopAppId::new(desktop_id)).ok()?;
     Some((
         entry.application.name.clone(),
