@@ -63,6 +63,9 @@
 
 mod chrome_buttons;
 mod clip;
+// Matrix model is wired to settings; the composite-pass uniform that reads it is the pending render hook.
+#[allow(dead_code)]
+mod colour_filter;
 mod control;
 mod cursor;
 mod dmabuf;

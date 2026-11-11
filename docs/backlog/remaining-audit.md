@@ -48,3 +48,16 @@ Pass over the 29 rows that ea985abf left unclassified. Checked against origin/ma
 
 - D-rescan: slice 2 trigger is the opener-miss path (`opener.rs`) plus `refresh_installed_applications_if_changed`, gated on XDG application dir mtimes. Precedent: KDE kbuildsycoca rebuilds on desktop-entry dir mtime change (cited from the brief; no KDE tree is under `.vendor/`, so this is not re-verified here). No watcher or new event source. Launch-time caller beyond the opener is not wired in this slice.
 - D-dep-edge: approved. `flamewm-integrations-linux` depends on `flamewm-ui-document`; `impl From<Rgba8Raster> for RuntimeImage` is the single bridge used by `flamewm-shell` and `flamewm-desktop` projections. Precedent: the source-type owner implements the conversion, as `Rgb8Raster` alias already lives there.
+
+## a11y: compositor colour filters (Wayland)
+
+- Done: typed filter model (`crates/flamewm-wm-wayland/src/colour_filter.rs`: none, grayscale,
+  invert, protanopia, deuteranopia, tritanopia), `colourFilter` settings key read by
+  `control/settings.rs` and mirrored into `State::colour_filter` by `control/mirror.rs`.
+- Remainder: final composite pass. Upload `ColourFilter::matrix()` as a 4x4 uniform in a custom
+  GLES texture program (smithay `GlesTexProgram`, as `render/mod.rs` already does for corner
+  masks) and apply it when `colour_filter` is not `None`. Precedent: `.vendor/vela-main` output
+  matrix path. Not yet runtime-verified.
+- Remainder: settings UI control and keyboard action (`flamewm-api` shortcut name). Settings
+  UI is another worker's scope.
+- Remainder (second slice): cursor-following zoom, precedent cosmic-comp magnifier.

@@ -139,6 +139,7 @@ impl Service {
         let (edge_snap, edge_px) = edge_snap_settings(&snapshot);
         state.show_content_while_dragging = show_content_while_dragging(&snapshot);
         state.snap_preview_enabled = snap_preview_enabled(&snapshot);
+        state.colour_filter = colour_filter(&snapshot);
         let dock = flamewm_window_core::dock_reserve::dock_reserve_from_snapshot(&snapshot);
         if state.dock_reserve != dock {
             state.dock_reserve = dock;

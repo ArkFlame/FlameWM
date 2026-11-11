@@ -24,6 +24,56 @@ pub(super) fn snap_preview_enabled(snapshot: &flamewm_api::settings::SettingsSna
     }
 }
 
+/// `colourFilter`: the text value names a filter; a missing or non-text value keeps `None`.
+pub(super) fn colour_filter(
+    snapshot: &flamewm_api::settings::SettingsSnapshot,
+) -> crate::colour_filter::ColourFilter {
+    use flamewm_api::settings::SettingValue;
+    match snapshot.values.get("colourFilter") {
+        Some(SettingValue::Text(value)) => crate::colour_filter::ColourFilter::from_setting(value),
+        _ => crate::colour_filter::ColourFilter::None,
+    }
+}
+
+#[cfg(test)]
+mod colour_filter_tests {
+    use crate::colour_filter::ColourFilter;
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use std::collections::BTreeMap;
+
+    fn snapshot(value: Option<SettingValue>) -> SettingsSnapshot {
+        let mut values = BTreeMap::new();
+        if let Some(value) = value {
+            values.insert("colourFilter".to_owned(), value);
+        }
+        SettingsSnapshot {
+            revision: 1,
+            values,
+        }
+    }
+
+    #[test]
+    fn missing_or_ill_typed_value_is_no_filter() {
+        assert_eq!(super::colour_filter(&snapshot(None)), ColourFilter::None);
+        assert_eq!(
+            super::colour_filter(&snapshot(Some(SettingValue::Boolean(true)))),
+            ColourFilter::None
+        );
+    }
+
+    #[test]
+    fn text_value_selects_the_named_filter() {
+        assert_eq!(
+            super::colour_filter(&snapshot(Some(SettingValue::Text("deuteranopia".into())))),
+            ColourFilter::Deuteranopia
+        );
+        assert_eq!(
+            super::colour_filter(&snapshot(Some(SettingValue::Text("bogus".into())))),
+            ColourFilter::None
+        );
+    }
+}
+
 #[cfg(test)]
 mod snap_preview_tests {
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};

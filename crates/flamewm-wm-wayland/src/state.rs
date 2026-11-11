@@ -426,6 +426,8 @@ pub struct State {
     pub show_content_while_dragging: bool,
     /// `snapPreviewEnabled`: draw the snap-zone ring while a move targets a zone (X11 default on).
     pub snap_preview_enabled: bool,
+    /// `colourFilter`: the compositor colour filter (none by default). Synced from settings.
+    pub colour_filter: crate::colour_filter::ColourFilter,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -576,6 +578,7 @@ impl State {
             snap_preview: Default::default(),
             show_content_while_dragging,
             snap_preview_enabled,
+            colour_filter: Default::default(),
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,
