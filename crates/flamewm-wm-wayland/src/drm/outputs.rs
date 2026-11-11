@@ -106,6 +106,11 @@ pub(super) fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<
                         i32::from(mode.size().0),
                         i32::from(mode.size().1)
                     );
+                    // An output connected while the session is locked starts uncovered until its
+                    // own lock surface arrives (`LockCover::output_added`).
+                    if state.session_locked {
+                        state.lock_cover.output_added(&out.output.name());
+                    }
                     d.surfaces.push(out);
                     sync_pointer_layout(d, state);
                     break;
