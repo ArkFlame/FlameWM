@@ -76,17 +76,6 @@ impl WindowChromeScene {
             fullscreen: false,
         }
     }
-
-    /// Titlebar strip at the top of `bounds`.
-    #[must_use]
-    pub fn titlebar_rect(&self) -> SceneRect {
-        SceneRect::new(
-            self.bounds.x,
-            self.bounds.y,
-            self.bounds.width,
-            i32::from(WINDOW_CHROME.metrics.titlebar),
-        )
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

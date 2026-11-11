@@ -7,11 +7,6 @@
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::session_lock::SessionLockManagerState;
 
-/// The interface name a lock client looks for. Used by the protocol test; the compositor only
-/// needs the global itself.
-#[allow(dead_code)]
-pub const SESSION_LOCK_INTERFACE: &str = "ext_session_lock_manager_v1";
-
 /// Creates the session-lock global on `display`, admitting every client.
 ///
 /// A single-seat session has nobody to arbitrate between, and the protocol itself refuses a

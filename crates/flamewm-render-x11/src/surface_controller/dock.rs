@@ -147,30 +147,6 @@ impl SurfaceController {
         Ok(())
     }
 
-    /// Publishes a border-only ring bounding mask (`border_px` ring, outer `radius_px`) and
-    /// applies it at the current window size. Paint refreshes keep the ring, so the interior is
-    /// absent and shows what is behind the window.
-    pub fn set_ring_mask(
-        &mut self,
-        id: SurfaceId,
-        border_px: u32,
-        radius_px: u32,
-    ) -> Result<(), String> {
-        let display = self.display;
-        let instance = self.instance_mut(id)?;
-        instance.app.ring_mask = Some((border_px, radius_px));
-        let (w, h) = (instance.app.width, instance.app.height);
-        let spans = crate::xshape::ring_mask_spans(w, h, border_px, radius_px);
-        let bridge = instance
-            .app
-            .xshape
-            .as_ref()
-            .ok_or_else(|| "ring mask requires XShape (unavailable)".to_string())?;
-        unsafe { bridge.apply_rounded_mask(instance.app.window, &spans) }?;
-        unsafe { XFlush(display) };
-        Ok(())
-    }
-
     /// Root rect (x, y, width, height) of the dock panel: this controller's own Dock surface,
     /// else the rect published by `set_external_dock`.
     pub(super) fn dock_rect(&self) -> Option<(i32, i32, u32, u32)> {
