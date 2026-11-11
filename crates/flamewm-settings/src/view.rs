@@ -225,6 +225,7 @@ mod tests {
         assert!(HTML.contains("id=\"display-scale-track\" data-action=\"slider.display-scale\""));
         assert!(HTML.contains("id=\"display-scale-value\""));
         assert!(HTML.contains("role=\"slider\""));
+        assert!(HTML.contains("aria-label=\"Display scale\""));
         assert!(HTML.contains("aria-valuemin=\"100\""));
         assert!(HTML.contains("aria-valuemax=\"200\""));
         assert!(HTML.contains("100% to 200% in 25% steps (1.0x to 2.0x)"));
