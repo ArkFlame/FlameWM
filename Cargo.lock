@@ -942,6 +942,7 @@ dependencies = [
  "flamewm-integrations-core",
  "flamewm-profiler",
  "flamewm-reactor",
+ "flamewm-ui-document",
  "flate2",
  "libpulse-binding",
  "rustix 1.1.4",

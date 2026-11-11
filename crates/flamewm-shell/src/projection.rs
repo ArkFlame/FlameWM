@@ -5,7 +5,7 @@ use chrono::Local;
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::session::SessionCapabilities;
 use flamewm_api::settings::SettingsSnapshot;
-use flamewm_integrations_linux::icons::{IconResolver, IconSize, Rgb8Raster};
+use flamewm_integrations_linux::icons::{IconResolver, IconSize};
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::start::{StartCategory, PRESENTATION_CATEGORIES};
@@ -87,9 +87,5 @@ fn resolve_icon(
             format!("icon '{icon_name}' failed: {error}; generic fallback failed: {fallback}")
         })
     })?;
-    Ok(runtime_image(raster))
-}
-
-fn runtime_image(raster: Rgb8Raster) -> RuntimeImage {
-    RuntimeImage::new(raster.source, raster.width, raster.height, raster.pixels)
+    Ok(RuntimeImage::from(raster))
 }

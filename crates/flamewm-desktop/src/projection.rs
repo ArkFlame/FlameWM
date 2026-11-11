@@ -14,13 +14,12 @@ use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 use crate::entry::icon_names::icon_name;
 use crate::entry::icon_names::icon_semantic;
 pub use crate::entry::icon_names::{file_icon_name, icon_purpose, launcher_icon_name};
-use crate::entry::icon_raster::{
-    ICON_TILE_PX, fade_ghost_pixels, flame_fallback_raster, runtime_image,
-};
+use crate::entry::icon_raster::{ICON_TILE_PX, fade_ghost_pixels, flame_fallback_raster};
 use crate::entry::wallpaper_loader::{WallpaperPresentation, WallpaperRaster};
 use crate::entry::wallpaper_stamp::{
     WALLPAPER_STAMP, WallpaperStamp, wallpaper_matches, wallpaper_stamp,
 };
+use flamewm_ui_x11::RuntimeImage;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -442,7 +441,7 @@ fn apply_raster(
     let selected = icon_semantic(kind);
     document.image_rgba8(
         &format!("desktop-glyph-{index}-{selected}"),
-        runtime_image(raster),
+        RuntimeImage::from(raster),
     )?;
     set_glyph_visibility(document, index, Some(selected))
 }
@@ -499,7 +498,7 @@ pub fn project_drag_ghost_icon_scaled(
     // composited subtree. Parent CSS opacity alone never fades an Image node.
     // Fade the RGBA pixels of this drag-only copy, never the icon cache.
     fade_ghost_pixels(&mut raster.pixels);
-    document.image_rgba8("desktop-drag-ghost-icon", runtime_image(raster))?;
+    document.image_rgba8("desktop-drag-ghost-icon", RuntimeImage::from(raster))?;
     document.visible("desktop-drag-ghost-icon", true)?;
     if miss {
         icons.request_high(key);
@@ -522,7 +521,7 @@ pub fn project_conversion_preview_icon_scaled(
     let miss = cached.is_none();
     document.image_rgba8(
         "desktop-convert-preview-icon",
-        runtime_image(cached.unwrap_or_else(flame_fallback_raster)),
+        RuntimeImage::from(cached.unwrap_or_else(flame_fallback_raster)),
     )?;
     if miss {
         icons.request_high(key);

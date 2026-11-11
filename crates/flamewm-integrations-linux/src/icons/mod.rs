@@ -109,6 +109,14 @@ pub struct Rgba8Raster {
 /// legacy opaque black-background projection.
 pub type Rgb8Raster = Rgba8Raster;
 
+/// The single raster-to-runtime bridge for shell and desktop projections.
+/// Straight RGBA8 pixels map 1:1 into the runtime image.
+impl From<Rgba8Raster> for flamewm_ui_document::RuntimeImage {
+    fn from(raster: Rgba8Raster) -> Self {
+        Self::new(raster.source, raster.width, raster.height, raster.pixels)
+    }
+}
+
 impl Rgba8Raster {
     #[must_use]
     pub fn alpha_at(&self, x: u32, y: u32) -> Option<u8> {

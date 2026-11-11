@@ -1,5 +1,4 @@
 use flamewm_integrations_linux::icons::{IconOrigin, Rgba8Raster};
-use flamewm_ui_x11::RuntimeImage;
 
 pub(crate) const ICON_TILE_PX: u32 = 44;
 
@@ -25,8 +24,4 @@ pub(crate) fn flame_fallback_raster() -> Rgba8Raster {
         origin: IconOrigin::PackagedFallback,
         fallback_reason: None,
     }
-}
-
-pub(crate) fn runtime_image(raster: Rgba8Raster) -> RuntimeImage {
-    RuntimeImage::new(raster.source, raster.width, raster.height, raster.pixels)
 }
