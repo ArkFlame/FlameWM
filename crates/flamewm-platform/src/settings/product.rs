@@ -160,6 +160,9 @@ pub struct ProductSettings {
     pub slow_keys: bool,
     /// `shakeToLocate`: a fast left-right pointer shake enlarges the cursor for a moment. Default off.
     pub shake_to_locate: bool,
+    /// `colourFilter`: compositor colour filter, one of none, grayscale, invert, protanopia,
+    /// deuteranopia, tritanopia. Default none.
+    pub colour_filter: String,
     pub surface_outline_color: String,
     pub surface_outline_opacity: u8,
     /// `surfaceOutlineWidth` in px (1..=4); default 1.
@@ -366,6 +369,7 @@ impl Default for ProductSettings {
             sticky_keys: false,
             slow_keys: false,
             shake_to_locate: false,
+            colour_filter: "none".to_owned(),
             surface_outline_color: "#999999".to_owned(),
             surface_outline_opacity: 50,
             surface_outline_width: 1,

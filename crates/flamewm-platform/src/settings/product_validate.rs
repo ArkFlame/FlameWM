@@ -121,6 +121,14 @@ impl ProductSettings {
         if !(100..=200).contains(&self.text_scale_percent) {
             return invalid("textScalePercent must be 100..200");
         }
+        if !matches!(
+            self.colour_filter.as_str(),
+            "none" | "grayscale" | "invert" | "protanopia" | "deuteranopia" | "tritanopia"
+        ) {
+            return invalid(
+                "colourFilter must be none, grayscale, invert, protanopia, deuteranopia or tritanopia",
+            );
+        }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
         }

@@ -31,7 +31,8 @@ fn accessibility_rows_form_their_own_reset_section() {
             "textScalePercent",
             "stickyKeys",
             "slowKeys",
-            "shakeToLocate"
+            "shakeToLocate",
+            "colourFilter",
         ]
     );
 }
@@ -125,4 +126,22 @@ fn sticky_keys_rejects_non_boolean_values() {
         let text = format!("revision=2\nstickyKeys={value}\n");
         assert!(load(&text).is_err(), "stickyKeys={value} must be rejected");
     }
+}
+
+#[test]
+fn colour_filter_defaults_to_none_and_accepts_its_six_values() {
+    assert_eq!(ProductSettings::default().colour_filter, "none");
+    assert_eq!(load("revision=2\n").expect("default").colour_filter, "none");
+    for value in [
+        "none",
+        "grayscale",
+        "invert",
+        "protanopia",
+        "deuteranopia",
+        "tritanopia",
+    ] {
+        let settings = load(&format!("revision=2\ncolourFilter={value}\n")).expect(value);
+        assert_eq!(settings.colour_filter, value);
+    }
+    assert!(load("revision=2\ncolourFilter=sepia\n").is_err());
 }

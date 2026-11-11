@@ -111,6 +111,7 @@ stable_settings! {
     (false, accessibility, "stickyKeys", sticky_keys),
     (false, accessibility, "slowKeys", slow_keys),
     (false, accessibility, "shakeToLocate", shake_to_locate),
+    (false, accessibility, "colourFilter", colour_filter),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceOutlineColor", surface_outline_color),
     (false, taskbar, "surfaceOutlineOpacity", surface_outline_opacity),
