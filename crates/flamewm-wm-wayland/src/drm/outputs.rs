@@ -206,11 +206,21 @@ pub(super) fn build_output(
                 model: "DRM".to_owned(),
             },
         );
+        // Placed at the end of the row of outputs already added, as `output_layout::arrange_row`
+        // does, so a second connector no longer overlaps the first at (0, 0).
+        let placed: Vec<(i32, i32)> = d
+            .surfaces
+            .iter()
+            .filter_map(|out| out.output.current_mode())
+            .map(|m| crate::output_layout::logical_size((m.size.w, m.size.h), percent))
+            .collect();
+        let logical = crate::output_layout::logical_size((mode.size.w, mode.size.h), percent);
+        let origin = crate::output_layout::origin_after(&placed, logical);
         output.change_current_state(
             Some(mode),
             Some(Transform::Normal),
             Some(output_scale),
-            None,
+            Some(origin.into()),
         );
         output.set_preferred(mode);
         let global = output.create_global::<State>(&state.display);

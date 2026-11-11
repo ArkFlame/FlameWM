@@ -104,6 +104,16 @@ pub(crate) fn arrange_row(logical_sizes: &[(i32, i32)]) -> Vec<Rect> {
         .collect()
 }
 
+/// Origin of an output added after `placed` (logical sizes, in row order): the end of the row, as
+/// `arrange_row` would place it. With nothing placed this is the origin `(0, 0)`.
+pub(crate) fn origin_after(placed: &[(i32, i32)], next: (i32, i32)) -> (i32, i32) {
+    let mut sizes = placed.to_vec();
+    sizes.push(next);
+    arrange_row(&sizes)
+        .last()
+        .map_or((0, 0), |rect| (rect.x, rect.y))
+}
+
 /// Index of the output whose area contains `(x, y)`, using the half-open rule of `Rect::contains`.
 pub(crate) fn output_at(outputs: &[Rect], x: f64, y: f64) -> Option<usize> {
     outputs.iter().position(|rect| rect.contains(x, y))
@@ -193,6 +203,17 @@ mod tests {
         assert_eq!(select_mode(&preferred_second), Some(1));
         let equal = [mode(800, 600, 60_000, false), mode(800, 600, 60_000, false)];
         assert_eq!(select_mode(&equal), Some(0));
+    }
+
+    #[test]
+    fn single_output_stays_at_origin_and_later_outputs_follow_the_row() {
+        assert_eq!(origin_after(&[], (1920, 1080)), (0, 0));
+        assert_eq!(origin_after(&[(1920, 1080)], (2560, 1440)), (1920, 0));
+        let rects = arrange_row(&[(1920, 1080), (2560, 1440), (1280, 1024)]);
+        assert_eq!(
+            origin_after(&[(1920, 1080), (2560, 1440)], (1280, 1024)),
+            (rects[2].x, rects[2].y)
+        );
     }
 
     #[test]
