@@ -613,6 +613,17 @@ mod audio_list_css_tests {
         assert!(include_str!("../../../../ui/shell/audio.html")
             .contains(".audio-list { position:relative; height:336px;"));
     }
+
+    /// Icon-only controls need an accessible name: the back button has no text, only an icon.
+    #[test]
+    fn audio_back_button_has_accessible_name() {
+        let html = include_str!("../../../../ui/shell/audio.html");
+        let tag = html
+            .lines()
+            .find(|line| line.contains(r#"id="audio-back""#))
+            .expect("audio-back button");
+        assert!(tag.contains(r#"aria-label="Back""#), "{tag}");
+    }
 }
 
 #[cfg(test)]
