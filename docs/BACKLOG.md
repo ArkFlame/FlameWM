@@ -1,6 +1,6 @@
 # Backlog index
 
-Single ranked index of open candidates and recent landings. Detail lives in `docs/backlog/*.md` and `docs/competitors/**`. Snapshot: origin/main `81cb6919`, 2026-11-11 (reconciled at `49f033e7`). Done rows cite the landing sha, checked as an ancestor of origin/main. Unknown or unverified status stays `open`. Static evidence only unless a row says otherwise. Rank = order within the table; open and partial rows first, then done rows.
+Single ranked index of open candidates and recent landings. Detail lives in `docs/backlog/*.md` and `docs/competitors/**`. Snapshot: origin/main `c6e2fc9d`, 2026-11-11 (reconciled at `99763d61`). Done rows cite the landing sha, checked as an ancestor of origin/main. Unknown or unverified status stays `open`. Static evidence only unless a row says otherwise. Rank = order within the table; open and partial rows first, then done rows.
 
 Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-rss.md, `look-*` = look.md, `dock-*` = dock-translucency.md, `cmp-*` = compare.md, `gap-*` = docs/competitors/vela/GAP_PLAN.md, `bt-*` = bluetooth.md, `pol-*` = polkit.md, `break-*` = break.md, `wsh-*` = wayland-shared.md, `disp-*` = displays.md.
 
@@ -56,7 +56,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | read-U5 | quality | `send_state` per-type adapters | `x11-desktop/src/shared.rs:156`; `x11-desktop/src/lib.rs:217`; `wm-x11/src/lib.rs:290` | low value | S | open (see dup-color-rgb) |
 | read-U6 | quality | `wall_clock_delay_ms` duplicated | `reactor/src/lib.rs:337`; `shell-core/src/clock.rs:40` | dep-edge decision | S | open (same as dup-wall-clock) |
 | read-U7 | quality | `runtime_image` duplicated (three copies) | `desktop/src/icon_raster.rs:30`; `shell/src/projection.rs:91`; `lock/src/document.rs:649` | maintenance | S | done (flamewm-api typed readers; RuntimeImage::new/from_rgba) |
-| read-U8 | quality | `release` and `drop` single-instance helpers duplicated | `finder/src/instance.rs:63`; `assistant/src/instance.rs:69`; `integrations-linux/src/device_watch.rs:115`; `explorer/src/refresh.rs:114` | maintenance | S | open |
+| read-U8 | quality | `release` and `drop` single-instance helpers duplicated | `finder/src/instance.rs:63`; `assistant/src/instance.rs:69`; `integrations-linux/src/device_watch.rs:115`; `explorer/src/refresh.rs:114` | maintenance | S | open; decision needed: premise audit `40b6059b` (`docs/backlog/read-u8.md`): release/drop mis-scoped (the two Drop items are watcher teardown, not single-instance helpers); finder/assistant claim/release dedupe needs a shared-home dep-edge decision; row stays open |
 | read-U9 | quality | `From<SurfaceRole>` in two crates | `ui-x11/src/surface_runtime.rs:25`; `render-x11/src/config.rs:67` | not a duplicate: different `SurfaceRole` and target types | S | won't-fix |
 | read-SIZE | quality | Oversized files (discovery: 49 over 600 lines, unverified) | `desktop/src/widgets/mod.rs` 1460 (was 1307); `lock/src/run.rs` 1262 (was 1130; now 363 after `af02bb59`) | split by responsibility | L | open: lock `run.rs` split into 11 `run/*.rs` modules (`af02bb59`; gate all=0, 147 tests; no runtime lock-screen proof; 5 source-text contract tests adapted, preview-loop-before-lock-loop ordering assertion dropped, slightly weaker coverage); other oversized files open |
 | read-GUARD | quality | Five pending `TODO(J..-PENDING)` guard warnings, 24-62 days old | `tools/architecture_guard.py:440,518,522,851,859` | governance debt | S | open; all five need real migrations (system-before-packaged icon lookup, z-index store migration, ShellSurfaces ownership, fitted_start_placement); none trivially resolvable |
@@ -65,7 +65,7 @@ Ids: `read-*` = docs/backlog/read.md, `meas-*` = measure.md, `wrss-*` = wayland-
 | break-b3 | quality | WM RSS steps 8.2 MB over first 150 churn cycles, then plateaus; no per-cycle leak at this size | `docs/backlog/break.md:28` | soak 1000+ cycles needed | S | open; not started this cycle; needs a dedicated slice plan |
 | break-b4 | quality | Settings save-error path unexercised (read-only config dir) | `docs/backlog/break.md:29`; `crates/flamewm-platform/src/services/settings_persist.rs:56` | save failure not verified | S | partial; 4 save-error tests and shutdown log fix landed `bddeff02` (`settings_persist.rs`; 385 tests as reported, not re-run here); runtime not run |
 | break-b5 | quality | Label flicker (map count during hover) not measured | `docs/backlog/break.md:30` | no map-count probe | S | open; not started this cycle; needs a dedicated slice plan |
-| break-b6 | quality | Dock/panel reposition after resize checked by screenshot only | `docs/backlog/break.md:31` | no geometry assertion | S | open; not started this cycle; needs a dedicated slice plan |
+| break-b6 | quality | Dock/panel reposition after resize checked by screenshot only | `docs/backlog/break.md:31` | no geometry assertion | S | done: assertion `204b9537` (s4 reads `_NET_WM_STRUT_PARTIAL` and real geometry before/after xrandr) found a real bug; fix `c1cd0028` (dock strut reads live root size via XGetGeometry on RandR resize). Runtime: `scripts/break/break.sh` s4 PASS, run dirs `20261111-124859` and `20261111-130120` |
 | wsh-grab | quality | Grab state machine (Move/Resize) differs X11 vs Wayland | `docs/backlog/wayland-shared.md:18` row 8 | largest remaining shared-logic item | L | open; not started this cycle; needs a dedicated slice plan |
 | wsh-strut | quality | Dock strut on work area differs (X11 raw struts vs Wayland unmanaged struts and layer zone) | `docs/backlog/wayland-shared.md:14` row 4 | different inputs, not shared | M | open; not started this cycle; needs a dedicated slice plan |
 | wsh-lock-x11 | quality | Lock, focus/urgency, media on X11 unmeasured | `docs/backlog/wayland-shared.md:22` row 12 | X11 side unknown | M | open; source audit only `a51f951f` (`docs/backlog/wayland-shared.md` row 12; no code moved) |
@@ -115,13 +115,21 @@ Re-checked by grep and read of current source, not from memory. Evidence per row
 - Open: P3, D2, D4, D5, U4, U5, U6, U8, SIZE, GUARD (cycle updates: U4 decision needed; SIZE lock/run.rs split at `af02bb59`; D5 row stale) (`tools/architecture_guard.py:440,518,522,851,859`, all present).
 - Unverified: P3 runtime timing (no runtime run); D4 "test-only" is from grep, not a build; SIZE file-count baseline (49) not re-run.
 
-## Cycle notes (origin/main `81cb6919`)
+## Cycle notes (origin/main `c6e2fc9d`)
 
 - Host incident: a worker's single read-only `CheckAuthorization` on the host system bus made host polkitd abort (status=6/ABRT); systemd restarted it. All worker briefs now forbid probing host system buses.
 - Process: `e7cfa0ed` carries a `Co-Authored-By: Claude Haiku 5.5` trailer instead of Sonnet 5.5. Not rewritten; history is on main.
 - Process: `272aae65` was pushed before its re-gate finished. The re-gate then passed.
 - Landed since `af02bb59`: render-x11 ring-mask removal `57ef1200` (see read-D5). Flaky under load: render-x11 `xdnd_two_windows_on_private_xvfb` (passes standalone).
 - Decisions needed (blocked, not decided here): cmp-quick mic row placement; cmp-sigblock sole signal waiter (`flamewm-wm/src/bin/flamewm-session.rs`, `flamewm-lock/src/signals.rs`); look-muted (close, or load `base/base.css`); read-U4 (close, or approve a shared production owner); cmp-dock-overflow placement; wrss-scratch status (open vs closed not-fixable); perf-bgaudit shared lowering owner.
+- Closing decisions list unchanged this cycle: cmp-quick mic row placement; cmp-sigblock; look-muted; read-U4; cmp-dock-overflow; wrss-scratch; perf-bgaudit lowering owner; read-U8 shared home; Displays per-output scale key decision.
+
+## Landed since 99763d61
+
+- `40b6059b` docs(backlog): read-U8 premise audit; release/drop mis-scoped, dep-edge decision needed (`docs/backlog/read-u8.md`; row open).
+- `204b9537` test(break): s4 asserts dock/panel geometry after xrandr (break-b6); found a real bug.
+- `c1cd0028` fix(render-x11): dock strut reads live root size on RandR resize (break-b6); s4 PASS, dock_geometry PASS.
+- `c6e2fc9d` fix(render-x11): every runtime root-extent use goes through `app::display_extent` (live XGetGeometry); gate EXIT all 0; s4 PASS on private Xvfb; other touched paths unit/clippy only; one extra XGetGeometry round trip per read, unmeasured.
 
 ## Landed since 1951e0df
 
