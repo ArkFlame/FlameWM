@@ -125,6 +125,12 @@ pub(crate) fn output_at(outputs: &[Rect], x: f64, y: f64) -> Option<usize> {
     outputs.iter().position(|rect| rect.contains(x, y))
 }
 
+/// Whether a pointer hit lookup may run at `(x, y)`. With a placed row the point must lie on one of
+/// its outputs. An empty row (single or nested output) imposes no gate, so that lookup is unchanged.
+pub(crate) fn hit_on_layout(stored: &[Rect], x: f64, y: f64) -> bool {
+    stored.is_empty() || output_at(stored, x, y).is_some()
+}
+
 /// Output holding most of `rect`, the owner a window belongs to. `None` when it overlaps none.
 pub(crate) fn output_for_rect(outputs: &[Rect], rect: Rect) -> Option<usize> {
     outputs
@@ -301,6 +307,17 @@ mod tests {
         assert_eq!(clamp_point_to_layout(400.0, 20.0, &rects), (199.0, 20.0));
         // Negative coordinates: the origin pixel of the first output.
         assert_eq!(clamp_point_to_layout(-5.0, -5.0, &rects), (0.0, 0.0));
+    }
+
+    #[test]
+    fn hit_lookup_resolves_against_the_placed_row() {
+        let row = arrange_row(&[(100, 100), (100, 50)]);
+        assert_eq!(output_at(&row, 150.0, 20.0), Some(1));
+        assert!(hit_on_layout(&row, 150.0, 20.0));
+        // Below the short second output: a gap, no scene owner.
+        assert!(!hit_on_layout(&row, 150.0, 80.0));
+        // Single output (no stored row): no gate, even for points off the primary output.
+        assert!(hit_on_layout(&[], -40.0, 9000.0));
     }
 
     #[test]

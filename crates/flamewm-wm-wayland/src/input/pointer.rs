@@ -366,6 +366,12 @@ impl State {
             };
         }
 
+        // Hit lookups resolve against the placed row the pointer is clamped to: a point on no
+        // output (a gap or past the row) has no scene owner. Single output keeps the open lookup.
+        if !crate::output_layout::hit_on_layout(&self.pointer_layout, location.x, location.y) {
+            return PointerTarget::default();
+        }
+
         first_hit(crate::scene::front_to_back(self), |item| match item {
             SceneItem::Layer { surface, origin } => {
                 let origin = origin.to_f64();
