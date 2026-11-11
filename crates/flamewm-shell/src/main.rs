@@ -16,7 +16,7 @@ use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
 use flamewm_integrations_linux::notifications;
-use flamewm_integrations_linux::polkit_agent::{PolkitAgent, PolkitEvent};
+use flamewm_integrations_linux::polkit_agent::{AuthOutcome, PolkitAgent, PolkitEvent};
 use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
 use flamewm_shell::bus_offline;
@@ -995,7 +995,10 @@ fn drain_polkit_prompts(agent: &mut PolkitAgent) {
                 "flamewm-shell: polkit prompt for {} has no dialog yet; left unanswered",
                 request.action_id
             );
-            agent.finish(&request.cookie);
+            // No dialog yet: answer the pending call now instead of letting polkit time out.
+            if let Err(error) = agent.finish(&request.cookie, AuthOutcome::Failed) {
+                eprintln!("flamewm-shell: polkit reply failed: {error}");
+            }
         }
     }
 }
