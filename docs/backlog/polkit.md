@@ -42,7 +42,7 @@ Status: core and bounded event queue landed in `flamewm-integrations-linux`; UI,
 1. `XDG_SESSION_ID` passed in by the caller, trimmed; a blank value counts as absent. Not read inside the function.
 2. Otherwise `SessionLookup::session_id_for_pid(pid)`, the logind `GetSessionByPID` mapping (object path to `Id` property). Blank answer is `InvalidArgument`; lookup errors propagate. No guessed fallback.
 
-The trait has a fake in tests only. No real logind implementation: the crate has `BusPump` with `BusKind::System` and `send_with_reply`, so a thin call is possible, but it needs a pump and a reply-timeout policy that this step does not decide. Real impl stays open in `pol-sessid`. Known weakness: `XDG_SESSION_ID` can be stale under `su`/`sudo` that keeps the caller's env, so env-first can name another seat. Cross-checking against logind is the follow-up once the real lookup exists.
+The trait has a fake in tests only. No real logind implementation: the crate has `BusPump` with `BusKind::System` and `send_with_reply`, so a thin call is possible, but it needs a pump and a reply-timeout policy that this step does not decide. Real lookup landed: `LogindLookup<W: LogindWire>` maps `GetSessionByPID` then the `Id` property; `SystemLogind::connect()` is the blocking system-bus client (5 s timeout). `NoSessionForPID` maps to `NotFound`, other bus errors to `Unavailable`. Tests use a fake wire only (no bus). Runtime against real logind is **unverified**. Known weakness: `XDG_SESSION_ID` can be stale under `su`/`sudo` that keeps the caller's env, so env-first can name another seat. Cross-checking against logind is the follow-up once the real lookup exists.
 
 ## Session wiring decision (pol-session, design only, not wired)
 

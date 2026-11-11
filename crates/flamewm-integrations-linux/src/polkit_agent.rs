@@ -399,6 +399,100 @@ pub fn resolve_session_id(
     Ok(id.to_owned())
 }
 
+const LOGIN_DEST: &str = "org.freedesktop.login1";
+const LOGIN_MANAGER_PATH: &str = "/org/freedesktop/login1";
+const LOGIN_MANAGER_IFACE: &str = "org.freedesktop.login1.Manager";
+const LOGIN_SESSION_IFACE: &str = "org.freedesktop.login1.Session";
+const NO_SESSION_FOR_PID: &str = "org.freedesktop.login1.NoSessionForPID";
+const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The two logind calls the lookup needs. `SystemLogind` is the system-bus implementation; tests
+/// use a fake, so no test touches a bus.
+pub trait LogindWire {
+    /// `Manager.GetSessionByPID(pid)`: the session object path.
+    fn session_path_for_pid(&self, pid: u32) -> FlameResult<String>;
+    /// Reads the `Id` property of a session object path.
+    fn session_id_of(&self, session_path: &str) -> FlameResult<String>;
+}
+
+/// `SessionLookup` over a `LogindWire`: `GetSessionByPID`, then the session's `Id` property.
+pub struct LogindLookup<W: LogindWire> {
+    wire: W,
+}
+
+impl<W: LogindWire> LogindLookup<W> {
+    #[must_use]
+    pub fn new(wire: W) -> Self {
+        Self { wire }
+    }
+}
+
+impl<W: LogindWire> SessionLookup for LogindLookup<W> {
+    fn session_id_for_pid(&self, pid: u32) -> FlameResult<String> {
+        let path = self.wire.session_path_for_pid(pid)?;
+        let id = self.wire.session_id_of(&path)?;
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(invalid("logind session has an empty Id"));
+        }
+        Ok(id.to_owned())
+    }
+}
+
+/// Blocking system-bus logind client, bounded by `LOGIN_TIMEOUT`. Owned by the caller that needs
+/// a session id; this module adds no event source for it.
+pub struct SystemLogind {
+    conn: dbus::blocking::Connection,
+}
+
+impl SystemLogind {
+    /// # Errors
+    /// Returns `Unavailable` when the system bus cannot be reached.
+    pub fn connect() -> FlameResult<Self> {
+        dbus::blocking::Connection::new_system()
+            .map(|conn| Self { conn })
+            .map_err(|error| {
+                FlameError::new(
+                    ErrorCode::Unavailable,
+                    format!("polkit: system bus: {error}"),
+                )
+            })
+    }
+}
+
+impl LogindWire for SystemLogind {
+    fn session_path_for_pid(&self, pid: u32) -> FlameResult<String> {
+        let manager = self
+            .conn
+            .with_proxy(LOGIN_DEST, LOGIN_MANAGER_PATH, LOGIN_TIMEOUT);
+        let (path,): (dbus::Path<'static>,) = manager
+            .method_call(LOGIN_MANAGER_IFACE, "GetSessionByPID", (pid,))
+            .map_err(logind_error)?;
+        Ok(path.to_string())
+    }
+
+    fn session_id_of(&self, session_path: &str) -> FlameResult<String> {
+        use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+        let path = dbus::Path::new(session_path)
+            .map(dbus::Path::into_static)
+            .map_err(|error| invalid(&format!("session path {session_path}: {error}")))?;
+        let session = self.conn.with_proxy(LOGIN_DEST, path, LOGIN_TIMEOUT);
+        session
+            .get::<String>(LOGIN_SESSION_IFACE, "Id")
+            .map_err(logind_error)
+    }
+}
+
+/// Maps a logind failure: "no session for this pid" is `NotFound`, anything else `Unavailable`.
+fn logind_error(error: dbus::Error) -> FlameError {
+    let code = if error.name() == Some(NO_SESSION_FOR_PID) {
+        ErrorCode::NotFound
+    } else {
+        ErrorCode::Unavailable
+    };
+    FlameError::new(code, format!("polkit: logind: {error}"))
+}
+
 #[cfg(test)]
 mod session_id_tests {
     use std::cell::Cell;
@@ -478,6 +572,86 @@ mod session_id_tests {
         let fake = FakeLogind::new(Some(" "));
         let err = resolve_session_id(Some(""), 4242, &fake).expect_err("blank");
         assert!(matches!(err.code, ErrorCode::InvalidArgument));
+    }
+}
+
+#[cfg(test)]
+mod logind_lookup_tests {
+    use super::*;
+
+    const SESSION: &str = "/org/freedesktop/login1/session/_32";
+
+    /// Mock logind: no bus. `by_pid` is the session path `GetSessionByPID` returns, if any.
+    struct FakeWire {
+        by_pid: Option<&'static str>,
+        id: &'static str,
+    }
+
+    impl LogindWire for FakeWire {
+        fn session_path_for_pid(&self, pid: u32) -> FlameResult<String> {
+            assert_eq!(pid, 4242, "lookup must be asked for the agent's pid");
+            self.by_pid
+                .map(str::to_owned)
+                .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake: no session"))
+        }
+
+        fn session_id_of(&self, session_path: &str) -> FlameResult<String> {
+            assert_eq!(session_path, SESSION);
+            Ok(self.id.to_owned())
+        }
+    }
+
+    #[test]
+    fn get_session_by_pid_then_id_property() {
+        let lookup = LogindLookup::new(FakeWire {
+            by_pid: Some(SESSION),
+            id: "2",
+        });
+        assert_eq!(lookup.session_id_for_pid(4242).expect("id"), "2");
+    }
+
+    #[test]
+    fn no_session_for_pid_is_typed_not_found() {
+        let lookup = LogindLookup::new(FakeWire {
+            by_pid: None,
+            id: "2",
+        });
+        let err = resolve_session_id(None, 4242, &lookup).expect_err("no session");
+        assert!(matches!(err.code, ErrorCode::NotFound));
+    }
+
+    #[test]
+    fn blank_id_property_is_rejected() {
+        let lookup = LogindLookup::new(FakeWire {
+            by_pid: Some(SESSION),
+            id: "  ",
+        });
+        let err = lookup.session_id_for_pid(4242).expect_err("blank");
+        assert!(matches!(err.code, ErrorCode::InvalidArgument));
+    }
+
+    #[test]
+    fn env_session_id_takes_precedence_over_logind() {
+        let lookup = LogindLookup::new(FakeWire {
+            by_pid: Some(SESSION),
+            id: "9",
+        });
+        assert_eq!(
+            resolve_session_id(Some("3"), 4242, &lookup).expect("env"),
+            "3"
+        );
+        assert_eq!(
+            resolve_session_id(None, 4242, &lookup).expect("logind"),
+            "9"
+        );
+    }
+
+    #[test]
+    fn no_session_error_name_maps_to_not_found_other_errors_unavailable() {
+        let no_session = dbus::Error::new_custom(NO_SESSION_FOR_PID, "no session");
+        assert!(matches!(logind_error(no_session).code, ErrorCode::NotFound));
+        let other = dbus::Error::new_custom("org.freedesktop.DBus.Error.NoReply", "timeout");
+        assert!(matches!(logind_error(other).code, ErrorCode::Unavailable));
     }
 }
 
