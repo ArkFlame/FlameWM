@@ -1,14 +1,14 @@
 <!doctype html><html><head><meta charset="utf-8"><title>FlameWM Explorer</title><link rel="stylesheet" href="../base/base.css"><link rel="stylesheet" href="explorer.css"></head>
 <body id="explorer">
 <div id="toolbar" class="toolbar">
-  <button id="nav-back" class="tool" data-action="explorer.back"><img class="tool-ico" src="icons/back.svg" alt=""></button>
-  <button id="nav-forward" class="tool" data-action="explorer.forward"><img class="tool-ico" src="icons/forward.svg" alt=""></button>
-  <button id="nav-up" class="tool" data-action="explorer.up"><img class="tool-ico" src="icons/up.svg" alt=""></button>
-  <button id="nav-refresh" class="tool" data-action="explorer.reload"><img class="tool-ico" src="icons/refresh.svg" alt=""></button>
+  <button id="nav-back" class="tool" aria-label="Back" data-action="explorer.back"><img class="tool-ico" src="icons/back.svg" alt=""></button>
+  <button id="nav-forward" class="tool" aria-label="Forward" data-action="explorer.forward"><img class="tool-ico" src="icons/forward.svg" alt=""></button>
+  <button id="nav-up" class="tool" aria-label="Up" data-action="explorer.up"><img class="tool-ico" src="icons/up.svg" alt=""></button>
+  <button id="nav-refresh" class="tool" aria-label="Refresh" data-action="explorer.reload"><img class="tool-ico" src="icons/refresh.svg" alt=""></button>
   <div class="tool-sep"></div>
   <div id="address" class="field address"><button class="address-edit" data-action="explorer.address" aria-label="Edit address"><img class="field-ico" src="icons/folder.svg" alt=""></button><button id="breadcrumb-0" class="breadcrumb" data-action="explorer.breadcrumb.0">/</button><button id="breadcrumb-1" class="breadcrumb" data-action="explorer.breadcrumb.1">/</button><button id="breadcrumb-2" class="breadcrumb" data-action="explorer.breadcrumb.2">/</button><button id="breadcrumb-3" class="breadcrumb" data-action="explorer.breadcrumb.3">/</button><button id="breadcrumb-4" class="breadcrumb" data-action="explorer.breadcrumb.4">/</button><button id="breadcrumb-5" class="breadcrumb" data-action="explorer.breadcrumb.5">/</button><button id="address-text" class="field-text" data-action="explorer.address">~</button></div>
-  <div id="search-toggle" class="field search" data-action="explorer.search"><img class="field-ico" src="icons/search.svg" alt=""><span id="search-text" class="field-text">Search</span><button id="search-clear" class="search-clear" data-action="explorer.search.clear">×</button></div>
-  <button id="menu-toggle" class="tool" data-action="explorer.menu"><img class="tool-ico" src="icons/more.svg" alt=""></button>
+  <div id="search-toggle" class="field search" data-action="explorer.search"><img class="field-ico" src="icons/search.svg" alt=""><span id="search-text" class="field-text">Search</span><button id="search-clear" class="search-clear" data-action="explorer.search.clear" aria-label="Clear search">×</button></div>
+  <button id="menu-toggle" class="tool" aria-label="Menu" data-action="explorer.menu"><img class="tool-ico" src="icons/more.svg" alt=""></button>
 </div>
 <div class="hairline"></div>
 <div id="tabs" class="tabs">
@@ -17,7 +17,7 @@
     <button id="tab-2" class="tab" data-action="explorer.tab.2">Home</button>
     <button id="tab-3" class="tab" data-action="explorer.tab.3">Home</button>
     <button id="tab-4" class="tab" data-action="explorer.tab.4">Home</button>
-    <button class="tab-add" data-action="explorer.tab.new">+</button><button class="tab-close" data-action="explorer.tab.close">x</button>
+    <button class="tab-add" data-action="explorer.tab.new" aria-label="New tab">+</button><button class="tab-close" data-action="explorer.tab.close" aria-label="Close tab">x</button>
 </div>
 <div class="hairline"></div>
 <div id="body-area" class="body">
