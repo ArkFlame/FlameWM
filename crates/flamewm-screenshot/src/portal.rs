@@ -16,6 +16,7 @@ use flamewm_dbus_reactor::{
 };
 
 use crate::capture::{self, Image};
+use crate::screencast;
 use crate::wayland;
 
 /// Well-known name the portal frontend activates (`packaging/dbus-1/...service`).
@@ -26,7 +27,7 @@ const MEMBER: &str = "Screenshot";
 
 /// Portal response codes: 0 success, 2 other failure.
 const RESPONSE_SUCCESS: u32 = 0;
-const RESPONSE_OTHER: u32 = 2;
+pub const RESPONSE_OTHER: u32 = 2;
 
 /// Bounds how long the service blocks in one bus wait before it re-checks the connection.
 const WAIT: Duration = Duration::from_millis(500);
@@ -144,6 +145,14 @@ fn answer(request: &Request) -> (u32, Option<String>) {
 }
 
 fn handle(message: &Message) -> MessageDisposition {
+    let is_screencast = message
+        .interface()
+        .zip(message.member())
+        .is_some_and(|(i, m)| screencast::is_call(&i, &m));
+    if is_screencast {
+        eprintln!("flamewm-screenshot portal: {}", screencast::REFUSAL);
+        return reply(message, RESPONSE_OTHER, None);
+    }
     let is_screenshot = message.interface().is_some_and(|i| &*i == INTERFACE)
         && message.member().is_some_and(|m| &*m == MEMBER);
     if !is_screenshot {
@@ -156,7 +165,12 @@ fn handle(message: &Message) -> MessageDisposition {
             (RESPONSE_OTHER, None)
         }
     };
-    match reply_items(response, uri.as_deref()) {
+    reply(message, response, uri.as_deref())
+}
+
+/// Builds the method return `(response, results)` for one call.
+fn reply(message: &Message, response: u32, uri: Option<&str>) -> MessageDisposition {
+    match reply_items(response, uri) {
         Ok(items) => {
             let mut reply = message.method_return();
             reply.append_items(&items);
