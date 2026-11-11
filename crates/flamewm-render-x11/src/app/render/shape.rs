@@ -3,15 +3,7 @@ use super::*;
 /// Only shapes independent of paint commands may skip coverage reconstruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StaticShapeKey {
-    Ring {
-        size: (u32, u32),
-        border: u32,
-        radius: u32,
-    },
-    Dock {
-        size: (u32, u32),
-        radius: u32,
-    },
+    Dock { size: (u32, u32), radius: u32 },
 }
 
 pub(super) fn fixed_shape_unchanged(
@@ -25,16 +17,9 @@ pub(super) fn fixed_shape_unchanged(
 pub(super) fn static_shape_key(
     width: u32,
     height: u32,
-    ring: Option<(u32, u32)>,
     dock_radius: u32,
 ) -> Option<StaticShapeKey> {
-    if let Some((border, radius)) = ring {
-        Some(StaticShapeKey::Ring {
-            size: (width, height),
-            border,
-            radius,
-        })
-    } else if dock_radius > 0 {
+    if dock_radius > 0 {
         Some(StaticShapeKey::Dock {
             size: (width, height),
             radius: dock_radius,
@@ -73,9 +58,7 @@ impl X11App {
         if let Some(spans) = &self.shape_override {
             return spans.clone();
         }
-        if let Some((border, radius)) = self.ring_mask {
-            crate::xshape::ring_mask_spans(self.width, self.height, border, radius)
-        } else if self.dock_corner_radius > 0 {
+        if self.dock_corner_radius > 0 {
             crate::xshape::rounded_mask_spans(self.width, self.height, self.dock_corner_radius)
         } else {
             self.mask_spans(commands, scale, backdrop_radius)
@@ -89,12 +72,7 @@ impl X11App {
         if self.shape_override.is_some() {
             return None;
         }
-        static_shape_key(
-            self.width,
-            self.height,
-            self.ring_mask,
-            self.dock_corner_radius,
-        )
+        static_shape_key(self.width, self.height, self.dock_corner_radius)
     }
 
     /// Scale-aware shape refresh: coverage matches the paint path for

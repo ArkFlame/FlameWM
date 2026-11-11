@@ -67,27 +67,22 @@ mod static_shape_tests {
 
     #[test]
     fn static_shape_changes_on_resize_or_style_and_dynamic_masks_are_not_memoized() {
-        let dock = static_shape_key(1920, 50, None, 12).unwrap();
-        assert_eq!(dock, static_shape_key(1920, 50, None, 12).unwrap());
-        assert_ne!(dock, static_shape_key(1920, 49, None, 12).unwrap());
-        assert_ne!(dock, static_shape_key(1920, 50, None, 13).unwrap());
-        assert_ne!(dock, static_shape_key(1920, 50, Some((2, 12)), 12).unwrap());
-        assert_ne!(
-            static_shape_key(1920, 50, Some((2, 12)), 12),
-            static_shape_key(1920, 50, Some((3, 12)), 12)
-        );
-        assert_eq!(static_shape_key(1920, 50, None, 0), None);
+        let dock = static_shape_key(1920, 50, 12).unwrap();
+        assert_eq!(dock, static_shape_key(1920, 50, 12).unwrap());
+        assert_ne!(dock, static_shape_key(1920, 49, 12).unwrap());
+        assert_ne!(dock, static_shape_key(1920, 50, 13).unwrap());
+        assert_eq!(static_shape_key(1920, 50, 0), None);
     }
 
     #[test]
     fn invalidated_shape_latch_does_not_skip_reapplication() {
-        let key = static_shape_key(800, 48, None, 12);
+        let key = static_shape_key(800, 48, 12);
         assert!(fixed_shape_unchanged(key, key, true));
         // A slide or an overlay mask writer invalidates the server shape latch.
         assert!(!fixed_shape_unchanged(key, key, false));
         assert!(!fixed_shape_unchanged(
             key,
-            static_shape_key(801, 48, None, 12),
+            static_shape_key(801, 48, 12),
             true,
         ));
         assert!(!fixed_shape_unchanged(key, None, true));

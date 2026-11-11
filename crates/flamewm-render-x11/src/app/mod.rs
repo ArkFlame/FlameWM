@@ -214,9 +214,6 @@ pub(crate) struct X11App {
     pub(crate) dock_corner_radius: u32,
     /// Opt-in (shell only): a wheel tick also reaches the node under the pointer.
     pub(crate) node_wheel_targets: bool,
-    /// Border-only ring (`border_px`, `radius_px`) in window px. When set, the coverage refresh
-    /// keeps only the ring so the interior stays see-through.
-    pub(crate) ring_mask: Option<(u32, u32)>,
     /// Per-pixel alpha silhouette for an XShape-backed overlay without an ARGB compositor.
     pub(crate) shape_override: Option<Vec<(u32, u32, u32)>>,
     pub(crate) visual: *mut Visual,
@@ -691,7 +688,6 @@ impl X11App {
             xshape,
             dock_corner_radius: 0,
             node_wheel_targets: false,
-            ring_mask: None,
             shape_override: None,
             visual,
             argb_visual,
