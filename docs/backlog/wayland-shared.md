@@ -21,7 +21,7 @@ reachable inputs, differing edge case), **different** (structurally distinct), *
 | 9 | Keep-visible clamp | `crates/flamewm-wm-x11/src/frame/geometry/bounds.rs:10` delegates to core `keep_visible` | Wayland uses core too | **identical** (already shared) | none | `flamewm-window-core` |
 | 10 | Cursor theme env | `crates/flamewm-session-core` `cursor_environment` (shared) | `crates/flamewm-wm-wayland/src/cursor.rs` | **identical** source (already shared) | none | `flamewm-session-core` |
 | 11 | Workspace grid | `flamewm-api::workspace` | same | **identical** (already shared) | none | `flamewm-api` |
-| 12 | Lock, focus/urgency, media on X11 | unmeasured (scans truncated) | `crates/flamewm-wm-wayland/src/session_lock.rs` | unmeasured | not in this pass | - |
+| 12 | Lock, focus/urgency, media on X11 | measured on X11 (see Row 12 runtime measurement below); media unmeasured | `crates/flamewm-wm-wayland/src/session_lock.rs` | unmeasured on Wayland; X11 lock and focus/urgency measured | not in this pass | - |
 
 ## Steps and outcome (landed on main)
 
@@ -144,3 +144,14 @@ Scope: `wsh-lock-x11`. Method: source reads on `origin/main` `bddeff02`, no runt
 - Differs by design: lock supervision, activation/focus-steal policy, restack model, missing-control-service path.
 - Unknown: X11 lock input gating, Wayland urgency (absent in source), Wayland MPRIS, Super-tap focus loss on Wayland.
 - Code change: none. Runtime check: none run, so no runtime claim is made. Row 12 in the table above stays "unmeasured" until a runtime pass.
+
+## Row 12 runtime measurement (wsh-lock-x11)
+
+Method: fresh fast build of this tree; private Xvfb with private HOME/XDG and `dbus-run-session`; `scripts/break/lock-x11.sh` (run `.agents/runtime/break/20261111-145143/`, exit 0). Lock and focus were measured; media was not.
+
+- Lock (X11): Super+L shows a full-screen 1280x800 lock window; Super+Space while locked changes 0.00% of pixels; SIGKILL respawns `flamewm-lock` (new pid, cover present) after 681 ms.
+- Focus/urgency (X11): idle probe (no recent input) is taken, same as the map-only control, which matches `focus_guard` `!recent_input`. After a Shift tap (inside the 2 s recent-input window) the probe is refused, focus stays on the baseline, and `_NET_WM_STATE_DEMANDS_ATTENTION` is set. The request-only effect is not isolated, since the map is already refused.
+- Media (X11): `XF86AudioRaiseVolume` is delivered via XTest; no audio-related session log lines follow and no PulseAudio sink is reachable. The volume effect is unmeasured. Decision needed: a private audio sink inside the sandbox.
+
+Status: BLOCKED on the media decision; lock and focus/urgency landed as measurements.
+
