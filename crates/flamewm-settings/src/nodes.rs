@@ -36,6 +36,31 @@ pub(crate) fn accent_for_swatch(name: &str) -> Option<&'static str> {
     }
 }
 
+/// KDE Plasma accent names with approximate Breeze reference sRGB values (reference values,
+/// not read from KDE source). Arbitrary accents take the nearest name.
+const KDE_ACCENTS: &[(&str, [u8; 3])] = &[
+    ("Red", [0xDA, 0x44, 0x53]),
+    ("Orange", [0xF6, 0x74, 0x00]),
+    ("Yellow", [0xFD, 0xBC, 0x4B]),
+    ("Green", [0x27, 0xAE, 0x60]),
+    ("Teal", [0x1A, 0xBC, 0x9C]),
+    ("Blue", [0x3D, 0xAE, 0xE9]),
+    ("Purple", [0x9B, 0x59, 0xB6]),
+    ("Pink", [0xEB, 0x5D, 0xA0]),
+    ("Graphite", [0x4D, 0x4D, 0x4D]),
+];
+
+/// Nearest KDE Plasma accent name (squared sRGB distance) for an accent colour.
+pub(crate) fn kde_accent_name(r: u8, g: u8, b: u8) -> &'static str {
+    let diff = |x: u8, y: u8| i32::from(x) - i32::from(y);
+    KDE_ACCENTS
+        .iter()
+        .min_by_key(|(_, [nr, ng, nb])| {
+            diff(r, *nr).pow(2) + diff(g, *ng).pow(2) + diff(b, *nb).pow(2)
+        })
+        .map_or("Custom", |(name, _)| *name)
+}
+
 /// An opaque swatch colour for a `#RRGGBB` value.
 pub(crate) fn solid_color(value: &str) -> Result<UiColor, String> {
     Ok(UiColor {

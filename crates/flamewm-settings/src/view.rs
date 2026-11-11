@@ -672,9 +672,9 @@ mod tests {
         let document = document().expect("settings artifact must decode");
         let viewport = (820.0, 540.0);
 
-        for (name, action) in [
-            ("blue", "settings.accent.blue"),
-            ("teal", "settings.accent.teal"),
+        for (name, action, label) in [
+            ("blue", "settings.accent.blue", "Blue"),
+            ("teal", "settings.accent.teal", "Teal"),
         ] {
             let selected_dot = format!("accent-selected-{name}");
             let (x, y, width, height) = document
@@ -689,7 +689,7 @@ mod tests {
             assert!(center.1 >= 0.0 && center.1 < viewport.1);
             assert!(
                 HTML.contains(&format!(
-                    "<button class=\"accent-swatch swatch-{name}\" data-action=\"{action}\"><span id=\"{selected_dot}\""
+                    "<button class=\"accent-swatch swatch-{name}\" aria-label=\"{label}\" data-action=\"{action}\"><span id=\"{selected_dot}\""
                 )),
                 "compiled hit target {selected_dot} must be nested under the {action} button"
             );

@@ -72,3 +72,69 @@ fn settings_toggles_have_accessible_names() {
         offenders.join("\n")
     );
 }
+
+/// On/off toggles are `role="switch"` whose `aria-checked` matches the twin's class. The
+/// controller shows exactly one twin via `document.visible`, so the exposed state tracks the setting.
+#[test]
+fn settings_toggles_expose_switch_role_and_state() {
+    let html = repo_file("ui/settings.html");
+    let mut switches = 0;
+    let mut offenders = Vec::new();
+    for (index, _) in html.match_indices("<button") {
+        let rest = &html[index..];
+        let tag = &rest[..=rest.find('>').expect("button tag closes")];
+        let expected = if tag.contains(r#"class="toggle toggle-on""#) {
+            "true"
+        } else if tag.contains(r#"class="toggle toggle-off""#) {
+            "false"
+        } else {
+            continue;
+        };
+        switches += 1;
+        if attr(tag, "role") != Some("switch") || attr(tag, "aria-checked") != Some(expected) {
+            offenders.push(tag.to_owned());
+        }
+        if expected == "true" {
+            let action = attr(tag, "data-action").expect("toggle has data-action");
+            let twins = html.matches(&format!(r#"data-action="{action}""#)).count();
+            assert_eq!(twins, 2, "{action} must have one on and one off twin");
+        }
+    }
+    assert!(
+        switches >= 136,
+        "expected at least 136 switch toggles, found {switches}"
+    );
+    assert!(
+        offenders.is_empty(),
+        "{} of {switches} switch toggles lack role=switch or a matching aria-checked:\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
+}
+
+/// Accent swatches carry KDE-style colour names; the accent wheel names its current value
+/// through a text node the controller updates (nearest KDE name).
+#[test]
+fn accent_swatches_and_wheel_carry_colour_names() {
+    let html = repo_file("ui/settings.html");
+    let mut swatches = 0;
+    for (index, _) in html.match_indices(r#"<button class="accent-swatch"#) {
+        let rest = &html[index..];
+        let tag = &rest[..=rest.find('>').expect("swatch tag closes")];
+        swatches += 1;
+        let label = attr(tag, "aria-label").unwrap_or_default();
+        assert!(
+            ["Graphite", "White", "Red", "Blue", "Purple", "Teal"].contains(&label),
+            "unexpected swatch name {label:?} in {tag}"
+        );
+    }
+    assert_eq!(swatches, 6, "accent swatch count");
+    let wheel = html
+        .find(r#"<button class="wheel-swatch" id="color-accent-wheel""#)
+        .expect("accent wheel button");
+    let wheel_end = wheel + html[wheel..].find("</button>").expect("wheel closes");
+    assert!(
+        html[wheel..wheel_end].contains(r#"id="color-accent-name""#),
+        "accent wheel must hold the colour-name text node"
+    );
+}

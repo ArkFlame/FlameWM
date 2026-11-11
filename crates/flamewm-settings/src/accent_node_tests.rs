@@ -170,7 +170,7 @@ fn red_swatch_still_paints_red_accent_nodes() {
 #[test]
 fn accent_registry_covers_every_toggle_on_twin_in_markup() {
     let html = include_str!("../../../ui/settings.html");
-    let marker = "toggle toggle-on\x22 id=\x22";
+    let marker = "toggle toggle-on\x22 role=\x22switch\x22 aria-checked=\x22true\x22 id=\x22";
     let ids: Vec<&str> = html
         .split(marker)
         .skip(1)
@@ -185,4 +185,19 @@ fn accent_registry_covers_every_toggle_on_twin_in_markup() {
         missing.is_empty(),
         "toggle-on ids missing from ACCENT_NODE_IDS: {missing:?}"
     );
+}
+
+#[test]
+fn kde_accent_names_follow_the_nearest_named_colour() {
+    use crate::nodes::kde_accent_name;
+    for (r, g, b, name) in [
+        (0x3D, 0xAE, 0xE9, "Blue"),
+        (0xEF, 0x40, 0x48, "Red"),
+        (0x1A, 0xBC, 0x9C, "Teal"),
+        (0x9B, 0x59, 0xB6, "Purple"),
+        (0x19, 0x1B, 0x1D, "Graphite"),
+        (0xFD, 0xBC, 0x4B, "Yellow"),
+    ] {
+        assert_eq!(kde_accent_name(r, g, b), name, "#{r:02X}{g:02X}{b:02X}");
+    }
 }

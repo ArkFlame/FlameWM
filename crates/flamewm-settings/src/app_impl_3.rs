@@ -215,6 +215,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let current = solid_color(&value)?;
             document.background(&format!("color-{target}-current"), current)?;
             if target == "accent" {
+                let name = crate::nodes::kde_accent_name(current.r, current.g, current.b);
+                document.text("color-accent-name", name.to_owned())?;
                 continue;
             }
             for (index, preset) in SURFACE_PRESETS.iter().enumerate() {
