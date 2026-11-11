@@ -30,3 +30,27 @@ reproducing the failure requires interaction.
   overflow implementation (backlog records zero `overflow` hits).
 - Runtime geometry and screenshot: NOT RUN in this documentation-only slice.
 - Placement decision: unresolved; implementation intentionally deferred.
+
+## Source findings (layout owner, origin/main 0193147d)
+
+- Owner: `ui/shell/panel.html` (`#task-slots` has 8 fixed `task-slot-N` buttons,
+  `#tray-group`, `#clock-capsule`) with CSS in `ui/shell/flamewm.css`
+  (`.task-slot` 42px). Rust projection: `crates/flamewm-shell/src/projection/panel.rs`
+  (`project_panel`, `project_task_slots_extent`, `task_slots_rendered`), mirrored in
+  `async_projection/panel.rs` and `async_projection/task_slots.rs`.
+- Task count is capped at `TASK_SLOT_COUNT = 8` only, not by width. Nothing measures
+  the bar width against task, tray and clock widths. `crates/flamewm-shell/src/app/dock.rs`
+  is the app dock surface, not the taskbar, so the backlog's original pointer there was
+  off-target.
+- Flex inference (static, unverified at runtime): `#task-slots` has an explicit width,
+  its slots cannot shrink below their 42px min-content, so excess width spills past the
+  bar edge rather than clipping. Tray and clock can be pushed out of view.
+- Why no code change in this slice: a non-overlapping cap needs the real `#tray-group`
+  width. That width depends on media, audio, network, battery, weather and SNI item
+  visibility, which is split across `projection/panel.rs`, `tray_host.rs`,
+  `taskbar/status/*` and the weather projection. Reserving the tray's maximum width
+  would cut slots at normal widths. The indicator/menu UX is also an open decision.
+- Next slice (needs a placement decision first): a single shared tray-width helper used
+  by all three projection paths, then `max_task_slots` in `taskbar_scale.rs` gating
+  `index < rendered` for visibility. Runtime geometry check per
+  `Bounded runtime check` above is still NOT RUN.
