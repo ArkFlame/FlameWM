@@ -6,6 +6,7 @@
 set -uo pipefail
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
 PTR="$BREAK_DIR/pointer.py"
+MAPC="$BREAK_DIR/mapcount.py"
 
 finish() { # scenario verdict evidence-note: adds panic evidence, tears down
   local n; n="$(panic_count)"
@@ -67,15 +68,20 @@ s2_churn() {
 s3_hover() {
   sandbox_new s3 && start_session bus || { finish s3 FAIL "setup failed"; return; }
   ready_or_fail s3 || return
-  local sh c0 c1 r0 r1 cpu_pct v=PASS
+  local sh c0 c1 r0 r1 cpu_pct mpid maps v=PASS
   sh="$(pids_named flamewm-shell | head -1)"; c0="$(cpu_ticks "$sh")"; r0="$(rss_kb "$sh")"
+  # Map-event probe (break-b5): root-child MapNotify/UnmapNotify across the sweep window.
+  python3 -I "$MAPC" 11 >"$S/maps.out" 2>&1 & mpid=$!
+  wait_until 10 grep -q ready "$S/maps.out" || v=FAIL
   python3 -I "$PTR" sweep 796 0 1279 500 10 >"$S/sweep.out" 2>&1 || v=FAIL
+  wait "$mpid" 2>/dev/null || v=FAIL
   c1="$(cpu_ticks "$sh")"; r1="$(rss_kb "$sh")"
   cpu_pct=$(( (c1 - c0) * 100 / CLK_TCK / 10 ))
   [ "$cpu_pct" -lt 50 ] || v=FAIL
   [ "$(( r1 - r0 ))" -le 8192 ] || v=FAIL
+  maps="$(tail -1 "$S/maps.out")"
   shot s3 >/dev/null
-  finish s3 "$v" "sweep=500/10s shell_cpu=${cpu_pct}% shell_rss_kb $r0->$r1 label_flicker=UNVERIFIED(no map-count probe)"
+  finish s3 "$v" "sweep=500/10s shell_cpu=${cpu_pct}% shell_rss_kb $r0->$r1 root_child_map_events: ${maps:-none}"
 }
 
 s4_randr() {
