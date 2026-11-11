@@ -612,13 +612,22 @@ impl PolkitAgent {
         let pump = BusPump::connect(BusKind::System)?;
         let lookup = LogindLookup::new(SystemLogind::connect()?);
         let session_id = resolve_session_id(env_session_id, std::process::id(), &lookup)?;
+        Self::register_on(pump, &session_id, locale)
+    }
+
+    /// Registers the agent for `session_id` over an already-open bus. `connect_system` uses it
+    /// after logind lookup; tests use it with a private bus.
+    ///
+    /// # Errors
+    /// Returns the encoding or bus error of the register call.
+    pub fn register_on(pump: BusPump, session_id: &str, locale: &str) -> FlameResult<Self> {
         pump.send_with_reply(
-            register_message(&session_id, locale)?,
+            register_message(session_id, locale)?,
             AUTHORITY_REPLY_TIMEOUT,
         )?;
         Ok(Self {
             pump,
-            session_id,
+            session_id: session_id.to_owned(),
             sessions: AgentSessions::default(),
             queue: PolkitEventQueue::default(),
         })
@@ -1125,3 +1134,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod e2e_tests;

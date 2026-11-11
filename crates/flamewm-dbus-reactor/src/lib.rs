@@ -60,6 +60,15 @@ impl BusPump {
         self.channel.unique_name()
     }
 
+    /// Opens a private connection to `address` and registers on it. Used for test buses such as a
+    /// private `dbus-daemon`; production code uses [`BusPump::connect`].
+    pub fn connect_address(address: &str) -> FlameResult<Self> {
+        let mut channel = Channel::open_private(address).map_err(map_dbus_error)?;
+        channel.register().map_err(map_dbus_error)?;
+        channel.set_watch_enabled(true);
+        Ok(Self { channel })
+    }
+
     #[must_use]
     pub fn watch(&self) -> BusWatch {
         watch_contract(self.channel.watch())
