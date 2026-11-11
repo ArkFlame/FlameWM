@@ -2,6 +2,7 @@
 //! screen rereads, repaint loops, compositing, and capture-of-overlay artifacts.
 
 use crate::capture::{Image, Rect, Result, decode_ximage_owned};
+use crate::region;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
@@ -347,14 +348,6 @@ fn sym<C: Connection>(conn: &C, keycode: u8) -> u32 {
         .unwrap_or(0)
 }
 
-/// Returns None for Escape/cancel; a click-without-drag is also cancellation.
-/// A release without a press, or a drag narrower than 3 px in either axis, is not a region.
-fn finished_region(start: Option<(i32, i32)>, end: (i32, i32)) -> Option<Rect> {
-    let (x, y) = start?;
-    let r = Rect::from_points(x, y, end.0, end.1);
-    (r.w > 2 && r.h > 2).then_some(r)
-}
-
 pub fn select_region<C: Connection>(conn: &C, screen: usize, full: &Image) -> Result<Option<Rect>> {
     let o = Overlay::new(conn, screen, full, false)?;
     let border_gc = conn.generate_id().map_err(err)?;
@@ -410,7 +403,15 @@ pub fn select_region<C: Connection>(conn: &C, screen: usize, full: &Image) -> Re
             // A release whose press was not seen (for example a press that raced the map) is
             // ignored, so it cannot end the selection as a silent cancel.
             Event::ButtonRelease(e) if e.event == o.win && e.detail == 1 && start.is_some() => {
-                break finished_region(start, (i32::from(e.event_x), i32::from(e.event_y)));
+                let screen = Rect {
+                    x: 0,
+                    y: 0,
+                    w: full.width,
+                    h: full.height,
+                };
+                break start.and_then(|s| {
+                    region::confirm(s, (i32::from(e.event_x), i32::from(e.event_y)), screen)
+                });
             }
             Event::KeyPress(e) if sym(conn, e.detail) == 0xff1b => break None,
             Event::Expose(e) if e.window == o.win && e.count == 0 => {
@@ -765,33 +766,5 @@ mod memory_tests {
         )
         .unwrap();
         assert_eq!(output, [0x00, 0xf8, 0x1f, 0x00]);
-    }
-}
-
-#[cfg(test)]
-mod region_rule_tests {
-    use super::*;
-
-    #[test]
-    fn release_without_press_is_cancelled() {
-        assert_eq!(finished_region(None, (50, 50)), None);
-    }
-
-    #[test]
-    fn degenerate_drags_are_rejected() {
-        // Same point, one-pixel line and two-pixel line are all below the 3 px minimum.
-        assert_eq!(finished_region(Some((5, 5)), (5, 5)), None);
-        assert_eq!(finished_region(Some((5, 5)), (5, 200)), None);
-        assert_eq!(finished_region(Some((5, 5)), (6, 200)), None);
-    }
-
-    #[test]
-    fn reverse_drag_normalises_to_the_smallest_valid_region() {
-        let r = finished_region(Some((30, 40)), (10, 20)).expect("valid");
-        assert_eq!((r.x, r.y, r.w, r.h), (10, 20, 21, 21));
-        assert_eq!(
-            finished_region(Some((0, 0)), (2, 2)).map(|r| (r.w, r.h)),
-            Some((3, 3))
-        );
     }
 }

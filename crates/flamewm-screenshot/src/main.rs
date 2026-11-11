@@ -6,6 +6,7 @@ mod clipboard;
 mod notify;
 mod portal;
 mod record;
+mod region;
 mod screencast;
 mod ui;
 mod wayland;
