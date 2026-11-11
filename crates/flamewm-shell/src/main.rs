@@ -670,16 +670,21 @@ fn execute() -> Result<(), String> {
             }
         };
 
-    // Polkit agent for this session. Without the system bus or logind the shell runs without one.
-    // The C locale is registered because no prompt text is shown yet (pol-ui).
-    let polkit =
+    // Polkit agent for this session. It registers only when POLKIT_AGENT_CAN_ANSWER is set; until a
+    // prompt UI and a password helper exist, a registered agent would leave pkexec requests
+    // unanswered. Without the system bus or logind the shell runs without one.
+    let polkit = if POLKIT_AGENT_CAN_ANSWER {
         match PolkitAgent::connect_system(std::env::var("XDG_SESSION_ID").ok().as_deref(), "C") {
             Ok(agent) => Some(Rc::new(RefCell::new(agent))),
             Err(error) => {
                 eprintln!("flamewm-shell: polkit agent disabled: {error}");
                 None
             }
-        };
+        }
+    } else {
+        eprintln!("flamewm-shell: polkit agent not registered: no prompt answer path yet");
+        None
+    };
 
     let profile_interval = profile_interval_secs();
     let profile_due = Arc::new(AtomicBool::new(false));
@@ -972,6 +977,14 @@ fn execute() -> Result<(), String> {
     }
     run_result
 }
+
+/// Registration gate for the polkit agent. Keep false until the prompt UI (`polkit_dialog`) is wired
+/// and a password step exists: `polkit-agent-helper-1` via cosmic-osd's socket/binary conversation
+/// (`.vendor/cosmic-epoch/cosmic-osd/src/subscriptions/polkit_agent_helper.rs`) or libpolkit-agent
+/// sessions as in `.vendor/vela-main/polkit/agent/backend.cpp`, with the `BeginAuthentication` reply
+/// deferred to the outcome (`pkagent.c` `finish()` replies ok, or `Error.Cancelled`). A
+/// registered agent that cannot answer makes pkexec wait out polkit's timeout.
+const POLKIT_AGENT_CAN_ANSWER: bool = false;
 
 /// Prompts have no dialog yet (pol-ui), so each one is logged and removed from the pending set.
 /// polkit then times out its own request; nothing is answered on the user's behalf.
