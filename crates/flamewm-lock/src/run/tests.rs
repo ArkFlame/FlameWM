@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use flamewm_ui_x11::SurfaceRuntime;
 
+use super::preview_mode::preview_lock_ui;
 use super::*;
 
 #[test]
@@ -86,12 +87,9 @@ fn runtime_drops_cleanly_after_xft_and_xrender_load() {
 /// The shared preview body must never reach a grab, PAM, a screensaver or DPMS.
 #[test]
 fn preview_loop_has_no_grab_auth_screensaver_or_dpms_call_sites() {
-    let source = include_str!("../run.rs");
+    let source = run_sources();
     let start = source.find("fn preview_loop(").expect("preview loop");
-    let end = source
-        .find("fn lock_on(")
-        .expect("lock loop follows the preview");
-    assert!(start < end, "preview loop must sit before the lock loop");
+    let end = start + source[start..].find("\n}\n").expect("preview loop end");
     let body = &source[start..end];
     for forbidden in [
         "set_display_power",
@@ -140,11 +138,31 @@ fn failing_lock_step_is_logged_and_never_fatal() {
 }
 
 /// Body of the method in this file whose signature starts with `name`.
-fn method_body(name: &str) -> &'static str {
-    let source = include_str!("../run.rs");
+fn method_body(name: &str) -> String {
+    let source = run_sources();
     let start = source.find(name).expect("function present");
     let end = start + source[start..].find("\n    }\n").expect("function end");
-    &source[start..end]
+    source[start..end].to_string()
+}
+
+/// Every module of the lock loop, the settings preview first, so the source-contract
+/// checks see the whole loop wherever its functions now live.
+fn run_sources() -> String {
+    [
+        include_str!("preview_mode.rs"),
+        include_str!("../run.rs"),
+        include_str!("change.rs"),
+        include_str!("control_watch.rs"),
+        include_str!("idle.rs"),
+        include_str!("input.rs"),
+        include_str!("live.rs"),
+        include_str!("paint.rs"),
+        include_str!("steps.rs"),
+        include_str!("surface.rs"),
+        include_str!("surfaces.rs"),
+        include_str!("tick.rs"),
+    ]
+    .join("\n")
 }
 
 /// The loop-reachable functions must not propagate with `?`: a rendering or
