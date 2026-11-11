@@ -29,9 +29,15 @@ Why it cannot proceed: which scale is canonical, and whether the 3/6/9/11px lite
 (`look.md` item 3 says "Choose one"). Any choice changes pixels on 169 token sites. Visual proof needs the look
 harness, which is blocked for archiver, assistant and task-manager (`look.md:45-48`).
 
-Decision needed: pick one canonical scale (`--r-*` 4/8/12 or `--radius-*` 3/6/9/11), state the mapping rule
-(look.md proposes within 1.5px: 2, 2.5 -> sm; 5, 7 -> md; 10 -> lg; 13 -> r-lg), and say whether the retired
-`--radius-*` comment is authoritative. Then one mechanical slice can land.
+D-radius (decided by reference, 2026-11-11): canonical scale = COSMIC corner radii, the step set
+`radius_xs 4px / radius_s 8px / radius_m 16px / radius_l 32px / radius_xl 160px` (plus 0 for none), read from
+`.vendor/cosmic-epoch/cosmic-initial-setup/res/themes/mocha-dark.ron:210-215` (same values in every bundled theme).
+Mapping rule for legacy literals: nearest COSMIC-compatible step within 1.5px per look.md (3 -> `--r-sm` 4px,
+9 -> `--r-md` 8px, 11 -> `--r-lg` 12px). 6px sits 2px from both 4 and 8, so it stays literal. The retired
+`--radius-*` comment in `ui/base/tokens.css:2` is not authoritative: `--radius-*` names stay until each use is
+mapped. Status: not landed in this pass. The remap rewrites 32 declarations across ui pages and changes pixels, and
+the look harness has no runtime capture for them, so it needs a visual run first (shortcut: static decision only;
+revisit when a look-harness capture exists for the affected pages).
 
 ## look-radius-large (S): blocked, decision needed
 
@@ -57,8 +63,11 @@ Why it cannot proceed: the change alters which secret store a browser uses for i
 keyring or Secret Service behaviour needs a live bus, which the host rules forbid; a private mock Secret Service
 bus has not been defined. Static audit `aba76518` already found no narrow fix.
 
-Decision needed: (1) approve dropping the KDE identity for browser children, or keep it and close the row;
-(2) approve a private-session-bus test harness with a mock Secret Service for the GNOME path. Until then no slice.
+D-keyring (decided by reference, 2026-11-11): keep the KDE identity for browser children until a mock Secret
+Service test exists. Reference: the code and its error text already choose KWallet deliberately, and dropping the
+identity would make an existing profile's secret store change, which the wait_for_wallet guard exists to prevent.
+Test precedent for the mock bus: none in `.vendor` was adopted; the next slice must add that mock first. Row stays
+closed-as-kept until then.
 
 ## cmp-bt (L): blocked, security-sensitive
 
