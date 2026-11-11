@@ -14,6 +14,7 @@ flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-debug = { path = "../flamewm-debug" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-integrations-core = { path = "../flamewm-integrations-core" }
+flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 pulse = { package = "libpulse-binding", version = "=2.30.1", default-features = true, optional = true }
 rustix = { workspace = true, features = ["event", "net", "pipe", "process", "thread"] }

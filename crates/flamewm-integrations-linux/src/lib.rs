@@ -24,6 +24,7 @@ pub mod network_slot;
 pub mod notification_history;
 pub mod notifications;
 pub mod polkit_agent;
+pub mod polkit_helper;
 pub mod portal_file_chooser;
 pub mod power;
 pub mod power_profiles;
