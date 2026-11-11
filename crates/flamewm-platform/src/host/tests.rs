@@ -361,8 +361,8 @@ fn set_shell_scale_persists_scale_across_restart() {
 }
 
 #[test]
-fn wayland_scale_persists_both_keys_through_host_path() {
-    // Index 1 output: the Wayland backend writes its own `wayland-1` key, then `wayland-0` last.
+fn wayland_scale_persists_only_the_output_key_through_host_path() {
+    // Index 1 output: the Wayland backend writes only its own `wayland-1` key, never `wayland-0`.
     let path = fixture_path("wayland-scale-both-keys");
     std::fs::write(&path, "").expect("write settings fixture");
     let mut display = fake_display(100);
@@ -382,7 +382,7 @@ fn wayland_scale_persists_both_keys_through_host_path() {
     assert!(changed);
     let persisted = persisted.expect("settings file is written");
     assert!(persisted.contains("scale.wayland-1=150\n"), "{persisted}");
-    assert!(persisted.contains("scale.wayland-0=150\n"), "{persisted}");
+    assert!(!persisted.contains("scale.wayland-0="), "{persisted}");
     assert!(!persisted.contains("scale.DP-B="), "{persisted}");
 }
 

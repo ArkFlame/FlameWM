@@ -200,15 +200,11 @@ pub trait DisplayPort {
     }
 }
 
-/// Scale keys for a Wayland backend: the selected output's index key plus `wayland-0`, the single
-/// output key the Wayland WM renders under. Written in this order; `wayland-0` is written last.
+/// Scale key for a Wayland output: `wayland-{index}`, the output's position in the display snapshot.
+/// `wayland-0` is the first output's key, so a config saved before per-output keys keeps its scale.
 #[must_use]
 pub fn wayland_scale_keys(index: usize) -> Vec<String> {
-    let mut keys = vec![format!("wayland-{index}")];
-    if index != 0 {
-        keys.push("wayland-0".to_owned());
-    }
-    keys
+    vec![format!("wayland-{index}")]
 }
 
 pub trait ShortcutPort {

@@ -69,6 +69,17 @@ pub(crate) fn scale_percent_for(scales: &BTreeMap<String, u16>, output: &str) ->
     }
 }
 
+/// Scale for the output at snapshot `index`: its own `wayland-{index}` key when saved, else the
+/// `wayland-0` key that configs saved before per-output keys carry. Old configs keep their scale.
+pub(crate) fn output_scale_percent(scales: &BTreeMap<String, u16>, index: usize) -> u16 {
+    let own = format!("wayland-{index}");
+    if scales.contains_key(&own) {
+        scale_percent_for(scales, &own)
+    } else {
+        scale_percent_for(scales, "wayland-0")
+    }
+}
+
 /// Logical size of a physical mode at `percent` scale, rounded to the nearest pixel, never below 1.
 pub(crate) fn logical_size(physical: (i32, i32), percent: u16) -> (i32, i32) {
     let percent = i64::from(percent.max(1));
@@ -178,6 +189,22 @@ pub(crate) fn clamp_point_to_layout(x: f64, y: f64, outputs: &[Rect]) -> (f64, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_reads_its_own_key_then_the_legacy_wayland_0_key() {
+        let mut scales = BTreeMap::new();
+        scales.insert("wayland-0".to_owned(), 150);
+        // Old config: only wayland-0, so the primary and every secondary keep 150.
+        assert_eq!(output_scale_percent(&scales, 0), 150);
+        assert_eq!(output_scale_percent(&scales, 2), 150);
+        scales.insert("wayland-1".to_owned(), 125);
+        assert_eq!(output_scale_percent(&scales, 1), 125);
+        assert_eq!(output_scale_percent(&scales, 2), 150);
+        // An own key that is invalid is 100, not the legacy value.
+        scales.insert("wayland-1".to_owned(), 137);
+        assert_eq!(output_scale_percent(&scales, 1), 100);
+        assert_eq!(output_scale_percent(&BTreeMap::new(), 3), 100);
+    }
 
     fn mode(width: i32, height: i32, refresh_mhz: i32, preferred: bool) -> ModeCandidate {
         ModeCandidate {

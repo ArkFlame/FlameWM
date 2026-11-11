@@ -193,15 +193,12 @@ mod tests {
     }
 
     #[test]
-    fn other_outputs_persist_their_index_key_and_the_wm_key() {
-        assert_eq!(
-            keys(2),
-            vec!["wayland-2".to_owned(), "wayland-0".to_owned()]
-        );
+    fn other_outputs_persist_only_their_index_key() {
+        assert_eq!(keys(2), vec!["wayland-2".to_owned()]);
     }
 
     #[test]
-    fn successful_persist_writes_every_key() {
+    fn successful_persist_writes_the_output_key() {
         let mut store = BTreeMap::new();
         persist_scale_keys(
             &keys(2),
@@ -214,18 +211,18 @@ mod tests {
         )
         .expect("persist");
         assert_eq!(store.get("wayland-2"), Some(&150));
-        assert_eq!(store.get("wayland-0"), Some(&150));
+        assert_eq!(store.get("wayland-0"), None);
     }
 
     #[test]
-    fn failed_second_key_deletes_a_key_that_had_no_prior_value() {
+    fn failed_write_deletes_a_key_that_had_no_prior_value() {
         let mut store: BTreeMap<String, u16> = BTreeMap::new();
         let result = persist_scale_keys(
             &keys(2),
             150,
             |_| None,
             |key, value| {
-                if key == "wayland-0" {
+                if key == "wayland-2" && value.is_some() {
                     return Err(FlameError::new(ErrorCode::Unavailable, "disk full"));
                 }
                 match value {
@@ -236,25 +233,20 @@ mod tests {
             },
         );
         assert_eq!(result.unwrap_err().code, ErrorCode::Unavailable);
-        assert!(
-            !store.contains_key("wayland-2"),
-            "new key deleted on rollback"
-        );
         assert!(store.is_empty());
     }
 
     #[test]
-    fn failed_second_key_restores_first_key_and_fails_the_transaction() {
+    fn failed_write_restores_the_prior_value() {
         let mut store: BTreeMap<String, u16> = BTreeMap::new();
         store.insert("wayland-2".to_owned(), 100);
-        store.insert("wayland-0".to_owned(), 100);
         let prior = store.clone();
         let result = persist_scale_keys(
             &keys(2),
             150,
             |key| prior.get(key).copied(),
             |key, value| {
-                if key == "wayland-0" {
+                if value == Some(150) {
                     return Err(FlameError::new(ErrorCode::Unavailable, "disk full"));
                 }
                 match value {
@@ -265,7 +257,6 @@ mod tests {
             },
         );
         assert_eq!(result.unwrap_err().code, ErrorCode::Unavailable);
-        assert_eq!(store.get("wayland-2"), Some(&100), "first key rolled back");
-        assert_eq!(store.get("wayland-0"), Some(&100));
+        assert_eq!(store.get("wayland-2"), Some(&100), "prior value restored");
     }
 }

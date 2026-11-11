@@ -194,8 +194,8 @@ pub(super) fn build_output(
         size: (i32::from(width), i32::from(height)).into(),
         refresh: i32::try_from(mode.vrefresh()).unwrap_or(60) * 1000,
     };
-    // Same saved scale as the nested output; the mode stays physical and layout stays logical.
-    let percent = crate::control::nested_output_scale_percent();
+    // Each output reads its own saved scale, keyed by its index; the mode stays physical, layout logical.
+    let percent = crate::control::output_scale_percent(d.surfaces.len());
     let output_scale = crate::presentation_scale::output_scale(percent);
     // The first output is `State::output`, which already has a global; later ones get their own.
     let (output, global) = if d.surfaces.iter().any(|out| out.global.is_none()) {
@@ -218,8 +218,14 @@ pub(super) fn build_output(
         let placed: Vec<(i32, i32)> = d
             .surfaces
             .iter()
-            .filter_map(|out| out.output.current_mode())
-            .map(|m| crate::output_layout::logical_size((m.size.w, m.size.h), percent))
+            .filter_map(|out| {
+                let m = out.output.current_mode()?;
+                let scale = (out.output.current_scale().fractional_scale() * 100.0).round() as u16;
+                Some(crate::output_layout::logical_size(
+                    (m.size.w, m.size.h),
+                    scale,
+                ))
+            })
             .collect();
         let logical = crate::output_layout::logical_size((mode.size.w, mode.size.h), percent);
         let origin = crate::output_layout::origin_after(&placed, logical);

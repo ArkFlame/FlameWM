@@ -161,6 +161,12 @@ pub(crate) fn nested_output_scale_percent() -> u16 {
         .unwrap_or(100)
 }
 
+/// The saved scale of the output at `index` in the display snapshot (see `output_layout`).
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // only the drm backend builds outputs per index
+pub(crate) fn output_scale_percent(index: usize) -> u16 {
+    crate::output_layout::output_scale_percent(&saved_shell_scales(), index)
+}
+
 /// `titlebars` and `windowMargin` from a committed settings snapshot.
 ///
 /// Read the way X11 `live_settings` reads them: a missing or ill-typed value keeps the product

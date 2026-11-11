@@ -108,6 +108,27 @@ Rotation, refresh rate, drag-and-drop and a revert timer are out of scope.
    The settings acceptance SS08 multi-output case is `ENVIRONMENT_BLOCKED` in `docs/TERRA_RESULTS.md:371`.
    No new runtime evidence was captured in this slice. README stays `Partial`.
 
+## Slice C: per-output scale key (decided, static only)
+
+Decision: index-keyed `wayland-{index}` (the persisted schema already in `flamewm-api`
+`ports.rs`), not connector names. Reference: COSMIC keys output config by connector name
+(`.vendor/cosmic-epoch/cosmic-comp/src/config/mod.rs:480`), which needs a data migration
+here; smithay's `Output::change_current_state` (`.vendor/smithay-master/src/output.rs:380`)
+takes `Scale::Fractional`, which `presentation_scale::output_scale` already uses.
+
+- Write side: `wayland_scale_keys(index)` writes only `wayland-{index}`. The old
+  `wayland-0` alias write for index > 0 is gone, so a secondary save cannot overwrite the primary.
+- Read side: `output_layout::output_scale_percent(scales, index)` uses `wayland-{index}` when
+  present, else `wayland-0`, so an old config with only `wayland-0` still applies to every output.
+  An invalid own key is 100, not the legacy value. Test: `output_reads_its_own_key_then_the_legacy_wayland_0_key`.
+- DRM: `drm/outputs.rs::build_output` reads the scale by `d.surfaces.len()`, and the row
+  arithmetic for placed outputs uses each placed output's own scale.
+- Unprovable here: the platform derives the index as the position of the output id in the
+  display snapshot (`flamewm-platform/src/host/displays.rs`). The wm-wayland snapshot
+  (`control/ports.rs` `display_snapshot`) reports one output, so the platform always writes
+  `wayland-0` today. Nothing writes `wayland-{N}` for N > 0, and that index-to-surface
+  correspondence is not pinned by a test. Static only; no DRM or nested multi-output run.
+
 ## Evidence
 
 - Runtime evidence: none.

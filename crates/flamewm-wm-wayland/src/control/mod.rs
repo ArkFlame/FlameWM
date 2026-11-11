@@ -71,6 +71,8 @@ use self::media::*;
 use self::mirror::*;
 use self::session::*;
 pub(crate) use self::settings::nested_output_scale_percent;
+#[cfg_attr(not(feature = "drm"), allow(unused_imports))]
+pub(crate) use self::settings::output_scale_percent;
 use self::settings::*;
 use self::switcher::*;
 

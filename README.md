@@ -56,7 +56,7 @@ Status key: **Shipped** is in the current source and used in the screenshots. **
 | Wayland | Compositor on Smithay, runs native Wayland and XWayland clients | Shipped; see [Wayland known limitations](#wayland-known-limitations) |
 | Wayland | DRM/KMS backend | Shipped; owner-reported working on a real laptop, not re-verified in CI |
 | Wayland | Nested window backend, for testing inside another session | Shipped |
-| Displays | Per-output layout and scale | Partial; per-output scale is persisted and applied to the driven output, multi-output placement is not applied and runtime proof is missing; see [`docs/backlog/displays.md`](docs/backlog/displays.md) |
+| Displays | Per-output layout and scale | Partial; per-output scale is persisted under `wayland-{index}` and applied to the matching DRM output (static proof only; index 0 is the only output the platform snapshot reports today, so index > 0 is unproven at runtime); multi-output placement is not applied by the compositor; no runtime proof; see [`docs/backlog/displays.md`](docs/backlog/displays.md) |
 
 Full comparison with another desktop is in [`docs/competitors/`](docs/competitors/README.md).
 
