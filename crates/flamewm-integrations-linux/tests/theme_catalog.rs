@@ -119,27 +119,6 @@ fn discover_finds_icon_and_cursor_themes_and_prefers_user_root() {
 }
 
 #[test]
-fn icon_chain_terminates_on_inherits_cycle() {
-    let base = scratch("cycle");
-    let xdg = base.join("xdg");
-    write_index(
-        &xdg.join("icons/A"),
-        "[Icon Theme]\nName=A\nDirectories=d\nInherits=B\n[d]\nSize=16\n",
-    );
-    write_index(
-        &xdg.join("icons/B"),
-        "[Icon Theme]\nName=B\nDirectories=d\nInherits=A,C\n[d]\nSize=16\n",
-    );
-    let catalog = ThemeCatalog::discover(std::slice::from_ref(&xdg));
-    let chain = catalog.icon_chain("A");
-    assert_eq!(chain.first().map(String::as_str), Some("A"));
-    assert_eq!(chain.iter().filter(|n| *n == "A").count(), 1);
-    assert_eq!(chain.iter().filter(|n| *n == "B").count(), 1);
-    assert_eq!(chain.last().map(String::as_str), Some("hicolor"));
-    fs::remove_dir_all(&base).unwrap();
-}
-
-#[test]
 fn xcursor_picks_nearest_nominal_size_and_converts_argb_to_rgba() {
     // Two frames: 16 and 30. 30 is nearer to 24. Pixel word 0xAA112233 is ARGB.
     let bytes = xcursor(&[(16, 1, 1, 0, 0, 0xff00_0000), (30, 3, 2, 1, 1, 0xAA11_2233)]);

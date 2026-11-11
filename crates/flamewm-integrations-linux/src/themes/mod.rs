@@ -12,7 +12,7 @@ use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::icon_theme::{IconThemeIndex, inheritance_chain, parse_ini_value, search_roots};
+use crate::icon_theme::{IconThemeIndex, parse_ini_value, search_roots};
 
 const O_NOFOLLOW: i32 = if cfg!(target_arch = "aarch64") {
     0o100_000
@@ -125,14 +125,5 @@ impl ThemeCatalog {
     #[must_use]
     pub fn find(&self, kind: ThemeKind, id: &str) -> Option<&ThemeEntry> {
         self.entries.iter().find(|e| e.kind == kind && e.id == id)
-    }
-
-    /// Cycle-safe icon inheritance chain for `id`, ending in `hicolor`.
-    #[must_use]
-    pub fn icon_chain(&self, id: &str) -> Vec<String> {
-        inheritance_chain(id, &|name: &str| {
-            self.find(ThemeKind::Icon, name)
-                .and_then(|entry| IconThemeIndex::load(&entry.root))
-        })
     }
 }
