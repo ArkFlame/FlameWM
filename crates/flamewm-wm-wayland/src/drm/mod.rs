@@ -374,6 +374,7 @@ impl Drm {
             elements,
             state.physical_output_size(),
         );
+        render::serve_switcher_thumbs(state, &mut self.renderer);
 
         // `FLAMEWM_WAYLAND_DUMP`: one readback of the primary output. Taking the path makes a set
         // request be consumed exactly once, and `state.dumped` stops main.rs's re-arming timer.

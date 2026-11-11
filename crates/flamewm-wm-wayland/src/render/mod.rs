@@ -28,7 +28,9 @@ use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
 mod dock_backdrop;
+mod switcher_thumbs;
 mod titlebar;
+pub use switcher_thumbs::serve_switcher_thumbs;
 pub(crate) use titlebar::{premultiplied_argb_bytes, put};
 
 pub(crate) use backdrop::*;
@@ -463,6 +465,7 @@ fn render_into(
         }
     };
     serve_screencopy(state, backend.renderer(), &elements, size);
+    serve_switcher_thumbs(state, backend.renderer());
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays

@@ -14,18 +14,29 @@ const THUMB_CAP: usize = 24;
 pub(super) struct ThumbCache {
     /// Oldest first. A repeat `store` for a window moves it to the back.
     slots: VecDeque<(WindowId, SwitcherThumb)>,
+    /// Windows whose preview this open already sent, so later publishes send a reference only.
+    announced: Vec<WindowId>,
 }
+
+/// Process-wide preview generations. Unique across opens, so the shell's pixel cache never serves
+/// one window's pixels for another window of a later open.
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl ThumbCache {
     /// Keeps `thumb` as the preview for `id`. Wire references and malformed or empty buffers are
     /// refused, so the entry keeps its `title` and `app_id` row. Evicts the oldest preview at `THUMB_CAP`.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn store(&mut self, id: WindowId, thumb: SwitcherThumb) -> bool {
+    /// A preview with generation `0` (untracked) gets a fresh generation here.
+    pub(super) fn store(&mut self, id: WindowId, mut thumb: SwitcherThumb) -> bool {
         if thumb.is_reference() || !thumb.is_well_formed() || thumb.width == 0 || thumb.height == 0
         {
             return false;
         }
+        if thumb.generation == 0 {
+            thumb.generation =
+                NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        }
         self.slots.retain(|(known, _)| *known != id);
+        self.announced.retain(|known| *known != id);
         if self.slots.len() == THUMB_CAP {
             self.slots.pop_front();
         }
@@ -33,12 +44,21 @@ impl ThumbCache {
         true
     }
 
-    /// The preview to publish for `id`, if one was stored for this open.
-    pub(super) fn wire(&self, id: WindowId) -> Option<SwitcherThumb> {
-        self.slots
-            .iter()
-            .find(|(known, _)| *known == id)
-            .map(|(_, thumb)| thumb.clone())
+    /// The preview to publish for `id`, if one was stored for this open. The first publish carries
+    /// pixels; later ones send the same generation without pixels, so a Tab press does not resend
+    /// every preview.
+    pub(super) fn wire(&mut self, id: WindowId) -> Option<SwitcherThumb> {
+        let (_, thumb) = self.slots.iter().find(|(known, _)| *known == id)?;
+        if self.announced.contains(&id) {
+            return Some(SwitcherThumb {
+                width: thumb.width,
+                height: thumb.height,
+                generation: thumb.generation,
+                rgba: Vec::new(),
+            });
+        }
+        self.announced.push(id);
+        Some(thumb.clone())
     }
 }
 
@@ -47,10 +67,25 @@ pub(super) struct Switcher {
     order: Vec<WindowId>,
     selected: usize,
     thumbs: ThumbCache,
+    /// Windows whose preview the render path still has to capture, in switcher order.
+    pending: VecDeque<WindowId>,
 }
 
 /// What `emit_switcher` publishes: window order, highlighted index, and one optional preview per entry.
 type SwitcherView = (Vec<WindowId>, usize, Vec<Option<SwitcherThumb>>);
+
+/// Previews queued for one open: the first `THUMB_CAP` windows in switcher order.
+fn capture_queue(order: &[WindowId]) -> VecDeque<WindowId> {
+    order.iter().take(THUMB_CAP).copied().collect()
+}
+
+impl Switcher {
+    /// The list `emit_switcher` publishes. Takes `&mut` because a preview is marked announced when sent.
+    fn view(&mut self) -> SwitcherView {
+        let thumbs = self.order.iter().map(|id| self.thumbs.wire(*id)).collect();
+        (self.order.clone(), self.selected, thumbs)
+    }
+}
 
 impl Service {
     /// Alt+Tab: the first press opens the switcher on the visible windows with the second one
@@ -68,22 +103,47 @@ impl Service {
                     return;
                 }
                 *slot = Some(Switcher {
+                    pending: capture_queue(&order),
                     order,
                     selected: 1,
                     thumbs: ThumbCache::default(),
                 });
+                // The render path captures the queued previews on the next frame.
+                state.request_redraw();
             }
         }
-        let view: Option<SwitcherView> = slot.as_ref().map(|switcher| {
-            let thumbs = switcher
-                .order
-                .iter()
-                .map(|id| switcher.thumbs.wire(*id))
-                .collect();
-            (switcher.order.clone(), switcher.selected, thumbs)
-        });
+        let view: Option<SwitcherView> = slot.as_mut().map(Switcher::view);
         drop(slot);
         self.emit_switcher(view);
+    }
+
+    /// Next window whose preview the render path should capture, or `None` when none is queued.
+    pub(crate) fn next_switcher_capture(&self) -> Option<WindowId> {
+        self.switcher.borrow_mut().as_mut()?.pending.pop_front()
+    }
+
+    /// True while the open switcher still has previews queued for capture.
+    pub(crate) fn switcher_captures_pending(&self) -> bool {
+        self.switcher
+            .borrow()
+            .as_ref()
+            .is_some_and(|switcher| !switcher.pending.is_empty())
+    }
+
+    /// Keeps a rendered preview for the open switcher and republishes the list. With no open
+    /// switcher, or a preview the cache refuses, nothing is published.
+    pub(crate) fn store_switcher_thumb(&self, id: WindowId, thumb: SwitcherThumb) {
+        let view = {
+            let mut slot = self.switcher.borrow_mut();
+            let Some(switcher) = slot.as_mut() else {
+                return;
+            };
+            if !switcher.thumbs.store(id, thumb) {
+                return;
+            }
+            switcher.view()
+        };
+        self.emit_switcher(Some(view));
     }
 
     /// Alt released: commits the highlighted window and closes the switcher overlay.
@@ -223,5 +283,26 @@ mod thumb_tests {
         assert_eq!(cache.slots.len(), THUMB_CAP);
         assert_eq!(cache.wire(1), None, "oldest preview is evicted");
         assert!(cache.wire(0).is_some(), "refreshed preview survives");
+    }
+
+    #[test]
+    fn store_assigns_generation_and_wire_sends_pixels_once() {
+        let mut cache = ThumbCache::default();
+        assert!(cache.store(3, thumb(0, 2, 2)));
+        let first = cache.wire(3).expect("stored");
+        assert_ne!(first.generation, 0);
+        assert_eq!(first.rgba.len(), 16);
+        let again = cache.wire(3).expect("stored");
+        assert_eq!(again.generation, first.generation);
+        assert!(again.is_reference(), "repeat publish is a reference");
+    }
+
+    #[test]
+    fn capture_queue_is_capped_in_switcher_order() {
+        let order: Vec<WindowId> = (0..THUMB_CAP as WindowId + 5).collect();
+        let queue = capture_queue(&order);
+        assert_eq!(queue.len(), THUMB_CAP);
+        assert_eq!(queue.front(), Some(&0));
+        assert_eq!(queue.back(), Some(&(THUMB_CAP as WindowId - 1)));
     }
 }
