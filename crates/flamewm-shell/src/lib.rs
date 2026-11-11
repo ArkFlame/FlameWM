@@ -13,6 +13,7 @@ use flamewm_debug::log_limit;
 pub mod notification_center;
 pub mod osd;
 pub mod panel;
+pub mod polkit_answer;
 pub mod polkit_dialog;
 pub mod popovers;
 pub mod popup_controller;

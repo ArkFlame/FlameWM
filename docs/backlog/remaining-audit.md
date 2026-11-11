@@ -61,3 +61,15 @@ Pass over the 29 rows that ea985abf left unclassified. Checked against origin/ma
 - Remainder: settings UI control and keyboard action (`flamewm-api` shortcut name). Settings
   UI is another worker's scope.
 - Remainder (second slice): cursor-following zoom, precedent cosmic-comp magnifier.
+
+## pol-ui: answer path slice (polkit)
+
+- Landed: `polkit_helper::HelperConversation` and `drive` (nonblocking state machine over the
+  helper pipe; one password answer per prompt; echoed prompts and early EOF fail), `user_name_for_uid`
+  (/etc/passwd only; NSS-only accounts are not found), `ReactorHandle::register_child_pipe`, and
+  `flamewm-shell/src/polkit_answer.rs` (`start`, `start_with`, `cancel_active`). The e2e test
+  uses `drive`. Unit tests use a fake helper.
+- Still open: the on-screen popover (aria-labelled password field, message, identity selector,
+  authenticate and cancel) and its keyboard routing. Nothing calls `polkit_answer::start` yet, so
+  `POLKIT_AGENT_CAN_ANSWER` stays false. Helper timeout after the password is written is not
+  enforced; `PROMPT_TIMEOUT` covers only the BeginAuthentication call.

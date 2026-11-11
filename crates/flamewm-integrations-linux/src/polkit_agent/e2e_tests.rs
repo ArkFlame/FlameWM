@@ -13,7 +13,7 @@ use dbus::arg::messageitem::MessageItem;
 use flamewm_reactor::ChildPipe;
 
 use super::*;
-use crate::polkit_helper::{HelperEvent, LineBuffer, parse_helper_line, spawn_helper};
+use crate::polkit_helper::{HelperConversation, HelperStep, drive, spawn_helper};
 
 const COOKIE: &str = "e2e-cookie";
 const USER: &str = "alice";
@@ -158,28 +158,16 @@ fn wait_for_prompt(agent: &mut PolkitAgent) -> BeginRequest {
 /// Runs the helper conversation; returns true on `SUCCESS`.
 fn converse(helper: &mut ChildPipe) -> bool {
     let deadline = Instant::now() + TIMEOUT;
-    let mut lines = LineBuffer::default();
-    let mut buf = [0u8; 256];
+    let mut conversation = HelperConversation::default();
     loop {
         assert!(Instant::now() < deadline, "helper conversation timed out");
-        match helper.read_some(&mut buf) {
-            Ok(0) => return false,
-            Ok(n) => {
-                for line in lines.push(&buf[..n]) {
-                    match parse_helper_line(&line) {
-                        Some(HelperEvent::Prompt { .. }) => {
-                            helper.write_line(PASSWORD).expect("answer prompt");
-                        }
-                        Some(HelperEvent::Success) => return true,
-                        Some(HelperEvent::Failure) => return false,
-                        _ => {}
-                    }
-                }
+        match drive(helper, &mut conversation).expect("helper read") {
+            HelperStep::NeedsPassword => {
+                helper.write_line(PASSWORD).expect("answer prompt");
+                conversation.answered();
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(5));
-            }
-            Err(e) => panic!("helper read: {e}"),
+            HelperStep::Done(outcome) => return outcome == AuthOutcome::Success,
+            HelperStep::Idle => thread::sleep(Duration::from_millis(5)),
         }
     }
 }

@@ -292,6 +292,19 @@ impl ReactorHandle {
             move |fd, _, readiness| callback(fd, readiness),
         )
     }
+
+    /// Same contract as [`Reactor::register_child_pipe`], for registration from inside a dispatch
+    /// callback where `&mut Reactor` is not reachable.
+    pub fn register_child_pipe<C>(
+        &self,
+        pipe: ChildPipe,
+        callback: C,
+    ) -> calloop::Result<RegistrationToken>
+    where
+        C: FnMut(i32, &mut ChildPipe, FdReadiness) -> FdAction + 'static,
+    {
+        insert_fd_source(&self.0, pipe, Interest::READ, callback)
+    }
 }
 
 fn insert_fd_source<F, C>(

@@ -15,6 +15,8 @@ use std::process::Command;
 
 use flamewm_reactor::ChildPipe;
 
+use crate::polkit_agent::AuthOutcome;
+
 /// Installed locations, in lookup order. `/usr/libexec` is normally a symlink to `/usr/lib`.
 pub const HELPER_PATHS: [&str; 2] = [
     "/usr/lib/polkit-1/polkit-agent-helper-1",
@@ -108,15 +110,223 @@ pub fn spawn_helper(mut command: Command, user: &str, cookie: &str) -> io::Resul
     Ok(pipe)
 }
 
+/// Where a helper conversation stands after the bytes read so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HelperStep {
+    /// Nothing for the caller to do yet.
+    #[default]
+    Idle,
+    /// The helper asked for the password. The caller writes it once, then calls `answered`.
+    NeedsPassword,
+    /// The helper finished. The outcome maps to the pending `BeginAuthentication` reply.
+    Done(AuthOutcome),
+}
+
+/// Nonblocking state of one helper conversation. Bytes go in through `feed`; the caller answers
+/// `NeedsPassword`, then calls `answered`. Once `Done`, later bytes change nothing.
+#[derive(Debug, Default)]
+pub struct HelperConversation {
+    lines: LineBuffer,
+    step: HelperStep,
+    last_error: Option<String>,
+}
+
+impl HelperConversation {
+    /// Feeds bytes read from the helper and returns the step reached.
+    pub fn feed(&mut self, bytes: &[u8]) -> HelperStep {
+        if matches!(self.step, HelperStep::Done(_)) {
+            return self.step;
+        }
+        for line in self.lines.push(bytes) {
+            match parse_helper_line(&line) {
+                Some(HelperEvent::Prompt { echo: false, .. }) => {
+                    self.step = HelperStep::NeedsPassword;
+                }
+                // Only the password prompt can be answered here. Any echoed prompt, such as a
+                // user name, ends the conversation as failed instead of hanging the helper.
+                Some(HelperEvent::Prompt { echo: true, .. }) => {
+                    self.last_error = Some("unsupported helper prompt".to_owned());
+                    self.step = HelperStep::Done(AuthOutcome::Failed);
+                }
+                Some(HelperEvent::ErrorMsg(text)) => self.last_error = Some(text),
+                Some(HelperEvent::Success) => self.step = HelperStep::Done(AuthOutcome::Success),
+                Some(HelperEvent::Failure) => self.step = HelperStep::Done(AuthOutcome::Failed),
+                Some(HelperEvent::TextInfo(_)) | None => {}
+            }
+            if matches!(self.step, HelperStep::Done(_)) {
+                break;
+            }
+        }
+        self.step
+    }
+
+    /// The caller wrote the password. The helper's next line decides what comes next.
+    pub fn answered(&mut self) {
+        if self.step == HelperStep::NeedsPassword {
+            self.step = HelperStep::Idle;
+        }
+    }
+
+    /// The helper closed its output. Without a result line the answer is a failure.
+    pub fn end_of_output(&mut self) -> HelperStep {
+        if !matches!(self.step, HelperStep::Done(_)) {
+            self.step = HelperStep::Done(AuthOutcome::Failed);
+        }
+        self.step
+    }
+
+    #[must_use]
+    pub fn step(&self) -> HelperStep {
+        self.step
+    }
+
+    /// Last `PAM_ERROR_MSG` text or unsupported-prompt reason. Never contains the password.
+    #[must_use]
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+}
+
+/// Reads what the helper has written so far into `conversation`, returning early on a prompt or a
+/// result. `Ok(0)` from the pipe is end of output. `WouldBlock` returns the current step.
+///
+/// # Errors
+/// Returns read errors other than `WouldBlock`.
+pub fn drive(
+    pipe: &mut ChildPipe,
+    conversation: &mut HelperConversation,
+) -> io::Result<HelperStep> {
+    let mut buf = [0u8; 256];
+    loop {
+        match pipe.read_some(&mut buf) {
+            Ok(0) => return Ok(conversation.end_of_output()),
+            Ok(n) => {
+                let step = conversation.feed(&buf[..n]);
+                if step != HelperStep::Idle {
+                    return Ok(step);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(conversation.step());
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Account name for `uid`, read from `/etc/passwd`. The helper takes a name, not a uid. Accounts
+/// that exist only in NSS sources other than files are not found and return `None`.
+#[must_use]
+pub fn user_name_for_uid(uid: u32) -> Option<String> {
+    std::fs::read_to_string("/etc/passwd")
+        .ok()
+        .and_then(|text| name_in_passwd(&text, uid))
+}
+
+fn name_in_passwd(text: &str, uid: u32) -> Option<String> {
+    text.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let name = fields.next()?;
+        let _password = fields.next()?;
+        let id: u32 = fields.next()?.parse().ok()?;
+        (id == uid && !name.is_empty()).then(|| name.to_owned())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use flamewm_reactor::{FdAction, Reactor};
 
     use super::*;
+
+    #[test]
+    fn conversation_answers_once_then_reports_success() {
+        let mut conv = HelperConversation::default();
+        assert_eq!(
+            conv.feed(b"PAM_PROMPT_ECHO_OFF Password: \n"),
+            HelperStep::NeedsPassword
+        );
+        conv.answered();
+        assert_eq!(conv.step(), HelperStep::Idle);
+        assert_eq!(
+            conv.feed(b"PAM_TEXT_INFO ok\nSUCCESS\n"),
+            HelperStep::Done(AuthOutcome::Success)
+        );
+    }
+
+    #[test]
+    fn conversation_handles_split_chunks() {
+        let mut conv = HelperConversation::default();
+        assert_eq!(conv.feed(b"PAM_PROMPT_ECHO_"), HelperStep::Idle);
+        assert_eq!(conv.feed(b"OFF x\n"), HelperStep::NeedsPassword);
+    }
+
+    #[test]
+    fn failure_keeps_error_text_and_is_terminal() {
+        let mut conv = HelperConversation::default();
+        assert_eq!(
+            conv.feed(b"PAM_ERROR_MSG wrong\nFAILURE\n"),
+            HelperStep::Done(AuthOutcome::Failed)
+        );
+        assert_eq!(conv.last_error(), Some("wrong"));
+        assert_eq!(
+            conv.feed(b"SUCCESS\n"),
+            HelperStep::Done(AuthOutcome::Failed),
+            "a finished conversation ignores later lines"
+        );
+    }
+
+    #[test]
+    fn echoed_prompt_and_early_eof_fail_without_answer() {
+        let mut echoed = HelperConversation::default();
+        assert_eq!(
+            echoed.feed(b"PAM_PROMPT_ECHO_ON user:\n"),
+            HelperStep::Done(AuthOutcome::Failed)
+        );
+        let mut eof = HelperConversation::default();
+        assert_eq!(eof.end_of_output(), HelperStep::Done(AuthOutcome::Failed));
+    }
+
+    #[test]
+    fn passwd_lookup_matches_uid_and_skips_malformed_lines() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\nbroken\n:x:7:7::/:/bin/sh\n\
+                      alice:x:1000:1000::/home/alice:/bin/zsh\n";
+        assert_eq!(name_in_passwd(passwd, 1000).as_deref(), Some("alice"));
+        assert_eq!(name_in_passwd(passwd, 0).as_deref(), Some("root"));
+        assert_eq!(
+            name_in_passwd(passwd, 7),
+            None,
+            "empty name is not an account"
+        );
+        assert_eq!(name_in_passwd(passwd, 4242), None);
+    }
+
+    #[test]
+    fn drive_answers_fake_helper_to_success() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(FAKE).arg("sh");
+        let mut pipe = spawn_helper(command, "alice", "cookie-1").expect("spawn");
+        let mut conv = HelperConversation::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let outcome = loop {
+            assert!(Instant::now() < deadline, "helper conversation timed out");
+            match drive(&mut pipe, &mut conv).expect("drive") {
+                HelperStep::NeedsPassword => {
+                    pipe.write_line("hunter2").expect("answer");
+                    conv.answered();
+                }
+                HelperStep::Done(outcome) => break outcome,
+                HelperStep::Idle => thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        assert_eq!(outcome, AuthOutcome::Success);
+        pipe.wait().expect("helper exit");
+    }
 
     #[test]
     fn parses_pam_tokens_and_terminal_lines() {
