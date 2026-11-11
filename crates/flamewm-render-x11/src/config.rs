@@ -435,6 +435,26 @@ mod dock_strut_tests {
     }
 
     #[test]
+    fn bottom_dock_after_xrandr_shrink_reserves_bottom_not_left() {
+        // b6 s4: 1280x800 -> 1024x768 with the bottom bar at (0,724) 1024x44. A stale root
+        // (1280x800) yields bottom=76 for an explicit bottom edge, and classic inference
+        // yields left=1024. The live root (1024x768) yields bottom=44 only.
+        let (bx, by, bw, bh) = (0, 724, 1024, 44);
+        let live = DockStrut::from_edge_rect(1024, 768, DockEdge::Bottom, bx, by, bw, bh).unwrap();
+        assert_eq!(live.strut4(), [0, 0, 0, 44]);
+        let stale = DockStrut::from_edge_rect(1280, 800, DockEdge::Bottom, bx, by, bw, bh).unwrap();
+        assert_eq!(stale.strut4(), [0, 0, 0, 76]);
+        let classic_stale = DockStrut::from_root_and_rect(1280, 800, bx, by, bw, bh).unwrap();
+        assert_eq!(classic_stale.strut4(), [1024, 0, 0, 0]);
+        assert_eq!(
+            DockStrut::from_root_and_rect(1024, 768, bx, by, bw, bh)
+                .unwrap()
+                .strut4(),
+            [0, 0, 0, 44]
+        );
+    }
+
+    #[test]
     fn floating_rect_reserves_nothing() {
         assert!(DockStrut::from_root_and_rect(1920, 1080, 400, 300, 800, 600).is_none());
         assert!(DockStrut::from_root_and_rect(1920, 1080, 0, 0, 1920, 1080).is_none());

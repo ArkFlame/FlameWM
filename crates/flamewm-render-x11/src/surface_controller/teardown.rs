@@ -79,6 +79,37 @@ pub(super) fn drop_popup_grab(
     }
 }
 
+/// Current root window size from the server (`XGetGeometry`), falling back to the cached Xlib
+/// screen size only when the query fails.
+fn live_root_extent(display: *mut Display, screen: i32) -> (u32, u32) {
+    let root = unsafe { XRootWindow(display, screen) };
+    let (mut root_return, mut x, mut y) = (0, 0, 0);
+    let (mut width, mut height, mut border, mut depth) = (0u32, 0u32, 0u32, 0u32);
+    let status = unsafe {
+        crate::xlib_ext::XGetGeometry(
+            display,
+            root,
+            &mut root_return,
+            &mut x,
+            &mut y,
+            &mut width,
+            &mut height,
+            &mut border,
+            &mut depth,
+        )
+    };
+    if status != 0 && width > 0 && height > 0 {
+        (width, height)
+    } else {
+        unsafe {
+            (
+                XDisplayWidth(display, screen).max(1) as u32,
+                XDisplayHeight(display, screen).max(1) as u32,
+            )
+        }
+    }
+}
+
 /// Keeps a dock's strut, rounded mask, and root-space origin in step with its window rect.
 pub(super) fn sync_dock_geometry(
     display: *mut Display,
@@ -88,8 +119,9 @@ pub(super) fn sync_dock_geometry(
     w: u32,
     h: u32,
 ) {
-    let root_w = unsafe { XDisplayWidth(display, instance.app.screen).max(1) as u32 };
-    let root_h = unsafe { XDisplayHeight(display, instance.app.screen).max(1) as u32 };
+    // Live root size: Xlib's cached screen size is not refreshed by a RandR mode change, so the
+    // strut edge would be computed against the pre-resize root (1280x800 vs 1024x768).
+    let (root_w, root_h) = live_root_extent(display, instance.app.screen);
     crate::app::apply_dock_strut(
         instance.app.display,
         instance.app.window,
