@@ -77,3 +77,8 @@ Every item needs `./scripts/check` (build and native checks) and `./scripts/veri
 - The D-Bus notification server is confirmed (checked 2026-11-09): `crates/flamewm-integrations-linux/src/notifications.rs:431` answers `GetCapabilities` and `:450` answers `Notify`. P2 step 1 is resolved. The DND toggle is wired end to end (checked 2026-11-09): `set_dnd` at `notifications.rs:178` is called from `crates/flamewm-shell/src/main.rs` (`Command::ToggleDnd`), and the UI button is `ui/shell/notification-center.html` (`notification.center.dnd`). P2 step 2 is resolved.
 - Per-surface accent consumption is not proven. P1 starts with that audit.
 - No release build was measured this session. All deltas are `unmeasured`.
+
+## Bounded browser keyring audit (2026-11-10)
+
+- Static source audit: browser secret policy in `crates/flamewm-applications/src/browser_secrets.rs` sets `XDG_CURRENT_DESKTOP=KDE`, `XDG_SESSION_DESKTOP=KDE`, and `KDE_SESSION_VERSION` only on a browser child process when the selected KWallet backend is active. FlameWM's own session environment is not changed. Both browser launch paths call the policy; explicit `basic`, `gnome-libsecret`, and `none` flags are preserved without the KDE override. Helium is untouched by default; only its explicit KWallet opt-in enables the override.
+- Existing tests cover explicit KWallet and basic/GNOME-libsecret choices. This audit found no narrow, proven fix to make. No GNOME keyring daemon, wallet, or secret was queried or modified; no live host compatibility claim is made. This is static evidence only; end-to-end browser/KWallet and GNOME Secret Service behavior remains unverified.
