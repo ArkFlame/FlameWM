@@ -56,7 +56,7 @@ render_elements! {
     Memory=MemoryRenderBufferRenderElement<GlowRenderer>,
 }
 
-const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
+pub(crate) const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
 // Shared Xephyr skin metrics and palette, never per-backend coloured-square placeholders.
 /// Titlebar fill from `surface::titlebar_fill`, packed as `alpha << 24 | rgb`. The default is the
 /// flat opaque solid (`reduceTransparency` defaults on), so nothing paints translucent before settings arrive.
@@ -467,16 +467,6 @@ fn render_into(
     };
     serve_screencopy(state, backend.renderer(), &elements, size);
     serve_switcher_thumbs(state, backend.renderer());
-    if let Some(path) = state.dump.take() {
-        // Readback goes through an offscreen texture: copying from the window surface target
-        // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
-        // readback-free.
-        dump_offscreen(backend.renderer(), &state.output, &elements, size, &path)?;
-        state.dumped = true;
-        if state.exit_after_dump {
-            state.loop_signal.stop();
-        }
-    }
     // Partial repaint: when the driver reports a valid swapchain age, the damage tracker only
     // touches the rectangles that changed (the pointer is the common case), instead of clearing
     // and redrawing the full output on every motion event. Some nested software-EGL drivers return
@@ -513,6 +503,30 @@ fn render_into(
         Some(Ok(program)) if filter != ColourFilter::None => Some(program.clone()),
         _ => None,
     };
+    if let Some(path) = state.dump.take() {
+        // Readback goes through an offscreen texture: copying from the window surface target
+        // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
+        // readback-free. A filtered dump reads back the filtered pixels, so the runtime proof
+        // compares what the filter actually produces.
+        match &filter_program {
+            Some(program) => {
+                let pixels = crate::colour_pass::filtered_pixels(
+                    backend.renderer(),
+                    program,
+                    filter,
+                    &state.output,
+                    &elements,
+                    size,
+                )?;
+                write_ppm(&path, size, &pixels, readback_is_flipped(&state.output))?;
+            }
+            None => dump_offscreen(backend.renderer(), &state.output, &elements, size, &path)?,
+        }
+        state.dumped = true;
+        if state.exit_after_dump {
+            state.loop_signal.stop();
+        }
+    }
     let damage = if let Some(program) = &filter_program {
         // The filter pass repaints the full output with a fresh tracker, so the window tracker's
         // partial-repaint state is left intact for when the filter is off again.
@@ -564,6 +578,17 @@ pub fn offscreen_pixels(
     Ok(renderer.map_texture(&mapping)?.to_vec())
 }
 
+pub fn dump_offscreen(
+    renderer: &mut GlowRenderer,
+    output: &smithay::output::Output,
+    elements: &[Elem],
+    size: Size<i32, Physical>,
+    path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let pixels = offscreen_pixels(renderer, output, elements, size)?;
+    write_ppm(path, size, &pixels, readback_is_flipped(output))
+}
+
 /// Whether a readback of `output` must reverse its rows (flipped transforms).
 #[must_use]
 pub fn readback_is_flipped(output: &smithay::output::Output) -> bool {
@@ -598,17 +623,6 @@ pub fn serve_screencopy(
             crate::screencopy::fail(pending);
         }
     }
-}
-
-pub fn dump_offscreen(
-    renderer: &mut GlowRenderer,
-    output: &smithay::output::Output,
-    elements: &[Elem],
-    size: Size<i32, Physical>,
-    path: &Path,
-) -> Result<(), Box<dyn Error>> {
-    let pixels = offscreen_pixels(renderer, output, elements, size)?;
-    write_ppm(path, size, &pixels, readback_is_flipped(output))
 }
 
 fn send_frame_callbacks(state: &State) {

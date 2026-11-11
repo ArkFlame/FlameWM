@@ -10,6 +10,7 @@
 use std::borrow::BorrowMut;
 use std::error::Error;
 
+use crate::render::CLEAR;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::{
@@ -17,7 +18,7 @@ use smithay::backend::renderer::gles::{
     UniformType, UniformValue,
 };
 use smithay::backend::renderer::glow::GlowRenderer;
-use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
+use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
 
@@ -86,6 +87,57 @@ fn matrix_uniform(matrix: &ColourMatrix) -> Uniform<'static> {
             transpose: true,
         },
     )
+}
+
+/// Readback of the filtered frame: `elements` go to an offscreen texture, which is drawn through
+/// the filter program into a second offscreen texture and read back as RGBA rows, the same byte
+/// layout as `offscreen_pixels`. Used by PPM dumps so they show what the filter produces.
+pub fn filtered_pixels(
+    renderer: &mut GlowRenderer,
+    program: &GlesTexProgram,
+    filter: ColourFilter,
+    output: &smithay::output::Output,
+    elements: &[Elem],
+    size: Size<i32, Physical>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let matrix = filter
+        .matrix()
+        .ok_or("colour filter pass called without a filter")?;
+    let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
+    let mut source_tex: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    let mut tracker = OutputDamageTracker::from_output(output);
+    {
+        let mut target = renderer.bind(&mut source_tex)?;
+        tracker.render_output(renderer, &mut target, 0, elements, CLEAR)?;
+    }
+    let mut out_tex: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    {
+        let mut target = renderer.bind(&mut out_tex)?;
+        let full: Rectangle<i32, Physical> = Rectangle::from_size(size);
+        let source = Rectangle::from_size(buffer_size.to_f64());
+        let mut frame = renderer.render(&mut target, size, Transform::Normal)?;
+        frame.clear(CLEAR.into(), &[full])?;
+        {
+            let gles: &mut GlesFrame<'_, '_> = frame.borrow_mut();
+            let uniforms = [matrix_uniform(&matrix)];
+            gles.render_texture_from_to(
+                &source_tex,
+                source,
+                full,
+                &[full],
+                &[],
+                Transform::Normal,
+                1.0,
+                Some(program),
+                &uniforms,
+            )?;
+        }
+        let _sync = frame.finish()?;
+    }
+    let target = renderer.bind(&mut out_tex)?;
+    let mapping =
+        renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Abgr8888)?;
+    Ok(renderer.map_texture(&mapping)?.to_vec())
 }
 
 /// Renders `elements` into an offscreen texture the size of the output, then draws that texture
