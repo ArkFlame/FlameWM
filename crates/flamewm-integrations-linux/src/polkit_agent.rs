@@ -7,12 +7,13 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
+use std::time::Duration;
 
 use dbus::arg::messageitem::{MessageItem, MessageItemDict};
 use dbus::strings::ErrorName;
 use dbus::{Message, MessageType, Path};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
-use flamewm_dbus_reactor::MessageDisposition;
+use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
 
 pub const AUTHORITY_DEST: &str = "org.freedesktop.PolicyKit1";
 pub const AUTHORITY_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
@@ -405,6 +406,7 @@ const LOGIN_MANAGER_IFACE: &str = "org.freedesktop.login1.Manager";
 const LOGIN_SESSION_IFACE: &str = "org.freedesktop.login1.Session";
 const NO_SESSION_FOR_PID: &str = "org.freedesktop.login1.NoSessionForPID";
 const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const AUTHORITY_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The two logind calls the lookup needs. `SystemLogind` is the system-bus implementation; tests
 /// use a fake, so no test touches a bus.
@@ -491,6 +493,82 @@ fn logind_error(error: dbus::Error) -> FlameError {
         ErrorCode::Unavailable
     };
     FlameError::new(code, format!("polkit: logind: {error}"))
+}
+
+/// Shell-owned polkit agent: one system-bus pump, the pending prompt state and the bounded event
+/// queue the shell drains. `connect_system` registers the agent; `shutdown` unregisters it on
+/// orderly exit only. No thread and no event source of its own.
+pub struct PolkitAgent {
+    pump: BusPump,
+    session_id: String,
+    sessions: AgentSessions,
+    queue: PolkitEventQueue,
+}
+
+impl PolkitAgent {
+    /// Opens the system bus, resolves this process's logind session and registers the agent.
+    ///
+    /// # Errors
+    /// Returns the bus, session-lookup or registration error; the caller runs without an agent.
+    pub fn connect_system(env_session_id: Option<&str>, locale: &str) -> FlameResult<Self> {
+        let pump = BusPump::connect(BusKind::System)?;
+        let lookup = LogindLookup::new(SystemLogind::connect()?);
+        let session_id = resolve_session_id(env_session_id, std::process::id(), &lookup)?;
+        pump.send_with_reply(
+            register_message(&session_id, locale)?,
+            AUTHORITY_REPLY_TIMEOUT,
+        )?;
+        Ok(Self {
+            pump,
+            session_id,
+            sessions: AgentSessions::default(),
+            queue: PolkitEventQueue::default(),
+        })
+    }
+
+    #[must_use]
+    pub fn watch(&self) -> BusWatch {
+        self.pump.watch()
+    }
+
+    /// Dispatches incoming calls on `AGENT_PATH` into the session state and prompt queue.
+    ///
+    /// # Errors
+    /// Returns the bus error from the pump turn.
+    pub fn on_ready(&mut self) -> FlameResult<usize> {
+        let Self {
+            pump,
+            sessions,
+            queue,
+            ..
+        } = self;
+        pump.on_ready_with_object_path(
+            AGENT_PATH,
+            |message| handle_agent_call(sessions, queue, message),
+            |_| MessageDisposition::Unhandled,
+        )
+    }
+
+    /// Takes the prompt events queued since the last call, in arrival order.
+    pub fn take_events(&mut self) -> Vec<PolkitEvent> {
+        self.queue.drain().collect()
+    }
+
+    /// Removes a request once the UI has answered it or the shell cannot show it.
+    pub fn finish(&mut self, cookie: &str) -> Option<BeginRequest> {
+        self.sessions.finish(cookie)
+    }
+
+    /// Unregisters the agent for this session. Call only on orderly exit.
+    ///
+    /// # Errors
+    /// Returns the encoding or bus error of the unregister call.
+    pub fn shutdown(&self) -> FlameResult<()> {
+        let call = unregister_message(&self.session_id)?;
+        self.pump
+            .send_with_reply(call, AUTHORITY_REPLY_TIMEOUT)
+            .map(|_| ())
+    }
 }
 
 #[cfg(test)]

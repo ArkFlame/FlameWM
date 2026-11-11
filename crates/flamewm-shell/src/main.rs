@@ -16,6 +16,7 @@ use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
 use flamewm_integrations_linux::notifications;
+use flamewm_integrations_linux::polkit_agent::{PolkitAgent, PolkitEvent};
 use flamewm_reactor::{Reactor, SystemWallClock};
 use flamewm_shell::async_projection;
 use flamewm_shell::bus_offline;
@@ -669,6 +670,17 @@ fn execute() -> Result<(), String> {
             }
         };
 
+    // Polkit agent for this session. Without the system bus or logind the shell runs without one.
+    // The C locale is registered because no prompt text is shown yet (pol-ui).
+    let polkit =
+        match PolkitAgent::connect_system(std::env::var("XDG_SESSION_ID").ok().as_deref(), "C") {
+            Ok(agent) => Some(Rc::new(RefCell::new(agent))),
+            Err(error) => {
+                eprintln!("flamewm-shell: polkit agent disabled: {error}");
+                None
+            }
+        };
+
     let profile_interval = profile_interval_secs();
     let profile_due = Arc::new(AtomicBool::new(false));
     let profile_flag = Arc::clone(&profile_due);
@@ -799,6 +811,25 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register notification source: {error}"))?;
     }
+    if let Some(agent) = polkit.as_ref() {
+        let watch = agent.borrow().watch();
+        let polkit_state = Rc::clone(agent);
+        reactor
+            .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+                let mut agent = polkit_state.borrow_mut();
+                match agent.on_ready() {
+                    Ok(_) => {
+                        drain_polkit_prompts(&mut agent);
+                        flamewm_reactor::FdAction::Continue
+                    }
+                    Err(error) => {
+                        eprintln!("flamewm-shell: polkit D-Bus source failed: {error}");
+                        flamewm_reactor::FdAction::Remove
+                    }
+                }
+            })
+            .map_err(|error| format!("register polkit source: {error}"))?;
+    }
     let event_state = Rc::clone(&state);
     let tray_events = tray_host.clone();
     let tick_state = Rc::clone(&state);
@@ -865,7 +896,7 @@ fn execute() -> Result<(), String> {
     }
     let mut badge_tick = badge;
     let shared_wake = reactor.wake_deadline();
-    run_surface_runtime_with_reactor_access(
+    let run_result = run_surface_runtime_with_reactor_access(
         &mut runtime,
         &mut reactor,
         {
@@ -933,7 +964,27 @@ fn execute() -> Result<(), String> {
             }
         },
     )
-    .map_err(|error| format!("surface runtime: {error:?}"))
+    .map_err(|error| format!("surface runtime: {error:?}"));
+    if let Some(agent) = polkit.as_ref() {
+        if let Err(error) = agent.borrow().shutdown() {
+            eprintln!("flamewm-shell: polkit unregister failed: {error}");
+        }
+    }
+    run_result
+}
+
+/// Prompts have no dialog yet (pol-ui), so each one is logged and removed from the pending set.
+/// polkit then times out its own request; nothing is answered on the user's behalf.
+fn drain_polkit_prompts(agent: &mut PolkitAgent) {
+    for event in agent.take_events() {
+        if let PolkitEvent::Show(request) = event {
+            eprintln!(
+                "flamewm-shell: polkit prompt for {} has no dialog yet; left unanswered",
+                request.action_id
+            );
+            agent.finish(&request.cookie);
+        }
+    }
 }
 
 /// Parent helper program: re-exec this binary with the helper role flag so
