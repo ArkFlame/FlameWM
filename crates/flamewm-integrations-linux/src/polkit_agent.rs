@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dbus::arg::messageitem::{MessageItem, MessageItemDict};
 use dbus::strings::ErrorName;
@@ -26,6 +26,12 @@ const UNREGISTER: &str = "UnregisterAuthenticationAgent";
 const BEGIN: &str = "BeginAuthentication";
 const CANCEL: &str = "CancelAuthentication";
 const INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
+/// polkit error names for `BeginAuthentication` outcomes (polkit `AuthenticationAgent` spec).
+const CANCELLED_ERR: &str = "org.freedesktop.PolicyKit1.Error.Cancelled";
+const FAILED_ERR: &str = "org.freedesktop.PolicyKit1.Error.Failed";
+/// Longest a prompt may stay unanswered before its `BeginAuthentication` fails. Bounds every
+/// pending call so polkit never waits forever on a prompt the user ignores.
+pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One `(sa{sv})` identity. Only the unix uid matters to the prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,10 +140,46 @@ impl AuthPrompt for PolkitEventQueue {
     }
 }
 
-/// Pending authentication requests keyed by polkit cookie.
-#[derive(Debug, Default)]
+/// Outcome of one prompt, chosen by the UI side. Each maps to one reply to the pending
+/// `BeginAuthentication` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthOutcome {
+    Success,
+    Cancelled,
+    Failed,
+}
+
+/// The three possible replies to one `BeginAuthentication` call, built from the call while it is
+/// still borrowed, so the deferred reply needs no copy of the message.
+pub struct Replies {
+    success: Message,
+    cancelled: Message,
+    failed: Message,
+}
+
+impl Replies {
+    #[must_use]
+    pub fn for_call(call: &Message) -> Self {
+        Self {
+            success: call.method_return(),
+            cancelled: error_named(call, CANCELLED_ERR, "authentication cancelled"),
+            failed: error_named(call, FAILED_ERR, "authentication failed"),
+        }
+    }
+}
+
+struct Pending {
+    request: BeginRequest,
+    replies: Replies,
+    since: Instant,
+}
+
+/// Pending authentication requests keyed by polkit cookie. A `BeginAuthentication` call stays
+/// unanswered until its outcome is known; the reply is queued in `outbox` and the owner sends it.
+#[derive(Default)]
 pub struct AgentSessions {
-    pending: BTreeMap<String, BeginRequest>,
+    pending: BTreeMap<String, Pending>,
+    outbox: Vec<Message>,
 }
 
 impl AgentSessions {
@@ -146,28 +188,72 @@ impl AgentSessions {
         &mut self,
         prompt: &mut impl AuthPrompt,
         request: BeginRequest,
+        replies: Replies,
     ) -> FlameResult<()> {
         if self.pending.contains_key(&request.cookie) {
             return Err(invalid("duplicate authentication cookie"));
         }
         prompt.show(&request)?;
-        self.pending.insert(request.cookie.clone(), request);
+        self.pending.insert(
+            request.cookie.clone(),
+            Pending {
+                request,
+                replies,
+                since: Instant::now(),
+            },
+        );
         Ok(())
     }
 
-    /// Cancels a request. Returns `false` for unknown or already finished cookies, which polkit
-    /// may send harmlessly.
+    /// Cancels a request and answers its pending call with `Cancelled`. Returns `false` for unknown
+    /// or already finished cookies, which polkit may send harmlessly.
     pub fn cancel(&mut self, prompt: &mut impl AuthPrompt, cookie: &str) -> bool {
-        let found = self.pending.remove(cookie).is_some();
-        if found {
-            prompt.dismiss(cookie);
+        match self.pending.remove(cookie) {
+            Some(pending) => {
+                prompt.dismiss(cookie);
+                self.outbox.push(pending.replies.cancelled);
+                true
+            }
+            None => false,
         }
-        found
     }
 
-    /// Removes a request once the UI has answered it (success or user abort).
-    pub fn finish(&mut self, cookie: &str) -> Option<BeginRequest> {
-        self.pending.remove(cookie)
+    /// Answers a request with its outcome once the UI has decided it.
+    pub fn finish(&mut self, cookie: &str, outcome: AuthOutcome) -> Option<BeginRequest> {
+        let pending = self.pending.remove(cookie)?;
+        self.outbox.push(match outcome {
+            AuthOutcome::Success => pending.replies.success,
+            AuthOutcome::Cancelled => pending.replies.cancelled,
+            AuthOutcome::Failed => pending.replies.failed,
+        });
+        Some(pending.request)
+    }
+
+    /// Fails every prompt pending for at least `max_age` as `Failed`. Returns how many expired.
+    pub fn expire(
+        &mut self,
+        prompt: &mut impl AuthPrompt,
+        now: Instant,
+        max_age: Duration,
+    ) -> usize {
+        let stale: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| now.saturating_duration_since(p.since) >= max_age)
+            .map(|(cookie, _)| cookie.clone())
+            .collect();
+        for cookie in &stale {
+            if let Some(pending) = self.pending.remove(cookie) {
+                prompt.dismiss(cookie);
+                self.outbox.push(pending.replies.failed);
+            }
+        }
+        stale.len()
+    }
+
+    /// Takes the replies to send on the bus, in the order they were decided.
+    pub fn take_outbox(&mut self) -> Vec<Message> {
+        std::mem::take(&mut self.outbox)
     }
 
     #[must_use]
@@ -284,7 +370,16 @@ pub fn handle_agent_call(
         return MessageDisposition::Unhandled;
     }
     let outcome = match member.to_string().as_str() {
-        BEGIN => parse_begin(&message.get_items()).and_then(|req| sessions.begin(prompt, req)),
+        // The reply is deferred: `Handled` here, the real answer is queued by `finish`/`cancel`.
+        BEGIN => {
+            return match parse_begin(&message.get_items()) {
+                Ok(req) => match sessions.begin(prompt, req, Replies::for_call(message)) {
+                    Ok(()) => MessageDisposition::Handled,
+                    Err(error) => MessageDisposition::Reply(error_reply(message, &error)),
+                },
+                Err(error) => MessageDisposition::Reply(error_reply(message, &error)),
+            };
+        }
         CANCEL => parse_cancel(&message.get_items()).map(|cookie| {
             sessions.cancel(prompt, &cookie);
         }),
@@ -297,9 +392,12 @@ pub fn handle_agent_call(
 }
 
 fn error_reply(call: &Message, error: &FlameError) -> Message {
-    let name = ErrorName::new(INVALID_ARGS).ok();
-    let text = CString::new(error.to_string()).unwrap_or_default();
-    match name {
+    error_named(call, INVALID_ARGS, &error.to_string())
+}
+
+fn error_named(call: &Message, name: &str, text: &str) -> Message {
+    let text = CString::new(text).unwrap_or_default();
+    match ErrorName::new(name).ok() {
         Some(name) => call.error(&name, &text),
         None => call.method_return(),
     }
@@ -542,11 +640,14 @@ impl PolkitAgent {
             queue,
             ..
         } = self;
-        pump.on_ready_with_object_path(
+        let visited = pump.on_ready_with_object_path(
             AGENT_PATH,
             |message| handle_agent_call(sessions, queue, message),
             |_| MessageDisposition::Unhandled,
-        )
+        )?;
+        sessions.expire(queue, Instant::now(), PROMPT_TIMEOUT);
+        flush(pump, sessions)?;
+        Ok(visited)
     }
 
     /// Takes the prompt events queued since the last call, in arrival order.
@@ -555,8 +656,17 @@ impl PolkitAgent {
     }
 
     /// Removes a request once the UI has answered it or the shell cannot show it.
-    pub fn finish(&mut self, cookie: &str) -> Option<BeginRequest> {
-        self.sessions.finish(cookie)
+    ///
+    /// # Errors
+    /// Returns the bus error when the outcome reply cannot be queued on the bus.
+    pub fn finish(
+        &mut self,
+        cookie: &str,
+        outcome: AuthOutcome,
+    ) -> FlameResult<Option<BeginRequest>> {
+        let request = self.sessions.finish(cookie, outcome);
+        flush(&self.pump, &mut self.sessions)?;
+        Ok(request)
     }
 
     /// Unregisters the agent for this session. Call only on orderly exit.
@@ -569,6 +679,18 @@ impl PolkitAgent {
             .send_with_reply(call, AUTHORITY_REPLY_TIMEOUT)
             .map(|_| ())
     }
+}
+
+/// Sends every queued `BeginAuthentication` reply. Sends all of them even after one fails, then
+/// reports the first error.
+fn flush(pump: &BusPump, sessions: &mut AgentSessions) -> FlameResult<()> {
+    let mut first_error = None;
+    for reply in sessions.take_outbox() {
+        if let Err(error) = pump.send(reply) {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]
@@ -821,12 +943,20 @@ mod tests {
         assert!(parse_begin(&begin_items("x")[..5]).is_err());
     }
 
+    fn replies(cookie: &str) -> Replies {
+        Replies::for_call(&call(BEGIN, &begin_items(cookie)))
+    }
+
     #[test]
     fn begin_then_cancel_dismisses_prompt_once() {
         let mut sessions = AgentSessions::default();
         let mut prompt = MockPrompt::default();
         let r = handle_agent_call(&mut sessions, &mut prompt, &call(BEGIN, &begin_items("c2")));
-        assert!(matches!(r, MessageDisposition::Reply(_)));
+        assert!(matches!(r, MessageDisposition::Handled));
+        assert!(
+            sessions.take_outbox().is_empty(),
+            "begin must not reply before the outcome"
+        );
         assert_eq!(prompt.shown, vec!["c2".to_owned()]);
         assert_eq!(sessions.len(), 1);
 
@@ -837,10 +967,65 @@ mod tests {
         ));
         assert_eq!(prompt.dismissed, vec!["c2".to_owned()]);
         assert!(sessions.is_empty());
+        let outbox = sessions.take_outbox();
+        assert_eq!(outbox.len(), 1, "cancel must complete the pending begin");
+        assert_eq!(outbox[0].msg_type(), MessageType::Error);
 
         // Second cancel for the same cookie is a harmless no-op.
         assert!(!sessions.cancel(&mut prompt, "c2"));
         assert_eq!(prompt.dismissed.len(), 1);
+        assert!(sessions.take_outbox().is_empty());
+    }
+
+    #[test]
+    fn success_replies_only_on_finish() {
+        let mut sessions = AgentSessions::default();
+        let mut prompt = MockPrompt::default();
+        let begin = call(BEGIN, &begin_items("s"));
+        assert!(matches!(
+            handle_agent_call(&mut sessions, &mut prompt, &begin),
+            MessageDisposition::Handled
+        ));
+        assert!(sessions.take_outbox().is_empty());
+        assert!(sessions.finish("s", AuthOutcome::Success).is_some());
+        let outbox = sessions.take_outbox();
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(outbox[0].msg_type(), MessageType::MethodReturn);
+        assert!(sessions.finish("s", AuthOutcome::Success).is_none());
+    }
+
+    #[test]
+    fn failed_finish_sends_error_reply() {
+        let mut sessions = AgentSessions::default();
+        let mut prompt = MockPrompt::default();
+        sessions
+            .begin(
+                &mut prompt,
+                parse_begin(&begin_items("f")).expect("p"),
+                replies("f"),
+            )
+            .expect("begin");
+        sessions.finish("f", AuthOutcome::Failed);
+        assert_eq!(sessions.take_outbox()[0].msg_type(), MessageType::Error);
+    }
+
+    #[test]
+    fn unanswered_prompt_expires_as_failed() {
+        let mut sessions = AgentSessions::default();
+        let mut prompt = MockPrompt::default();
+        sessions
+            .begin(
+                &mut prompt,
+                parse_begin(&begin_items("t")).expect("p"),
+                replies("t"),
+            )
+            .expect("begin");
+        let later = Instant::now() + PROMPT_TIMEOUT + Duration::from_secs(1);
+        assert_eq!(sessions.expire(&mut prompt, later, PROMPT_TIMEOUT), 1);
+        assert!(sessions.is_empty());
+        assert_eq!(prompt.dismissed, vec!["t".to_owned()]);
+        assert_eq!(sessions.take_outbox()[0].msg_type(), MessageType::Error);
+        assert_eq!(sessions.expire(&mut prompt, later, PROMPT_TIMEOUT), 0);
     }
 
     #[test]
@@ -848,11 +1033,19 @@ mod tests {
         let mut sessions = AgentSessions::default();
         let mut prompt = MockPrompt::default();
         sessions
-            .begin(&mut prompt, parse_begin(&begin_items("d")).expect("p"))
+            .begin(
+                &mut prompt,
+                parse_begin(&begin_items("d")).expect("p"),
+                replies("d"),
+            )
             .expect("first");
         assert!(
             sessions
-                .begin(&mut prompt, parse_begin(&begin_items("d")).expect("p"))
+                .begin(
+                    &mut prompt,
+                    parse_begin(&begin_items("d")).expect("p"),
+                    replies("d")
+                )
                 .is_err()
         );
         assert_eq!(prompt.shown.len(), 1);
@@ -863,7 +1056,9 @@ mod tests {
         let mut sessions = AgentSessions::default();
         let mut queue = PolkitEventQueue::with_capacity(1);
         let first = parse_begin(&begin_items("q1")).expect("p");
-        sessions.begin(&mut queue, first.clone()).expect("first");
+        sessions
+            .begin(&mut queue, first.clone(), replies("q1"))
+            .expect("first");
         let second = call(BEGIN, &begin_items("q2"));
         assert!(matches!(
             handle_agent_call(&mut sessions, &mut queue, &second),
@@ -881,7 +1076,11 @@ mod tests {
         let mut sessions = AgentSessions::default();
         let mut queue = PolkitEventQueue::default();
         sessions
-            .begin(&mut queue, parse_begin(&begin_items("c")).expect("p"))
+            .begin(
+                &mut queue,
+                parse_begin(&begin_items("c")).expect("p"),
+                replies("c"),
+            )
             .expect("begin");
         assert!(sessions.cancel(&mut queue, "c"));
         assert!(queue.is_empty());
@@ -892,7 +1091,11 @@ mod tests {
         let mut sessions = AgentSessions::default();
         let mut queue = PolkitEventQueue::default();
         sessions
-            .begin(&mut queue, parse_begin(&begin_items("c")).expect("p"))
+            .begin(
+                &mut queue,
+                parse_begin(&begin_items("c")).expect("p"),
+                replies("c"),
+            )
             .expect("begin");
         assert_eq!(queue.drain().count(), 1);
         assert!(sessions.cancel(&mut queue, "c"));
@@ -907,10 +1110,14 @@ mod tests {
         let mut sessions = AgentSessions::default();
         let mut prompt = MockPrompt::default();
         sessions
-            .begin(&mut prompt, parse_begin(&begin_items("e")).expect("p"))
+            .begin(
+                &mut prompt,
+                parse_begin(&begin_items("e")).expect("p"),
+                replies("e"),
+            )
             .expect("begin");
-        assert!(sessions.finish("e").is_some());
-        assert!(sessions.finish("e").is_none());
+        assert!(sessions.finish("e", AuthOutcome::Success).is_some());
+        assert!(sessions.finish("e", AuthOutcome::Success).is_none());
         let other = call("Bogus", &[]);
         assert!(matches!(
             handle_agent_call(&mut sessions, &mut prompt, &other),
