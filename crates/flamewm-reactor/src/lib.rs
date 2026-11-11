@@ -14,7 +14,9 @@ use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, Mode, PostAction, Readiness, RegistrationToken};
 
+pub mod child_pipe;
 pub mod timeline;
+pub use child_pipe::ChildPipe;
 pub use timeline::{Easing, Start, Timeline, TransitionId};
 
 /// Readiness flags exposed by the reactor without leaking calloop's source types.
@@ -188,6 +190,19 @@ impl Reactor {
         C: FnMut(i32, &mut F, FdReadiness) -> FdAction + 'static,
     {
         insert_fd_source(&self.event_loop.handle(), source, interest, callback)
+    }
+
+    /// Registers a child-process stdout as a read source. The reactor owns the [`ChildPipe`] until
+    /// the callback returns [`FdAction::Remove`] or the reactor is dropped.
+    pub fn register_child_pipe<C>(
+        &mut self,
+        pipe: ChildPipe,
+        callback: C,
+    ) -> calloop::Result<RegistrationToken>
+    where
+        C: FnMut(i32, &mut ChildPipe, FdReadiness) -> FdAction + 'static,
+    {
+        self.register_fd_with_source_action(pipe, Interest::READ, callback)
     }
 
     /// Cloneable insertion handle for sources registered from inside a dispatch callback, where

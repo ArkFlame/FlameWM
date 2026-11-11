@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 calloop.workspace = true
+rustix.workspace = true
 
 [lints.rust]
 unsafe_code = "allow"

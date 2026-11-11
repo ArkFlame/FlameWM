@@ -988,6 +988,7 @@ name = "flamewm-reactor"
 version = "0.1.7"
 dependencies = [
  "calloop 0.14.4",
+ "rustix 1.1.4",
 ]
 
 [[package]]
