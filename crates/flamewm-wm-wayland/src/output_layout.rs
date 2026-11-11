@@ -114,6 +114,12 @@ pub(crate) fn origin_after(placed: &[(i32, i32)], next: (i32, i32)) -> (i32, i32
         .map_or((0, 0), |rect| (rect.x, rect.y))
 }
 
+/// Outputs the pointer is clamped to: the placed row when the backend drives several outputs, else
+/// the primary output alone (single-output and nested sessions keep their old bounds).
+pub(crate) fn pointer_layout<'a>(stored: &'a [Rect], primary: &'a [Rect]) -> &'a [Rect] {
+    if stored.is_empty() { primary } else { stored }
+}
+
 /// Index of the output whose area contains `(x, y)`, using the half-open rule of `Rect::contains`.
 pub(crate) fn output_at(outputs: &[Rect], x: f64, y: f64) -> Option<usize> {
     outputs.iter().position(|rect| rect.contains(x, y))
@@ -295,6 +301,18 @@ mod tests {
         assert_eq!(clamp_point_to_layout(400.0, 20.0, &rects), (199.0, 20.0));
         // Negative coordinates: the origin pixel of the first output.
         assert_eq!(clamp_point_to_layout(-5.0, -5.0, &rects), (0.0, 0.0));
+    }
+
+    #[test]
+    fn pointer_layout_prefers_the_row_and_falls_back_to_the_primary_output() {
+        let primary = [Rect::new(0, 0, 1920, 1080)];
+        let row = arrange_row(&[(1920, 1080), (1280, 1024)]);
+        assert_eq!(pointer_layout(&[], &primary), &primary[..]);
+        assert_eq!(pointer_layout(&row, &primary), &row[..]);
+        // Single output: an in-bounds point is unchanged; past the edge it lands on the last pixel.
+        let single = pointer_layout(&[], &primary);
+        assert_eq!(clamp_point_to_layout(10.5, 20.0, single), (10.5, 20.0));
+        assert_eq!(clamp_point_to_layout(2500.0, 20.0, single), (1919.0, 20.0));
     }
 
     #[test]

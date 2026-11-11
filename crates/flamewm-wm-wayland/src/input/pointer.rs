@@ -104,6 +104,10 @@ impl State {
             return;
         }
         let location = self.confined_location(self.pointer, location);
+        let primary = [self.output_rect()];
+        let rects = crate::output_layout::pointer_layout(&self.pointer_layout, &primary);
+        let (x, y) = crate::output_layout::clamp_point_to_layout(location.x, location.y, rects);
+        let location = Point::from((x, y));
         self.pointer = location;
         if let Some(grab) = self.grab {
             match grab {

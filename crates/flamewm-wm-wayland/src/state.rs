@@ -402,6 +402,9 @@ pub struct State {
     /// Last position a backend reported. Equals `pointer` unless a pointer lock keeps the cursor
     /// still; relative motion is measured from here so locked deltas are not lost or doubled.
     pub raw_pointer: Point<f64, Logical>,
+    /// Logical rects of the DRM outputs in the placed row; empty when only the primary output
+    /// exists (nested or single output), so `on_motion` clamps to `output_rect` as before.
+    pub pointer_layout: Vec<crate::model::Rect>,
     /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
     pub client_cursor_status: CursorImageStatus,
     /// Resize cursor of the compositor handle under the pointer; it overrides the client's request.
@@ -561,6 +564,7 @@ impl State {
             shortcuts,
             pointer: Point::from((0.0, 0.0)),
             raw_pointer: Point::from((0.0, 0.0)),
+            pointer_layout: Vec::new(),
             client_cursor_status: CursorImageStatus::default_named(),
             decor_cursor: None,
             cursor_status: CursorImageStatus::default_named(),

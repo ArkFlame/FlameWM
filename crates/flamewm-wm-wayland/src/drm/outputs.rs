@@ -37,6 +37,7 @@ pub(super) fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<
             continue;
         }
         let gone = d.surfaces.remove(index);
+        sync_pointer_layout(d, state);
         if let Some(global) = gone.global {
             state.display.remove_global::<State>(global);
         }
@@ -106,6 +107,7 @@ pub(super) fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<
                         i32::from(mode.size().1)
                     );
                     d.surfaces.push(out);
+                    sync_pointer_layout(d, state);
                     break;
                 }
                 Err(error) => {
@@ -294,4 +296,21 @@ pub(super) fn drop_outputs(d: &mut Drm, state: &mut State) {
             state.display.remove_global::<State>(global);
         }
     }
+    sync_pointer_layout(d, state);
+}
+
+/// Rebuilds `State::pointer_layout` from the outputs the DRM backend drives: each logical rect at
+/// its current origin. `on_motion` clamps the pointer to this union.
+pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
+    state.pointer_layout = d
+        .surfaces
+        .iter()
+        .filter_map(|out| {
+            let mode = out.output.current_mode()?;
+            let percent = (out.output.current_scale().fractional_scale() * 100.0).round() as u16;
+            let (w, h) = crate::output_layout::logical_size((mode.size.w, mode.size.h), percent);
+            let origin = out.output.current_location();
+            Some(crate::model::Rect::new(origin.x, origin.y, w, h))
+        })
+        .collect();
 }
