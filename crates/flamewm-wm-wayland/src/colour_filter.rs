@@ -12,6 +12,7 @@
 /// Row-major 4x4 matrix over the homogeneous colour `(r, g, b, 1)`.
 pub type ColourMatrix = [[f32; 4]; 4];
 
+#[cfg(test)]
 const IDENTITY: ColourMatrix = [
     [1.0, 0.0, 0.0, 0.0],
     [0.0, 1.0, 0.0, 0.0],
@@ -84,12 +85,14 @@ impl ColourFilter {
 }
 
 /// Applies `matrix` to one sRGB colour and clamps each channel to `0.0..=1.0`.
+#[cfg(test)]
 pub fn apply(matrix: &ColourMatrix, [r, g, b]: [f32; 3]) -> [f32; 3] {
     let row = |m: &[f32; 4]| (m[0] * r + m[1] * g + m[2] * b + m[3]).clamp(0.0, 1.0);
     [row(&matrix[0]), row(&matrix[1]), row(&matrix[2])]
 }
 
 /// The matrix a pass should use: the identity for `None`, so a disabled filter is a no-op.
+#[cfg(test)]
 pub fn effective_matrix(filter: ColourFilter) -> ColourMatrix {
     filter.matrix().unwrap_or(IDENTITY)
 }

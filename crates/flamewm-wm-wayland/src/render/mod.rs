@@ -5,6 +5,7 @@ use std::error::Error;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::colour_filter::ColourFilter;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::memory::{
@@ -498,7 +499,35 @@ fn render_into(
     };
     // A retained texture + full blit was measured slower than direct window damage under llvmpipe
     // (marquee 142% vs 89% CPU, one run each), so the window path stays the only one.
-    let damage = {
+    let filter = state.colour_filter;
+    if filter != ColourFilter::None && state.colour_program.is_none() {
+        state.colour_program = Some(match crate::colour_pass::compile(backend.renderer()) {
+            Ok(program) => Ok(program),
+            Err(error) => {
+                eprintln!("flamewm-wayland: colour filter shader failed: {error}");
+                Err(())
+            }
+        });
+    }
+    let filter_program = match &state.colour_program {
+        Some(Ok(program)) if filter != ColourFilter::None => Some(program.clone()),
+        _ => None,
+    };
+    let damage = if let Some(program) = &filter_program {
+        // The filter pass repaints the full output with a fresh tracker, so the window tracker's
+        // partial-repaint state is left intact for when the filter is off again.
+        let mut tracker = OutputDamageTracker::from_output(&state.output);
+        crate::colour_pass::draw_filtered(
+            backend,
+            program,
+            filter,
+            &mut tracker,
+            &elements,
+            size,
+            CLEAR,
+        )?;
+        None
+    } else {
         let (renderer, mut framebuffer) = backend.bind()?;
         let result =
             state
