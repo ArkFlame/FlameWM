@@ -75,6 +75,39 @@ Rotation, refresh rate, drag-and-drop and a revert timer are out of scope.
 4. Runtime. No multi-output runtime path has been run. The DRM path cannot run in the
    development environment, and no private nested multi-output session was found.
 
+## Slice B (pointer clamp, settings label, decisions, runtime status)
+
+1. Pointer clamping: wired. `State::pointer_layout` (`crates/flamewm-wm-wayland/src/state.rs`)
+   is rebuilt from the live DRM outputs in `drm/outputs.rs::sync_pointer_layout` after
+   connector add/remove and on drop. `input/pointer.rs::on_motion` clamps through
+   `output_layout::clamp_point_to_layout`, using `output_layout::pointer_layout` (row
+   when stored, else the primary `output_rect`). Commit `16212dd3`. Test
+   `pointer_layout_prefers_the_row_and_falls_back_to_the_primary_output` proves selection
+   and clamp math only, not runtime wiring. Behavior note: a motion past the single output
+   edge now lands on its last pixel; in-bounds motion is unchanged.
+   Still open: hit lookups (`pointer_target`) still use per-window geometry, not the row.
+2. Settings scale slider: accessible name present. `ui/settings.html:58`
+   (`role="slider" aria-label="Display scale" aria-valuemin="100" aria-valuemax="200"`).
+   Test `view.rs` `scale_is_a_single_draggable_control_not_five_buckets` now asserts the
+   label. Commit `8eb2c3b9`.
+3. Per-output scale key: decision needed, nothing changed. `wayland-0` stays the persisted key.
+   - Option A, per-connector keys (`DP-1`, `eDP-1`): `scale_percent_for` and
+     `control/settings.rs:107` read the connector name; `control/mod.rs:78`
+     `nested_output_scale_percent` picks the key per output; `drm/outputs.rs:190` and
+     `build_output` read per output; `host/displays.rs::persist_output_scale` writes per output.
+     Migration risk: existing `scale.wayland-0` values stop applying unless migrated to the
+     primary connector name. Connector names can change across hardware or port moves, so a
+     stale key silently falls back to 100%.
+   - Option B, single shared key: no code change beyond the docs. Every output gets one
+     scale; mixed-DPI multi-output setups remain impossible.
+   - Needed decision: A or B, and for A whether `wayland-0` migrates to the primary connector
+     or stays as a fallback key.
+4. Runtime: no private nested multi-output path exists. The nested backend
+   (`FLAMEWM_WAYLAND_BACKEND=winit`, `main.rs:5`) creates one `Output` (`state.rs` `on_resized`).
+   The DRM path needs a real tty and connectors; it was not probed (host buses off limits).
+   The settings acceptance SS08 multi-output case is `ENVIRONMENT_BLOCKED` in `docs/TERRA_RESULTS.md:371`.
+   No new runtime evidence was captured in this slice. README stays `Partial`.
+
 ## Evidence
 
 - Runtime evidence: none.
