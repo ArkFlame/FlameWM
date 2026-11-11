@@ -98,3 +98,49 @@ Measured at the flat titlebar pixel (x=900, one row inside the bar) with the wal
 - Measured: `flamewm-screenshot --full --no-save --output` PNG (1350x641, RGB) top-left and centre pixels read `[18, 20, 28]`, which is R=18 G=20 B=28 in RGB order. A swapped channel order would read `[28, 20, 18]`. Not swapped.
 - Conclusion: the screencopy path stays `Abgr8888`. Only the backdrop blur readback (`read_reduced`) needed `Argb8888`, per `f9c1b491`.
 - Not measured: a red wallpaper sample; the check relies on the screenshot decoder's `Xrgb8888` to RGB conversion being correct.
+
+## Row 12 source audit: lock, focus/urgency, media (X11 vs Wayland)
+
+Scope: `wsh-lock-x11`. Method: source reads on `origin/main` `bddeff02`, no runtime run. Line refs are from that commit. Verdicts: **shared** (one owner, both call it), **duplicated** (same rule written twice), **differs-by-design** (input or mechanism differs on purpose), **unknown** (not established from source here).
+
+### Lock
+
+| Item | X11 evidence | Wayland evidence | Verdict |
+|---|---|---|---|
+| Lock trigger | `crates/flamewm-wm-x11/src/wm/events.rs:202`, `idle.rs:144`, `hot_corner.rs:157`, `lib.rs:758`, `flamewm-x11-desktop/src/ports.rs:214` all call `flamewm_x11_desktop::start_lock_screen` | `input/shortcuts.rs:160` `ACTION_SESSION_LOCK` only logs "session lock is a later phase"; no WM-initiated lock | differs-by-design (X11 spawns a lock client; Wayland waits for a client to request `ext-session-lock-v1`) |
+| Lock process ownership | `crates/flamewm-x11-desktop/src/lock.rs:115-121` spawns `flamewm-lock` detached plus supervisor thread; fallback `loginctl lock-session` (`lock.rs:126`) | `session_lock.rs:122` `lock()` and `:135` `unlock()` handle the protocol; `lock_global.rs:15` `install` advertises the global; `lock_cover.rs` paints | differs-by-design |
+| Crash supervision | `lock.rs:50` `decide`: respawn on non-success exit (SIGKILL drops grabs), `LOCK_RESPAWN_CAP` stop, `supervise_lock` `:72` | Protocol: a dead locker leaves the session locked (`session_lock.rs:37` `clear_lock_surfaces`, `:213` `prune_dead_locks`); no respawn; WM owns no lock process | differs-by-design |
+| Input gating while locked | none found in X11 lock path (scan limited to `lock.rs`; `windows_reachable`-equivalent not located) | `session_lock.rs:201` `shortcuts_active`, `:207` `windows_reachable`, `:190` `screen_for`, `:174` `enter_lock` | unknown on X11 (not located); Wayland side is source-verified |
+| Lock UI | `flamewm-lock` is a separate binary on both sides, X11 via `flamewm-lock/src/x11.rs`, Wayland via `flamewm-lock/src/wayland.rs` | same crate | shared (one UI crate, two backends) |
+
+### Focus and urgency
+
+| Item | X11 evidence | Wayland evidence | Verdict |
+|---|---|---|---|
+| New-map focus steal | `wm/focus_guard.rs:30` `map_may_take_focus(recent_input, has_active, transient)` | no equivalent in `wm-wayland` source; new toplevels are placed in `state.rs`/`model.rs` | differs-by-design (X11 input timestamp rule; Wayland has no timestamp rule for maps) |
+| Active-window request policy | `focus_guard.rs:35` `active_request_may_focus(source, recent_input)`, pager source honoured after input | `protocols/compat.rs:30` `activation_allowed(has_input_serial, age)`, max age `:26` 10 s, `:100-118` `request_activation` | differs-by-design (inputs differ: X11 user-time/source vs Wayland token serial + age) |
+| Focus set | `wm/window_ops.rs:4` `focus`, `:10` `focus_hover` (no restack), `:28` `focus_with_stacking` | `state.rs:817` `set_focus` (raises in model, `pin_focus_to_lock` `:855` short-circuits) | differs-by-design (restacking models differ) |
+| Focus-follows-mouse setting | `live_settings.rs:271` `focus_follows_mouse` | `input/settings.rs:6` `saved_focus_follows_mouse`, `:12` `focus_follows_mouse_at` | duplicated (both read a boolean setting in their own backend; no shared reader found in the scan) |
+| Urgency set on blocked activation | `wm/events.rs:750` sets `_NET_WM_STATE_DEMANDS_ATTENTION` via `update_demands_attention` `:662-680` | `compat.rs:106-108` drops a rejected activation silently; no urgency property or state in `wm-wayland` source (grep for urgen/demands_attention empty) | unknown on Wayland (feature absent in source; whether it should exist is not decided) |
+| Urgency clear and read | cleared on focus `wm/window_ops.rs:39`, on map `manage.rs:593` sets, `client_state.rs:33` reads | none | X11-only |
+| Super-tap focus loss | `wm/super_tap.rs:96` `focus_lost` | none found | unknown on Wayland |
+
+### Media keys and control
+
+| Item | X11 evidence | Wayland evidence | Verdict |
+|---|---|---|---|
+| Key names to actions | `flamewm-x11-desktop/src/shortcuts.rs:77-93` XF86 keysym table; actions from `flamewm_api` | `flamewm-platform/src/shortcuts.rs:383-399` defaults for the same `XF86Audio*` and `XF86MonBrightness*` names | shared (action ids and defaults from platform/api) |
+| Action id to media key | `wm/events.rs:211-218` inline `match` (volume up/down/mute, brightness up/down) | `input/mod.rs:52-61` `media_key` (same five ids) | **duplicated** (same five-row mapping written twice; the Wayland one has a unit test, `input/tests.rs:25-45`; X11 has none found) |
+| Audio apply | `runtime.rs:742-746` `host.media_audio_key(key, cap)` | `control/media.rs:64-68` `media_audio_key(key)` calls the same `host.media_audio_key(key, cap)` | shared (`flamewm-platform/src/system.rs:255-300` owns step, cap, mute and generation) |
+| Brightness apply | `runtime.rs:748-749` `host.media_brightness_key(key)` | `control/media.rs:33-50` `media_brightness_key` calls the same host method | shared (platform owner) |
+| Volume cap source | `live_settings.rs:51` `raise_maximum` snapshot, `runtime.rs:744` `volume_cap_percent()` | `control/media.rs:65` `volume_cap(&settings_snapshot())` | duplicated read of one shared setting; each backend resolves it separately |
+| Missing control service | X11 path has no control-service gate (host called directly) | `input/shortcuts.rs:173-181` logs once and drops the key when `self.control` is `None` | differs-by-design (Wayland runs a separate control service) |
+| MPRIS / media transport | X11 `runtime.rs:156` registers `LinuxIntegrationSource::Mpris` | not searched in this pass | unknown on Wayland |
+
+### Summary
+
+- Shared, no action: lock UI binary (`flamewm-lock`), media apply (`flamewm-platform` `system.rs`), shortcut names and defaults.
+- Duplicated, candidate for a later move: the five-row action-to-media-key map (`wm/events.rs:211-218` vs `input/mod.rs:52-61`). Not moved in this pass. The map has no shared key enum today (audio and brightness are separate types in `flamewm-platform`), so moving it means adding a new type to a shared crate. That is a design step, not the tiny pure move this pass allowed. Also duplicated: the focus-follows-mouse bool reader and the volume-cap read.
+- Differs by design: lock supervision, activation/focus-steal policy, restack model, missing-control-service path.
+- Unknown: X11 lock input gating, Wayland urgency (absent in source), Wayland MPRIS, Super-tap focus loss on Wayland.
+- Code change: none. Runtime check: none run, so no runtime claim is made. Row 12 in the table above stays "unmeasured" until a runtime pass.
