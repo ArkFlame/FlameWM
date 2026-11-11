@@ -31,6 +31,34 @@ fn desktop(name: &str) -> String {
 }
 
 #[test]
+fn refresh_is_gated_on_application_dir_mtime() {
+    let dir = scratch_apps_dir("gate");
+    let dirs = std::slice::from_ref(&dir);
+    let t1 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let t2 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+    fs::File::open(&dir).unwrap().set_modified(t1).unwrap();
+    let shared = SharedApplicationCatalog::new(ApplicationCatalog::from_dirs(dirs).unwrap());
+    shared.rescan_from_dirs(dirs).unwrap();
+
+    // Entry added with the dir mtime pinned back to t1: the gate must not read the dir.
+    fs::write(dir.join("late.desktop"), desktop("Late")).unwrap();
+    fs::File::open(&dir).unwrap().set_modified(t1).unwrap();
+    assert!(shared.refresh_if_dirs_changed(dirs).unwrap().is_empty());
+    assert!(
+        shared
+            .current()
+            .find(&DesktopAppId::new("late.desktop"))
+            .is_err()
+    );
+
+    // A real mtime change triggers the rescan and reports the new entry.
+    fs::File::open(&dir).unwrap().set_modified(t2).unwrap();
+    let delta = shared.refresh_if_dirs_changed(dirs).unwrap();
+    assert_eq!(delta.added, vec![DesktopAppId::new("late.desktop")]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn rescan_reports_added_changed_and_removed_entries() {
     let dir = scratch_apps_dir("delta");
     fs::write(dir.join("keep.desktop"), desktop("Keep")).unwrap();

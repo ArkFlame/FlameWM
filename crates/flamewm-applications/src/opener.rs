@@ -157,8 +157,14 @@ pub(super) fn startup_identity_for_target(
         defaults.lock().ok()?.insert(mime, id.clone());
         id
     }?;
-    let catalog = shared_application_catalog().current();
-    let entry = catalog.find(&DesktopAppId::new(desktop_id)).ok()?;
+    let id = DesktopAppId::new(desktop_id);
+    let mut catalog = shared_application_catalog().current();
+    if catalog.find(&id).is_err() {
+        // Opener-miss trigger: the default handler may be installed after the last read.
+        let _ = refresh_installed_applications_if_changed();
+        catalog = shared_application_catalog().current();
+    }
+    let entry = catalog.find(&id).ok()?;
     Some((
         entry.application.name.clone(),
         if entry.application.icon_name.is_empty() {

@@ -252,6 +252,16 @@ impl ApplicationCatalog {
 #[derive(Debug)]
 pub struct SharedApplicationCatalog {
     pub(super) current: std::sync::RwLock<std::sync::Arc<ApplicationCatalog>>,
+    /// Application-dir mtimes taken before the last read; `None` until one is recorded.
+    pub(super) stamps: std::sync::Mutex<Option<Vec<Option<std::time::SystemTime>>>>,
+}
+
+/// Modification time of each dir in `dirs`; `None` when the dir is absent.
+/// A dir's mtime changes when entries are added, removed or renamed in it.
+fn dir_stamps(dirs: &[PathBuf]) -> Vec<Option<std::time::SystemTime>> {
+    dirs.iter()
+        .map(|dir| std::fs::metadata(dir).and_then(|meta| meta.modified()).ok())
+        .collect()
 }
 
 impl SharedApplicationCatalog {
@@ -259,6 +269,7 @@ impl SharedApplicationCatalog {
     pub fn new(catalog: ApplicationCatalog) -> Self {
         Self {
             current: std::sync::RwLock::new(std::sync::Arc::new(catalog)),
+            stamps: std::sync::Mutex::new(None),
         }
     }
 
@@ -272,6 +283,8 @@ impl SharedApplicationCatalog {
 
     /// Re-reads `dirs`, swaps the snapshot in, and reports what changed.
     pub fn rescan_from_dirs(&self, dirs: &[PathBuf]) -> FlameResult<CatalogDelta> {
+        // Stamps are taken before the read: a change during the read forces the next refresh.
+        let stamps = dir_stamps(dirs);
         let next = ApplicationCatalog::from_dirs(dirs)?;
         let mut guard = self
             .current
@@ -279,7 +292,26 @@ impl SharedApplicationCatalog {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let delta = guard.delta_to(&next);
         *guard = std::sync::Arc::new(next);
+        *self
+            .stamps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stamps);
         Ok(delta)
+    }
+
+    /// Rescans only when an application dir mtime changed since the last read.
+    /// Unchanged dirs return an empty delta without reading any `.desktop` file.
+    pub fn refresh_if_dirs_changed(&self, dirs: &[PathBuf]) -> FlameResult<CatalogDelta> {
+        let stamps = dir_stamps(dirs);
+        let seen = self
+            .stamps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if seen.as_ref() == Some(&stamps) {
+            return Ok(CatalogDelta::default());
+        }
+        self.rescan_from_dirs(dirs)
     }
 }
 
@@ -287,11 +319,24 @@ impl SharedApplicationCatalog {
 pub fn shared_application_catalog() -> &'static SharedApplicationCatalog {
     static SHARED: std::sync::OnceLock<SharedApplicationCatalog> = std::sync::OnceLock::new();
     SHARED.get_or_init(|| {
-        SharedApplicationCatalog::new(ApplicationCatalog::discover().unwrap_or_default())
+        let dirs = xdg_application_dirs();
+        let stamps = dir_stamps(&dirs);
+        let shared =
+            SharedApplicationCatalog::new(ApplicationCatalog::discover().unwrap_or_default());
+        *shared
+            .stamps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stamps);
+        shared
     })
 }
 
 /// Explicit rescan of the XDG application directories. No watcher and no logout.
 pub fn rescan_installed_applications() -> FlameResult<CatalogDelta> {
     shared_application_catalog().rescan_from_dirs(&xdg_application_dirs())
+}
+
+/// Gated rescan for launch-time consumers: a no-op unless an XDG application dir changed.
+pub fn refresh_installed_applications_if_changed() -> FlameResult<CatalogDelta> {
+    shared_application_catalog().refresh_if_dirs_changed(&xdg_application_dirs())
 }
