@@ -1,12 +1,56 @@
 //! Alt+Tab switcher and new-popup focus handling.
 
 use super::*;
+use flamewm_api::switcher::SwitcherThumb;
+use std::collections::VecDeque;
 
-/// Alt+Tab state while the switcher is open: the window order and the highlighted entry.
+/// Most previews kept for one open switcher. Matches `MAX_THUMBS` in the X11 path
+/// (`crates/flamewm-wm-x11/src/wm/switcher_thumbs.rs`).
+const THUMB_CAP: usize = 24;
+
+/// Per-open preview cache. Previews are captured lazily while the switcher is open and dropped
+/// when it closes, so nothing stays resident while idle (docs/backlog/alttab.md, section 5).
+#[derive(Default)]
+pub(super) struct ThumbCache {
+    /// Oldest first. A repeat `store` for a window moves it to the back.
+    slots: VecDeque<(WindowId, SwitcherThumb)>,
+}
+
+impl ThumbCache {
+    /// Keeps `thumb` as the preview for `id`. Wire references and malformed or empty buffers are
+    /// refused, so the entry keeps its `title` and `app_id` row. Evicts the oldest preview at `THUMB_CAP`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn store(&mut self, id: WindowId, thumb: SwitcherThumb) -> bool {
+        if thumb.is_reference() || !thumb.is_well_formed() || thumb.width == 0 || thumb.height == 0
+        {
+            return false;
+        }
+        self.slots.retain(|(known, _)| *known != id);
+        if self.slots.len() == THUMB_CAP {
+            self.slots.pop_front();
+        }
+        self.slots.push_back((id, thumb));
+        true
+    }
+
+    /// The preview to publish for `id`, if one was stored for this open.
+    pub(super) fn wire(&self, id: WindowId) -> Option<SwitcherThumb> {
+        self.slots
+            .iter()
+            .find(|(known, _)| *known == id)
+            .map(|(_, thumb)| thumb.clone())
+    }
+}
+
+/// Alt+Tab state while the switcher is open: the window order, the highlighted entry and previews.
 pub(super) struct Switcher {
     order: Vec<WindowId>,
     selected: usize,
+    thumbs: ThumbCache,
 }
+
+/// What `emit_switcher` publishes: window order, highlighted index, and one optional preview per entry.
+type SwitcherView = (Vec<WindowId>, usize, Vec<Option<SwitcherThumb>>);
 
 impl Service {
     /// Alt+Tab: the first press opens the switcher on the visible windows with the second one
@@ -23,12 +67,21 @@ impl Service {
                 if order.len() < 2 {
                     return;
                 }
-                *slot = Some(Switcher { order, selected: 1 });
+                *slot = Some(Switcher {
+                    order,
+                    selected: 1,
+                    thumbs: ThumbCache::default(),
+                });
             }
         }
-        let view = slot
-            .as_ref()
-            .map(|switcher| (switcher.order.clone(), switcher.selected));
+        let view: Option<SwitcherView> = slot.as_ref().map(|switcher| {
+            let thumbs = switcher
+                .order
+                .iter()
+                .map(|id| switcher.thumbs.wire(*id))
+                .collect();
+            (switcher.order.clone(), switcher.selected, thumbs)
+        });
         drop(slot);
         self.emit_switcher(view);
     }
@@ -51,29 +104,26 @@ impl Service {
         }
     }
 
-    pub(super) fn emit_switcher(&self, view: Option<(Vec<WindowId>, usize)>) {
+    pub(super) fn emit_switcher(&self, view: Option<SwitcherView>) {
         let signal = match view {
-            Some((order, selected)) => {
+            Some((order, selected, thumbs)) => {
                 let windows = self.mirror.borrow();
                 let entries = order
                     .iter()
-                    .map(|id| {
-                        windows
+                    .zip(thumbs)
+                    .map(|(id, thumb)| {
+                        let (title, app_id) = windows
                             .windows
                             .iter()
                             .find(|window| window.reference.id == *id)
-                            .map_or(
-                                SwitcherEntry {
-                                    title: String::new(),
-                                    app_id: String::new(),
-                                    thumb: None,
-                                },
-                                |window| SwitcherEntry {
-                                    title: window.title.clone(),
-                                    app_id: window.app_id.as_str().to_owned(),
-                                    thumb: None,
-                                },
-                            )
+                            .map_or((String::new(), String::new()), |window| {
+                                (window.title.clone(), window.app_id.as_str().to_owned())
+                            });
+                        SwitcherEntry {
+                            title,
+                            app_id,
+                            thumb,
+                        }
                     })
                     .collect();
                 ControlSignal::WindowSwitcherChanged {
@@ -121,5 +171,57 @@ impl Service {
         if let Some(keyboard) = state.seat.get_keyboard() {
             keyboard.set_focus(state, Some(surface), crate::state::next_serial());
         }
+    }
+}
+
+#[cfg(test)]
+mod thumb_tests {
+    use super::*;
+
+    fn thumb(generation: u64, width: u32, height: u32) -> SwitcherThumb {
+        SwitcherThumb {
+            width,
+            height,
+            generation,
+            rgba: vec![0; (width * height * 4) as usize],
+        }
+    }
+
+    #[test]
+    fn store_keeps_complete_previews_and_refuses_bad_ones() {
+        let mut cache = ThumbCache::default();
+        assert!(cache.store(7, thumb(1, 4, 2)));
+        assert!(!cache.store(
+            8,
+            SwitcherThumb {
+                rgba: Vec::new(),
+                ..thumb(1, 4, 2)
+            }
+        ));
+        assert!(!cache.store(
+            8,
+            SwitcherThumb {
+                rgba: vec![0; 3],
+                ..thumb(1, 4, 2)
+            }
+        ));
+        assert!(!cache.store(8, thumb(1, 0, 0)));
+        assert_eq!(cache.wire(7), Some(thumb(1, 4, 2)));
+        assert_eq!(cache.wire(8), None);
+    }
+
+    #[test]
+    fn store_replaces_per_window_and_evicts_oldest_at_cap() {
+        let mut cache = ThumbCache::default();
+        for id in 0..THUMB_CAP as WindowId {
+            assert!(cache.store(id, thumb(1, 1, 1)));
+        }
+        assert!(cache.store(0, thumb(2, 2, 1)));
+        assert_eq!(cache.slots.len(), THUMB_CAP);
+        assert_eq!(cache.wire(0).map(|t| t.generation), Some(2));
+        assert!(cache.store(999, thumb(1, 1, 1)));
+        assert_eq!(cache.slots.len(), THUMB_CAP);
+        assert_eq!(cache.wire(1), None, "oldest preview is evicted");
+        assert!(cache.wire(0).is_some(), "refreshed preview survives");
     }
 }
