@@ -3,7 +3,7 @@ use crate::hash::{FastMap, FastSet};
 use crate::layout::LayoutResult;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +198,9 @@ pub struct RuntimeDocument {
     /// Global text-shadow gate; off suppresses every text shadow at paint time.
     pub(super) ui_text_shadow: bool,
     pub(super) ui_scale: f32,
+    /// Node-local accessibility attributes (`aria-label`, `aria-checked`, ...). Not painted, so
+    /// they bump `revision` without damage; the accessibility tree reads them back by node.
+    pub(super) attribute_overrides: FastMap<u32, BTreeMap<String, String>>,
 }
 
 impl RuntimeDocument {
@@ -265,6 +268,7 @@ impl RuntimeDocument {
             ui_font_bold: false,
             ui_text_shadow: true,
             ui_scale: 1.0,
+            attribute_overrides: FastMap::default(),
         })
     }
 
@@ -407,6 +411,35 @@ impl RuntimeDocument {
             self.touch_node(target, DirtyReason::Text, true);
         }
         Ok(())
+    }
+
+    /// Sets accessibility attribute `name` (lowercase ASCII letters, digits and `-`, for example
+    /// `aria-label`) on node `id`. An unchanged value costs no revision bump.
+    pub fn set_attribute(&mut self, id: &str, name: &str, value: &str) -> Result<(), String> {
+        let index = self.require_node(id)?;
+        let valid = !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if !valid {
+            return Err(format!("invalid attribute name '{name}'"));
+        }
+        let values = self.attribute_overrides.entry(index).or_default();
+        if values.get(name).is_some_and(|current| current == value) {
+            return Ok(());
+        }
+        values.insert(name.to_owned(), value.to_owned());
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    /// The accessibility attribute `name` last set on node `id`, if any.
+    pub fn attribute(&self, id: &str, name: &str) -> Option<&str> {
+        let index = self.node_by_id(id)?;
+        self.attribute_overrides
+            .get(&index)?
+            .get(name)
+            .map(String::as_str)
     }
 
     pub fn set_visible(&mut self, id: &str, visible: bool) -> Result<(), String> {

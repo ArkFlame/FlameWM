@@ -1056,3 +1056,60 @@ mod visibility_tests {
         assert_eq!(panel_fills(&document), 1);
     }
 }
+
+#[cfg(test)]
+mod attribute_tests {
+    use super::*;
+
+    fn fixture() -> RuntimeDocument {
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![CompiledNode {
+                kind: NodeKind::Element,
+                parent: None,
+                first_child: None,
+                next_sibling: None,
+                id: "toggle".to_string().into(),
+                action: std::borrow::Cow::Borrowed(""),
+                text: std::borrow::Cow::Borrowed(""),
+                image: None,
+                style: Style::default().into(),
+                hover_style: None,
+                active_style: None,
+                focus_style: None,
+            }],
+        })
+        .expect("fixture validates")
+    }
+
+    #[test]
+    fn set_attribute_round_trips_and_overwrites() {
+        let mut doc = fixture();
+        assert_eq!(doc.attribute("toggle", "aria-checked"), None);
+        doc.set_attribute("toggle", "aria-checked", "false")
+            .expect("set");
+        assert_eq!(doc.attribute("toggle", "aria-checked"), Some("false"));
+        doc.set_attribute("toggle", "aria-checked", "true")
+            .expect("overwrite");
+        assert_eq!(doc.attribute("toggle", "aria-checked"), Some("true"));
+    }
+
+    #[test]
+    fn unchanged_attribute_keeps_revision_and_rejects_bad_input() {
+        let mut doc = fixture();
+        doc.set_attribute("toggle", "aria-label", "Night light")
+            .expect("set");
+        let revision = doc.revision();
+        doc.set_attribute("toggle", "aria-label", "Night light")
+            .expect("same");
+        assert_eq!(doc.revision(), revision);
+        assert!(doc.set_attribute("absent", "aria-label", "x").is_err());
+        assert!(doc.set_attribute("toggle", "", "x").is_err());
+        assert!(doc.set_attribute("toggle", "Aria-Label", "x").is_err());
+        assert!(doc.set_attribute("toggle", "aria label", "x").is_err());
+        assert_eq!(doc.attribute("toggle", "aria-label"), Some("Night light"));
+    }
+}

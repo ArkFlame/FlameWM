@@ -252,6 +252,11 @@ pub trait UiDocumentAccess {
         y: flamewm_render_core::Overflow,
     ) -> Result<(), String>;
     fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String>;
+    /// Sets accessibility attribute `name` (for example `aria-label`) on node `id`. Backends with a
+    /// node attribute store override it; the default refuses so a caller never assumes a silent drop.
+    fn attribute(&mut self, _id: &str, _name: &str, _value: &str) -> Result<(), String> {
+        Err("attribute projection is unsupported by this document access".to_string())
+    }
 }
 
 impl UiDocument {
@@ -565,6 +570,10 @@ macro_rules! document_access_methods {
         fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
             self.document.set_z_index(id, layer.z_index())
         }
+
+        fn attribute(&mut self, id: &str, name: &str, value: &str) -> Result<(), String> {
+            self.document.set_attribute(id, name, value)
+        }
     };
 }
 
@@ -751,6 +760,32 @@ mod tests {
             active_style: None,
             focus_style: None,
         }
+    }
+
+    #[test]
+    fn attribute_lands_on_compiled_node_through_document_and_view() {
+        // Precedent: WAI-ARIA 1.2 names a button from `aria-label` on the element itself.
+        let mut doc = make_doc(
+            Vec::new(),
+            Vec::new(),
+            vec![node("dock-slot-1", NodeKind::Element)],
+        );
+        UiDocumentAccess::attribute(&mut doc, "dock-slot-1", "aria-label", "Trash")
+            .expect("owned document stores attribute");
+        assert_eq!(
+            doc.document.attribute("dock-slot-1", "aria-label"),
+            Some("Trash")
+        );
+        assert!(UiDocumentAccess::attribute(&mut doc, "missing", "aria-label", "x").is_err());
+
+        let (mut runtime, ..) = doc.into_parts();
+        let mut view = UiDocumentView::from_runtime(&mut runtime, None);
+        UiDocumentAccess::attribute(&mut view, "dock-slot-1", "aria-checked", "true")
+            .expect("view stores attribute");
+        assert_eq!(
+            runtime.attribute("dock-slot-1", "aria-checked"),
+            Some("true")
+        );
     }
 
     fn make_doc(
