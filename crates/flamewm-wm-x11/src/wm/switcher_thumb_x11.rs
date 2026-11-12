@@ -159,4 +159,173 @@ mod tests {
         );
         assert!(thumb.is_some_and(|(_, _, px)| px.iter().any(|&b| b != 0)));
     }
+
+    /// Live refresh and last-frame proof on a private Xvfb with Composite and DAMAGE:
+    /// `DISPLAY=:N cargo test -p flamewm-wm-x11 damaged_window -- --ignored --nocapture`.
+    /// Production `ThumbProvider` over `X11ThumbSource`, with a real DAMAGE object on the client.
+    /// The client repaints green to red; its `DamageNotify` drives `provider.damage` (the
+    /// `switcher_damaged` path) and the next pump captures red. Once minimised, the client is
+    /// never read again and its request serves the last red frame.
+    #[test]
+    #[ignore = "needs DISPLAY with Composite (Xvfb +extension Composite)"]
+    fn damaged_window_recaptures_and_minimised_window_keeps_last_frame() {
+        use crate::wm::switcher_thumb_provider::{CaptureBudget, ThumbProvider};
+        use crate::wm::switcher_thumbs::ThumbKey;
+        use std::cell::Cell;
+        use std::time::Duration;
+        use x11rb::protocol::Event;
+        use x11rb::protocol::damage::{self, ReportLevel};
+        use x11rb::protocol::xproto::{CreateGCAux, Rectangle};
+
+        const GREEN: [u8; 3] = [0x00, 0xff, 0x00];
+        const RED: [u8; 3] = [0x00, 0x00, 0xff];
+        let (conn, screen_num) = x11rb::connect(None).expect("DISPLAY");
+        let screen = conn.setup().roots[screen_num].clone();
+        let frame = conn.generate_id().unwrap();
+        conn.create_window(
+            screen.root_depth,
+            frame,
+            screen.root,
+            100,
+            100,
+            300,
+            200,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().background_pixel(0),
+        )
+        .unwrap();
+        let client = conn.generate_id().unwrap();
+        conn.create_window(
+            screen.root_depth,
+            client,
+            frame,
+            40,
+            30,
+            200,
+            120,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().background_pixel(0x0000_ff00),
+        )
+        .unwrap();
+        conn.composite_redirect_window(frame, Redirect::AUTOMATIC)
+            .unwrap();
+        conn.map_window(client).unwrap();
+        conn.map_window(frame).unwrap();
+        damage::query_version(&conn, 1, 1)
+            .unwrap()
+            .reply()
+            .expect("DAMAGE extension");
+        let damage_id = conn.generate_id().unwrap();
+        damage::create(&conn, damage_id, client, ReportLevel::NON_EMPTY)
+            .unwrap()
+            .check()
+            .unwrap();
+        // Same reset as `watch_switcher_damage`: clear the paints from the map before watching.
+        damage::subtract(&conn, damage_id, 0u32, 0u32)
+            .unwrap()
+            .check()
+            .unwrap();
+        conn.get_input_focus().unwrap().reply().unwrap();
+        while conn.poll_for_event().unwrap().is_some() {}
+
+        let minimised = Cell::new(false);
+        let iconic = |_: u32| minimised.get();
+        let redirected = |window: u32| (window == client).then_some(frame);
+        let key = ThumbKey {
+            window: client,
+            src_w: 200,
+            src_h: 120,
+        };
+        let mut provider = ThumbProvider::default();
+        let mut budget = CaptureBudget::new(4);
+        let pump = |provider: &mut ThumbProvider, budget: &mut CaptureBudget| {
+            budget.begin_turn();
+            let mut source = X11ThumbSource {
+                conn: &conn,
+                iconic: &iconic,
+                redirected_frame: &redirected,
+            };
+            provider.pump(&mut source, budget)
+        };
+        let solid = |px: &[u8]| -> Option<[u8; 3]> {
+            let first = [px[0], px[1], px[2]];
+            px.chunks_exact(4).all(|p| p[..3] == first).then_some(first)
+        };
+
+        provider.request(key);
+        assert_eq!(pump(&mut provider, &mut budget), 1, "first capture");
+        let first = provider.request(key).expect("cached").2.clone();
+        assert_eq!(
+            solid(&first),
+            Some(GREEN),
+            "first capture shows the drawn colour"
+        );
+
+        // The client repaints by drawing into itself, which is what reports DAMAGE.
+        let gc = conn.generate_id().unwrap();
+        conn.create_gc(gc, client, &CreateGCAux::new().foreground(0x00ff_0000))
+            .unwrap()
+            .check()
+            .unwrap();
+        conn.poly_fill_rectangle(
+            client,
+            gc,
+            &[Rectangle {
+                x: 0,
+                y: 0,
+                width: 200,
+                height: 120,
+            }],
+        )
+        .unwrap()
+        .check()
+        .unwrap();
+        let mut damaged = false;
+        for _ in 0..300 {
+            while let Some(event) = conn.poll_for_event().unwrap() {
+                damaged |= matches!(event, Event::DamageNotify(e) if e.damage == damage_id);
+            }
+            if damaged {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(damaged, "DamageNotify after the client repainted");
+        // Production path: handle_damage_notify -> switcher_damaged -> provider.damage.
+        provider.damage(client);
+        assert!(
+            provider.request(key).is_none(),
+            "damaged preview is not served"
+        );
+        assert_eq!(
+            pump(&mut provider, &mut budget),
+            1,
+            "recapture after damage"
+        );
+        let repainted = provider.request(key).expect("recaptured").2.clone();
+        assert_eq!(
+            solid(&repainted),
+            Some(RED),
+            "thumbnail follows the repaint"
+        );
+
+        minimised.set(true);
+        provider.end_session();
+        provider.begin_session(|window| window == client);
+        let kept = provider
+            .request(key)
+            .expect("minimised window keeps its last frame")
+            .2
+            .clone();
+        assert_eq!(solid(&kept), Some(RED), "last frame is the red repaint");
+        assert_eq!(
+            pump(&mut provider, &mut budget),
+            0,
+            "minimised window is never read"
+        );
+    }
 }

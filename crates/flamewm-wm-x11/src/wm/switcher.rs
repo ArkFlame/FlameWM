@@ -6,7 +6,7 @@
 //! fullscreen client holds the keyboard. The pure parts (`Mru`, `switcher_order`, `Switcher`)
 //! carry no X state and are unit tested; the `Wm` glue at the bottom performs the X calls.
 
-use super::switcher_thumb_provider::{CaptureBudget, ThumbProvider};
+use super::switcher_thumb_provider::CaptureBudget;
 use super::switcher_thumb_x11::X11ThumbSource;
 use super::switcher_thumbs::{MAX_THUMBS, THUMB_MAX_H, THUMB_MAX_W, ThumbKey};
 use super::*;
@@ -282,8 +282,25 @@ impl<C: Connection> Wm<'_, C> {
             if !self.switcher.open(windows, step) {
                 return Ok(());
             }
+            // Visible windows are re-read; minimised or other-workspace ones keep their last frame.
+            let current = self.current_workspace;
+            let clients = &self.clients;
+            let hidden = |window: Window| {
+                clients.get(&window).is_some_and(|state| {
+                    state.minimized || (!state.sticky && state.workspace != current)
+                })
+            };
+            self.switcher_thumbs.begin_session(hidden);
             // A new session starts with an empty shell cache: every preview goes out again once.
             self.switcher_previews.clear();
+            let listed = self
+                .switcher
+                .view()
+                .map(|(windows, _)| windows.to_vec())
+                .unwrap_or_default();
+            for window in listed {
+                self.watch_switcher_damage(window);
+            }
             // No keyboard grab: a WM-held grab stops the raw feed from delivering the Alt
             // release, so the switcher would never commit. Keys reach the WM via the raw feed.
         }
@@ -384,6 +401,51 @@ impl<C: Connection> Wm<'_, C> {
         })
     }
 
+    /// Watches `window` for repaints while the switcher is open. Its DAMAGE events arrive on the
+    /// WM's existing `DamageNotify` path (see `switcher_damaged`); no new event source.
+    pub(super) fn watch_switcher_damage(&mut self, window: Window) {
+        if self.switcher_damage.contains_key(&window) {
+            return;
+        }
+        let Ok(id) = self.conn.generate_id() else {
+            return;
+        };
+        let version_ok = damage::query_version(&self.conn, 1, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some();
+        if version_ok
+            && damage::create(&self.conn, id, window, damage::ReportLevel::NON_EMPTY).is_ok()
+        {
+            // Clear paints from before the watch: NON_EMPTY reports only an empty-to-damaged change.
+            let _ = damage::subtract(&self.conn, id, 0u32, 0u32);
+            self.switcher_damage.insert(window, id);
+        }
+    }
+
+    /// A watched window repainted while the switcher is open: re-arms its damage object, drops
+    /// the stale preview and republishes, so the open switcher recaptures it.
+    pub(super) fn switcher_damaged(&mut self, window: Window, damage_id: u32) {
+        // NON_EMPTY reports again only after the damage region is subtracted.
+        let _ = damage::subtract(&self.conn, damage_id, 0u32, 0u32);
+        self.switcher_thumbs.damage(window);
+        if self.switcher.is_open() {
+            self.publish_switcher();
+        }
+    }
+
+    pub(super) fn release_switcher_damage(&mut self) {
+        for (_, id) in self.switcher_damage.drain() {
+            let _ = damage::destroy(&self.conn, id);
+        }
+    }
+
+    pub(super) fn release_switcher_damage_for(&mut self, window: Window) {
+        if let Some(id) = self.switcher_damage.remove(&window) {
+            let _ = damage::destroy(&self.conn, id);
+        }
+    }
+
     /// Event-loop hook: runs up to `SWITCHER_CAPTURES_PER_TURN` captures while the switcher is
     /// open. Republishes the snapshot when a preview landed. Returns the thumbnails stored.
     pub(crate) fn pump_switcher_thumbs(&mut self) -> usize {
@@ -471,8 +533,9 @@ impl<C: Connection> Wm<'_, C> {
     }
 
     fn end_switcher_session(&mut self) -> Result<(), ReplyError> {
-        // Previews are lazy: dropped when the switcher closes, so none stay resident while idle.
-        self.switcher_thumbs = ThumbProvider::default();
+        // Frames stay in the LRU-bounded provider so hidden windows keep their last frame.
+        self.switcher_thumbs.end_session();
+        self.release_switcher_damage();
         self.switcher_budget = CaptureBudget::new(SWITCHER_CAPTURES_PER_TURN);
         self.switcher_signal = Some(closed_signal());
         Ok(())

@@ -101,6 +101,21 @@ impl ThumbProvider {
         self.dirty.insert(window);
     }
 
+    /// Starts a switcher session. Cached frames of windows `hidden` (minimised or on another
+    /// workspace) stay served as their last captured frame. Every other cached window is
+    /// invalidated, since it may have repainted while the switcher was closed.
+    pub(crate) fn begin_session(&mut self, hidden: impl Fn(u32) -> bool) {
+        let visible: Vec<u32> = self.cache.windows().filter(|&w| !hidden(w)).collect();
+        for window in visible {
+            self.damage(window);
+        }
+    }
+
+    /// Ends a switcher session: queued captures are dropped, cached frames stay (LRU-bounded).
+    pub(crate) fn end_session(&mut self) {
+        self.pending.clear();
+    }
+
     /// Window closed or destroyed: drops everything kept for it.
     pub(crate) fn forget(&mut self, window: u32) {
         self.cache.remove_window(window);
@@ -293,6 +308,46 @@ mod tests {
         assert_eq!(turn(&mut p, &mut s, &mut b), 0);
         assert!(s.captures.is_empty());
         assert_eq!(p.pending_len(), 0);
+    }
+
+    #[test]
+    fn minimised_window_serves_its_last_frame_across_sessions() {
+        let mut p = ThumbProvider::default();
+        let mut s = Fake::live(&[1]);
+        p.request(key(1));
+        let mut b = CaptureBudget::new(1);
+        assert_eq!(turn(&mut p, &mut s, &mut b), 1);
+        p.end_session();
+        s.states.insert(
+            1,
+            WindowState {
+                iconic: true,
+                ..LIVE
+            },
+        );
+        p.begin_session(|w| w == 1);
+        assert!(
+            p.request(key(1)).is_some(),
+            "hidden window keeps its last frame"
+        );
+        assert_eq!(p.pending_len(), 0, "hidden window is not scheduled");
+    }
+
+    #[test]
+    fn visible_window_is_recaptured_on_a_new_session() {
+        let mut p = ThumbProvider::default();
+        let mut s = Fake::live(&[1]);
+        p.request(key(1));
+        let mut b = CaptureBudget::new(1);
+        turn(&mut p, &mut s, &mut b);
+        p.end_session();
+        p.begin_session(|_| false);
+        assert!(
+            p.request(key(1)).is_none(),
+            "visible window is not served stale"
+        );
+        assert_eq!(turn(&mut p, &mut s, &mut b), 1);
+        assert!(p.request(key(1)).is_some());
     }
 
     #[test]

@@ -518,6 +518,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     /// Preview generations sent in the open switcher session; cleared on open.
     switcher_previews: switcher::PreviewLedger,
     switcher_budget: switcher_thumb_provider::CaptureBudget,
+    /// DAMAGE objects on the windows the open switcher lists; a repaint refreshes their preview.
+    switcher_damage: HashMap<Window, u32>,
     /// Alt+Tab previews: captured while the switcher is open, dropped when it closes.
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,

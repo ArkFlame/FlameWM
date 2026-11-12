@@ -169,6 +169,11 @@ impl<V> ThumbCache<V> {
         None
     }
 
+    /// Windows that currently hold at least one entry (may repeat per entry).
+    pub(crate) fn windows(&self) -> impl Iterator<Item = u32> + '_ {
+        self.entries.iter().map(|(key, _)| key.window)
+    }
+
     /// Drops every entry for `window` (window closed or unmapped); returns how many went.
     pub(crate) fn remove_window(&mut self, window: u32) -> usize {
         let before = self.entries.len();

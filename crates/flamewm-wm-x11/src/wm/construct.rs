@@ -133,6 +133,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             switcher_signal: None,
             switcher_thumbs: Default::default(),
             switcher_previews: switcher::PreviewLedger::default(),
+            switcher_damage: HashMap::new(),
             switcher_budget: switcher_thumb_provider::CaptureBudget::new(
                 switcher::SWITCHER_CAPTURES_PER_TURN,
             ),

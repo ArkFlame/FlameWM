@@ -270,6 +270,15 @@ impl<C: Connection> Wm<'_, C> {
 
     /// The client repainted after remap: release its lingering overlay and stop watching it.
     pub(super) fn handle_damage_notify(&mut self, damage_id: u32) {
+        if let Some(window) = self
+            .switcher_damage
+            .iter()
+            .find(|(_, id)| **id == damage_id)
+            .map(|(window, _)| *window)
+        {
+            self.switcher_damaged(window, damage_id);
+            return;
+        }
         let Some(client) = self
             .damage_watch
             .iter()
