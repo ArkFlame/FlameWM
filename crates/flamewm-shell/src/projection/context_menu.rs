@@ -10,6 +10,7 @@ pub fn project_context_menu(
     settings: &SettingsSnapshot,
     state: Option<&crate::ContextMenuState>,
     start_favorites: &[String],
+    overflow_highlight: usize,
 ) -> Result<(), String> {
     // Shared menu surface (radius + fill) from the Surfaces settings, same owner as desktop menus.
     let surface = flamewm_ui_core::context_menu::menu_surface(settings);
@@ -62,8 +63,23 @@ pub fn project_context_menu(
         crate::ContextMenuKind::TaskOverflow { entries } => {
             for (index, state) in entries.iter().take(TASK_OVERFLOW_MENU_ROWS).enumerate() {
                 let label = crate::projection::task_label(snapshot, state);
-                document.text(&format!("context-overflow-{index}-label"), label.to_owned())?;
-                document.visible(&format!("context-overflow-{index}"), true)?;
+                let id = format!("context-overflow-{index}");
+                document.text(&format!("{id}-label"), label.to_owned())?;
+                document.visible(&id, true)?;
+                // WAI-ARIA APG menu button: one active item, roving tabindex. The highlight is
+                // the same accent-soft fill the pager uses for its active cell.
+                let highlighted = index == overflow_highlight;
+                document.attribute(
+                    &id,
+                    "aria-selected",
+                    if highlighted { "true" } else { "false" },
+                )?;
+                document.attribute(&id, "tabindex", if highlighted { "0" } else { "-1" })?;
+                if highlighted {
+                    document.background(&id, super::panel::pager_active_fill())?;
+                } else {
+                    document.background_clear(&id)?;
+                }
             }
         }
         crate::ContextMenuKind::TrayItem { rows, .. } => {

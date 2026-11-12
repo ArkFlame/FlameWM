@@ -75,7 +75,7 @@ fn project_idle() -> Recorder {
     let mut recorder = Recorder::default();
     let snapshot = ShellSnapshot::default();
     let settings = SettingsSnapshot::new(0);
-    project_context_menu(&mut recorder, &snapshot, &settings, None, &[]).expect("projection");
+    project_context_menu(&mut recorder, &snapshot, &settings, None, &[], 0).expect("projection");
     recorder
 }
 
@@ -120,6 +120,7 @@ fn start_app_menu_shows_the_row_matching_the_favorite_state() {
         &SettingsSnapshot::new(0),
         Some(&state),
         &["org.example.calc".to_owned()],
+        0,
     )
     .expect("projection");
     // Favorited app: the remove row is projected, the add row is hidden.

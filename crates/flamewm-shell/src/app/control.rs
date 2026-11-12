@@ -3,11 +3,68 @@
 use super::*;
 
 impl ShellLoop {
+    /// Re-projects the open task menu so the overflow highlight follows `overflow_row`.
+    pub(crate) fn project_overflow_menu(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), UiBackendError> {
+        let settings = self
+            .settings_cache
+            .clone()
+            .unwrap_or_else(|| flamewm_api::settings::SettingsSnapshot::new(0));
+        let highlight = self.overflow_row;
+        runtime.with_document(self.surfaces.task_menu, |document| {
+            projection::project_context_menu(
+                document,
+                self.shell.snapshot(),
+                &settings,
+                self.context_menu.as_ref(),
+                self.start_model.favorites(),
+                highlight,
+            )
+        })
+    }
+
+    /// Mirrors an open task-overflow menu on its trigger `#task-overflow` (`aria-expanded`).
+    /// Only the panel of the menu's output is updated; other panels keep their value.
+    fn set_overflow_expanded(
+        &self,
+        runtime: &mut SurfaceRuntime,
+        expanded: bool,
+    ) -> Result<(), UiBackendError> {
+        let Some(menu) = self.context_menu.as_ref() else {
+            return Ok(());
+        };
+        if !matches!(
+            menu.kind,
+            flamewm_shell::ContextMenuKind::TaskOverflow { .. }
+        ) {
+            return Ok(());
+        }
+        let Some(panel) = menu
+            .output
+            .as_ref()
+            .and_then(|output| self.surfaces.panel_for_output(output))
+        else {
+            return Ok(());
+        };
+        let value = if expanded { "true" } else { "false" };
+        runtime.with_document(panel, |document| {
+            flamewm_ui_x11::UiDocumentAccess::attribute(
+                document,
+                "task-overflow",
+                "aria-expanded",
+                value,
+            )
+        })
+    }
+
     /// Shared transient close transaction and semantic state update.
     pub(crate) fn close_transients(
         &mut self,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
+        self.set_overflow_expanded(runtime, false)?;
         self.surfaces
             .close_transients(runtime)
             .map_err(UiBackendError::Renderer)?;
@@ -324,6 +381,7 @@ impl ShellLoop {
                                 &settings,
                                 Some(&state),
                                 self.start_model.favorites(),
+                                0,
                             )
                         })?;
                     }
@@ -331,6 +389,7 @@ impl ShellLoop {
                         crate::entry::settings_projection::start_backdrop_percents(&settings);
                     self.context_menu = Some(state.clone());
                     self.overflow_row = 0;
+                    self.set_overflow_expanded(runtime, true)?;
                     let _measure = shell_stage!("shell.context.open.measure");
                     let _place = shell_stage!("shell.context.open.place");
                     let _prepare = shell_stage!("shell.context.open.prepare");
@@ -373,6 +432,7 @@ impl ShellLoop {
                             .open(flamewm_shell_core::popup_session::PopupKind::Start, target)
                             .ok()
                     });
+                    self.set_overflow_expanded(runtime, false)?;
                     self.surfaces
                         .close_context_menu(runtime)
                         .map_err(UiBackendError::Renderer)?;

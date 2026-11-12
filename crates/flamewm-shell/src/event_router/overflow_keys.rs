@@ -27,6 +27,12 @@ pub(crate) fn overflow_menu_step(payload: &str, rows: usize, highlight: usize) -
     }
 }
 
+/// True when a typed Tab closes the open overflow menu (APG: Tab leaves the menu).
+pub(crate) fn overflow_menu_closes_on(payload: &str, rows: usize) -> bool {
+    rows > 0
+        && flamewm_shell::launcher::parse_typed_key(payload).is_some_and(|(_, key)| key == "Tab")
+}
+
 /// Row action that a typed Enter or Space activates on the open overflow menu. `None` when no
 /// menu row exists or the text is another key.
 pub(crate) fn overflow_activation_row(
@@ -92,5 +98,12 @@ mod tests {
         assert_eq!(overflow_menu_step(&key("Down"), 0, 0), None);
         assert_eq!(overflow_menu_step(&key("a"), 3, 0), None);
         assert_eq!(overflow_menu_step(&key("Escape"), 3, 0), None);
+    }
+
+    #[test]
+    fn tab_closes_only_an_open_overflow_menu() {
+        assert!(overflow_menu_closes_on(&key("Tab"), 3));
+        assert!(!overflow_menu_closes_on(&key("Tab"), 0));
+        assert!(!overflow_menu_closes_on(&key("Down"), 3));
     }
 }

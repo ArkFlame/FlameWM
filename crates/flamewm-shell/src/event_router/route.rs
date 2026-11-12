@@ -1,4 +1,6 @@
-use super::overflow_keys::{overflow_activation_row, overflow_menu_rows, overflow_menu_step};
+use super::overflow_keys::{
+    overflow_activation_row, overflow_menu_closes_on, overflow_menu_rows, overflow_menu_step,
+};
 use super::*;
 
 impl ShellLoop {
@@ -202,9 +204,12 @@ impl ShellLoop {
         let overflow_rows = overflow_menu_rows(self.context_menu.as_ref());
         if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
             let payload = event.action.text.as_deref().unwrap_or_default();
+            if overflow_menu_closes_on(payload, overflow_rows) {
+                return self.close_transients(runtime);
+            }
             if let Some(next) = overflow_menu_step(payload, overflow_rows, self.overflow_row) {
                 self.overflow_row = next;
-                return Ok(());
+                return self.project_overflow_menu(runtime);
             }
         }
         if let Some(row) = overflow_activation_row(typed, overflow_rows, self.overflow_row) {
