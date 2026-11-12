@@ -117,6 +117,19 @@ impl LauncherState {
             return;
         }
         self.selection.step(delta, self.count);
+        self.follow_selection();
+    }
+
+    /// Moves the selection to result `index`, clamped to the last result; the window follows it.
+    pub fn move_to(&mut self, index: usize) {
+        if self.count == 0 {
+            return;
+        }
+        self.selection.jump(index.min(self.count - 1), self.count);
+        self.follow_selection();
+    }
+
+    fn follow_selection(&mut self) {
         let target = self.selected();
         if target < self.first {
             self.first = target;
@@ -283,7 +296,7 @@ pub fn parse_typed_key(payload: &str) -> Option<(&str, &str)> {
     Some((modifiers, key))
 }
 
-/// Selection delta for a navigation key: Up/Down, or Ctrl+K / Ctrl+J.
+/// Selection delta for a navigation key: Up/Down, or Ctrl+K / Ctrl+J. Start uses this too.
 #[must_use]
 pub fn navigation_delta(modifiers: &str, key: &str) -> Option<isize> {
     let ctrl = modifiers.split('+').any(|modifier| modifier == "Ctrl");
@@ -292,6 +305,35 @@ pub fn navigation_delta(modifiers: &str, key: &str) -> Option<isize> {
         "Down" => Some(1),
         "k" | "K" if ctrl => Some(-1),
         "j" | "J" if ctrl => Some(1),
+        _ => None,
+    }
+}
+
+/// One launcher list movement. Results are a single column, so there is no horizontal move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherMove {
+    /// Relative step, clamped to the result range (no wrap), as Up/Down.
+    By(isize),
+    /// Absolute result index, clamped to the last result (`End` passes `usize::MAX`).
+    To(usize),
+}
+
+/// Movement for a typed key while the launcher is open. Left/Right, and any unlisted key, return
+/// None: the launcher consumes them without moving the selection or editing the query.
+#[must_use]
+pub fn launcher_move(modifiers: &str, key: &str) -> Option<LauncherMove> {
+    if let Some(delta) = navigation_delta(modifiers, key) {
+        return Some(LauncherMove::By(delta));
+    }
+    let shift = modifiers.split('+').any(|modifier| modifier == "Shift");
+    match key {
+        "Tab" if shift => Some(LauncherMove::By(-1)),
+        "Tab" => Some(LauncherMove::By(1)),
+        "ISO_Left_Tab" => Some(LauncherMove::By(-1)),
+        "Page_Up" => Some(LauncherMove::By(-(LAUNCHER_ROWS as isize))),
+        "Page_Down" => Some(LauncherMove::By(LAUNCHER_ROWS as isize)),
+        "Home" => Some(LauncherMove::To(0)),
+        "End" => Some(LauncherMove::To(usize::MAX)),
         _ => None,
     }
 }
@@ -322,6 +364,47 @@ mod tests {
         assert_eq!(navigation_delta("Ctrl", "j"), Some(1));
         assert_eq!(navigation_delta("", "k"), None, "plain letters are text");
         assert_eq!(navigation_delta("Shift", "j"), None);
+    }
+
+    #[test]
+    fn launcher_keys_map_to_column_list_movement() {
+        assert_eq!(launcher_move("", "Down"), Some(LauncherMove::By(1)));
+        assert_eq!(launcher_move("", "Tab"), Some(LauncherMove::By(1)));
+        assert_eq!(launcher_move("Shift", "Tab"), Some(LauncherMove::By(-1)));
+        assert_eq!(
+            launcher_move("Shift", "ISO_Left_Tab"),
+            Some(LauncherMove::By(-1))
+        );
+        assert_eq!(launcher_move("", "Page_Down"), Some(LauncherMove::By(8)));
+        assert_eq!(launcher_move("", "Page_Up"), Some(LauncherMove::By(-8)));
+        assert_eq!(launcher_move("", "Home"), Some(LauncherMove::To(0)));
+        assert_eq!(launcher_move("", "End"), Some(LauncherMove::To(usize::MAX)));
+        // One column: Left/Right never move the selection, and the query has no caret to move.
+        assert_eq!(launcher_move("", "Left"), None);
+        assert_eq!(launcher_move("", "Right"), None);
+        assert_eq!(
+            launcher_move("", "Escape"),
+            None,
+            "Escape stays with the generic close path"
+        );
+    }
+
+    #[test]
+    fn home_end_jump_and_follow_the_window() {
+        let mut state = LauncherState {
+            count: 20,
+            ..LauncherState::default()
+        };
+        state.move_to(usize::MAX);
+        assert_eq!(state.selected(), 19, "End clamps to the last result");
+        assert_eq!(state.window(), 12..20);
+        state.move_to(0);
+        assert_eq!(state.selected(), 0);
+        assert_eq!(state.window(), 0..LAUNCHER_ROWS);
+        let mut empty = LauncherState::default();
+        empty.move_to(0);
+        assert_eq!(empty.selected(), 0);
+        assert_eq!(empty.window(), 0..0);
     }
 
     #[test]

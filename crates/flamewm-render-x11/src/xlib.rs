@@ -504,6 +504,11 @@ pub const XK_LEFT: c_ulong = 0xff51;
 pub const XK_UP: c_ulong = 0xff52;
 pub const XK_RIGHT: c_ulong = 0xff53;
 pub const XK_DOWN: c_ulong = 0xff54;
+pub const XK_PAGE_UP: c_ulong = 0xff55;
+pub const XK_PAGE_DOWN: c_ulong = 0xff56;
+pub const XK_HOME: c_ulong = 0xff50;
+pub const XK_END: c_ulong = 0xff57;
+pub const XK_ISO_LEFT_TAB: c_ulong = 0xfe20;
 pub const XK_SUPER_L: c_ulong = 0xffeb;
 pub const XK_SUPER_R: c_ulong = 0xffec;
 

@@ -3,7 +3,7 @@
 //! and map/grab live in `runtime::launcher_surface`.
 
 use super::*;
-use flamewm_shell::launcher::{navigation_delta, parse_typed_key};
+use flamewm_shell::launcher::{launcher_move, parse_typed_key, LauncherMove};
 use flamewm_shell_core::popup_session::PopupKind;
 
 impl ShellLoop {
@@ -102,7 +102,8 @@ impl ShellLoop {
         Ok(true)
     }
 
-    /// Typed navigation keys while the launcher is open: Up/Down and Ctrl+J/K.
+    /// Typed keys while the launcher is open. Enter launches; Up/Down, Ctrl+J/K, Tab/Shift+Tab,
+    /// Home/End and PageUp/PageDown move the selection; every other key is consumed without effect.
     pub(crate) fn route_launcher_key(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -116,8 +117,11 @@ impl ShellLoop {
         };
         if key == "Return" || key == "KP_Enter" {
             self.launch_launcher_slot(runtime, self.launcher.selected())?;
-        } else if let Some(delta) = navigation_delta(modifiers, key) {
-            self.launcher.move_by(delta);
+        } else if let Some(movement) = launcher_move(modifiers, key) {
+            match movement {
+                LauncherMove::By(delta) => self.launcher.move_by(delta),
+                LauncherMove::To(index) => self.launcher.move_to(index),
+            }
             self.project_launcher(runtime)?;
         }
         Ok(true)

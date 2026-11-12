@@ -45,6 +45,11 @@ impl ListSelection {
         self.select(Highlight::Keyboard(next))
     }
 
+    /// Keyboard jump to row `index` of `count` (Home/End). Returns true when the highlight changed.
+    pub fn jump(&mut self, index: usize, count: usize) -> bool {
+        index < count && self.select(Highlight::Keyboard(index))
+    }
+
     /// Pointer over row `index` of `count`. Replaces any keyboard highlight.
     pub fn hover(&mut self, index: usize, count: usize) -> bool {
         index < count && self.select(Highlight::Hover(index))
