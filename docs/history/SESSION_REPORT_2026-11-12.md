@@ -138,3 +138,47 @@ toggle `aria-checked` once the attribute setter lands; wl-lock-multi
 occlusion; Bluetooth agent shell wiring and UI; cmp-sigblock owner; the
 "decision needed" rows above; README Planned/Partial rows; another docs(backlog)
 reconcile after the in-flight slices land.
+
+## 8. Addendum: reconcile 7a0d1a4e..6c45665d
+
+Landed on origin/main after the 7a0d1a4e reconcile (18 commits, oldest first).
+Claims follow the commit bodies; nothing here was re-run in the reconcile.
+
+- `c9161614` lock covers dropped on DRM pause and resume (unit only).
+- `ab25b5ea` ScreenCast refusal e2e on a private dbus-daemon (no frames).
+- `8fd8b450` X11 Alt+Tab composite previews for occluded windows (executed Xvfb occlusion proof PASS; no damage invalidation; no minimised or other-workspace previews).
+- `984cc167` per-surface output map drives fractional scale per output (unit only).
+- `7dbd160b` BlueZ pairing agent slice 2 (queue, 30 s reject; private-bus e2e).
+- `e6b84921` BlueZ pairing card and agent registration (executed on private Xvfb with mock org.bluez; real BlueZ unverified; card-side 30 s expiry pending).
+- `7dfaf8c0` Wayland zoomFollowMode (unit only at that commit).
+- `8df097ac` Wayland magnifier follow runtime proof, `zoomfollow.sh` PASS 18/18 (nested winit; DRM not applied).
+- `07c311d4` launcher Tab, Home/End, PageUp/PageDown (unit only; gate exit 0).
+- `3be22d73` render-core golden refresh for the polkit card.
+- `e53bc0f3` UiDocument typed attribute setter (unit only).
+- `f12ad17c` aria-checked on settings toggles, dock aria-label (gate exit 0).
+- `9b5c18fa` X11 zoom shortcuts and zoomLevel state (unit only).
+- `f44e83b6` dock slot aria-label label fn (unit only).
+- `4be2a408` X11 magnifier via RandR CRTC transform (unit only; Xvfb rejects RRSetCrtcTransform).
+- `79c2505b` aria roles for polkit card, audio sliders and toast (gate exit 0).
+- `c894b3ba` overflow menu arrow, Home and End highlight (unit only).
+- `6c45665d` X11 magnifier follow modes, reset on every loop exit, RandR direction (unit only).
+
+Unverified claims, stated as such in BACKLOG.md:
+
+- Real BlueZ and a real pairing: not run (mock org.bluez only).
+- Real `polkit-agent-helper-1`, polkitd and pkexec: not exercised (fake helper only).
+- X11 magnifier at runtime: unproven; Xvfb rejects RRSetCrtcTransform.
+- DRM magnifier, DRM colour filter, dmabuf on DRM: not applied or not run.
+- Wayland ScreenCast frames: none; the portal answers refusal only.
+- Multi-output and cross-output surface scale: unit only; layer surfaces on secondary outputs and window moves across outputs not covered.
+- Alt+Tab: no damage invalidation, no minimised or other-workspace previews.
+- Overflow menu highlight and launcher listbox: no visual highlight projection and no aria-selected.
+- `install.sh` live install: not run; dry-run only, not in CI.
+- `b8e76656` #24 hardening only: double launch not reproduced.
+
+Process notes:
+
+- Haiku trailers (Claude Haiku 5.5 in place of Sonnet 5.5) on `e7cfa0ed`, `9750110d` and `a546c29e`. History not rewritten.
+- `b8e76656` carries an extra Haiku trailer line in addition to the Sonnet line.
+- The `0a95a8f4` commit message contains the wrong phrase "scripts/break-free docs slice".
+- `07c311d4` and a few other commits were pushed before a post-rebase re-gate. The post-push gate for `07c311d4` passed.
