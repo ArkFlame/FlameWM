@@ -36,6 +36,8 @@ pub struct LauncherState {
     recent: Vec<DesktopAppId>,
     /// Result order filtered once per query change; keyed by the model generation.
     order: Option<OrderCache>,
+    /// True from open until the first launch claims it; guards against duplicate activations.
+    activation_armed: bool,
 }
 
 /// Application indices in result order for one query, valid for one model generation.
@@ -52,7 +54,15 @@ impl LauncherState {
         self.query.clear();
         self.selection.reset();
         self.first = 0;
+        self.activation_armed = true;
         self.refresh(model);
+    }
+
+    /// Claims the single launch this open may perform. Returns false after the first claim, so a
+    /// repeated activation for the same open cannot launch twice; the next `open` re-arms it.
+    #[must_use]
+    pub fn claim_activation(&mut self) -> bool {
+        std::mem::replace(&mut self.activation_armed, false)
     }
 
     #[must_use]
@@ -289,6 +299,20 @@ pub fn navigation_delta(modifiers: &str, key: &str) -> Option<isize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_claims_once_per_open() {
+        let mut state = LauncherState::default();
+        assert!(!state.claim_activation(), "closed launcher cannot launch");
+        state.open(&model());
+        assert!(state.claim_activation(), "first Enter launches");
+        assert!(
+            !state.claim_activation(),
+            "second Enter in the same open is a no-op"
+        );
+        state.open(&model());
+        assert!(state.claim_activation(), "reopening re-arms the launcher");
+    }
 
     #[test]
     fn navigation_accepts_arrows_and_ctrl_jk_only() {

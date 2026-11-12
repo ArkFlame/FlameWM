@@ -162,6 +162,10 @@ impl ShellLoop {
         let Some(application) = self.launcher.app_at(&self.start_model, index) else {
             return Ok(());
         };
+        // One launch per open: a repeated activation (key repeat, Return plus a second route) is a no-op.
+        if !self.launcher.claim_activation() {
+            return Ok(());
+        }
         let (id, name) = (application.id.clone(), application.name.clone());
         self.launcher.note_launch(&id);
         // Launch feedback and the mutation go through the same path as Start.
