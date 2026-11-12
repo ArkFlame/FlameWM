@@ -1,3 +1,4 @@
+use super::overflow_keys::{overflow_activation_row, overflow_menu_rows};
 use super::*;
 
 impl ShellLoop {
@@ -191,6 +192,21 @@ impl ShellLoop {
                 self.project_network_secret(runtime)?;
                 return Ok(());
             }
+        }
+        let typed = (is_keyboard && event.action.phase == ActionPhase::Release)
+            .then_some(event.action.text.as_deref())
+            .flatten();
+        if let Some(row) =
+            overflow_activation_row(typed, overflow_menu_rows(self.context_menu.as_ref()))
+        {
+            if let Some(request) = self
+                .shell
+                .context_menu_request_for_action(row, self.context_menu.as_ref())
+            {
+                self.submit(request);
+                self.shell.dispatch("popover.close");
+            }
+            return self.apply_controls(runtime);
         }
         let decision = outside_release_decision(
             action,
