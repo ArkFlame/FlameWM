@@ -77,3 +77,7 @@ Pass over the 29 rows that ea985abf left unclassified. Checked against origin/ma
   authenticate and cancel) and its keyboard routing. Nothing calls `polkit_answer::start` yet, so
   `POLKIT_AGENT_CAN_ANSWER` stays false. Helper timeout after the password is written is not
   enforced; `PROMPT_TIMEOUT` covers only the BeginAuthentication call.
+## cmp-app-rescan slice 3: launcher-open trigger
+
+- Wired: `ShellLoop::refresh_launcher_applications` (flamewm-shell `app/launcher_session.rs`) runs before `launcher.open` and calls the mtime-gated `refresh_installed_applications_if_changed`; on a changed set it replaces `start_model` applications from the shared catalog. No watcher, no new event source.
+- Launch gap closed: WM launch paths (`flamewm-wm-wayland/src/control/ports.rs`, `flamewm-wm-x11` `launch_application`) resolve through `flamewm_applications::with_application_entry` / `launch_application_resolved`, the shared catalog with one mtime-gated refresh on miss. Precedent: KDE kbuildsycoca (rebuild on desktop-entry dir mtime change). No watcher or new event source. Runtime proof: see the commit body.

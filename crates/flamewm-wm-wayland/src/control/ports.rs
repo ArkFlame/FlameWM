@@ -272,13 +272,8 @@ impl ApplicationPort for WaylandDesktop {
         app: &DesktopAppId,
         options: &ApplicationLaunchOptions,
     ) -> FlameResult<()> {
-        let catalog = self.catalog.clone().ok_or_else(|| {
-            FlameError::new(
-                ErrorCode::Unavailable,
-                "application catalog is not injected",
-            )
-        })?;
-        let argv = catalog.find(app)?.argv(options)?;
+        // Shared catalog with refresh-on-miss: an app installed after WM start still launches.
+        let argv = flamewm_applications::with_application_entry(app, |entry| entry.argv(options))?;
         self.queue(Command::Spawn(argv))
     }
 

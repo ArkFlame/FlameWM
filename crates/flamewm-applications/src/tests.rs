@@ -59,6 +59,92 @@ fn refresh_is_gated_on_application_dir_mtime() {
 }
 
 #[test]
+fn launcher_open_refresh_lists_new_entry_then_stays_gated() {
+    // Pins the launcher-open sequence: a new .desktop plus a bumped dir mtime is listed once,
+    // and the next open with an unchanged mtime reads nothing.
+    let dir = scratch_apps_dir("open");
+    let dirs = std::slice::from_ref(&dir);
+    let t1 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let t2 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+    fs::File::open(&dir).unwrap().set_modified(t1).unwrap();
+    let shared = SharedApplicationCatalog::new(ApplicationCatalog::from_dirs(dirs).unwrap());
+    shared.rescan_from_dirs(dirs).unwrap();
+
+    fs::write(dir.join("fresh.desktop"), desktop("Fresh")).unwrap();
+    fs::File::open(&dir).unwrap().set_modified(t2).unwrap();
+    let delta = shared.refresh_if_dirs_changed(dirs).unwrap();
+    assert_eq!(delta.added, vec![DesktopAppId::new("fresh.desktop")]);
+    assert!(
+        shared
+            .current()
+            .find(&DesktopAppId::new("fresh.desktop"))
+            .is_ok()
+    );
+
+    assert!(shared.refresh_if_dirs_changed(dirs).unwrap().is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn launch_miss_refreshes_once_and_resolves_new_entry() {
+    let dir = scratch_apps_dir("resolve-hit-after-miss");
+    let dirs = std::slice::from_ref(&dir);
+    let t1 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let t2 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+    fs::File::open(&dir).unwrap().set_modified(t1).unwrap();
+    let shared = SharedApplicationCatalog::new(ApplicationCatalog::from_dirs(dirs).unwrap());
+    shared.rescan_from_dirs(dirs).unwrap();
+
+    fs::write(dir.join("installed.desktop"), desktop("Installed")).unwrap();
+    fs::File::open(&dir).unwrap().set_modified(t2).unwrap();
+    let id = DesktopAppId::new("installed.desktop");
+    let resolved = resolve_with_refresh(&shared, dirs, &id, |entry| {
+        assert_eq!(entry.application.name, "Installed");
+        Ok(())
+    });
+    assert!(resolved.is_ok());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn launch_miss_without_dir_change_fails_without_reading_dirs() {
+    let dir = scratch_apps_dir("resolve-miss");
+    let dirs = std::slice::from_ref(&dir);
+    let t1 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    fs::File::open(&dir).unwrap().set_modified(t1).unwrap();
+    let shared = SharedApplicationCatalog::new(ApplicationCatalog::from_dirs(dirs).unwrap());
+    shared.rescan_from_dirs(dirs).unwrap();
+
+    // Entry written with the mtime pinned back: the gate skips the rescan, so the miss stays a miss.
+    fs::write(dir.join("hidden.desktop"), desktop("Hidden")).unwrap();
+    fs::File::open(&dir).unwrap().set_modified(t1).unwrap();
+    let id = DesktopAppId::new("hidden.desktop");
+    let mut called = false;
+    let resolved = resolve_with_refresh(&shared, dirs, &id, |_| {
+        called = true;
+        Ok(())
+    });
+    assert!(resolved.is_err());
+    assert!(!called);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn launch_hit_skips_refresh_entirely() {
+    let dir = scratch_apps_dir("resolve-direct");
+    fs::write(dir.join("known.desktop"), desktop("Known")).unwrap();
+    let dirs = std::slice::from_ref(&dir);
+    let shared = SharedApplicationCatalog::new(ApplicationCatalog::from_dirs(dirs).unwrap());
+    let mut called = false;
+    let resolved = resolve_with_refresh(&shared, dirs, &DesktopAppId::new("known.desktop"), |_| {
+        called = true;
+        Ok(())
+    });
+    assert!(resolved.is_ok() && called);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn rescan_reports_added_changed_and_removed_entries() {
     let dir = scratch_apps_dir("delta");
     fs::write(dir.join("keep.desktop"), desktop("Keep")).unwrap();

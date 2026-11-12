@@ -340,3 +340,45 @@ pub fn rescan_installed_applications() -> FlameResult<CatalogDelta> {
 pub fn refresh_installed_applications_if_changed() -> FlameResult<CatalogDelta> {
     shared_application_catalog().refresh_if_dirs_changed(&xdg_application_dirs())
 }
+
+/// Resolves `app` in `shared`; on a miss, runs the mtime-gated refresh over `dirs` and retries once.
+/// A refresh that finds nothing new costs stat calls only, so a genuinely absent id still fails.
+pub fn resolve_with_refresh<T>(
+    shared: &SharedApplicationCatalog,
+    dirs: &[PathBuf],
+    app: &DesktopAppId,
+    resolve: impl FnOnce(&DesktopEntry) -> FlameResult<T>,
+) -> FlameResult<T> {
+    let current = shared.current();
+    if let Ok(entry) = current.find(app) {
+        return resolve(entry);
+    }
+    // Refresh failure keeps the snapshot; the retry below reports the miss.
+    let _ = shared.refresh_if_dirs_changed(dirs);
+    let refreshed = shared.current();
+    resolve(refreshed.find(app)?)
+}
+
+/// Launch-time lookup for WM launch paths: shared catalog, refresh-and-retry once on miss.
+pub fn with_application_entry<T>(
+    app: &DesktopAppId,
+    resolve: impl FnOnce(&DesktopEntry) -> FlameResult<T>,
+) -> FlameResult<T> {
+    resolve_with_refresh(
+        shared_application_catalog(),
+        &xdg_application_dirs(),
+        app,
+        resolve,
+    )
+}
+
+/// Launches `app` through the shared catalog with the same refresh-on-miss rule.
+pub fn launch_application_resolved(
+    app: &DesktopAppId,
+    options: &ApplicationLaunchOptions,
+) -> FlameResult<()> {
+    with_application_entry(app, |entry| {
+        let argv = entry.argv(options)?;
+        launch_argv_for_app(&argv, &entry.application, entry.startup_notify)
+    })
+}

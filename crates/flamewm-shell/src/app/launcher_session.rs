@@ -26,6 +26,7 @@ impl ShellLoop {
         let Ok(transition) = self.popup_session.open(PopupKind::Launcher, target.clone()) else {
             return Ok(());
         };
+        self.refresh_launcher_applications();
         self.launcher.open(&self.start_model);
         // Projection runs before the measured open so the placed size matches the rows shown.
         self.project_launcher(runtime)?;
@@ -37,6 +38,21 @@ impl ShellLoop {
             Err(error) => eprintln!("flamewm-shell: launcher open refused: {error}"),
         }
         Ok(())
+    }
+
+    /// Launcher open: lists apps installed since the last read. Gated on XDG application dir
+    /// mtimes (KDE kbuildsycoca precedent), so an unchanged set costs stat calls only. No watcher.
+    fn refresh_launcher_applications(&mut self) {
+        match flamewm_applications::refresh_installed_applications_if_changed() {
+            Ok(delta) if !delta.is_empty() => {
+                let applications = flamewm_applications::shared_application_catalog()
+                    .current()
+                    .all();
+                self.start_model.replace_applications(applications);
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("flamewm-shell: launcher app rescan failed: {error:?}"),
+        }
     }
 
     /// Hides the launcher and releases its popup lease. A no-op when it is closed.

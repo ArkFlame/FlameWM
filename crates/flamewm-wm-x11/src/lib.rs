@@ -736,7 +736,8 @@ impl ApplicationPort for X11Desktop {
         app: &DesktopAppId,
         options: &ApplicationLaunchOptions,
     ) -> FlameResult<()> {
-        self.catalog.launch(app, options)
+        // Shared catalog with refresh-on-miss: an app installed after WM start still launches.
+        flamewm_applications::launch_application_resolved(app, options)
     }
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()> {
         flamewm_applications::spawn_reaped(Command::new("xdg-open").arg(uri)).map(|_| ())

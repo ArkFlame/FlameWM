@@ -18,7 +18,6 @@ impl Service {
         let engine = WaylandDesktop {
             mirror: Rc::clone(&mirror),
             commands: Rc::clone(&commands),
-            catalog: catalog.clone(),
             staged_shortcuts: RefCell::new(None),
             shell_scales: saved_shell_scales(),
         };

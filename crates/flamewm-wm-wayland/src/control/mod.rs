@@ -135,7 +135,6 @@ pub enum Command {
 pub struct WaylandDesktop {
     mirror: Rc<RefCell<Mirror>>,
     commands: Rc<RefCell<Vec<Command>>>,
-    catalog: Option<Arc<flamewm_applications::ApplicationCatalog>>,
     /// Bindings prepared but not yet committed: the shell stages one edit set, then commits it.
     staged_shortcuts: RefCell<Option<BTreeMap<String, KeyBinding>>>,
     /// Per-output shell scale saved by Settings, keyed by this compositor's output id.
