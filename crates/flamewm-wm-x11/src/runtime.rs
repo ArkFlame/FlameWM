@@ -680,6 +680,7 @@ fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &Setti
     crate::blue_light::set_config(flamewm_api::blue_light::BlueLightConfig::from_snapshot(
         snapshot,
     ));
+    crate::zoom::set_committed(crate::zoom::committed_from_snapshot(snapshot));
     if let Some(observer) = observer.borrow_mut().as_mut() {
         observer(snapshot);
     }

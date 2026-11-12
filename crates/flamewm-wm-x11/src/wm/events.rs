@@ -233,6 +233,9 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_FOCUS_UP => self.focus_direction(GridDirection::Up)?,
             ACTION_FOCUS_DOWN => self.focus_direction(GridDirection::Down)?,
             other => {
+                if crate::zoom::dispatch(other) {
+                    return Ok(());
+                }
                 if !self.dispatch_hyprland_binding(other)? {
                     log_unhandled_shortcut_once(other);
                 }
