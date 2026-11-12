@@ -39,7 +39,7 @@ const MATCH_OBJECTS: &str =
 
 /// Validates an adapter name (`hciN`) so it cannot inject path segments.
 /// Address of a device object path (`.../dev_AA_BB_CC_DD_EE_FF`), or empty when absent.
-fn address_from_path(path: &str) -> String {
+pub(crate) fn address_from_path(path: &str) -> String {
     path.rsplit("/dev_")
         .next()
         .filter(|segment| segment.len() == 17 && segment.contains('_'))
@@ -127,6 +127,32 @@ pub fn add_match_message(rule: &str) -> FlameResult<Message> {
         .map_err(|error| FlameError::invalid(format!("dbus message: {error}")))?;
     message.append_items(&[MessageItem::Str(rule.to_owned())]);
     Ok(message)
+}
+
+/// `GetAll("org.bluez.Device1")` on a device object, sent on the agent's connection. Pure.
+pub(crate) fn device_props_message(path: &str) -> FlameResult<Message> {
+    let mut message = Message::new_method_call(BLUEZ_SERVICE, path, PROPERTIES_INTERFACE, "GetAll")
+        .map_err(|error| FlameError::invalid(format!("dbus message: {error}")))?;
+    message.append_items(&[MessageItem::Str(DEVICE_INTERFACE.to_owned())]);
+    Ok(message)
+}
+
+/// `Alias`, else `Name`, from a `Device1` `GetAll` reply. Empty values count as absent.
+pub(crate) fn device_name(items: &[MessageItem]) -> Option<String> {
+    let Some(MessageItem::Dict(dict)) = items.first() else {
+        return None;
+    };
+    let values = named_values(dict);
+    let text = |key: &str| {
+        values
+            .iter()
+            .find(|(name, _)| *name == key)
+            .and_then(|(_, value)| match value {
+                MessageItem::Str(text) if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+    };
+    text("Alias").or_else(|| text("Name"))
 }
 
 pub use flamewm_api::system::{BluetoothDevice as Device, BluetoothSnapshot};
@@ -493,6 +519,19 @@ mod tests {
             .map(|(key, value)| (strs(key), MessageItem::Variant(Box::new(value))))
             .collect();
         MessageItem::new_dict(items).expect("a{sv}")
+    }
+
+    #[test]
+    fn device_name_prefers_alias_then_name_and_skips_empty() {
+        let both = [props(vec![
+            ("Name", strs("K")),
+            ("Alias", strs("Keyboard")),
+        ])];
+        assert_eq!(device_name(&both).as_deref(), Some("Keyboard"));
+        let empty_alias = [props(vec![("Name", strs("K")), ("Alias", strs(""))])];
+        assert_eq!(device_name(&empty_alias).as_deref(), Some("K"));
+        assert_eq!(device_name(&[MessageItem::Bool(true)]), None);
+        assert_eq!(device_name(&[]), None);
     }
 
     fn object(path: &str, interfaces: Vec<(&str, MessageItem)>) -> (MessageItem, MessageItem) {

@@ -45,6 +45,15 @@ fn answer(message: &Message, seen: &mpsc::Sender<Seen>) -> MessageDisposition {
         .interface()
         .map(|i| i.to_string())
         .unwrap_or_default();
+    if path == DEVICE && interface == "org.freedesktop.DBus.Properties" {
+        // Device1 GetAll: Alias is what the card shows.
+        let alias = MessageItem::Variant(Box::new(MessageItem::Str("Test Keyboard".to_owned())));
+        let props = MessageItem::new_dict(vec![(MessageItem::Str("Alias".to_owned()), alias)])
+            .expect("a{sv}");
+        let mut reply = message.method_return();
+        reply.append_items(&[props]);
+        return MessageDisposition::Reply(reply);
+    }
     if path != AGENT_MANAGER_PATH || interface != AGENT_MANAGER_IFACE {
         return MessageDisposition::Unhandled;
     }
@@ -231,6 +240,13 @@ fn agent_registers_and_answers_every_agent1_method_on_a_private_bus() {
             ask(&mut agent, member, None).is_ok(),
             "{member} must get an empty reply"
         );
+    }
+    // The Device1 Alias arrives as a reply on a later turn; the card label follows it.
+    let deadline = Instant::now() + TIMEOUT;
+    while agent.device_label(DEVICE) != "Test Keyboard" {
+        assert!(Instant::now() < deadline, "Device1 Alias not resolved");
+        agent.on_ready().expect("agent pump");
+        thread::sleep(Duration::from_millis(5));
     }
     let unknown = ask(&mut agent, UNKNOWN, None);
     let error = unknown.expect_err("unknown members get a D-Bus error");

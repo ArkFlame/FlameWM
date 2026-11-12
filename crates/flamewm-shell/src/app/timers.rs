@@ -191,6 +191,9 @@ impl ShellLoop {
                 .and_then(|model| model.deadline(now)),
             self.dock_bounce
                 .and_then(|(_, bounce)| bounce.deadline(now)),
+            self.bluetooth_agent
+                .as_ref()
+                .and_then(|agent| agent.borrow().next_deadline()),
         ]));
     }
 

@@ -35,6 +35,7 @@ def mock(address, out_dir):
     state = {"agent": None, "started": 0, "busy": False}
 
     def log(record):
+        record["t"] = time.time()
         with open(events, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
 
@@ -43,6 +44,7 @@ def mock(address, out_dir):
         ("RequestConfirmation", lambda: [dbus.ObjectPath(DEVICE), dbus.UInt32(PASSKEY)]),
         ("DisplayPasskey", lambda: [dbus.ObjectPath(DEVICE), dbus.UInt32(PASSKEY), dbus.UInt16(0)]),
         ("RequestAuthorization", lambda: [dbus.ObjectPath(DEVICE)]),
+        ("RequestPinCode", lambda: [dbus.ObjectPath(DEVICE)]),
     ]
 
     def run_step():
@@ -84,8 +86,17 @@ def mock(address, out_dir):
         def UnregisterAgent(self, path):
             log({"ev": "unregister", "path": str(path)})
 
+    class Device(dbus.service.Object):
+        """Device1 properties: the agent resolves the card name from Alias."""
+
+        @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}")
+        def GetAll(self, interface):
+            log({"ev": "props", "path": DEVICE, "interface": str(interface)})
+            return {"Alias": dbus.String("Test Keyboard"), "Name": dbus.String("Keyboard")}
+
     bus.request_name("org.bluez")
     Manager(bus, "/org/bluez")
+    Device(bus, DEVICE)
     GLib.timeout_add(200, run_step)
     loop = GLib.MainLoop()
     loop.run()
@@ -230,6 +241,20 @@ def run(shell, out_dir):
         keys(display, "Return")
         reply = wait_for(lambda: done(3), 30, "step 3 reply")
         check("Return accepts authorization", reply["kind"] == "reply", str(reply["value"]))
+        check("agent asked Device1 for its name", any(e["ev"] == "props" for e in read_events(events)), "GetAll on device")
+
+        # Step 4: RequestPinCode with no key press. The card waits, then the agent rejects at the
+        # production 30 s prompt timeout (no injected timeout here) and the card closes.
+        next_step(4)
+        pending = wait_for(lambda: next((e for e in read_events(events) if e["ev"] == "pending" and e["step"] == 4), None), 30, "step 4")
+        card = wait_for(lambda: find_card(display), 30, "pairing card (PIN, unanswered)")
+        check("PIN card size 420 wide", card[0] == 420, f"card={card[0]}x{card[1]}")
+        reply = wait_for(lambda: done(4), 90, "step 4 expiry")
+        elapsed = reply["t"] - pending["t"]
+        check("unanswered prompt expires to Rejected", reply["kind"] == "error" and "org.bluez.Error.Rejected" in reply["value"], reply["value"])
+        check("expiry after the 30 s prompt timeout", 29.0 <= elapsed <= 45.0, f"elapsed={elapsed:.1f}s")
+        wait_for(lambda: not find_card(display), 15, "card closed after expiry")
+        check("card closed after expiry", True, "no card on the X display")
         return all(verdicts)
     finally:
         for proc in reversed(procs):

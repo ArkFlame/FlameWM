@@ -21,7 +21,7 @@ use dbus::{Message, MessageType, Path};
 use flamewm_api::{FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
 
-use crate::bluetooth::BLUEZ_SERVICE;
+use crate::bluetooth::{BLUEZ_SERVICE, address_from_path, device_name, device_props_message};
 
 pub const AGENT_MANAGER_IFACE: &str = "org.bluez.AgentManager1";
 pub const AGENT_MANAGER_PATH: &str = "/org/bluez";
@@ -84,6 +84,38 @@ pub enum PromptKind {
     DisplayPinCode { device: String, pin: String },
 }
 
+impl PromptKind {
+    /// Device object path the request is about.
+    #[must_use]
+    pub fn device(&self) -> &str {
+        match self {
+            Self::Confirm { device, .. }
+            | Self::Authorize { device }
+            | Self::AuthorizeService { device, .. }
+            | Self::PinCode { device }
+            | Self::Passkey { device }
+            | Self::DisplayPasskey { device, .. }
+            | Self::DisplayPinCode { device, .. } => device,
+        }
+    }
+
+    /// The same request with its device replaced by the label the card shows.
+    #[must_use]
+    pub fn with_device(mut self, label: String) -> Self {
+        let device = match &mut self {
+            Self::Confirm { device, .. }
+            | Self::Authorize { device }
+            | Self::AuthorizeService { device, .. }
+            | Self::PinCode { device }
+            | Self::Passkey { device }
+            | Self::DisplayPasskey { device, .. }
+            | Self::DisplayPinCode { device, .. } => device,
+        };
+        *device = label;
+        self
+    }
+}
+
 /// The answer chosen by the prompt UI. `Accept` carries the typed value for PIN and passkey
 /// prompts, and `None` for confirmations and authorizations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +136,6 @@ struct Pending {
 
 /// Decision requests waiting for a UI answer. UI-agnostic: a prompt card lists `prompts`, answers
 /// with `decide`, and the owner sends `take_outbox`. Replies are queued in the order decided.
-#[derive(Default)]
 pub struct PromptQueue {
     next_id: u64,
     pending: BTreeMap<u64, Pending>,
@@ -112,9 +143,28 @@ pub struct PromptQueue {
     /// Latest display notice. Each notice replaces the last: `BlueZ` resends passkeys as digits are
     /// typed on the device.
     notice: Option<PromptKind>,
+    /// How long a prompt waits before `expire` rejects it. Tests inject a shorter one.
+    timeout: Duration,
+}
+
+impl Default for PromptQueue {
+    fn default() -> Self {
+        Self::new(PROMPT_TIMEOUT)
+    }
 }
 
 impl PromptQueue {
+    #[must_use]
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            next_id: 0,
+            pending: BTreeMap::new(),
+            outbox: Vec::new(),
+            notice: None,
+            timeout,
+        }
+    }
+
     #[must_use]
     pub fn is_full(&self) -> bool {
         self.pending.len() >= MAX_PENDING
@@ -150,18 +200,24 @@ impl PromptQueue {
         true
     }
 
-    /// Rejects every prompt pending for at least `max_age`. Returns how many expired.
-    pub fn expire(&mut self, now: Instant, max_age: Duration) -> usize {
+    /// Rejects every prompt pending for at least the queue timeout. Returns how many expired.
+    pub fn expire(&mut self, now: Instant) -> usize {
         let stale: Vec<u64> = self
             .pending
             .iter()
-            .filter(|(_, p)| now.saturating_duration_since(p.since) >= max_age)
+            .filter(|(_, p)| now.saturating_duration_since(p.since) >= self.timeout)
             .map(|(id, _)| *id)
             .collect();
         for id in &stale {
             self.decide(*id, Decision::Reject);
         }
         stale.len()
+    }
+
+    /// When the oldest pending prompt expires, so the shell can wake then.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.pending.values().map(|p| p.since + self.timeout).min()
     }
 
     /// Rejects every pending prompt, for orderly shutdown.
@@ -359,11 +415,49 @@ fn notice_kind(message: &Message, member: &str) -> Option<PromptKind> {
     }
 }
 
+/// Name the card shows for `path`: the cached `Device1` name, else the address, else the path.
+/// An empty cached name means `BlueZ` answered with none, or with an error.
+fn label_for(names: &BTreeMap<String, String>, path: &str) -> String {
+    if let Some(name) = names.get(path).filter(|name| !name.is_empty()) {
+        return name.clone();
+    }
+    let address = address_from_path(path);
+    if address.is_empty() {
+        path.to_owned()
+    } else {
+        address
+    }
+}
+
+/// Stores the `Device1` name from a reply to a `resolve_names` call. An error reply stores no name,
+/// so the card falls back to the address and the device is not asked again.
+fn take_name_reply(
+    message: &Message,
+    names: &mut BTreeMap<String, String>,
+    lookups: &mut BTreeMap<u32, String>,
+) -> MessageDisposition {
+    let Some(device) = message
+        .get_reply_serial()
+        .and_then(|serial| lookups.remove(&serial))
+    else {
+        return MessageDisposition::Unhandled;
+    };
+    let name = match message.msg_type() {
+        MessageType::MethodReturn => device_name(&message.get_items()),
+        _ => None,
+    };
+    names.insert(device, name.unwrap_or_default());
+    MessageDisposition::Handled
+}
+
 /// Registered `BlueZ` pairing agent on a system-bus pump the caller owns.
 pub struct BluetoothAgent {
     pump: BusPump,
     prompts: PromptQueue,
-    prompt_timeout: Duration,
+    /// Resolved `Device1` names by device path; empty when `BlueZ` gave none.
+    names: BTreeMap<String, String>,
+    /// In-flight `GetAll` calls: reply serial to device path.
+    lookups: BTreeMap<u32, String>,
 }
 
 impl BluetoothAgent {
@@ -383,7 +477,8 @@ impl BluetoothAgent {
         Ok(Self {
             pump,
             prompts: PromptQueue::default(),
-            prompt_timeout: PROMPT_TIMEOUT,
+            names: BTreeMap::new(),
+            lookups: BTreeMap::new(),
         })
     }
 
@@ -408,7 +503,19 @@ impl BluetoothAgent {
 
     /// Changes how long an unanswered prompt waits before it is rejected.
     pub fn set_prompt_timeout(&mut self, timeout: Duration) {
-        self.prompt_timeout = timeout;
+        self.prompts.timeout = timeout;
+    }
+
+    /// Name the card shows for device `path`. See `label_for`.
+    #[must_use]
+    pub fn device_label(&self, path: &str) -> String {
+        label_for(&self.names, path)
+    }
+
+    /// When the oldest pending prompt expires. The shell wakes then to call `expire_due`.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.prompts.next_deadline()
     }
 
     /// Pending decision requests for the prompt UI.
@@ -444,15 +551,49 @@ impl BluetoothAgent {
     /// Returns the bus error from the pump turn.
     pub fn on_ready(&mut self) -> FlameResult<usize> {
         let now = Instant::now();
-        let prompts = &mut self.prompts;
-        let visited = self.pump.on_ready_with_object_path(
+        let Self {
+            pump,
+            prompts,
+            names,
+            lookups,
+        } = self;
+        let visited = pump.on_ready_with_object_path(
             AGENT_PATH,
             |message| handle_agent_call(message, prompts, now),
-            |_| MessageDisposition::Unhandled,
+            |message| take_name_reply(message, names, lookups),
         )?;
-        self.prompts.expire(Instant::now(), self.prompt_timeout);
-        self.flush()?;
+        self.resolve_names()?;
+        self.expire_due()?;
         Ok(visited)
+    }
+
+    /// Rejects prompts past their timeout and sends the replies. The shell calls this on every tick
+    /// so a prompt expires even when no bus traffic arrives.
+    ///
+    /// # Errors
+    /// Returns the bus error when a reply cannot be sent.
+    pub fn expire_due(&mut self) -> FlameResult<()> {
+        self.prompts.expire(Instant::now());
+        self.flush()
+    }
+
+    /// Asks `BlueZ` for the `Device1` name of each device the card may show, once per device, on this
+    /// connection. The reply is stored by `take_name_reply` on a later turn, so nothing waits on it.
+    fn resolve_names(&mut self) -> FlameResult<()> {
+        let mut devices: Vec<String> = self
+            .prompts
+            .prompts()
+            .map(|(_, kind)| kind.device().to_owned())
+            .collect();
+        devices.extend(self.notice().map(|kind| kind.device().to_owned()));
+        for device in devices {
+            if self.names.contains_key(&device) || self.lookups.values().any(|d| *d == device) {
+                continue;
+            }
+            let serial = self.pump.send(device_props_message(&device)?)?;
+            self.lookups.insert(serial, device);
+        }
+        Ok(())
     }
 
     /// Rejects pending prompts and unregisters the agent. Call only on orderly exit.
@@ -585,13 +726,40 @@ mod tests {
         let now = Instant::now();
         let _ = handle_agent_call(&prompt_calls()[1], &mut queue, now);
         assert_eq!(
-            queue.expire(now, PROMPT_TIMEOUT - Duration::from_secs(1)),
+            queue.expire(now + (PROMPT_TIMEOUT - Duration::from_secs(1))),
             0
         );
-        assert_eq!(queue.expire(now + PROMPT_TIMEOUT, PROMPT_TIMEOUT), 1);
+        assert_eq!(queue.next_deadline(), Some(now + PROMPT_TIMEOUT));
+        assert_eq!(queue.expire(now + PROMPT_TIMEOUT), 1);
         let mut reply = queue.take_outbox().pop().expect("expired reply");
         assert_eq!(error_name(&mut reply).as_deref(), Some(REJECTED_ERR));
         assert_eq!(queue.prompts().count(), 0);
+        assert_eq!(queue.next_deadline(), None);
+    }
+
+    #[test]
+    fn injected_queue_timeout_drives_expiry() {
+        let mut queue = PromptQueue::new(Duration::from_millis(200));
+        let now = Instant::now();
+        let _ = handle_agent_call(&prompt_calls()[1], &mut queue, now);
+        assert_eq!(queue.expire(now + Duration::from_millis(199)), 0);
+        assert_eq!(queue.expire(now + Duration::from_millis(200)), 1);
+    }
+
+    #[test]
+    fn device_label_prefers_name_then_address_then_path() {
+        let mut names = BTreeMap::new();
+        names.insert(DEVICE.to_owned(), "Keyboard".to_owned());
+        names.insert(
+            "/org/bluez/hci0/dev_11_22_33_44_55_66".to_owned(),
+            String::new(),
+        );
+        assert_eq!(label_for(&names, DEVICE), "Keyboard");
+        assert_eq!(
+            label_for(&names, "/org/bluez/hci0/dev_11_22_33_44_55_66"),
+            "11:22:33:44:55:66"
+        );
+        assert_eq!(label_for(&names, "/org/bluez/odd"), "/org/bluez/odd");
     }
 
     #[test]

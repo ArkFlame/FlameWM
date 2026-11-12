@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use flamewm_integrations_linux::bluetooth_agent::Decision;
+use flamewm_integrations_linux::bluetooth_agent::{Decision, PromptKind};
 use flamewm_shell::bluetooth_dialog::Shown;
 use flamewm_shell::projection;
 use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
@@ -21,14 +21,19 @@ impl ShellLoop {
         let Some(agent) = self.bluetooth_agent.clone() else {
             return Ok(());
         };
+        // The card shows the device's BlueZ name (address until it arrives); see `device_label`.
         let shown = {
-            let agent = agent.borrow();
+            let mut agent = agent.borrow_mut();
+            if let Err(error) = agent.expire_due() {
+                eprintln!("flamewm-shell: bluetooth expiry failed: {error}");
+            }
+            let label =
+                |kind: &PromptKind| kind.clone().with_device(agent.device_label(kind.device()));
             let prompt = agent.prompts().next().map(|(id, kind)| Shown::Prompt {
                 id,
-                kind: kind.clone(),
+                kind: label(kind),
             });
-            let shown = prompt.or_else(|| agent.notice().cloned().map(Shown::Notice));
-            shown
+            prompt.or_else(|| agent.notice().map(|kind| Shown::Notice(label(kind))))
         };
         let shared = Rc::clone(&self.bluetooth_dialog);
         let mut dialog = shared.borrow_mut();
