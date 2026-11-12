@@ -1,7 +1,8 @@
 //! End-to-end `BlueZ` pairing agent on a private `dbus-daemon`. A mock `org.bluez` owns the service
 //! name, records `RegisterAgent`, `RequestDefaultAgent` and `UnregisterAgent`, and calls every
-//! `org.bluez.Agent1` method on the registered agent. The agent is pumped here. Nothing touches the
-//! host bus. When `dbus-daemon` is missing the test reports a skip and returns.
+//! `org.bluez.Agent1` method on the registered agent. The agent is pumped here and each queued
+//! prompt is answered through `BluetoothAgent::decide`. Nothing touches the host bus. When
+//! `dbus-daemon` is missing the test reports a skip and returns.
 
 use std::sync::mpsc;
 use std::thread;
@@ -13,7 +14,7 @@ use flamewm_dbus_reactor::{BusPump, MessageDisposition};
 
 use super::{
     ACKNOWLEDGED_METHODS, AGENT_IFACE, AGENT_MANAGER_IFACE, AGENT_MANAGER_PATH, AGENT_PATH,
-    BluetoothAgent, REJECTED_METHODS, REJECTED_TEXT,
+    BluetoothAgent, CANCELED_TEXT, Decision, REJECTED_TEXT,
 };
 use crate::bluetooth::BLUEZ_SERVICE;
 use crate::polkit_agent::e2e_tests::start_daemon;
@@ -22,6 +23,9 @@ const DEVICE: &str = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF";
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Member sent to the agent that no handler owns; the agent must not treat it as a refusal.
 const UNKNOWN: &str = "Bogus";
+
+/// Outcome of one probe: the reply's arguments as text, or the error text.
+type Outcome = Result<String, String>;
 
 /// What the mock `org.bluez` saw, in arrival order.
 #[derive(Debug, PartialEq, Eq)]
@@ -92,7 +96,7 @@ fn run_mock(
     ready: &mpsc::Sender<()>,
     seen: &mpsc::Sender<Seen>,
     probes: &mpsc::Receiver<(String, &'static str)>,
-    results: &mpsc::Sender<(&'static str, Result<(), String>)>,
+    results: &mpsc::Sender<(&'static str, Outcome)>,
     stop: &mpsc::Receiver<()>,
 ) -> Result<(), String> {
     let pump = BusPump::connect_address(address).map_err(|e| e.to_string())?;
@@ -111,22 +115,24 @@ fn run_mock(
     Ok(())
 }
 
-fn probe(pump: &BusPump, dest: &str, member: &'static str) -> Result<(), String> {
+fn probe(pump: &BusPump, dest: &str, member: &'static str) -> Outcome {
     let mut call = Message::new_method_call(dest, AGENT_PATH, AGENT_IFACE, member)?;
     call.append_items(&probe_items(member));
     pump.send_with_reply(call, TIMEOUT)
-        .map(|_| ())
+        .map(|reply| format!("{:?}", reply.get_items()))
         .map_err(|e| e.to_string())
 }
 
-/// Sends one probe to the agent and keeps pumping the agent until the mock reports the outcome.
+/// Sends one probe and pumps the agent until the mock reports the outcome. A queued prompt is
+/// answered with `answer` when one is given; `None` leaves it for the timeout.
 fn probe_agent(
-    agent: &BluetoothAgent,
+    agent: &mut BluetoothAgent,
     probes: &mpsc::Sender<(String, &'static str)>,
-    results: &mpsc::Receiver<(&'static str, Result<(), String>)>,
+    results: &mpsc::Receiver<(&'static str, Outcome)>,
     dest: &str,
     member: &'static str,
-) -> Result<(), String> {
+    answer: Option<Decision>,
+) -> Outcome {
     probes.send((dest.to_owned(), member)).expect("probe mock");
     let deadline = Instant::now() + TIMEOUT;
     loop {
@@ -136,6 +142,12 @@ fn probe_agent(
         }
         assert!(Instant::now() < deadline, "no probe outcome for {member}");
         agent.on_ready().expect("agent pump");
+        if let Some(decision) = &answer {
+            let ids: Vec<u64> = agent.prompts().map(|(id, _)| id).collect();
+            for id in ids {
+                agent.decide(id, decision.clone()).expect("decide prompt");
+            }
+        }
         thread::sleep(Duration::from_millis(5));
     }
 }
@@ -167,14 +179,14 @@ fn agent_registers_and_answers_every_agent1_method_on_a_private_bus() {
         .expect("mock org.bluez ready");
 
     let pump = BusPump::connect_address(&daemon.address).expect("agent bus");
-    let agent = BluetoothAgent::register_on(pump).expect("register and default");
+    let mut agent = BluetoothAgent::register_on(pump).expect("register and default");
     let sender = agent.unique_name().expect("agent unique name").to_owned();
     assert_eq!(
         next_seen(&seen_rx),
         Seen::Register {
             sender: sender.clone(),
             path: AGENT_PATH.to_owned(),
-            capability: "NoInputNoOutput".to_owned(),
+            capability: "KeyboardDisplay".to_owned(),
         }
     );
     assert_eq!(
@@ -182,16 +194,45 @@ fn agent_registers_and_answers_every_agent1_method_on_a_private_bus() {
         Seen::RequestDefault(AGENT_PATH.to_owned())
     );
 
-    for member in REJECTED_METHODS {
-        let outcome = probe_agent(&agent, &probe_tx, &result_rx, &sender, member);
-        let error = outcome.expect_err("decision requests must be refused");
-        assert!(error.contains(REJECTED_TEXT), "{member}: {error}");
-    }
+    let ask = |agent: &mut BluetoothAgent, member: &'static str, answer: Option<Decision>| {
+        probe_agent(agent, &probe_tx, &result_rx, &sender, member, answer)
+    };
+    // Each decision request gets the reply its answer maps to.
+    let confirm = ask(
+        &mut agent,
+        "RequestConfirmation",
+        Some(Decision::Accept(None)),
+    );
+    assert!(confirm.is_ok(), "confirm accepted: {confirm:?}");
+    let authorize = ask(&mut agent, "RequestAuthorization", Some(Decision::Reject));
+    assert!(authorize.unwrap_err().contains(REJECTED_TEXT));
+    let service = ask(&mut agent, "AuthorizeService", Some(Decision::Cancel));
+    assert!(service.unwrap_err().contains(CANCELED_TEXT));
+    let pin = ask(
+        &mut agent,
+        "RequestPinCode",
+        Some(Decision::Accept(Some("0000".to_owned()))),
+    );
+    assert!(pin.expect("pin reply").contains("\"0000\""));
+    let passkey = ask(
+        &mut agent,
+        "RequestPasskey",
+        Some(Decision::Accept(Some("123456".to_owned()))),
+    );
+    assert!(passkey.expect("passkey reply").contains("UInt32(123456)"));
+    // Without an answer the prompt waits, then expires to Rejected instead of hanging.
+    agent.set_prompt_timeout(Duration::from_millis(200));
+    let timed_out = ask(&mut agent, "RequestPinCode", None);
+    assert!(timed_out.unwrap_err().contains(REJECTED_TEXT));
+    assert_eq!(agent.prompts().count(), 0);
+
     for member in ACKNOWLEDGED_METHODS {
-        let outcome = probe_agent(&agent, &probe_tx, &result_rx, &sender, member);
-        assert_eq!(outcome, Ok(()), "{member} must get an empty reply");
+        assert!(
+            ask(&mut agent, member, None).is_ok(),
+            "{member} must get an empty reply"
+        );
     }
-    let unknown = probe_agent(&agent, &probe_tx, &result_rx, &sender, UNKNOWN);
+    let unknown = ask(&mut agent, UNKNOWN, None);
     let error = unknown.expect_err("unknown members get a D-Bus error");
     assert!(
         !error.contains(REJECTED_TEXT),
