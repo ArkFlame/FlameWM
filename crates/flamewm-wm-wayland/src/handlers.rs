@@ -123,13 +123,14 @@ impl CompositorHandler for State {
         }
 
         // Layer surfaces: re-arrange exclusive zones and send the first configure once.
+        let out = self.output_handle_of(surface);
         let layer = {
-            let map = layer_map_for_output(&self.output);
+            let map = layer_map_for_output(&out);
             map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
                 .cloned()
         };
         if let Some(layer) = layer {
-            layer_map_for_output(&self.output).arrange();
+            layer_map_for_output(&out).arrange();
             self.reflow_if_work_area_changed();
             if !State::layer_initial_configure_sent(surface) {
                 layer.layer_surface().send_configure();
@@ -249,9 +250,8 @@ impl XdgShellHandler for State {
         let workspace = self.model.current_workspace();
         let rect = self.model.cascade_rect(workspace);
         self.model.add(id, rect, workspace);
-        let key = surface.wl_surface().id();
         let name = self.output_name_under_pointer();
-        self.surface_outputs.assign(key, name);
+        self.set_surface_output(surface.wl_surface(), name);
         self.toplevels.push((id, surface));
         self.foreign_toplevel_open(id, ToplevelFacts::default());
         self.set_focus(Some(id));
@@ -266,13 +266,13 @@ impl XdgShellHandler for State {
     }
 
     fn popup_destroyed(&mut self, surface: PopupSurface) {
-        self.surface_outputs.remove(&surface.wl_surface().id());
+        self.forget_surface_output(surface.wl_surface());
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         if let Some(parent) = surface.get_parent_surface() {
             let name = self.output_name_of(&parent);
-            self.surface_outputs.assign(surface.wl_surface().id(), name);
+            self.set_surface_output(surface.wl_surface(), name);
         }
         surface.with_pending_state(|state| {
             state.geometry = positioner.get_geometry();
@@ -376,7 +376,7 @@ impl XdgShellHandler for State {
         let Some(id) = self.window_for_surface(surface.wl_surface()) else {
             return;
         };
-        self.surface_outputs.remove(&surface.wl_surface().id());
+        self.forget_surface_output(surface.wl_surface());
         self.toplevels.retain(|(wid, _)| *wid != id);
         self.foreign_toplevel_close(id);
         self.model.remove(id);
@@ -460,14 +460,14 @@ impl WlrLayerShellHandler for State {
         _layer: Layer,
         namespace: String,
     ) {
-        let key = surface.wl_surface().id();
         let name = output
             .as_ref()
             .and_then(smithay::output::Output::from_resource)
             .map_or_else(|| self.output_name_under_pointer(), |out| out.name());
-        self.surface_outputs.assign(key, name);
+        let out = self.output_handle(&name);
+        self.set_surface_output(surface.wl_surface(), name);
         let desktop = DesktopLayer::new(surface, namespace);
-        let mut map = layer_map_for_output(&self.output);
+        let mut map = layer_map_for_output(&out);
         let _ = map.map_layer(&desktop);
         map.arrange();
         drop(map);
@@ -477,8 +477,9 @@ impl WlrLayerShellHandler for State {
     fn ack_configure(&mut self, _surface: WlSurface, _configure: LayerSurfaceConfigure) {}
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        self.surface_outputs.remove(&surface.wl_surface().id());
-        let mut map = layer_map_for_output(&self.output);
+        let out = self.output_handle_of(surface.wl_surface());
+        self.forget_surface_output(surface.wl_surface());
+        let mut map = layer_map_for_output(&out);
         let target = map
             .layers()
             .find(|layer| layer.layer_surface().wl_surface() == surface.wl_surface())

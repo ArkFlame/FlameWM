@@ -411,6 +411,9 @@ pub struct State {
     /// Connector names of the DRM outputs in the layout, kept in step with `pointer_layout`. A lock
     /// seeds its cover from these; empty means the primary output alone.
     pub layout_outputs: Vec<String>,
+    /// Handles of the DRM outputs, kept in step with `layout_outputs`. Layer surfaces map on, and
+    /// enter/leave is sent for, the handle of the output they sit on; empty means the primary alone.
+    pub output_handles: Vec<Output>,
     /// Output each surface sits on (toplevels, popups, layer surfaces); absent means the primary output.
     pub surface_outputs:
         crate::output_layout::SurfaceOutputs<smithay::reexports::wayland_server::backend::ObjectId>,
@@ -588,6 +591,7 @@ impl State {
             raw_pointer: Point::from((0.0, 0.0)),
             pointer_layout: Vec::new(),
             layout_outputs: Vec::new(),
+            output_handles: Vec::new(),
             surface_outputs: Default::default(),
             output_scales: Vec::new(),
             client_cursor_status: CursorImageStatus::default_named(),
@@ -756,23 +760,84 @@ impl State {
             .map_or_else(|| self.output.name(), str::to_owned)
     }
 
+    /// Output handle for a connector name; the primary output when the name is not driven.
+    pub fn output_handle(&self, name: &str) -> Output {
+        self.output_handles
+            .iter()
+            .find(|out| out.name() == name)
+            .unwrap_or(&self.output)
+            .clone()
+    }
+
+    /// Output handle a surface sits on, the primary output when unmapped.
+    pub fn output_handle_of(&self, surface: &WlSurface) -> Output {
+        self.output_handle(&self.output_name_of(surface))
+    }
+
+    /// Records the output a surface sits on. Sends `wl_surface.leave` on the output it left and
+    /// `wl_surface.enter` on the new one; smithay tracks each output's surfaces, so repeats are no-ops.
+    pub fn set_surface_output(&mut self, surface: &WlSurface, name: String) {
+        let previous = self.output_handle_of(surface);
+        if previous.name() != name {
+            previous.leave(surface);
+        }
+        self.output_handle(&name).enter(surface);
+        let key = smithay::reexports::wayland_server::Resource::id(surface);
+        self.surface_outputs.assign(key, name);
+    }
+
+    /// Drops a surface's output entry, leaving the output it was on.
+    pub fn forget_surface_output(&mut self, surface: &WlSurface) {
+        self.output_handle_of(surface).leave(surface);
+        let key = smithay::reexports::wayland_server::Resource::id(surface);
+        self.surface_outputs.remove(&key);
+    }
+
+    /// Leaves every surface on a removed output and moves its layer surfaces to the primary output's
+    /// layer map, so their panels keep their exclusive zone on the output that is still present.
+    #[cfg_attr(not(feature = "drm"), allow(dead_code))] // called only by the drm output sync
+    pub(crate) fn retire_output(&mut self, out: &Output) {
+        let name = out.name();
+        let stranded: Vec<WlSurface> = self
+            .toplevels
+            .iter()
+            .map(|(_, top)| top.wl_surface().clone())
+            .filter(|wl| self.output_name_of(wl) == name)
+            .collect();
+        for wl in &stranded {
+            out.leave(wl);
+        }
+        let layers: Vec<smithay::desktop::LayerSurface> =
+            layer_map_for_output(out).layers().cloned().collect();
+        let primary = self.output.clone();
+        for layer in layers {
+            layer_map_for_output(out).unmap_layer(&layer);
+            let _ = layer_map_for_output(&primary).map_layer(&layer);
+            self.set_surface_output(layer.wl_surface(), primary.name());
+        }
+    }
+
     /// Homes every toplevel on the output holding most of its rect, then re-sends the scale to the
     /// surfaces whose output scale changed. With no placed row (nested) every window stays primary.
     pub fn refresh_window_outputs(&mut self) {
         let before = crate::presentation_scale::scale_snapshot(self);
         let primary = self.output.name();
-        for (id, top) in &self.toplevels {
-            let Some(rect) = self.model.get(*id).map(|m| m.rect) else {
-                continue;
-            };
-            let name = crate::output_layout::output_name_for_rect(
-                &self.pointer_layout,
-                &self.layout_outputs,
-                rect,
-                &primary,
-            );
-            let key = smithay::reexports::wayland_server::Resource::id(top.wl_surface());
-            self.surface_outputs.assign(key, name.to_owned());
+        let homes: Vec<(WlSurface, String)> = self
+            .toplevels
+            .iter()
+            .filter_map(|(id, top)| {
+                let rect = self.model.get(*id)?.rect;
+                let name = crate::output_layout::output_name_for_rect(
+                    &self.pointer_layout,
+                    &self.layout_outputs,
+                    rect,
+                    &primary,
+                );
+                Some((top.wl_surface().clone(), name.to_owned()))
+            })
+            .collect();
+        for (surface, name) in homes {
+            self.set_surface_output(&surface, name);
         }
         crate::presentation_scale::notify_scale_change(self, &before);
     }

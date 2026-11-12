@@ -318,6 +318,22 @@ pub(super) fn drop_outputs(d: &mut Drm, state: &mut State) {
 /// its current origin. `on_motion` clamps the pointer to this union.
 pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
     let before = presentation_scale::scale_snapshot(state);
+    let handles: Vec<smithay::output::Output> =
+        d.surfaces.iter().map(|out| out.output.clone()).collect();
+    let primary = state.output.name();
+    let gone: Vec<smithay::output::Output> = state
+        .output_handles
+        .iter()
+        .filter(|old| {
+            let name = old.name();
+            name != primary && !handles.iter().any(|new| new.name() == name)
+        })
+        .cloned()
+        .collect();
+    state.output_handles = handles;
+    for out in &gone {
+        state.retire_output(out);
+    }
     state.layout_outputs = d.surfaces.iter().map(|out| out.output.name()).collect();
     state.output_scales = d
         .surfaces
@@ -344,5 +360,8 @@ pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
     let mut live = state.layout_outputs.clone();
     live.push(state.output.name());
     state.surface_outputs.retain_outputs(&live);
+    // Toplevels on a removed output were dropped to the primary above; re-home them by rect so the
+    // enter/leave they get matches the output they now sit on.
+    state.refresh_window_outputs();
     presentation_scale::notify_scale_change(state, &before);
 }
