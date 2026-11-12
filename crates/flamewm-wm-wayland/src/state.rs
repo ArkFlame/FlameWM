@@ -408,6 +408,9 @@ pub struct State {
     /// Logical rects of the DRM outputs in the placed row; empty when only the primary output
     /// exists (nested or single output), so `on_motion` clamps to `output_rect` as before.
     pub pointer_layout: Vec<crate::model::Rect>,
+    /// Connector names of the DRM outputs in the layout, kept in step with `pointer_layout`. A lock
+    /// seeds its cover from these; empty means the primary output alone.
+    pub layout_outputs: Vec<String>,
     /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
     pub client_cursor_status: CursorImageStatus,
     /// Resize cursor of the compositor handle under the pointer; it overrides the client's request.
@@ -575,6 +578,7 @@ impl State {
             pointer: Point::from((0.0, 0.0)),
             raw_pointer: Point::from((0.0, 0.0)),
             pointer_layout: Vec::new(),
+            layout_outputs: Vec::new(),
             client_cursor_status: CursorImageStatus::default_named(),
             decor_cursor: None,
             cursor_status: CursorImageStatus::default_named(),

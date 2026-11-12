@@ -37,7 +37,29 @@ impl State {
     pub fn clear_lock_surfaces(&mut self) {
         self.locked_outputs.clear();
         // Coverage starts over: every output in the layout is uncovered until its surface arrives.
-        self.lock_cover = LockCover::new([self.output.name()]);
+        // Precedent: smithay `session_lock/surface.rs` and cosmic-comp `handlers/session_lock.rs`
+        // key lock surfaces per `Output`, so one surface per layout output is the protocol shape.
+        self.lock_cover = LockCover::new(seed_outputs(&self.layout_outputs, &self.output.name()));
+    }
+
+    /// An output left the layout while the session may be locked: its cover and its lock surface
+    /// go with it, so the remaining outputs alone decide whether the lock covers the session.
+    /// Precedent: cosmic-comp drops the output's entry from `session_lock.surfaces` on removal.
+    #[cfg_attr(not(feature = "drm"), allow(dead_code))]
+    pub fn forget_lock_output(&mut self, output: &str) {
+        self.lock_cover.output_removed(output);
+        if !drop_output_locks(&mut self.locked_outputs, |l| l.output_name.as_str(), output) {
+            return;
+        }
+        // Keyboard focus may sit on the dropped surface; move it to a surviving lock surface.
+        match self.lock_surface().map(|lock| lock.wl_surface().clone()) {
+            Some(surface) if self.session_locked => {
+                if let Some(keyboard) = self.seat.get_keyboard() {
+                    keyboard.set_focus(self, Some(surface), crate::state::next_serial());
+                }
+            }
+            _ => self.refocus(),
+        }
     }
 
     /// The size a lock surface covers: the whole output, as the protocol requires.
@@ -208,6 +230,31 @@ pub const fn windows_reachable(session_locked: bool) -> bool {
     !session_locked
 }
 
+/// The outputs a lock must cover: every output of the DRM layout, or the primary output alone when
+/// no layout exists (nested or single-output sessions). Pure, so the seed is tested without smithay.
+#[must_use]
+pub fn seed_outputs(layout: &[String], primary: &str) -> Vec<String> {
+    if layout.is_empty() {
+        vec![primary.to_owned()]
+    } else {
+        layout.to_vec()
+    }
+}
+
+/// Drops every lock surface bound to `output`. Returns whether any was dropped. Pure over any entry
+/// type, so the removal rule is tested without a Wayland client.
+#[must_use]
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub fn drop_output_locks<S>(
+    locks: &mut Vec<S>,
+    name_of: impl Fn(&S) -> &str,
+    output: &str,
+) -> bool {
+    let before = locks.len();
+    locks.retain(|lock| name_of(lock) != output);
+    before != locks.len()
+}
+
 /// Drops lock surfaces whose client is gone. The session stays locked (see `screen_for`), so a
 /// dead locker leaves a blank output rather than unlocking. Returns whether anything was removed.
 pub fn prune_dead_locks(state: &mut State) -> bool {
@@ -294,5 +341,53 @@ mod tests {
         assert!(locked);
         assert_eq!(grab, None);
         assert_eq!(decor_cursor, None);
+    }
+
+    #[test]
+    fn a_lock_seeds_every_layout_output_not_just_the_primary() {
+        let layout = ["DP-1".to_owned(), "HDMI-A-1".to_owned()];
+        assert_eq!(seed_outputs(&layout, "DP-1"), ["DP-1", "HDMI-A-1"]);
+    }
+
+    #[test]
+    fn a_nested_session_without_a_layout_seeds_only_the_primary() {
+        assert_eq!(seed_outputs(&[], "winit"), ["winit"]);
+    }
+
+    #[test]
+    fn a_seeded_lock_completes_only_once_every_layout_output_is_covered() {
+        let mut cover = LockCover::new(seed_outputs(
+            &["DP-1".to_owned(), "HDMI-A-1".to_owned()],
+            "DP-1",
+        ));
+        assert!(cover.cover("DP-1"));
+        assert!(!cover.is_complete());
+        assert!(cover.cover("HDMI-A-1"));
+        assert!(cover.is_complete());
+    }
+
+    #[test]
+    fn removing_an_output_drops_only_its_lock_surfaces() {
+        let mut locks = vec![("DP-1", 1u8), ("HDMI-A-1", 2), ("DP-1", 3)];
+        assert!(drop_output_locks(&mut locks, |l| l.0, "DP-1"));
+        assert_eq!(locks, [("HDMI-A-1", 2)]);
+    }
+
+    #[test]
+    fn removing_an_output_without_a_lock_surface_changes_nothing() {
+        let mut locks = vec![("DP-1", 1u8)];
+        assert!(!drop_output_locks(&mut locks, |l| l.0, "eDP-1"));
+        assert_eq!(locks, [("DP-1", 1)]);
+    }
+
+    #[test]
+    fn a_removed_output_no_longer_blocks_a_lock_that_covers_the_rest() {
+        let mut cover = LockCover::new(seed_outputs(
+            &["DP-1".to_owned(), "HDMI-A-1".to_owned()],
+            "DP-1",
+        ));
+        cover.cover("DP-1");
+        cover.output_removed("HDMI-A-1");
+        assert!(cover.is_complete());
     }
 }

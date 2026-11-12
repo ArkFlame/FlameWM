@@ -38,6 +38,8 @@ pub(super) fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<
         }
         let gone = d.surfaces.remove(index);
         sync_pointer_layout(d, state);
+        // A wl_output removed mid-lock takes its lock surface and cover entry with it.
+        state.forget_lock_output(&gone.output.name());
         if let Some(global) = gone.global {
             state.display.remove_global::<State>(global);
         }
@@ -313,6 +315,7 @@ pub(super) fn drop_outputs(d: &mut Drm, state: &mut State) {
 /// Rebuilds `State::pointer_layout` from the outputs the DRM backend drives: each logical rect at
 /// its current origin. `on_motion` clamps the pointer to this union.
 pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
+    state.layout_outputs = d.surfaces.iter().map(|out| out.output.name()).collect();
     state.pointer_layout = d
         .surfaces
         .iter()
