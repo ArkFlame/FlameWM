@@ -227,7 +227,7 @@ impl DialogModel {
 
 fn identity_choice(identity: &Identity) -> IdentityChoice {
     let label = match identity.uid {
-        Some(uid) => format!("User {uid}"),
+        Some(uid) => format!("uid {uid}"),
         None => identity.kind.clone(),
     };
     IdentityChoice {
@@ -417,6 +417,14 @@ mod tests {
         assert_eq!(model.error.as_deref(), Some("Authentication failed."));
         model.input("right");
         assert!(model.submit().is_some());
+    }
+
+    #[test]
+    fn identity_without_name_shows_uid_and_never_blocks() {
+        let model = DialogModel::from_request(request("a", &[Some(1000), None]));
+        assert_eq!(model.identities[0].label, "uid 1000");
+        assert_eq!(model.identities[0].uid, Some(1000));
+        assert!(model.error.is_none());
     }
 
     #[test]
