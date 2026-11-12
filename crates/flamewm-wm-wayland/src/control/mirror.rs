@@ -141,6 +141,8 @@ impl Service {
         state.snap_preview_enabled = snap_preview_enabled(&snapshot);
         state.colour_filter = colour_filter(&snapshot);
         state.zoom_level = zoom_level(&snapshot);
+        state.zoom_follow = zoom_follow_mode(&snapshot);
+        state.zoom_origin = None;
         let dock = flamewm_window_core::dock_reserve::dock_reserve_from_snapshot(&snapshot);
         if state.dock_reserve != dock {
             state.dock_reserve = dock;

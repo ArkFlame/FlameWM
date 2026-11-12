@@ -165,6 +165,8 @@ pub struct ProductSettings {
     pub colour_filter: String,
     /// `zoomLevel`: magnifier factor, 1.0..=8.0 (clamped on load). `1.0` is off.
     pub zoom_level: f64,
+    /// `zoomFollowMode`: magnifier pointer tracking, one of proportional, centred, push. Default proportional.
+    pub zoom_follow_mode: String,
     pub surface_outline_color: String,
     pub surface_outline_opacity: u8,
     /// `surfaceOutlineWidth` in px (1..=4); default 1.
@@ -373,6 +375,7 @@ impl Default for ProductSettings {
             shake_to_locate: false,
             colour_filter: "none".to_owned(),
             zoom_level: 1.0,
+            zoom_follow_mode: "proportional".to_owned(),
             surface_outline_color: "#999999".to_owned(),
             surface_outline_opacity: 50,
             surface_outline_width: 1,

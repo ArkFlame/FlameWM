@@ -129,6 +129,12 @@ impl ProductSettings {
                 "colourFilter must be none, grayscale, invert, protanopia, deuteranopia or tritanopia",
             );
         }
+        if !matches!(
+            self.zoom_follow_mode.as_str(),
+            "proportional" | "centred" | "push"
+        ) {
+            return invalid("zoomFollowMode must be proportional, centred or push");
+        }
         if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
             return invalid("cursorSize must be 24, 32, 48 or 64");
         }

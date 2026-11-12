@@ -510,11 +510,15 @@ fn render_into(
     };
     let matrix = effective_matrix(filter);
     let scale = state.output_scale();
-    let source = crate::colour_pass::source_rect(crate::zoom::viewport(
+    let view = crate::zoom::viewport(
+        state.zoom_follow,
         (f64::from(size.w), f64::from(size.h)),
         zoom,
         (state.pointer.x * scale, state.pointer.y * scale),
-    ));
+        state.zoom_origin,
+    );
+    state.zoom_origin = Some((view.x, view.y));
+    let source = crate::colour_pass::source_rect(view);
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays

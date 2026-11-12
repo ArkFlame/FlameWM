@@ -7,6 +7,7 @@ impl State {
     pub fn dispatch_action(&mut self, action: &str) {
         if let Some(level) = crate::zoom::after_action(self.zoom_level, action) {
             self.zoom_level = level;
+            self.zoom_origin = None;
             self.request_redraw();
             return;
         }

@@ -33,6 +33,19 @@ pub(super) fn zoom_level(snapshot: &flamewm_api::settings::SettingsSnapshot) -> 
     }
 }
 
+/// `zoomFollowMode`: how the magnified view tracks the pointer; a missing or unknown value is proportional.
+pub(super) fn zoom_follow_mode(
+    snapshot: &flamewm_api::settings::SettingsSnapshot,
+) -> crate::zoom::FollowMode {
+    use flamewm_api::settings::SettingValue;
+    match snapshot.values.get("zoomFollowMode") {
+        Some(SettingValue::Text(value)) => {
+            crate::zoom::FollowMode::from_setting(value).unwrap_or_default()
+        }
+        _ => crate::zoom::FollowMode::default(),
+    }
+}
+
 /// `colourFilter`: the text value names a filter; a missing or non-text value keeps `None`.
 pub(super) fn colour_filter(
     snapshot: &flamewm_api::settings::SettingsSnapshot,
@@ -41,6 +54,35 @@ pub(super) fn colour_filter(
     match snapshot.values.get("colourFilter") {
         Some(SettingValue::Text(value)) => crate::colour_filter::ColourFilter::from_setting(value),
         _ => crate::colour_filter::ColourFilter::None,
+    }
+}
+
+#[cfg(test)]
+mod zoom_follow_tests {
+    use crate::zoom::FollowMode;
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use std::collections::BTreeMap;
+
+    fn follow(value: Option<&str>) -> FollowMode {
+        let mut values = BTreeMap::new();
+        if let Some(value) = value {
+            values.insert(
+                "zoomFollowMode".to_owned(),
+                SettingValue::Text(value.to_owned()),
+            );
+        }
+        super::zoom_follow_mode(&SettingsSnapshot {
+            revision: 1,
+            values,
+        })
+    }
+
+    #[test]
+    fn follow_mode_reads_the_text_value_and_defaults_to_proportional() {
+        assert_eq!(follow(None), FollowMode::Proportional);
+        assert_eq!(follow(Some("push")), FollowMode::Push);
+        assert_eq!(follow(Some("centred")), FollowMode::Centred);
+        assert_eq!(follow(Some("bogus")), FollowMode::Proportional);
     }
 }
 

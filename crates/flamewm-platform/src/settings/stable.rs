@@ -113,6 +113,7 @@ stable_settings! {
     (false, accessibility, "shakeToLocate", shake_to_locate),
     (false, accessibility, "colourFilter", colour_filter),
     (false, accessibility, "zoomLevel", zoom_level),
+    (false, accessibility, "zoomFollowMode", zoom_follow_mode),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (false, taskbar, "surfaceOutlineColor", surface_outline_color),
     (false, taskbar, "surfaceOutlineOpacity", surface_outline_opacity),

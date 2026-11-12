@@ -443,6 +443,10 @@ pub struct State {
     pub colour_program: Option<Result<smithay::backend::renderer::gles::GlesTexProgram, ()>>,
     /// Magnifier factor (1.0..=8.0). Seeded from `zoomLevel`; zoom shortcuts change it at runtime.
     pub zoom_level: f64,
+    /// `zoomFollowMode`: how the magnified viewport tracks the pointer. Synced from settings.
+    pub zoom_follow: crate::zoom::FollowMode,
+    /// Last magnified viewport origin in physical pixels, held by `Push`. Cleared on zoom changes.
+    pub zoom_origin: Option<(f64, f64)>,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -600,6 +604,8 @@ impl State {
             colour_filter: Default::default(),
             colour_program: None,
             zoom_level: flamewm_api::settings::ZOOM_LEVEL_MIN,
+            zoom_follow: Default::default(),
+            zoom_origin: None,
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,
