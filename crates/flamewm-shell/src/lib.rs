@@ -9,6 +9,8 @@ pub mod cursor_theme;
 pub mod dock;
 pub mod icon_loader;
 pub mod launcher;
+#[cfg(test)]
+pub(crate) mod test_recorder;
 use flamewm_debug::log_limit;
 pub mod bluetooth_dialog;
 pub mod notification_center;

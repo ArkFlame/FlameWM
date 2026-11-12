@@ -231,11 +231,22 @@ impl LauncherState {
         document.visible("launcher-empty", apps.is_empty())?;
         document.visible("launcher-highlight", !apps.is_empty())?;
         self.project_highlight(document)?;
+        // WAI-ARIA 1.2 listbox of options; the selected option carries aria-selected="true".
+        // Precedent: .vendor has no ARIA listbox code, so the choice follows the APG listbox pattern.
+        document.attribute("launcher-list", "role", "listbox")?;
         for slot in 0..LAUNCHER_ROWS {
             let row = slot + 1;
             let row_id = format!("launcher-row-{row}");
             let label_id = format!("launcher-row-{row}-label");
             let icon_id = format!("launcher-row-{row}-icon");
+            let index = window.start + slot;
+            let selected = index < window.end && index == self.selected();
+            document.attribute(&row_id, "role", "option")?;
+            document.attribute(
+                &row_id,
+                "aria-selected",
+                if selected { "true" } else { "false" },
+            )?;
             if let Some(application) = apps
                 .get(window.start + slot)
                 .filter(|_| window.start + slot < window.end)
@@ -341,6 +352,30 @@ pub fn launcher_move(modifiers: &str, key: &str) -> Option<LauncherMove> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn results_are_a_listbox_of_options_with_the_selected_row_marked() {
+        use crate::test_recorder::{NullDocument, Recording};
+        let mut state = LauncherState::default();
+        state.open(&model());
+        state.move_to(1);
+        let mut inner = NullDocument;
+        let mut document = Recording::new(&mut inner);
+        state
+            .project(&mut document, &model(), None)
+            .expect("launcher projects");
+        let recorded = &document.recorded;
+        assert_eq!(recorded.attribute("launcher-list", "role"), Some("listbox"));
+        assert_eq!(recorded.attribute("launcher-row-1", "role"), Some("option"));
+        assert_eq!(
+            recorded.attribute("launcher-row-1", "aria-selected"),
+            Some("false")
+        );
+        assert_eq!(
+            recorded.attribute("launcher-row-2", "aria-selected"),
+            Some("true")
+        );
+    }
 
     #[test]
     fn activation_claims_once_per_open() {
