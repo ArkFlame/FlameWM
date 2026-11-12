@@ -5,6 +5,11 @@ use super::*;
 impl State {
     /// Runs one shortcut action. Actions are the shared `flamewm-api` names.
     pub fn dispatch_action(&mut self, action: &str) {
+        if let Some(level) = crate::zoom::after_action(self.zoom_level, action) {
+            self.zoom_level = level;
+            self.request_redraw();
+            return;
+        }
         // Media keys are bound by the default registry, so they must reach the shared system
         // service instead of falling through to the unhandled log.
         if let Some(key) = media_key(action) {

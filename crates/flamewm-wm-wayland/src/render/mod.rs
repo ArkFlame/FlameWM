@@ -5,7 +5,8 @@ use std::error::Error;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::colour_filter::ColourFilter;
+use crate::colour_filter::{ColourFilter, effective_matrix};
+use flamewm_api::settings::ZOOM_LEVEL_MIN;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::memory::{
@@ -490,7 +491,11 @@ fn render_into(
     // A retained texture + full blit was measured slower than direct window damage under llvmpipe
     // (marquee 142% vs 89% CPU, one run each), so the window path stays the only one.
     let filter = state.colour_filter;
-    if filter != ColourFilter::None && state.colour_program.is_none() {
+    let zoom = state.zoom_level;
+    // The composite pass serves both the colour filter and the magnifier; the default (no filter,
+    // zoom 1) draws the window tracker path unchanged.
+    let composite = filter != ColourFilter::None || zoom > ZOOM_LEVEL_MIN;
+    if composite && state.colour_program.is_none() {
         state.colour_program = Some(match crate::colour_pass::compile(backend.renderer()) {
             Ok(program) => Ok(program),
             Err(error) => {
@@ -499,21 +504,29 @@ fn render_into(
             }
         });
     }
-    let filter_program = match &state.colour_program {
-        Some(Ok(program)) if filter != ColourFilter::None => Some(program.clone()),
+    let composite_program = match &state.colour_program {
+        Some(Ok(program)) if composite => Some(program.clone()),
         _ => None,
     };
+    let matrix = effective_matrix(filter);
+    let scale = state.output_scale();
+    let source = crate::colour_pass::source_rect(crate::zoom::viewport(
+        (f64::from(size.w), f64::from(size.h)),
+        zoom,
+        (state.pointer.x * scale, state.pointer.y * scale),
+    ));
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
         // readback-free. A filtered dump reads back the filtered pixels, so the runtime proof
         // compares what the filter actually produces.
-        match &filter_program {
+        match &composite_program {
             Some(program) => {
-                let pixels = crate::colour_pass::filtered_pixels(
+                let pixels = crate::colour_pass::composite_pixels(
                     backend.renderer(),
                     program,
-                    filter,
+                    &matrix,
+                    source,
                     &state.output,
                     &elements,
                     size,
@@ -527,18 +540,18 @@ fn render_into(
             state.loop_signal.stop();
         }
     }
-    let damage = if let Some(program) = &filter_program {
-        // The filter pass repaints the full output with a fresh tracker, so the window tracker's
-        // partial-repaint state is left intact for when the filter is off again.
+    let damage = if let Some(program) = &composite_program {
+        // The composite pass repaints the full output with a fresh tracker, so the window tracker's
+        // partial-repaint state is left intact for when the composite is off again.
         let mut tracker = OutputDamageTracker::from_output(&state.output);
-        crate::colour_pass::draw_filtered(
+        crate::colour_pass::draw_composite(
             backend,
             program,
-            filter,
+            &matrix,
+            source,
             &mut tracker,
             &elements,
             size,
-            CLEAR,
         )?;
         None
     } else {

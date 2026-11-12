@@ -76,6 +76,7 @@ mod drm;
 mod font;
 mod handlers;
 mod input;
+mod zoom;
 // Compiled without the `drm` feature too: the D-Bus surface and the `Session` impl are the only
 // feature-gated parts, which keeps the pause/resume state machine testable on any host.
 #[path = "protocols/compat.rs"]

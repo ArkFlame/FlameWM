@@ -430,6 +430,8 @@ pub struct State {
     pub colour_filter: crate::colour_filter::ColourFilter,
     /// Compiled colour-filter shader; `Some(Err(()))` after a failed compile, so it is not retried.
     pub colour_program: Option<Result<smithay::backend::renderer::gles::GlesTexProgram, ()>>,
+    /// Magnifier factor (1.0..=8.0). Seeded from `zoomLevel`; zoom shortcuts change it at runtime.
+    pub zoom_level: f64,
     /// Title release that moved nothing, awaiting a possible double click (see `TitleClick`).
     pub last_title_click: Option<crate::input::TitleClick>,
     /// `focusFollowsMouse`, read once at startup: pointer entry focuses the window under it.
@@ -582,6 +584,7 @@ impl State {
             snap_preview_enabled,
             colour_filter: Default::default(),
             colour_program: None,
+            zoom_level: flamewm_api::settings::ZOOM_LEVEL_MIN,
             last_title_click: None,
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,

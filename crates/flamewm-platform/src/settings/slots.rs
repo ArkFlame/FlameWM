@@ -31,6 +31,23 @@ impl Slot for String {
     }
 }
 
+impl Slot for f64 {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.to_string())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        match flamewm_api::settings::parse_zoom_level(text) {
+            Some(level) if key == "zoomLevel" => Ok(level),
+            _ => invalid("zoomLevel must be a number"),
+        }
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        from_text_value(value, key)
+    }
+}
+
 impl Slot for bool {
     fn to_value(&self) -> SettingValue {
         SettingValue::Boolean(*self)

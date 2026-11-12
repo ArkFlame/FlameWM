@@ -24,6 +24,15 @@ pub(super) fn snap_preview_enabled(snapshot: &flamewm_api::settings::SettingsSna
     }
 }
 
+/// `zoomLevel`: the magnifier factor, clamped to 1.0..=8.0; a missing or non-numeric value is 1.0.
+pub(super) fn zoom_level(snapshot: &flamewm_api::settings::SettingsSnapshot) -> f64 {
+    use flamewm_api::settings::{SettingValue, ZOOM_LEVEL_MIN, parse_zoom_level};
+    match snapshot.values.get("zoomLevel") {
+        Some(SettingValue::Text(value)) => parse_zoom_level(value).unwrap_or(ZOOM_LEVEL_MIN),
+        _ => ZOOM_LEVEL_MIN,
+    }
+}
+
 /// `colourFilter`: the text value names a filter; a missing or non-text value keeps `None`.
 pub(super) fn colour_filter(
     snapshot: &flamewm_api::settings::SettingsSnapshot,

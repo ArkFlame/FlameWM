@@ -9,6 +9,20 @@ pub enum SettingValue {
     Text(String),
 }
 
+/// `zoomLevel` bounds: the magnifier factor. 1.0 is off.
+pub const ZOOM_LEVEL_MIN: f64 = 1.0;
+pub const ZOOM_LEVEL_MAX: f64 = 8.0;
+
+/// Parses a `zoomLevel` value. Finite numbers clamp into the range; anything else is `None`.
+#[must_use]
+pub fn parse_zoom_level(text: &str) -> Option<f64> {
+    text.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(ZOOM_LEVEL_MIN, ZOOM_LEVEL_MAX))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppearanceMode {
     System,

@@ -20,10 +20,11 @@ use smithay::backend::renderer::gles::{
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
 use smithay::backend::winit::WinitGraphicsBackend;
-use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
+use smithay::utils::{Buffer, Physical, Point, Rectangle, Size, Transform};
 
-use crate::colour_filter::{ColourFilter, ColourMatrix};
+use crate::colour_filter::ColourMatrix;
 use crate::render::Elem;
+use crate::zoom::Viewport;
 
 /// Fragment shader: un-premultiply, apply the 4x4 matrix to `(r, g, b, 1)`, clamp, re-premultiply.
 const SHADER: &str = r"#version 100
@@ -89,20 +90,23 @@ fn matrix_uniform(matrix: &ColourMatrix) -> Uniform<'static> {
     )
 }
 
-/// Readback of the filtered frame: `elements` go to an offscreen texture, which is drawn through
+/// The composite source rectangle for a magnifier viewport, in buffer pixels.
+pub fn source_rect(view: Viewport) -> Rectangle<f64, Buffer> {
+    Rectangle::new(Point::from((view.x, view.y)), Size::from((view.w, view.h)))
+}
+
+/// Readback of the composited frame: `elements` go to an offscreen texture, which is drawn through
 /// the filter program into a second offscreen texture and read back as RGBA rows, the same byte
 /// layout as `offscreen_pixels`. Used by PPM dumps so they show what the filter produces.
-pub fn filtered_pixels(
+pub fn composite_pixels(
     renderer: &mut GlowRenderer,
     program: &GlesTexProgram,
-    filter: ColourFilter,
+    matrix: &ColourMatrix,
+    source: Rectangle<f64, Buffer>,
     output: &smithay::output::Output,
     elements: &[Elem],
     size: Size<i32, Physical>,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    let matrix = filter
-        .matrix()
-        .ok_or("colour filter pass called without a filter")?;
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
     let mut source_tex: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     let mut tracker = OutputDamageTracker::from_output(output);
@@ -114,12 +118,11 @@ pub fn filtered_pixels(
     {
         let mut target = renderer.bind(&mut out_tex)?;
         let full: Rectangle<i32, Physical> = Rectangle::from_size(size);
-        let source = Rectangle::from_size(buffer_size.to_f64());
         let mut frame = renderer.render(&mut target, size, Transform::Normal)?;
         frame.clear(CLEAR.into(), &[full])?;
         {
             let gles: &mut GlesFrame<'_, '_> = frame.borrow_mut();
-            let uniforms = [matrix_uniform(&matrix)];
+            let uniforms = [matrix_uniform(matrix)];
             gles.render_texture_from_to(
                 &source_tex,
                 source,
@@ -143,32 +146,28 @@ pub fn filtered_pixels(
 /// Renders `elements` into an offscreen texture the size of the output, then draws that texture
 /// into the winit backend's framebuffer through the filter program. The caller submits the frame
 /// with full damage: a partial repaint would leave unfiltered pixels on screen.
-pub fn draw_filtered(
+pub fn draw_composite(
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
     program: &GlesTexProgram,
-    filter: ColourFilter,
+    matrix: &ColourMatrix,
+    source: Rectangle<f64, Buffer>,
     tracker: &mut OutputDamageTracker,
     elements: &[Elem],
     size: Size<i32, Physical>,
-    clear: [f32; 4],
 ) -> Result<(), Box<dyn Error>> {
-    let matrix = filter
-        .matrix()
-        .ok_or("colour filter pass called without a filter")?;
     let (renderer, mut framebuffer) = backend.bind()?;
     let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     {
         let mut target = renderer.bind(&mut texture)?;
-        tracker.render_output(renderer, &mut target, 0, elements, clear)?;
+        tracker.render_output(renderer, &mut target, 0, elements, CLEAR)?;
     }
     let full: Rectangle<i32, Physical> = Rectangle::from_size(size);
-    let source = Rectangle::from_size(buffer_size.to_f64());
     let mut frame = renderer.render(&mut framebuffer, size, Transform::Normal)?;
-    frame.clear(clear.into(), &[full])?;
+    frame.clear(CLEAR.into(), &[full])?;
     {
         let gles: &mut GlesFrame<'_, '_> = frame.borrow_mut();
-        let uniforms = [matrix_uniform(&matrix)];
+        let uniforms = [matrix_uniform(matrix)];
         gles.render_texture_from_to(
             &texture,
             source,
@@ -189,6 +188,7 @@ pub fn draw_filtered(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::colour_filter::ColourFilter;
 
     #[test]
     fn uniform_is_row_major_and_named_as_the_shader_declares_it() {

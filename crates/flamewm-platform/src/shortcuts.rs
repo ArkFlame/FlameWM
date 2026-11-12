@@ -12,7 +12,7 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_RESIZE_GROW, ACTION_WINDOW_RESIZE_SHRINK, ACTION_WINDOW_SWITCH,
     ACTION_WINDOW_SWITCH_PREV, ACTION_WORKSPACE_ACTIVATE, ACTION_WORKSPACE_DOWN,
     ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_MOVE, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
-    KeyBinding,
+    ACTION_ZOOM_IN, ACTION_ZOOM_OUT, ACTION_ZOOM_RESET, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -50,7 +50,7 @@ pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 pub const ACTION_BRIGHTNESS_UP: &str = "BrightnessUp";
 pub const ACTION_BRIGHTNESS_DOWN: &str = "BrightnessDown";
 
-pub const ACTIONS: [&str; 68] = [
+pub const ACTIONS: [&str; 71] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -106,6 +106,9 @@ pub const ACTIONS: [&str; 68] = [
     ACTION_SCREENSHOT_FULL,
     ACTION_SCREENSHOT_REGION,
     ACTION_SCREENSHOT_WINDOW,
+    ACTION_ZOOM_IN,
+    ACTION_ZOOM_OUT,
+    ACTION_ZOOM_RESET,
     ACTION_VOLUME_UP,
     ACTION_VOLUME_DOWN,
     ACTION_VOLUME_MUTE,
@@ -296,6 +299,18 @@ impl Default for ShortcutRegistry {
             (
                 ACTION_WINDOW_CYCLE_PREV.to_owned(),
                 KeyBinding::assigned("Super+K"),
+            ),
+            (
+                ACTION_ZOOM_IN.to_owned(),
+                KeyBinding::assigned("Super+Alt+equal"),
+            ),
+            (
+                ACTION_ZOOM_OUT.to_owned(),
+                KeyBinding::assigned("Super+Alt+minus"),
+            ),
+            (
+                ACTION_ZOOM_RESET.to_owned(),
+                KeyBinding::assigned("Super+Alt+0"),
             ),
             (
                 ACTION_SCREENSHOT_FULL.to_owned(),
@@ -616,7 +631,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 68);
+        assert_eq!(ACTIONS.len(), 71);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         assert_eq!(
             ShortcutRegistry::default().binding(ACTION_WINDOW_SWITCH_PREV),

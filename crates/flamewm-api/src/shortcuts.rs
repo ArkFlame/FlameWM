@@ -20,6 +20,10 @@ pub const ACTION_SESSION_LOCK: &str = "SessionLock";
 pub const ACTION_SCREENSHOT_FULL: &str = "ScreenshotFull";
 pub const ACTION_SCREENSHOT_REGION: &str = "ScreenshotRegion";
 pub const ACTION_SCREENSHOT_WINDOW: &str = "ScreenshotWindow";
+/// Magnifier steps. Super+equal and Super+minus are already the resize actions, so zoom uses Super+Alt.
+pub const ACTION_ZOOM_IN: &str = "ZoomIn";
+pub const ACTION_ZOOM_OUT: &str = "ZoomOut";
+pub const ACTION_ZOOM_RESET: &str = "ZoomReset";
 
 /// Absolute workspace activation, Hyprland-style `Super+1..9`. Index is 0-based.
 pub const ACTION_WORKSPACE_ACTIVATE: [&str; 9] = [
