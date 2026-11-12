@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 pub mod launcher_surface;
+pub mod polkit_surface;
 pub mod start_surface;
 pub mod status_surface;
 use crate::popup_controller::POPUP_GAP;
@@ -43,6 +44,7 @@ const TASK_MENU_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-task-menu.rwr"));
 const MEDIA_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-media.rwr"));
 const LAUNCHER_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"));
+const POLKIT_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-polkit.rwr"));
 // J07: audio/network/calendar artifacts live in the helper role
 // (`quick_controls::host`), not in the parent runtime.
 
@@ -560,6 +562,9 @@ pub struct ShellSurfaces {
     /// Top-center Launcher popup; `launcher_output` is `Some` while it is open.
     pub launcher: SurfaceHandle,
     launcher_output: Option<flamewm_api::OutputId>,
+    /// Polkit authentication card; open while the dialog has an active prompt.
+    pub polkit: SurfaceHandle,
+    polkit_open: bool,
     panels: Vec<PanelSurfaceRecord>,
     selected_output: Option<flamewm_api::OutputId>,
     transient_output: Option<flamewm_api::OutputId>,

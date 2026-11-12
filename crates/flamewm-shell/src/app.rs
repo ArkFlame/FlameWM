@@ -46,6 +46,7 @@ mod input;
 mod ipc;
 mod launcher_session;
 mod panels;
+mod polkit_session;
 mod popups;
 mod progress_gate;
 mod quick_popups;
@@ -95,6 +96,15 @@ pub(crate) struct ShellLoop {
     pub(crate) context_menu: Option<flamewm_shell::ContextMenuState>,
     pub(crate) network_secret: String,
     pub(crate) network_secret_request_id: Option<u64>,
+    /// Polkit prompts in arrival order; the card shows the active one.
+    pub(crate) polkit_dialog:
+        std::rc::Rc<std::cell::RefCell<flamewm_shell::polkit_dialog::PolkitDialog>>,
+    /// Session agent that answers prompts. Set only when the agent registers.
+    pub(crate) polkit_agent: Option<
+        std::rc::Rc<std::cell::RefCell<flamewm_integrations_linux::polkit_agent::PolkitAgent>>,
+    >,
+    /// Reactor that runs the helper pipes. Set with `polkit_agent`.
+    pub(crate) polkit_reactor: Option<flamewm_reactor::ReactorHandle>,
     pub(crate) local_date: (i32, u8, u8),
     pub(crate) date_tracker: ClockDateTracker,
     pub(crate) audio_tab: AudioTab,
@@ -205,6 +215,9 @@ impl ShellLoop {
             context_menu: None,
             network_secret: String::new(),
             network_secret_request_id: None,
+            polkit_dialog: Default::default(),
+            polkit_agent: None,
+            polkit_reactor: None,
             local_date: projection::local_date(),
             date_tracker: ClockDateTracker::new(projection::local_date()),
             audio_tab: AudioTab::default(),

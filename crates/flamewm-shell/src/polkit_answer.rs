@@ -51,7 +51,7 @@ pub fn start(
     )
 }
 
-fn finish_and_dismiss(
+pub fn finish_and_dismiss(
     agent: &Rc<RefCell<PolkitAgent>>,
     dialog: &Rc<RefCell<PolkitDialog>>,
     cookie: &str,

@@ -34,6 +34,7 @@ mod context_menu;
 mod media;
 mod network;
 mod panel;
+mod polkit;
 mod start;
 mod task_menu;
 mod weather;
@@ -67,6 +68,7 @@ pub(crate) use panel::{
     taskbar_is_vertical, tray_any_visible, workspace_pager_visible, TASK_ATTENTION,
     TASK_NOT_RESPONDING,
 };
+pub use polkit::project_polkit;
 pub use start::{
     project_start, project_start_error, start_application_for_slot,
     start_application_name_for_slot, start_scroll_max, start_scroll_step, start_visible_results,

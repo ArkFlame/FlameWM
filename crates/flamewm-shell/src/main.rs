@@ -817,6 +817,12 @@ fn execute() -> Result<(), String> {
             .map_err(|error| format!("register notification source: {error}"))?;
     }
     if let Some(agent) = polkit.as_ref() {
+        {
+            let mut shell = state.borrow_mut();
+            shell.polkit_agent = Some(Rc::clone(agent));
+            shell.polkit_reactor = Some(reactor.handle());
+        }
+        let polkit_dialog = Rc::clone(&state.borrow().polkit_dialog);
         let watch = agent.borrow().watch();
         let polkit_state = Rc::clone(agent);
         reactor
@@ -824,7 +830,7 @@ fn execute() -> Result<(), String> {
                 let mut agent = polkit_state.borrow_mut();
                 match agent.on_ready() {
                     Ok(_) => {
-                        drain_polkit_prompts(&mut agent);
+                        drain_polkit_prompts(&mut agent, &polkit_dialog);
                         flamewm_reactor::FdAction::Continue
                     }
                     Err(error) => {
@@ -938,6 +944,7 @@ fn execute() -> Result<(), String> {
                 };
                 tick_state.borrow_mut().set_output_pointer(pointer);
                 tick_state.borrow_mut().tick(runtime, &clock_due)?;
+                tick_state.borrow_mut().sync_polkit(runtime)?;
                 tick_state.borrow_mut().tick_tray(runtime);
                 if let Some(host) = notifications.as_ref() {
                     if let Err(error) = host.borrow_mut().tick(runtime, Some(&shared_wake)) {
@@ -986,17 +993,23 @@ fn execute() -> Result<(), String> {
 /// registered agent that cannot answer makes pkexec wait out polkit's timeout.
 const POLKIT_AGENT_CAN_ANSWER: bool = false;
 
-/// Prompts have no dialog yet (pol-ui), so each one is logged and removed from the pending set.
-/// polkit then times out its own request; nothing is answered on the user's behalf.
-fn drain_polkit_prompts(agent: &mut PolkitAgent) {
+/// Feeds agent events to the dialog. A prompt the queue cannot hold is refused at once, so polkit
+/// does not wait out its own timeout.
+fn drain_polkit_prompts(
+    agent: &mut PolkitAgent,
+    dialog: &RefCell<flamewm_shell::polkit_dialog::PolkitDialog>,
+) {
     for event in agent.take_events() {
-        if let PolkitEvent::Show(request) = event {
-            eprintln!(
-                "flamewm-shell: polkit prompt for {} has no dialog yet; left unanswered",
-                request.action_id
-            );
-            // No dialog yet: answer the pending call now instead of letting polkit time out.
-            if let Err(error) = agent.finish(&request.cookie, AuthOutcome::Failed) {
+        let cookie = match &event {
+            PolkitEvent::Show(request) => Some(request.cookie.clone()),
+            PolkitEvent::Dismiss(_) => None,
+        };
+        if dialog.borrow_mut().apply(event) {
+            continue;
+        }
+        if let Some(cookie) = cookie {
+            eprintln!("flamewm-shell: polkit prompt queue full; request refused");
+            if let Err(error) = agent.finish(&cookie, AuthOutcome::Failed) {
                 eprintln!("flamewm-shell: polkit reply failed: {error}");
             }
         }

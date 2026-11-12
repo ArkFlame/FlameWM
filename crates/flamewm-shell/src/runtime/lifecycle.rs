@@ -66,6 +66,15 @@ impl ShellSurfaces {
                 flamewm_api::Rect::new(output.geometry.x, output.geometry.y, 600, 360),
             ),
         )?;
+        let polkit = create_surface(
+            runtime,
+            POLKIT_ARTIFACT,
+            popup_config(
+                "FlameWM authentication",
+                SurfaceRole::PopupMenu,
+                flamewm_api::Rect::new(output.geometry.x, output.geometry.y, 420, 260),
+            ),
+        )?;
         let mut panels = vec![PanelSurfaceRecord {
             panel: primary_panel,
             placement: primary_placement.clone(),
@@ -88,6 +97,8 @@ impl ShellSurfaces {
             media,
             launcher,
             launcher_output: None,
+            polkit,
+            polkit_open: false,
             panels,
             selected_output: None,
             transient_output: None,

@@ -154,6 +154,9 @@ impl ShellLoop {
         }
         if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
             let input = event.action.text.as_deref().unwrap_or_default();
+            if self.surfaces.is_polkit_open() {
+                return self.route_polkit_text(runtime, input);
+            }
             if input == "\u{1b}" {
                 if let Some(request) = self.network_secret_request(false) {
                     self.submit(request);
@@ -220,6 +223,9 @@ impl ShellLoop {
         }
 
         if event.action.phase == ActionPhase::Release && event.action.inside {
+            if action.starts_with("polkit.") && self.surfaces.is_polkit_open() {
+                return self.route_polkit_action(runtime, action, event.action.text.as_deref());
+            }
             if action == crate::assistant_popover::ACTION {
                 self.shell.dispatch("popover.close");
                 self.close_quick_control_nonfatal();
