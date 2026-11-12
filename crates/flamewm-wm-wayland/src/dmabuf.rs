@@ -80,13 +80,43 @@ pub fn init(state: &mut State, renderer: &mut GlowRenderer) {
     let count = formats.len();
     match default_feedback(device, formats) {
         Ok(feedback) => {
-            let _global = state
+            let global = state
                 .dmabuf_state
                 .create_global_with_default_feedback::<State>(&state.display, &feedback);
+            state.dmabuf_global = Some(global);
             eprintln!("flamewm-wayland: dmabuf global zwp_linux_dmabuf_v1 formats={count}");
         }
         Err(error) => {
             eprintln!("flamewm-wayland: dmabuf feedback unavailable ({error}); no dmabuf global");
+        }
+    }
+}
+
+/// Re-derives the default feedback of the global `init` created, after a renderer rebuild replaced
+/// the device and formats. Clients keep the same global; only its main device and formats change.
+/// A renderer with no usable formats or render node leaves the previous feedback in place and logs.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
+pub fn refresh_feedback(state: &mut State, renderer: &GlowRenderer) {
+    let Some(global) = state.dmabuf_global.as_ref() else {
+        return;
+    };
+    let formats = filter_formats(renderer.dmabuf_formats());
+    let Some(device) = main_device(renderer) else {
+        eprintln!("flamewm-wayland: dmabuf feedback refresh skipped: renderer has no render node");
+        return;
+    };
+    if formats.is_empty() {
+        eprintln!(
+            "flamewm-wayland: dmabuf feedback refresh skipped: renderer imports no RGB formats"
+        );
+        return;
+    }
+    match default_feedback(device, formats) {
+        Ok(feedback) => state.dmabuf_state.set_default_feedback(global, &feedback),
+        Err(error) => {
+            eprintln!(
+                "flamewm-wayland: dmabuf feedback refresh failed ({error}); keeping previous feedback"
+            );
         }
     }
 }

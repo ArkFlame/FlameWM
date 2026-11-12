@@ -31,7 +31,7 @@ use smithay::reexports::wayland_server::{Client, DisplayHandle, protocol::wl_sur
 use smithay::utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
-use smithay::wayland::dmabuf::{DmabufState, ImportNotifier};
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState, ImportNotifier};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -370,6 +370,9 @@ pub struct State {
     pub shm: ShmState,
     /// `zwp_linux_dmabuf_v1` state. The global is created by `dmabuf::init` once a renderer exists.
     pub dmabuf_state: DmabufState,
+    /// The dmabuf global `dmabuf::init` created, kept so a renderer rebuild can refresh its default
+    /// feedback. `None` when no global was offered.
+    pub dmabuf_global: Option<DmabufGlobal>,
     /// Client dmabufs waiting for the native renderer, which lives in `drm::Drm` rather than here.
     /// Settled by `dmabuf::settle_pending` on the next paint.
     pub pending_dmabufs: Vec<(Dmabuf, ImportNotifier)>,
@@ -549,6 +552,7 @@ impl State {
             layer_shell,
             shm,
             dmabuf_state: DmabufState::new(),
+            dmabuf_global: None,
             pending_dmabufs: Vec::new(),
             seat_state,
             data_device,

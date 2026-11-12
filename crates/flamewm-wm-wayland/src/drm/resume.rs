@@ -105,6 +105,8 @@ pub(super) fn rebuild(
     let mut renderer = unsafe { GlowRenderer::new(context)? };
     crate::render::log_gl_renderer(&mut renderer, "drm");
     let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
+    // Clients keep the global, but its default feedback names the old render node and formats.
+    crate::dmabuf::refresh_feedback(state, &renderer);
 
     let mut d = drm.borrow_mut();
     // Scanout buffers of the old device have to go before the old GBM device does.
