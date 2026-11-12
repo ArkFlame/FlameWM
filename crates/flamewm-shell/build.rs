@@ -32,6 +32,7 @@ fn main() {
         "notification-center.html",
         "launcher.html",
         "switcher.html",
+        "polkit.html",
     ];
     let artifacts = [
         ("flamewm-panel.rwr", "panel.html"),
@@ -56,6 +57,7 @@ fn main() {
         ),
         ("flamewm-launcher.rwr", "launcher.html"),
         ("flamewm-switcher.rwr", "switcher.html"),
+        ("flamewm-polkit.rwr", "polkit.html"),
     ];
 
     println!("cargo:rerun-if-changed={}", css.display());
