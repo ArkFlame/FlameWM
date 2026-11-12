@@ -34,6 +34,9 @@ impl ShellSurfaces {
             .move_resize(self.polkit, rect.x, rect.y, width, height)
             .map_err(ui_error)?;
         runtime.show(self.polkit).map_err(ui_error)?;
+        // No pointer grab, so the WM never focuses this override-redirect card. Typed input needs
+        // X focus, handed over the way a grabbed popup gets it.
+        runtime.take_keyboard_focus(self.polkit).map_err(ui_error)?;
         self.polkit_open = true;
         Ok(())
     }
@@ -43,6 +46,9 @@ impl ShellSurfaces {
         if !std::mem::take(&mut self.polkit_open) {
             return Ok(());
         }
+        runtime
+            .release_keyboard_focus(self.polkit)
+            .map_err(ui_error)?;
         runtime.close_surface(self.polkit).map_err(ui_error)
     }
 

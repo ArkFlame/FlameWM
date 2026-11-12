@@ -825,12 +825,16 @@ fn execute() -> Result<(), String> {
         let polkit_dialog = Rc::clone(&state.borrow().polkit_dialog);
         let watch = agent.borrow().watch();
         let polkit_state = Rc::clone(agent);
+        // A new prompt changes only the dialog model; the card opens on the next tick. Wake the
+        // loop now so the card maps at once instead of at the next scheduled tick.
+        let polkit_wake = reactor.wake_deadline();
         reactor
             .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
                 let mut agent = polkit_state.borrow_mut();
                 match agent.on_ready() {
                     Ok(_) => {
                         drain_polkit_prompts(&mut agent, &polkit_dialog);
+                        polkit_wake.set(Some(std::time::Instant::now()));
                         flamewm_reactor::FdAction::Continue
                     }
                     Err(error) => {

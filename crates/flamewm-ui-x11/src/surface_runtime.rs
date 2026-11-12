@@ -453,6 +453,19 @@ impl SurfaceRuntime {
             .map_err(Into::into)
     }
 
+    /// X input focus for a popup that types but does not grab the pointer (the polkit card).
+    pub fn take_keyboard_focus(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
+        self.controller
+            .take_keyboard_focus(surface.0)
+            .map_err(Into::into)
+    }
+
+    pub fn release_keyboard_focus(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
+        self.controller
+            .release_keyboard_focus(surface.0)
+            .map_err(Into::into)
+    }
+
     pub fn is_pointer_grabbed(&self, surface: SurfaceHandle) -> Result<bool, UiBackendError> {
         self.controller
             .is_pointer_grabbed(surface.0)

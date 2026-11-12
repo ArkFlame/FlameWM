@@ -221,6 +221,39 @@ impl SurfaceController {
         Ok(())
     }
 
+    /// Gives an override-redirect popup X input focus without a pointer grab, for a prompt that
+    /// takes typed input and must not grab the pointer. The WM never focuses override-redirect
+    /// windows, so the grab path's focus handoff is the only one. Undone by `release_keyboard_focus`.
+    pub fn take_keyboard_focus(&mut self, id: SurfaceId) -> Result<(), String> {
+        let display = self.display;
+        let instance = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        unsafe {
+            popup_take_focus(display, &mut instance.app);
+            XFlush(display);
+        }
+        Ok(())
+    }
+
+    /// Restores the focus displaced by `take_keyboard_focus`. A popup holding a pointer grab keeps
+    /// its focus; `ungrab_pointer` owns that restore.
+    pub fn release_keyboard_focus(&mut self, id: SurfaceId) -> Result<(), String> {
+        let display = self.display;
+        let instance = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        if !instance.app.pointer_grabbed {
+            unsafe {
+                popup_restore_focus(display, &mut instance.app);
+                XFlush(display);
+            }
+        }
+        Ok(())
+    }
+
     /// Subscribes to root child map/unmap/configure/destroy (SubstructureNotify is shared, so the
     /// window manager's redirect is unaffected). Idempotent.
     pub fn watch_root_changes(&self) {

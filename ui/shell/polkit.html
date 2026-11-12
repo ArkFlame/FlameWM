@@ -22,12 +22,13 @@
   <section id="polkit" class="polkit-card" role="dialog" aria-labelledby="polkit-title">
     <h1 id="polkit-title" class="polkit-title">Authentication required</h1>
     <p id="polkit-message" class="polkit-message">&#8203;</p>
-    <dl id="polkit-details" class="polkit-details"></dl>
+    <dl id="polkit-details" class="polkit-details">&#8203;</dl>
     <label class="polkit-label" for="polkit-identity">Authenticate as</label>
-    <select id="polkit-identity" class="polkit-identity" data-action="polkit.identity"></select>
+    <select id="polkit-identity" class="polkit-identity" data-action="polkit.identity">&#8203;</select>
     <label class="polkit-label" for="polkit-password">Password</label>
-    <input id="polkit-password" class="polkit-password" type="password" autocomplete="off" spellcheck="false" data-action="polkit.input">
-    <p id="polkit-error" class="polkit-error" role="alert"></p>
+    <!-- Typed text arrives as X key events on the card, not through this node; it shows only the masked value. -->
+    <div id="polkit-password" class="polkit-password" role="textbox" aria-readonly="true" aria-label="Password">&#8203;</div>
+    <p id="polkit-error" class="polkit-error" role="alert">&#8203;</p>
     <div class="polkit-actions">
       <button id="polkit-cancel" class="polkit-button" type="button" data-action="polkit.cancel">Cancel</button>
       <button id="polkit-submit" class="polkit-button" type="button" data-action="polkit.submit">Authenticate</button>
