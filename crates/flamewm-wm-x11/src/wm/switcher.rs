@@ -393,9 +393,17 @@ impl<C: Connection> Wm<'_, C> {
         self.switcher_budget.begin_turn();
         let clients = &self.clients;
         let iconic = |window: Window| clients.get(&window).is_some_and(|state| state.minimized);
+        let redirect = self.redirect_frames;
+        let redirected_frame = |window: Window| {
+            clients
+                .get(&window)
+                .filter(|_| redirect)
+                .map(|state| state.frame)
+        };
         let mut source = X11ThumbSource {
             conn: self.conn,
             iconic: &iconic,
+            redirected_frame: &redirected_frame,
         };
         let stored = self
             .switcher_thumbs
