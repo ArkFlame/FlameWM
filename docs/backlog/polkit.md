@@ -2,7 +2,7 @@
 
 > Rows: `cmp-polkit` (partial, core `1951e0df`), `pol-ui`, `pol-helper`, `pol-session`, `pol-sessid`, `pol-proof` in `docs/BACKLOG.md`.
 
-Status: core and bounded event queue landed in `flamewm-integrations-linux`; UI, shell consumer and helper I/O open. Static evidence only, no runtime proof.
+Status: core and bounded event queue landed in `flamewm-integrations-linux`. Since then: helper conversation driver and answer path (`6125d536`, `651ccadf`), 30 s helper kill (`81b133e7`), uid label (`3d619b81`), `polkit.html` compiled (`53b4d927`), mock-bus e2e (`c5c4197e`). Popover not built and not wired; `POLKIT_AGENT_CAN_ANSWER` stays false. Static and mock-bus evidence only; no real polkitd, pkexec or PAM runtime proof.
 
 ## Scope check (origin/main)
 

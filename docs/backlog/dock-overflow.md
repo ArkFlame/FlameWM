@@ -2,9 +2,7 @@
 
 > Backlog row: `cmp-dock-overflow` (`docs/BACKLOG.md`).
 
-Status: OPEN. The taskbar has no recorded narrow-width runtime check with both
-the system tray and clock present. No placement/overflow policy has been
-decided; this note specifies evidence to collect, not a UI design or behavior.
+Status: PARTIAL. Slice 1 (`ebad163d`, `+N` overflow cell) and slice 2 (`d42da107`, width-aware cap and overflow popup) have landed. The width model is unmeasured, Enter/Space on `#task-overflow` is not added, and no narrow-width runtime check has run. The bounded check below is still the evidence to collect.
 
 ## Bounded runtime check
 
@@ -49,14 +47,13 @@ reproducing the failure requires interaction.
   (role=status, text is the accessible name) and the cell adds to `#task-slots` width;
   no clipping is silent. Precedent: KDE Plasma icon-tasks and COSMIC applet overflow
   (`.vendor/cosmic-epoch/cosmic-applets`) both collapse excess items into an overflow
-  control; a popup is deferred because no popover route exists for it here. Width-aware
-  cap and runtime check remain open.
+  control; the popup landed in `d42da107` (role=menu, max 16 rows). The width-aware cap also landed in `d42da107`, from panel geometry minus a fixed chrome budget (a documented shortcut, not measured). The runtime check remains open.
 - Earlier reasoning: a non-overlapping cap needs the real `#tray-group`
   width. That width depends on media, audio, network, battery, weather and SNI item
   visibility, which is split across `projection/panel.rs`, `tray_host.rs`,
   `taskbar/status/*` and the weather projection. Reserving the tray's maximum width
   would cut slots at normal widths. The indicator/menu UX is also an open decision.
-- Next slice (needs a placement decision first): a single shared tray-width helper used
+- Former next slice (superseded by `d42da107`; kept as evidence): a single shared tray-width helper used
   by all three projection paths, then `max_task_slots` in `taskbar_scale.rs` gating
   `index < rendered` for visibility. Runtime geometry check per
   `Bounded runtime check` above is still NOT RUN.
