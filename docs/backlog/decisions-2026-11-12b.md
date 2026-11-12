@@ -29,8 +29,8 @@ them needs a code slice now, so no gate ran.
 
 ## D-read-U4 (read-U4): close as won't-fix
 
-- Premise: `drain` and `nonblocking_pair` exist in `crates/flamewm-finder/src/lib.rs:288,302`
-  and `crates/flamewm-assistant/src/lib.rs:993,1007`. They are wake-pipe production
+- Premise: `drain` and `nonblocking_pair` exist in `crates/flamewm-finder/src/lib.rs:270,284`
+  and `crates/flamewm-assistant/src/lib.rs:981,995`. They are wake-pipe production
   code, not test helpers (`docs/BACKLOG.md` row read-U4 already says so).
 - Precedent: `AGENTS.md` names `flamewm-reactor` as the owner of native event sources.
   A shared wake-pipe helper would belong there, but it would need new dependency
@@ -91,17 +91,27 @@ them needs a code slice now, so no gate ran.
 - Revisit when: an A/B run shows a foreground gain for one of the four sites.
 - Slice: none.
 
-## D-pol-session (pol-session): decided, registration stays gated off
+## D-pol-session (pol-session): superseded, gate on (`ecf88310`)
 
-- Current: `a2ba9ce0` gates shell registration behind `POLKIT_AGENT_CAN_ANSWER = false`.
-  `8f7cbbc4` expires unanswered prompts as Failed after `PROMPT_TIMEOUT`.
-- Precedent: the fail-fast rule in `docs/backlog/decisions-2026-11-12.md` (D-bt).
-  An agent that accepts a request and never answers makes the caller hang. The
-  polkit contract needs a reply for each request (`docs/backlog/polkit.md:47`).
-- Decision: keep the gate off until the prompt UI (pol-ui) answers prompts. Close
-  pol-session as decided. The session wiring (shell registers, unregisters on exit)
-  stays as written.
-- Slice: none. Proof: mock-bus test not run in this pass.
+- Earlier decision (superseded): keep the gate off until the prompt UI answers.
+  It was made while `a2ba9ce0` held `POLKIT_AGENT_CAN_ANSWER = false`.
+- Current (checked in code): `crates/flamewm-shell/src/main.rs:998` has
+  `POLKIT_AGENT_CAN_ANSWER = true`, and registration at shell start is under that
+  gate (`main.rs:676`). `ecf88310` flipped it because the prompt card now answers:
+  typed password reaches the helper and Escape returns `Cancelled`. Proof was on
+  private Xvfb and private buses with a fake Authority and fake helper. `66e053f4`
+  unregisters on exit.
+- Safety net: a prompt with no answer expires as `Failed` after `PROMPT_TIMEOUT`
+  = 120 s (`crates/flamewm-integrations-linux/src/polkit_agent.rs:34`, expiry at
+  :657; `8f7cbbc4`). This bounds the pkexec wait the old decision guarded against.
+  It does not remove the wait.
+- Residual risks: (1) the real `polkit-agent-helper-1` path is not exercised;
+  (2) typed input and Escape are proven only with the fake helper; (3) real polkitd
+  and logind registration are unverified (host system bus not probed); (4) pkexec
+  waits up to 120 s when the card does not answer.
+- Decision: the gate stays on. Revisit with a real helper run on a private session
+  bus (`pol-proof`, D-polkit-proof). If that run shows a hang, set the const to false.
+- Slice: none. Proof: fake-helper card proof `ecf88310`; real helper not run.
 
 ## D-wrss-scratch (wrss-scratch): closed as not-fixable below bar
 
