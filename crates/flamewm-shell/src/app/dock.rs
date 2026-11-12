@@ -97,6 +97,34 @@ fn dock_edge(edge: PanelEdge) -> Edge {
     }
 }
 
+/// Accessible name for one dock slot (WAI-ARIA 1.2: a button is named from `aria-label`). Trash is
+/// "Trash"; otherwise the app name, else the humanised desktop id, else "Application".
+pub(crate) fn dock_slot_label(app_name: Option<&str>, desktop_id: &str, is_trash: bool) -> String {
+    if is_trash {
+        return "Trash".to_owned();
+    }
+    if let Some(name) = app_name.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_owned();
+    }
+    let segment = desktop_id.rsplit('.').next().unwrap_or_default().trim();
+    let mut chars = segment.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "Application".to_owned(),
+    }
+}
+
+/// Writes `aria-label` on `dock-slot-N` (1-based) for each slot label, in slot order.
+pub(crate) fn set_slot_labels(
+    labels: &[String],
+    mut set: impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    for (index, label) in labels.iter().enumerate() {
+        set(&format!("dock-slot-{}", index + 1), label)?;
+    }
+    Ok(())
+}
+
 impl ShellLoop {
     /// Creates, moves, projects, or destroys the dock surface to match the settings and windows.
     /// Auto-hide slides the dock toward its edge; once fully hidden, only the reveal strip is mapped.
@@ -274,24 +302,21 @@ impl ShellLoop {
                     lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
                 })
                 .collect();
-            // Accessible name per slot (WAI-ARIA 1.2: name from aria-label); Trash is named "Trash".
             let app_labels: Vec<String> = layout
                 .entries
                 .iter()
                 .map(|entry| {
-                    if entry.app_id == TRASH_SLOT_ID {
-                        return "Trash".to_owned();
-                    }
-                    lookup(&entry.app_id).map_or_else(String::new, |app| app.name.clone())
+                    let app_name = lookup(&entry.app_id).map(|app| app.name.as_str());
+                    dock_slot_label(app_name, &entry.app_id, entry.app_id == TRASH_SLOT_ID)
                 })
                 .collect();
             async_projection::bump_dock_view_epoch();
             let icon_loader = &mut self.icon_loader;
             if let Err(error) = runtime.with_document(surface, |document| {
                 dock::project_dock(document, &frame, settings.squared_corners)?;
-                for (index, label) in app_labels.iter().enumerate() {
-                    document.attribute(&format!("dock-slot-{}", index + 1), "aria-label", label)?;
-                }
+                set_slot_labels(&app_labels, |id, label| {
+                    document.attribute(id, "aria-label", label)
+                })?;
                 // Same miss policy as the taskbar and launcher: a cached raster, else the transparent
                 // placeholder plus one worker request. The dock's default glyph never shows for a miss.
                 for (index, name) in icon_names.iter().enumerate() {
@@ -1079,5 +1104,63 @@ impl ShellLoop {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod slot_label_tests {
+    use super::{dock_slot_label, set_slot_labels, TRASH_SLOT_ID};
+
+    #[test]
+    fn trash_is_named_trash_regardless_of_app_entry() {
+        assert_eq!(dock_slot_label(Some("Files"), TRASH_SLOT_ID, true), "Trash");
+        assert_eq!(dock_slot_label(None, TRASH_SLOT_ID, true), "Trash");
+    }
+
+    #[test]
+    fn app_name_wins_and_is_trimmed() {
+        assert_eq!(dock_slot_label(Some("  Mail "), "mail", false), "Mail");
+    }
+
+    #[test]
+    fn missing_app_falls_back_to_humanised_desktop_id() {
+        assert_eq!(
+            dock_slot_label(None, "org.example.terminal", false),
+            "Terminal"
+        );
+        assert_eq!(dock_slot_label(Some(""), "web", false), "Web");
+    }
+
+    #[test]
+    fn empty_name_and_id_fall_back_to_application() {
+        assert_eq!(dock_slot_label(Some("  "), "", false), "Application");
+        assert_eq!(dock_slot_label(None, "org.example.", false), "Application");
+    }
+
+    #[test]
+    fn duplicate_names_are_kept_verbatim_per_slot() {
+        let labels = vec![
+            dock_slot_label(Some("Notes"), "a.notes", false),
+            dock_slot_label(Some("Notes"), "b.notes", false),
+        ];
+        assert_eq!(labels, ["Notes", "Notes"]);
+    }
+
+    #[test]
+    fn slot_labels_land_on_dock_slot_ids_in_order() {
+        let labels = vec!["Terminal".to_owned(), "Trash".to_owned()];
+        let mut writes = Vec::new();
+        set_slot_labels(&labels, |id, label| {
+            writes.push((id.to_owned(), label.to_owned()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            writes,
+            [
+                ("dock-slot-1".to_owned(), "Terminal".to_owned()),
+                ("dock-slot-2".to_owned(), "Trash".to_owned()),
+            ]
+        );
     }
 }
