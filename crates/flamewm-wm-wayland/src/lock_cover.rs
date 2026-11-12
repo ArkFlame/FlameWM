@@ -44,9 +44,11 @@ impl LockCover {
         self.covered.remove(output);
     }
 
-    /// An output was connected. It is uncovered until its own lock surface arrives.
+    /// An output was connected. It is uncovered until its own lock surface arrives, even when a
+    /// cover from a previous connection of the same connector lingers.
     pub fn output_added(&mut self, output: &str) {
         self.outputs.insert(output.to_owned());
+        self.covered.remove(output);
     }
 
     /// An output was disconnected. It no longer needs covering and any cover it had is dropped.
@@ -122,6 +124,17 @@ mod tests {
         assert_eq!(cover.uncovered(), ["HDMI-A-1"]);
         cover.cover("HDMI-A-1");
         assert!(cover.is_complete());
+    }
+
+    #[test]
+    fn a_reconnected_output_starts_uncovered_even_with_a_lingering_cover() {
+        // Resume drops the output and re-adds the same connector while locked: its old cover must
+        // not make the new output look covered.
+        let mut cover = LockCover::new(["DP-1"]);
+        cover.cover("DP-1");
+        cover.output_added("DP-1");
+        assert!(!cover.is_complete());
+        assert_eq!(cover.uncovered(), ["DP-1"]);
     }
 
     #[test]
