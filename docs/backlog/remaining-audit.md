@@ -44,6 +44,20 @@ Pass over the 29 rows that ea985abf left unclassified. Checked against origin/ma
 - Landed: `org.freedesktop.impl.portal.ScreenCast` is registered in `packaging/xdg-desktop-portal/flamewm.portal` and routed in `flamewm-portals.conf`. `flamewm-screenshot/src/screencast.rs` answers CreateSession, SelectSources and Start with response 2 and no streams. Precedent: `.vendor/cosmic-epoch/xdg-desktop-portal-cosmic/src/screencast.rs` (PipeWire-backed; idea only, no code copied).
 - Remaining (blocked by D-portal): a PipeWire stream owner for real ScreenCast frames.
 - Remaining: interactive Screenshot (`interactive=true`) is still refused with response 2. Precedent (cosmic) uses a dedicated selection dialog; FlameWM has no owner for a Wayland selection surface yet, so region and window choice needs that decision first.
+## Reconcile e2a43969..20614c7c (docs only)
+
+Static, unit and private-bus evidence only. Statuses stay PARTIAL where runtime proof is absent.
+
+- `cmp-alttab` (correction): Wayland previews are on origin/main. Producer `5a7f6a0c` (`crates/flamewm-wm-wayland/src/render/switcher_thumbs.rs`), ThumbCache in `control/switcher.rs`, proof `scripts/break/alttab-thumb.sh` (private Xvfb with nested winit, not DRM). Remaining: X11 XComposite occlusion (decision D-alttab-occlusion) and GPU downscale quality plus frame-time baseline. The older "Wayland previews BLOCKED" wording is stale.
+- `cmp-app-rescan` (`d3355c99`, launcher open and launch-miss catalog refresh): unit and gate only. No Xvfb run. Precedent cited (KDE kbuildsycoca mtime rebuild) is from the brief; not vendor-verified.
+- `net-vpn` (`493d4458`): activate and deactivate e2e on a mock NetworkManager on a private dbus-daemon. Passed before rebase; not re-gated after rebase. Lookup errors are only logged. PARTIAL; no live NetworkManager.
+- `cmp-dock-overflow` (`e3870895`): Enter/Space on the open overflow menu activates the first row. Button focus and arrow keys are NOT wired, because shell surfaces have no keyboard focus. PARTIAL.
+- `cmp-a11y` (`6dfc17b3`): KDE-style names on ui/index.html accent swatches (static markup test only). Startup toggles still lack `aria-checked`, because `UiDocumentAccess` has no attribute setter. PARTIAL.
+- `02125b39`: dialog submit test (empties the field; Debug hides the password). Unit test only.
+- `bt-agent` (`1c169efe`): BlueZ `Agent1` slice 1, reject-all, tested on a private bus. Not wired in the shell. PARTIAL.
+- `wl-lock-multi` (`14094520`, `20614c7c`): lock cover for hotplugged outputs and for every layout output. Unit only. `drop_outputs` resume path and wl_output removal via resume/events are not handled. Stays PARTIAL.
+- Known flaky test: `foreign_event_livelock` (`crates/flamewm-render-x11/tests/foreign_event_livelock.rs`). It failed twice at about 10 s under gate load and passed in 0.32 s on rerun. A clean origin/main baseline passed. Treat as flaky under load; not a regression signal by itself.
+
 ## Reconcile 0a95a8f4..5eed77c1 (docs only)
 
 - Rows updated: look-radius and look-harness (BACKLOG.md), cmp-a11y magnifier (`6b890a34`), pol-ui (`501876cc`, PARTIAL), wl-dmabuf-resume (`5eed77c1`, PARTIAL). Each statement is static, unit or capture evidence as the row states; runtime proof stays open where the row says so.
