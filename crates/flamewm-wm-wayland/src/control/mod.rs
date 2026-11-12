@@ -209,6 +209,9 @@ pub fn install(state: &mut State) -> Result<(), Box<dyn Error>> {
     // messages on it), so one level-triggered source is enough.
     let network = flamewm_reactor::BorrowedRawFd(service.network.borrow().watch().fd);
     state.control = Some(service.clone());
+    // Committed settings apply at startup, not only on the first bus wake: otherwise a
+    // `colourFilter` (or any chrome setting) stays at its default until something on the bus fires.
+    service.sync_chrome_settings(state);
     state.loop_handle.insert_source(
         Generic::new(bus, Interest::READ, Mode::Level),
         |_, _, state| {

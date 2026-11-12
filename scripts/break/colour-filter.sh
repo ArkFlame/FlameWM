@@ -18,7 +18,7 @@ if [[ "${1:-}" == --inner ]]; then
   for mode in none grayscale invert; do
     mkdir -p "$RUN/$mode"
     if [[ "$mode" == none ]]; then : >"$RUN/$mode/settings.toml"; else
-      printf 'colourFilter = "%s"\n' "$mode" >"$RUN/$mode/settings.toml"
+      printf 'revision=2\ncolourFilter=%s\n' "$mode" >"$RUN/$mode/settings.toml"
     fi
     SOCK="wl-cf-$mode-$$"
     FLAMEWM_SETTINGS_PATH="$RUN/$mode/settings.toml" \
@@ -94,10 +94,10 @@ try:
         out.append(f"{mode}_bytes_differ_from_none={d}")
         ok = ok and d > 0
     print(" ".join(out))
-    sys.exit(0 if ok else 1)
 except (OSError, SystemExit) as e:
     print(f"proof_error={e}")
     sys.exit(1)
+sys.exit(0 if ok else 1)
 PY
 then verdict=PASS; fi
 panics=$(grep -c 'panicked' "$RUN"/*.log 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
