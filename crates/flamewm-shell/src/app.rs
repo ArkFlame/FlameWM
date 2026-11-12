@@ -95,6 +95,8 @@ pub(crate) struct ShellLoop {
     /// Invocation currently owned by the visible Start-menu session.
     pub(crate) active_start_launch: Option<StartLaunchContext>,
     pub(crate) context_menu: Option<flamewm_shell::ContextMenuState>,
+    /// Highlighted row of the open taskbar overflow menu; reset when the menu opens.
+    pub(crate) overflow_row: usize,
     pub(crate) network_secret: String,
     pub(crate) network_secret_request_id: Option<u64>,
     /// Polkit prompts in arrival order; the card shows the active one.
@@ -223,6 +225,7 @@ impl ShellLoop {
             quick_kind_open: None,
             dismiss_latch: None,
             context_menu: None,
+            overflow_row: 0,
             network_secret: String::new(),
             network_secret_request_id: None,
             polkit_dialog: Default::default(),

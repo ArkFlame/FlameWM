@@ -330,6 +330,7 @@ impl ShellLoop {
                     let backdrop =
                         crate::entry::settings_projection::start_backdrop_percents(&settings);
                     self.context_menu = Some(state.clone());
+                    self.overflow_row = 0;
                     let _measure = shell_stage!("shell.context.open.measure");
                     let _place = shell_stage!("shell.context.open.place");
                     let _prepare = shell_stage!("shell.context.open.prepare");

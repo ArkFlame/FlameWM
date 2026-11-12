@@ -1,4 +1,4 @@
-use super::overflow_keys::{overflow_activation_row, overflow_menu_rows};
+use super::overflow_keys::{overflow_activation_row, overflow_menu_rows, overflow_menu_step};
 use super::*;
 
 impl ShellLoop {
@@ -199,12 +199,18 @@ impl ShellLoop {
         let typed = (is_keyboard && event.action.phase == ActionPhase::Release)
             .then_some(event.action.text.as_deref())
             .flatten();
-        if let Some(row) =
-            overflow_activation_row(typed, overflow_menu_rows(self.context_menu.as_ref()))
-        {
+        let overflow_rows = overflow_menu_rows(self.context_menu.as_ref());
+        if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
+            let payload = event.action.text.as_deref().unwrap_or_default();
+            if let Some(next) = overflow_menu_step(payload, overflow_rows, self.overflow_row) {
+                self.overflow_row = next;
+                return Ok(());
+            }
+        }
+        if let Some(row) = overflow_activation_row(typed, overflow_rows, self.overflow_row) {
             if let Some(request) = self
                 .shell
-                .context_menu_request_for_action(row, self.context_menu.as_ref())
+                .context_menu_request_for_action(&row, self.context_menu.as_ref())
             {
                 self.submit(request);
                 self.shell.dispatch("popover.close");
