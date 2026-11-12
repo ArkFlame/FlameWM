@@ -174,6 +174,12 @@ impl ShellSurfaces {
                     .flatten()
             })
             .or_else(|| {
+                // Card keys are dropped as Ignore without this, so typed input never reaches it.
+                (surface == self.polkit)
+                    .then(|| self.polkit_output.clone())
+                    .flatten()
+            })
+            .or_else(|| {
                 let owns_popup = match self.transient {
                     Some(Transient::StartGroup) => surface == self.start,
                     Some(Transient::ContextMenu) => surface == self.task_menu,

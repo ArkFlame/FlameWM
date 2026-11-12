@@ -99,6 +99,7 @@ impl ShellSurfaces {
             launcher_output: None,
             polkit,
             polkit_open: false,
+            polkit_output: None,
             panels,
             selected_output: None,
             transient_output: None,

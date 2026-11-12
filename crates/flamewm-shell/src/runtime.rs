@@ -565,6 +565,8 @@ pub struct ShellSurfaces {
     /// Polkit authentication card; open while the dialog has an active prompt.
     pub polkit: SurfaceHandle,
     polkit_open: bool,
+    /// Output the card opened on; `Some` while it is open. Card input resolves through it.
+    polkit_output: Option<flamewm_api::OutputId>,
     panels: Vec<PanelSurfaceRecord>,
     selected_output: Option<flamewm_api::OutputId>,
     transient_output: Option<flamewm_api::OutputId>,

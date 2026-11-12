@@ -670,9 +670,9 @@ fn execute() -> Result<(), String> {
             }
         };
 
-    // Polkit agent for this session. It registers only when POLKIT_AGENT_CAN_ANSWER is set; until a
-    // prompt UI and a password helper exist, a registered agent would leave pkexec requests
-    // unanswered. Without the system bus or logind the shell runs without one.
+    // Polkit agent for this session. It registers only when POLKIT_AGENT_CAN_ANSWER is set, so a
+    // registered agent always has a prompt card that takes input and answers the helper.
+    // Without the system bus or logind the shell runs without one.
     let polkit = if POLKIT_AGENT_CAN_ANSWER {
         match PolkitAgent::connect_system(std::env::var("XDG_SESSION_ID").ok().as_deref(), "C") {
             Ok(agent) => Some(Rc::new(RefCell::new(agent))),
@@ -995,7 +995,7 @@ fn execute() -> Result<(), String> {
 /// sessions as in `.vendor/vela-main/polkit/agent/backend.cpp`, with the `BeginAuthentication` reply
 /// deferred to the outcome (`pkagent.c` `finish()` replies ok, or `Error.Cancelled`). A
 /// registered agent that cannot answer makes pkexec wait out polkit's timeout.
-const POLKIT_AGENT_CAN_ANSWER: bool = false;
+const POLKIT_AGENT_CAN_ANSWER: bool = true;
 
 /// Feeds agent events to the dialog. A prompt the queue cannot hold is refused at once, so polkit
 /// does not wait out its own timeout.
