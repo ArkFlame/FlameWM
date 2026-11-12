@@ -562,3 +562,14 @@ mod tests {
         assert!(clip(&long).ends_with('…'));
     }
 }
+
+#[cfg(test)]
+mod toast_markup_tests {
+    // Precedent: WAI-ARIA 1.2 status role for a non-modal, polite announcement (a toast that
+    // does not take focus), as used by the shell's network status line.
+    #[test]
+    fn toast_card_is_a_polite_status_region() {
+        let html = include_str!("../../../ui/shell/notification.html");
+        assert!(html.contains(r#"id="notification-card" class="notification-card" role="status""#));
+    }
+}

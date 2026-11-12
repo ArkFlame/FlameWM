@@ -27,3 +27,16 @@ pub fn project_polkit(
     document.text("polkit-password", "*".repeat(model.password.len()))?;
     document.text("polkit-error", model.error.clone().unwrap_or_default())
 }
+
+#[cfg(test)]
+mod tests {
+    // The card markup is shipped through include_str!, so this reads the production template.
+    // Precedent: .vendor has no ARIA dialog code (grep hits were unrelated); WAI-ARIA 1.2 APG dialog.
+    #[test]
+    fn card_is_a_named_modal_dialog() {
+        let html = include_str!("../../../../ui/shell/polkit.html");
+        assert!(html.contains(
+            r#"id="polkit" class="polkit-card" role="dialog" aria-modal="true" aria-labelledby="polkit-title""#
+        ));
+    }
+}

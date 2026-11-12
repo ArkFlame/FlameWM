@@ -77,6 +77,13 @@ pub fn project_audio_full(
             audio_thumb_left(shown, spec.max),
             AUDIO_THUMB_TOP,
         )?;
+        // WAI-ARIA 1.2 slider: range from aria-valuemin/max, current value from aria-valuenow.
+        // Precedent: .vendor has no ARIA slider or dialog code (grep hits were unrelated); WAI-ARIA 1.2 APG slider.
+        let track = format!("audio-slot-{n}-track");
+        document.attribute(&track, "role", "slider")?;
+        document.attribute(&track, "aria-valuemin", "0")?;
+        document.attribute(&track, "aria-valuemax", &format!("{:.0}", spec.max))?;
+        document.attribute(&track, "aria-valuenow", &format!("{shown:.0}"))?;
         document.visible(&format!("audio-slot-{n}-icon-out"), !is_stream && !is_input)?;
         document.visible(&format!("audio-slot-{n}-icon-in"), !is_stream && is_input)?;
         document.visible(&format!("audio-slot-{n}-icon-app"), is_stream)?;
@@ -135,6 +142,7 @@ mod audio_template_tests {
         positions: std::collections::HashMap<String, (f32, f32)>,
         toggles: std::collections::HashMap<String, bool>,
         backgrounds: std::collections::HashMap<String, UiColor>,
+        attributes: std::collections::HashMap<(String, String), String>,
     }
 
     struct AudioRecorder<'a> {
@@ -179,6 +187,12 @@ mod audio_template_tests {
         fn background_clear(&mut self, id: &str) -> Result<(), String> {
             self.recorded.backgrounds.remove(id);
             UiDocumentAccess::background_clear(self.document, id)
+        }
+        fn attribute(&mut self, id: &str, name: &str, value: &str) -> Result<(), String> {
+            self.recorded
+                .attributes
+                .insert((id.to_owned(), name.to_owned()), value.to_owned());
+            UiDocumentAccess::attribute(self.document, id, name, value)
         }
         forward!(
             image_rgb8(id: &str, image: RuntimeImage),
@@ -305,6 +319,22 @@ mod audio_template_tests {
         assert_eq!(recorded.visible.get("audio-slot-3-icon-in"), Some(&true));
         assert_eq!(recorded.visible.get("audio-empty"), Some(&false));
         assert_eq!(recorded.toggles.get("audio-raise-track"), Some(&false));
+    }
+
+    #[test]
+    fn device_rows_expose_slider_role_with_range_and_value() {
+        // Speakers at 120% under the raised 150 cap: the slider range is 0..150 and now is 120.
+        let recorded = fixture(AudioTab::Devices, true);
+        let attr = |id: &str, name: &str| {
+            recorded
+                .attributes
+                .get(&(id.to_owned(), name.to_owned()))
+                .map(String::as_str)
+        };
+        assert_eq!(attr("audio-slot-1-track", "role"), Some("slider"));
+        assert_eq!(attr("audio-slot-1-track", "aria-valuemin"), Some("0"));
+        assert_eq!(attr("audio-slot-1-track", "aria-valuemax"), Some("150"));
+        assert_eq!(attr("audio-slot-1-track", "aria-valuenow"), Some("120"));
     }
 
     #[test]
