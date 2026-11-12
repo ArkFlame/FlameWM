@@ -61,7 +61,7 @@ pub fn refresh_period(millihertz: i32) -> Duration {
 
 impl FractionalScaleHandler for State {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = self.output.current_scale().fractional_scale();
+        let scale = self.surface_scale(&surface);
         with_states(&surface, |states| {
             with_fractional_scale(states, |fractional| fractional.set_preferred_scale(scale));
         });
@@ -99,14 +99,29 @@ pub struct ScaleSnapshot {
 /// Snapshots the scale and the mapped surfaces of the compositor's output.
 #[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
 pub fn scale_snapshot(state: &State) -> ScaleSnapshot {
-    let name = state.output.name();
     ScaleSnapshot {
-        outputs: vec![(name.clone(), state.output_scale())],
+        outputs: scale_table(state),
         surfaces: mapped_surfaces(state, &state.output)
             .into_iter()
-            .map(|surface| (surface, name.clone()))
+            .map(|surface| {
+                let name = state.output_name_of(&surface);
+                (surface, name)
+            })
             .collect(),
     }
+}
+
+/// Scale of every output by name. The primary's entry is its live scale, so a change made just
+/// before the snapshot is seen; the other outputs come from the last layout sync.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
+fn scale_table(state: &State) -> Vec<(String, f64)> {
+    let primary = state.output.name();
+    let mut table = state.output_scales.clone();
+    match table.iter_mut().find(|(name, _)| *name == primary) {
+        Some(entry) => entry.1 = state.output_scale(),
+        None => table.push((primary, state.output_scale())),
+    }
+    table
 }
 
 /// Re-sends the scale to every surface whose output scale changed since `before`.

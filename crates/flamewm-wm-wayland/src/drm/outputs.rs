@@ -318,6 +318,16 @@ pub(super) fn drop_outputs(d: &mut Drm, state: &mut State) {
 /// its current origin. `on_motion` clamps the pointer to this union.
 pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
     state.layout_outputs = d.surfaces.iter().map(|out| out.output.name()).collect();
+    state.output_scales = d
+        .surfaces
+        .iter()
+        .map(|out| {
+            (
+                out.output.name(),
+                out.output.current_scale().fractional_scale(),
+            )
+        })
+        .collect();
     state.pointer_layout = d
         .surfaces
         .iter()

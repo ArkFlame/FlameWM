@@ -249,6 +249,9 @@ impl XdgShellHandler for State {
         let workspace = self.model.current_workspace();
         let rect = self.model.cascade_rect(workspace);
         self.model.add(id, rect, workspace);
+        let key = surface.wl_surface().id();
+        let name = self.output_name_under_pointer();
+        self.surface_outputs.assign(key, name);
         self.toplevels.push((id, surface));
         self.foreign_toplevel_open(id, ToplevelFacts::default());
         self.set_focus(Some(id));
@@ -262,7 +265,15 @@ impl XdgShellHandler for State {
         self.foreign_toplevel_refresh(&surface);
     }
 
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        self.surface_outputs.remove(&surface.wl_surface().id());
+    }
+
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        if let Some(parent) = surface.get_parent_surface() {
+            let name = self.output_name_of(&parent);
+            self.surface_outputs.assign(surface.wl_surface().id(), name);
+        }
         surface.with_pending_state(|state| {
             state.geometry = positioner.get_geometry();
         });
@@ -365,6 +376,7 @@ impl XdgShellHandler for State {
         let Some(id) = self.window_for_surface(surface.wl_surface()) else {
             return;
         };
+        self.surface_outputs.remove(&surface.wl_surface().id());
         self.toplevels.retain(|(wid, _)| *wid != id);
         self.foreign_toplevel_close(id);
         self.model.remove(id);
@@ -448,7 +460,12 @@ impl WlrLayerShellHandler for State {
         _layer: Layer,
         namespace: String,
     ) {
-        let _ = output;
+        let key = surface.wl_surface().id();
+        let name = output
+            .as_ref()
+            .and_then(smithay::output::Output::from_resource)
+            .map_or_else(|| self.output_name_under_pointer(), |out| out.name());
+        self.surface_outputs.assign(key, name);
         let desktop = DesktopLayer::new(surface, namespace);
         let mut map = layer_map_for_output(&self.output);
         let _ = map.map_layer(&desktop);
@@ -460,6 +477,7 @@ impl WlrLayerShellHandler for State {
     fn ack_configure(&mut self, _surface: WlSurface, _configure: LayerSurfaceConfigure) {}
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        self.surface_outputs.remove(&surface.wl_surface().id());
         let mut map = layer_map_for_output(&self.output);
         let target = map
             .layers()

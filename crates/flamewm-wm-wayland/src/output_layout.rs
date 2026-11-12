@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 
 use crate::model::Rect;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Smallest accepted per-output scale, in percent.
 pub(crate) const SCALE_MIN_PERCENT: u16 = 100;
@@ -129,6 +129,52 @@ pub(crate) fn origin_after(placed: &[(i32, i32)], next: (i32, i32)) -> (i32, i32
 /// the primary output alone (single-output and nested sessions keep their old bounds).
 pub(crate) fn pointer_layout<'a>(stored: &'a [Rect], primary: &'a [Rect]) -> &'a [Rect] {
     if stored.is_empty() { primary } else { stored }
+}
+
+/// Which output each surface sits on, keyed by the surface's protocol id. A surface with no entry
+/// belongs to the primary output, so scale and placement keep the single-output path.
+#[derive(Debug)]
+pub(crate) struct SurfaceOutputs<K> {
+    map: HashMap<K, String>,
+}
+
+impl<K> Default for SurfaceOutputs<K> {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash> SurfaceOutputs<K> {
+    pub(crate) fn assign(&mut self, key: K, output: String) {
+        self.map.insert(key, output);
+    }
+
+    pub(crate) fn remove(&mut self, key: &K) {
+        self.map.remove(key);
+    }
+
+    pub(crate) fn output_of(&self, key: &K) -> Option<&str> {
+        self.map.get(key).map(String::as_str)
+    }
+}
+
+/// Scale of the output a surface sits on. Unmapped surfaces, and outputs with no entry in
+/// `scales`, take `primary_scale`, the scale the compositor's own output reports.
+pub(crate) fn scale_for_output(
+    scales: &[(String, f64)],
+    output: Option<&str>,
+    primary_scale: f64,
+) -> f64 {
+    output
+        .and_then(|name| {
+            scales
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, scale)| *scale)
+        })
+        .unwrap_or(primary_scale)
 }
 
 /// Index of the output whose area contains `(x, y)`, using the half-open rule of `Rect::contains`.
@@ -345,6 +391,32 @@ mod tests {
         assert!(!hit_on_layout(&row, 150.0, 80.0));
         // Single output (no stored row): no gate, even for points off the primary output.
         assert!(hit_on_layout(&[], -40.0, 9000.0));
+    }
+
+    #[test]
+    fn surface_scale_follows_its_output_and_falls_back_to_primary() {
+        let scales = vec![("DP-1".to_owned(), 1.5), ("eDP-1".to_owned(), 1.0)];
+        let mut map: SurfaceOutputs<u32> = SurfaceOutputs::default();
+        map.assign(1, "DP-1".to_owned());
+        assert_eq!(map.output_of(&1), Some("DP-1"));
+        assert_eq!(scale_for_output(&scales, map.output_of(&1), 1.0), 1.5);
+        assert_eq!(
+            scale_for_output(&scales, map.output_of(&2), 1.0),
+            1.0,
+            "unmapped takes primary"
+        );
+        assert_eq!(
+            scale_for_output(&scales, Some("gone"), 1.25),
+            1.25,
+            "unknown output takes primary"
+        );
+        map.remove(&1);
+        assert_eq!(map.output_of(&1), None);
+        assert_eq!(
+            scale_for_output(&scales, map.output_of(&1), 2.0),
+            2.0,
+            "cleared takes primary"
+        );
     }
 
     #[test]

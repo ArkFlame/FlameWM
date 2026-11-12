@@ -411,6 +411,11 @@ pub struct State {
     /// Connector names of the DRM outputs in the layout, kept in step with `pointer_layout`. A lock
     /// seeds its cover from these; empty means the primary output alone.
     pub layout_outputs: Vec<String>,
+    /// Output each surface sits on (toplevels, popups, layer surfaces); absent means the primary output.
+    pub surface_outputs:
+        crate::output_layout::SurfaceOutputs<smithay::reexports::wayland_server::backend::ObjectId>,
+    /// Scale of every DRM output by name, kept in step with `layout_outputs`; empty means primary only.
+    pub output_scales: Vec<(String, f64)>,
     /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
     pub client_cursor_status: CursorImageStatus,
     /// Resize cursor of the compositor handle under the pointer; it overrides the client's request.
@@ -579,6 +584,8 @@ impl State {
             raw_pointer: Point::from((0.0, 0.0)),
             pointer_layout: Vec::new(),
             layout_outputs: Vec::new(),
+            surface_outputs: Default::default(),
+            output_scales: Vec::new(),
             client_cursor_status: CursorImageStatus::default_named(),
             decor_cursor: None,
             cursor_status: CursorImageStatus::default_named(),
@@ -733,6 +740,31 @@ impl State {
 
     pub fn output_rect(&self) -> Rect {
         Rect::new(0, 0, self.output_size.w, self.output_size.h)
+    }
+
+    /// Name of the output a surface sits on, or the primary output when it is not mapped.
+    pub fn output_name_of(&self, surface: &WlSurface) -> String {
+        let key = smithay::reexports::wayland_server::Resource::id(surface);
+        self.surface_outputs
+            .output_of(&key)
+            .map_or_else(|| self.output.name(), str::to_owned)
+    }
+
+    /// Scale of the output a surface sits on, or the primary output's scale when unmapped.
+    pub fn surface_scale(&self, surface: &WlSurface) -> f64 {
+        let key = smithay::reexports::wayland_server::Resource::id(surface);
+        crate::output_layout::scale_for_output(
+            &self.output_scales,
+            self.surface_outputs.output_of(&key),
+            self.output_scale(),
+        )
+    }
+
+    /// Name of the output under the pointer, or the primary output when the row is unknown.
+    pub fn output_name_under_pointer(&self) -> String {
+        crate::output_layout::output_at(&self.pointer_layout, self.pointer.x, self.pointer.y)
+            .and_then(|index| self.layout_outputs.get(index).cloned())
+            .unwrap_or_else(|| self.output.name())
     }
 
     /// Output scale factor (1.0 by default). Layout is logical; rendering multiplies by this.
