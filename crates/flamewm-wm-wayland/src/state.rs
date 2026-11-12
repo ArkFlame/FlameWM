@@ -756,6 +756,27 @@ impl State {
             .map_or_else(|| self.output.name(), str::to_owned)
     }
 
+    /// Homes every toplevel on the output holding most of its rect, then re-sends the scale to the
+    /// surfaces whose output scale changed. With no placed row (nested) every window stays primary.
+    pub fn refresh_window_outputs(&mut self) {
+        let before = crate::presentation_scale::scale_snapshot(self);
+        let primary = self.output.name();
+        for (id, top) in &self.toplevels {
+            let Some(rect) = self.model.get(*id).map(|m| m.rect) else {
+                continue;
+            };
+            let name = crate::output_layout::output_name_for_rect(
+                &self.pointer_layout,
+                &self.layout_outputs,
+                rect,
+                &primary,
+            );
+            let key = smithay::reexports::wayland_server::Resource::id(top.wl_surface());
+            self.surface_outputs.assign(key, name.to_owned());
+        }
+        crate::presentation_scale::notify_scale_change(self, &before);
+    }
+
     /// Scale of the output a surface sits on, or the primary output's scale when unmapped.
     pub fn surface_scale(&self, surface: &WlSurface) -> f64 {
         let key = smithay::reexports::wayland_server::Resource::id(surface);

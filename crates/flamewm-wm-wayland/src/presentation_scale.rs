@@ -71,8 +71,8 @@ impl FractionalScaleHandler for State {
 delegate_fractional_scale!(State);
 delegate_presentation!(State);
 
-/// Every surface `output` presents: toplevels, their popups and the output's layer surfaces.
-fn mapped_surfaces(state: &State, output: &Output) -> Vec<WlSurface> {
+/// Toplevels and their popups.
+fn window_surfaces(state: &State) -> Vec<WlSurface> {
     let mut surfaces = Vec::new();
     for (_, top) in &state.toplevels {
         let surface = top.wl_surface();
@@ -81,6 +81,25 @@ fn mapped_surfaces(state: &State, output: &Output) -> Vec<WlSurface> {
             PopupManager::popups_for_surface(surface).map(|(popup, _)| popup.wl_surface().clone()),
         );
     }
+    surfaces
+}
+
+/// Every surface whose scale follows an output: windows, popups, and layer surfaces on any output.
+/// Layer surfaces are not limited to the primary's layer map, so a panel on a second output counts.
+fn scaled_surfaces(state: &State) -> Vec<WlSurface> {
+    let mut surfaces = window_surfaces(state);
+    surfaces.extend(
+        state
+            .layer_shell
+            .layer_surfaces()
+            .map(|layer| layer.wl_surface().clone()),
+    );
+    surfaces
+}
+
+/// Every surface `output` presents: windows, popups, and the output's layer surfaces.
+fn mapped_surfaces(state: &State, output: &Output) -> Vec<WlSurface> {
+    let mut surfaces = window_surfaces(state);
     surfaces.extend(
         layer_map_for_output(output)
             .layers()
@@ -101,7 +120,7 @@ pub struct ScaleSnapshot {
 pub fn scale_snapshot(state: &State) -> ScaleSnapshot {
     ScaleSnapshot {
         outputs: scale_table(state),
-        surfaces: mapped_surfaces(state, &state.output)
+        surfaces: scaled_surfaces(state)
             .into_iter()
             .map(|surface| {
                 let name = state.output_name_of(&surface);

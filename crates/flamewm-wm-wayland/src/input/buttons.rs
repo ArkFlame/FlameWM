@@ -102,6 +102,7 @@ impl State {
                         commit_move_snap(&mut self.model, id, target, work, candidate);
                     }
                     self.apply_geometry(id);
+                    self.refresh_window_outputs();
                     // A real drag never counts as either half of a double click.
                     self.last_title_click = None;
                 } else if titlebar

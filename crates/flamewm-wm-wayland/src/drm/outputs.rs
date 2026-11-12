@@ -317,6 +317,7 @@ pub(super) fn drop_outputs(d: &mut Drm, state: &mut State) {
 /// Rebuilds `State::pointer_layout` from the outputs the DRM backend drives: each logical rect at
 /// its current origin. `on_motion` clamps the pointer to this union.
 pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
+    let before = presentation_scale::scale_snapshot(state);
     state.layout_outputs = d.surfaces.iter().map(|out| out.output.name()).collect();
     state.output_scales = d
         .surfaces
@@ -339,4 +340,9 @@ pub(super) fn sync_pointer_layout(d: &Drm, state: &mut State) {
             Some(crate::model::Rect::new(origin.x, origin.y, w, h))
         })
         .collect();
+    // An output that went away takes its surface entries with it; they fall back to the primary.
+    let mut live = state.layout_outputs.clone();
+    live.push(state.output.name());
+    state.surface_outputs.retain_outputs(&live);
+    presentation_scale::notify_scale_change(state, &before);
 }

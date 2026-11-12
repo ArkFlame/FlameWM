@@ -158,6 +158,24 @@ impl<K: Eq + std::hash::Hash> SurfaceOutputs<K> {
     pub(crate) fn output_of(&self, key: &K) -> Option<&str> {
         self.map.get(key).map(String::as_str)
     }
+
+    /// Drops entries on outputs not in `live`, so those surfaces fall back to the primary output.
+    pub(crate) fn retain_outputs(&mut self, live: &[String]) {
+        self.map.retain(|_, output| live.contains(output));
+    }
+}
+
+/// Name of the output holding most of `rect`, or `primary` when it overlaps none. `names[i]` names
+/// `outputs[i]`; an empty row (single or nested output) is always `primary`.
+pub(crate) fn output_name_for_rect<'a>(
+    outputs: &[Rect],
+    names: &'a [String],
+    rect: Rect,
+    primary: &'a str,
+) -> &'a str {
+    output_for_rect(outputs, rect)
+        .and_then(|index| names.get(index))
+        .map_or(primary, String::as_str)
 }
 
 /// Scale of the output a surface sits on. Unmapped surfaces, and outputs with no entry in
@@ -428,6 +446,53 @@ mod tests {
             2.0,
             "cleared takes primary"
         );
+    }
+
+    #[test]
+    fn dragged_window_takes_the_output_with_most_overlap_and_primary_when_none() {
+        let row = arrange_row(&[(100, 100), (100, 100)]);
+        let names = ["DP-1".to_owned(), "DP-2".to_owned()];
+        // Straddles the seam: 30 px on DP-1, 70 px on DP-2, so the window moves to DP-2.
+        assert_eq!(
+            output_name_for_rect(&row, &names, Rect::new(70, 0, 100, 40), "DP-1"),
+            "DP-2"
+        );
+        // Still on the primary side where it overlaps more.
+        assert_eq!(
+            output_name_for_rect(&row, &names, Rect::new(40, 0, 100, 40), "DP-1"),
+            "DP-1"
+        );
+        assert_eq!(
+            output_name_for_rect(&row, &names, Rect::new(500, 0, 10, 10), "DP-1"),
+            "DP-1",
+            "no overlap takes primary"
+        );
+        // Nested session: no row, always primary.
+        assert_eq!(
+            output_name_for_rect(&[], &[], Rect::new(0, 0, 10, 10), "winit"),
+            "winit"
+        );
+    }
+
+    #[test]
+    fn removed_output_resets_its_surfaces_to_the_primary_scale() {
+        let scales = vec![("DP-1".to_owned(), 1.5), ("DP-2".to_owned(), 2.0)];
+        let mut map: SurfaceOutputs<u32> = SurfaceOutputs::default();
+        map.assign(1, "DP-2".to_owned()); // a window on the second output
+        map.assign(2, "DP-1".to_owned()); // a layer surface on the first
+        assert_eq!(scale_for_output(&scales, map.output_of(&1), 1.0), 2.0);
+        map.retain_outputs(&["DP-1".to_owned(), "eDP-1".to_owned()]);
+        assert_eq!(map.output_of(&1), None, "gone output is dropped");
+        assert_eq!(map.output_of(&2), Some("DP-1"), "live output is kept");
+        assert_eq!(scale_for_output(&scales, map.output_of(&1), 1.0), 1.0);
+    }
+
+    #[test]
+    fn layer_surface_on_a_secondary_output_keeps_that_outputs_scale() {
+        let scales = vec![("DP-1".to_owned(), 1.0), ("DP-2".to_owned(), 1.5)];
+        let mut map: SurfaceOutputs<u32> = SurfaceOutputs::default();
+        map.assign(7, "DP-2".to_owned()); // dock requested on DP-2
+        assert_eq!(scale_for_output(&scales, map.output_of(&7), 1.0), 1.5);
     }
 
     #[test]

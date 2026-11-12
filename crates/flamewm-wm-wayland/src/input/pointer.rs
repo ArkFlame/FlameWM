@@ -158,6 +158,7 @@ impl State {
                         !unchanged
                     });
                     if rect_changed {
+                        self.refresh_window_outputs();
                         self.pending_configure = Some(id);
                     }
                     let ring_changed = match feedback.ring {
