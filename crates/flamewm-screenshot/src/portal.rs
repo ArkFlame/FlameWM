@@ -183,14 +183,19 @@ fn reply(message: &Message, response: u32, uri: Option<&str>) -> MessageDisposit
     }
 }
 
+/// Dispatches the portal calls queued on `pump`; the caller owns the wait loop.
+fn dispatch(pump: &BusPump) -> Result<usize, String> {
+    pump.on_ready_with_object_path(OBJECT_PATH, handle, |_| MessageDisposition::Unhandled)
+        .map_err(|e| e.to_string())
+}
+
 /// Serves the backend until the bus connection fails.
 pub fn serve() -> Result<(), String> {
     let pump = BusPump::connect(BusKind::Session).map_err(|e| e.to_string())?;
     pump.own_name(BUS_NAME).map_err(|e| e.to_string())?;
     loop {
         pump.wait_ready(WAIT).map_err(|e| e.to_string())?;
-        pump.on_ready_with_object_path(OBJECT_PATH, handle, |_| MessageDisposition::Unhandled)
-            .map_err(|e| e.to_string())?;
+        dispatch(&pump)?;
     }
 }
 
@@ -198,6 +203,7 @@ pub fn serve() -> Result<(), String> {
 mod tests {
     use super::*;
     use flamewm_dbus_reactor::Path as DbusPath;
+    use std::sync::mpsc;
 
     fn options(entries: Vec<(&str, MessageItem)>) -> MessageItem {
         let v = entries
@@ -302,5 +308,159 @@ mod tests {
     fn file_uri_escapes_spaces_and_keeps_slashes() {
         let uri = file_uri(Path::new("/home/a b/Pictures/x%y.png"));
         assert_eq!(uri, "file:///home/a%20b/Pictures/x%25y.png");
+    }
+
+    /// Private `dbus-daemon` started for one test; killed on drop.
+    struct Daemon {
+        child: std::process::Child,
+        address: String,
+    }
+
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// Starts a private session-style `dbus-daemon`, or `None` when it is unavailable (test skips).
+    fn start_daemon(dir: &Path) -> Option<Daemon> {
+        use std::io::BufRead as _;
+        std::fs::create_dir_all(dir).ok()?;
+        let child = std::process::Command::new("dbus-daemon")
+            .args(["--session", "--nofork", "--print-address=1"])
+            .arg(format!("--address=unix:tmpdir={}", dir.display()))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        let mut daemon = Daemon {
+            child,
+            address: String::new(),
+        };
+        let mut line = String::new();
+        let stdout = daemon.child.stdout.take()?;
+        std::io::BufReader::new(stdout).read_line(&mut line).ok()?;
+        daemon.address = line.trim().to_owned();
+        (!daemon.address.is_empty()).then_some(daemon)
+    }
+
+    /// Owns `BUS_NAME` on the private bus and dispatches portal calls until `stop` fires.
+    fn run_backend(
+        address: &str,
+        ready: &mpsc::Sender<()>,
+        stop: &mpsc::Receiver<()>,
+    ) -> Result<(), String> {
+        let pump = BusPump::connect_address(address).map_err(|e| e.to_string())?;
+        pump.own_name(BUS_NAME).map_err(|e| e.to_string())?;
+        let _ = ready.send(());
+        while stop.try_recv().is_err() {
+            pump.wait_ready(Duration::from_millis(20))
+                .map_err(|e| e.to_string())?;
+            dispatch(&pump)?;
+        }
+        Ok(())
+    }
+
+    /// One method call to the backend; `Err` carries a D-Bus error reply or a transport failure.
+    fn bus_call(
+        client: &BusPump,
+        interface: &str,
+        member: &str,
+        args: &[MessageItem],
+    ) -> Result<Vec<MessageItem>, String> {
+        let mut message = Message::new_method_call(BUS_NAME, OBJECT_PATH, interface, member)?;
+        message.append_items(args);
+        let reply = client
+            .send_with_reply(message, Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        Ok(reply.get_items())
+    }
+
+    fn is_empty_results(item: &MessageItem) -> bool {
+        matches!(item, MessageItem::Dict(dict) if dict.clone().into_vec().is_empty())
+    }
+
+    #[test]
+    fn screencast_and_interactive_screenshot_calls_are_refused_over_the_bus() {
+        let dir = std::env::temp_dir().join(format!("flamewm-portal-e2e-{}", std::process::id()));
+        let Some(daemon) = start_daemon(&dir) else {
+            eprintln!("skipped: dbus-daemon unavailable");
+            return;
+        };
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let address = daemon.address.clone();
+        let backend = std::thread::spawn(move || run_backend(&address, &ready_tx, &stop_rx));
+        ready_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("backend owns the name");
+        let client = BusPump::connect_address(&daemon.address).expect("client connects");
+
+        let handle =
+            MessageItem::ObjectPath(dbus_path("/org/freedesktop/portal/desktop/request/x"));
+        let session =
+            MessageItem::ObjectPath(dbus_path("/org/freedesktop/portal/desktop/session/x"));
+        let app = MessageItem::Str("org.example.App".into());
+        let sc_iface = screencast::INTERFACE;
+        // Sequence a frontend runs: CreateSession, SelectSources, Start. Each must get a prompt
+        // response 2 with empty results, never a timeout.
+        let sequence: [(&str, Vec<MessageItem>); 3] = [
+            (
+                "CreateSession",
+                vec![
+                    handle.clone(),
+                    session.clone(),
+                    app.clone(),
+                    options(vec![]),
+                ],
+            ),
+            (
+                "SelectSources",
+                vec![
+                    handle.clone(),
+                    session.clone(),
+                    app.clone(),
+                    options(vec![]),
+                ],
+            ),
+            (
+                "Start",
+                vec![
+                    handle.clone(),
+                    session.clone(),
+                    app.clone(),
+                    MessageItem::Str(String::new()),
+                    options(vec![]),
+                ],
+            ),
+        ];
+        for (member, args) in &sequence {
+            let items = bus_call(&client, sc_iface, member, args).expect(member);
+            assert_eq!(items[0], MessageItem::UInt32(RESPONSE_OTHER), "{member}");
+            assert!(
+                is_empty_results(&items[1]),
+                "{member} must carry no streams"
+            );
+        }
+
+        // Interactive Screenshot is refused with response 2 before any capture is attempted.
+        let interactive = vec![
+            handle.clone(),
+            app.clone(),
+            MessageItem::Str(String::new()),
+            options(vec![("interactive", MessageItem::Bool(true))]),
+        ];
+        let items = bus_call(&client, INTERFACE, MEMBER, &interactive).expect("Screenshot");
+        assert_eq!(items[0], MessageItem::UInt32(RESPONSE_OTHER));
+
+        // A ScreenCast member FlameWM does not serve gets a bus error, not a silent drop.
+        assert!(bus_call(&client, sc_iface, "OpenPipeWireRemote", &[]).is_err());
+
+        let _ = stop_tx.send(());
+        backend
+            .join()
+            .expect("backend thread")
+            .expect("backend ran");
     }
 }
