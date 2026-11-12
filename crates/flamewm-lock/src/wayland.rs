@@ -302,16 +302,43 @@ fn shm_file(len: usize) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
+/// Whether a global announced by the registry needs a lock surface of its own. Only an output
+/// that appears after the lock was requested, while it is still live, is covered here: outputs
+/// present at `lock` time get their surfaces there. Precedent: ext-session-lock-v1 leaves the
+/// per-output surface to the client, and Vela's `lock/main.cpp` covers every active output.
+pub(crate) fn covers_late_output(interface: &str, lock_requested: bool, finished: bool) -> bool {
+    interface == "wl_output" && lock_requested && !finished
+}
+
 impl Dispatch<WlRegistry, GlobalListContents> for LockClient {
     fn event(
-        _: &mut Self,
-        _: &WlRegistry,
-        _: RegistryEvent,
+        state: &mut Self,
+        registry: &WlRegistry,
+        event: RegistryEvent,
         _: &GlobalListContents,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
-        // Globals are read from the list during `lock`; nothing to handle per event.
+        // Outputs present at `lock` time were read from the list there. A hotplugged output gets
+        // its lock surface here, or it would stay blank with no password prompt.
+        let RegistryEvent::Global {
+            name,
+            interface,
+            version,
+        } = event
+        else {
+            return;
+        };
+        if !covers_late_output(&interface, state.lock.is_some(), state.finished) {
+            return;
+        }
+        let (Some(compositor), Some(lock)) = (state.compositor.clone(), state.lock.clone()) else {
+            return;
+        };
+        let output = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, ());
+        let surface = compositor.create_surface(qh, ());
+        let lock_surface = lock.get_lock_surface(&surface, &output, qh, ());
+        state.pending.push((surface, lock_surface, output));
     }
 }
 
@@ -741,6 +768,23 @@ fn wait_readable(connection: &Connection) -> bool {
 mod tests {
     use super::*;
     use crate::state::{Effect, Key, Status};
+
+    #[test]
+    fn only_a_live_lock_covers_an_output_announced_later() {
+        assert!(covers_late_output("wl_output", true, false));
+        assert!(
+            !covers_late_output("wl_output", false, false),
+            "before lock: lock() covers it"
+        );
+        assert!(
+            !covers_late_output("wl_output", true, true),
+            "finished lock takes no surfaces"
+        );
+        assert!(
+            !covers_late_output("wl_seat", true, false),
+            "other globals are ignored"
+        );
+    }
 
     fn client() -> LockClient {
         LockClient::new(Box::new(|_, width, height| {
