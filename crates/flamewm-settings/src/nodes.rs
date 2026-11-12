@@ -126,6 +126,7 @@ impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
         color_variable(name: &str, color: UiColor);
         overflow(id: &str, x: flamewm_ui_x11::Overflow, y: flamewm_ui_x11::Overflow);
         layer(id: &str, layer: flamewm_ui_core::style::UiLayer);
+        attribute(id: &str, name: &str, value: &str);
     }
 }
 

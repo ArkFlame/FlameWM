@@ -148,11 +148,19 @@ struct ProbeDocument {
     highlighted: BTreeMap<String, bool>,
     foregrounds: BTreeMap<String, Option<UiColor>>,
     variables: BTreeMap<String, UiColor>,
+    attributes: BTreeMap<(String, String), String>,
 }
 
 impl UiDocumentAccess for ProbeDocument {
     fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
         self.variables.insert(name.to_owned(), color);
+        Ok(())
+    }
+
+    fn attribute(&mut self, id: &str, name: &str, value: &str) -> Result<(), String> {
+        crate::ui_contract::require_markup_id(id)?;
+        self.attributes
+            .insert((id.to_owned(), name.to_owned()), value.to_owned());
         Ok(())
     }
 

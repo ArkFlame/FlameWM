@@ -7,6 +7,29 @@ fn accessibility_snapshot(revision: u64, key: &str, value: SettingValue) -> Sett
 }
 
 #[test]
+fn toggle_twin_aria_checked_follows_the_projected_setting() {
+    // Precedent: WAI-ARIA 1.2 switch role exposes state through aria-checked on the visible control.
+    let (_requests, mut transport) = recording_transport();
+    transport
+        .responses
+        .push_back(Ok(ControlResponse::Settings(accessibility_snapshot(
+            1,
+            "highContrast",
+            SettingValue::Boolean(true),
+        ))));
+    let application = settings_application(transport);
+    let mut document = ProbeDocument::default();
+    application.sync(&mut document).expect("sync toggles");
+    let checked = |id: &str| {
+        document
+            .attributes
+            .get(&(id.to_owned(), "aria-checked".to_owned()))
+            .map(String::as_str)
+    };
+    assert_eq!(checked("a11y-high-contrast-on"), Some("true"));
+}
+
+#[test]
 fn sidebar_row_opens_the_accessibility_page_only() {
     let (_requests, mut transport) = recording_transport();
     transport

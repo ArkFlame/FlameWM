@@ -98,6 +98,9 @@ impl UiDocumentAccess for StrictDocument {
         self.visible.insert(id.to_owned(), visible);
         Ok(())
     }
+    fn attribute(&mut self, id: &str, _name: &str, _value: &str) -> Result<(), String> {
+        self.known(id)
+    }
     fn toggle(&mut self, track_id: &str, knob_id: &str, _checked: bool) -> Result<(), String> {
         self.known(track_id)?;
         self.known(knob_id)

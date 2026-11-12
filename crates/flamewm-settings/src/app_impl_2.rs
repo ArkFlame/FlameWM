@@ -891,8 +891,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 SettingValue::Boolean(value) => Some(*value),
                 _ => None,
             });
-            document.visible(on_id, enabled == Some(true))?;
+            let checked = enabled == Some(true);
+            document.visible(on_id, checked)?;
             document.visible(off_id, enabled == Some(false))?;
+            // The visible twin reports the live state; the off twin keeps its static aria-checked="false".
+            document.attribute(on_id, "aria-checked", &checked.to_string())?;
         }
         let animations_enabled = !matches!(
             self.setting_value("animationsEnabled"),

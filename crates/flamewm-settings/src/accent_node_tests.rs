@@ -34,6 +34,10 @@ impl UiDocumentAccess for ColorDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
+    fn attribute(&mut self, id: &str, _name: &str, _value: &str) -> Result<(), String> {
+        crate::ui_contract::require_markup_id(id)
+    }
+
     fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
         crate::ui_contract::require_markup_id(_track_id)?;
         crate::ui_contract::require_markup_id(_knob_id)

@@ -274,10 +274,24 @@ impl ShellLoop {
                     lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
                 })
                 .collect();
+            // Accessible name per slot (WAI-ARIA 1.2: name from aria-label); Trash is named "Trash".
+            let app_labels: Vec<String> = layout
+                .entries
+                .iter()
+                .map(|entry| {
+                    if entry.app_id == TRASH_SLOT_ID {
+                        return "Trash".to_owned();
+                    }
+                    lookup(&entry.app_id).map_or_else(String::new, |app| app.name.clone())
+                })
+                .collect();
             async_projection::bump_dock_view_epoch();
             let icon_loader = &mut self.icon_loader;
             if let Err(error) = runtime.with_document(surface, |document| {
                 dock::project_dock(document, &frame, settings.squared_corners)?;
+                for (index, label) in app_labels.iter().enumerate() {
+                    document.attribute(&format!("dock-slot-{}", index + 1), "aria-label", label)?;
+                }
                 // Same miss policy as the taskbar and launcher: a cached raster, else the transparent
                 // placeholder plus one worker request. The dock's default glyph never shows for a miss.
                 for (index, name) in icon_names.iter().enumerate() {
