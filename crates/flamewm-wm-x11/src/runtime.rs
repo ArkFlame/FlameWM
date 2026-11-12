@@ -366,6 +366,12 @@ fn run_session(
             {
                 eprintln!("flamewm: blue light filter update failed: {error}");
             }
+            // Magnifier output: a no-op unless the runtime level differs from the last send.
+            if let Err(error) =
+                crate::zoom_transform::apply(conn.as_ref(), root, crate::zoom::level())
+            {
+                eprintln!("flamewm: zoom output update failed: {error}");
+            }
             refresh_control(
                 &reactor_for_hook,
                 &mut control_link,
@@ -543,6 +549,7 @@ fn run_session(
             if wm.take_display_topology_dirty() && !desktop_held {
                 // A new crtc set must receive the filter again: the cached crtc ids are gone.
                 crate::blue_light::invalidate();
+                crate::zoom_transform::invalidate();
                 match host.display_snapshot() {
                     Ok(displays) => {
                         if let Err(error) = host.resync_panels_for_displays(&displays) {

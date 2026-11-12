@@ -19,6 +19,7 @@ pub(crate) mod snap_preview;
 mod window_config;
 mod wm;
 mod zoom;
+mod zoom_transform;
 
 pub use flamewm_render_x11::{apply_cursor_appearance, apply_cursor_theme};
 pub use runtime::{

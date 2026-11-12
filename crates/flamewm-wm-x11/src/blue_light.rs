@@ -117,7 +117,7 @@ fn gamma_size(conn: &RustConnection, crtc: u32) -> Result<usize, x11rb::errors::
 }
 
 /// Crtcs currently scanning out on this screen.
-fn crtcs_for_root(
+pub(crate) fn crtcs_for_root(
     conn: &RustConnection,
     root: Window,
 ) -> Result<Vec<u32>, x11rb::errors::ReplyError> {

@@ -1,10 +1,8 @@
 //! Magnifier state on X11: the `zoomLevel` setting and the Super+Alt zoom shortcuts.
 //!
-//! X11 has no output-scaling path yet. The Wayland magnifier scales the frame in its composite
-//! pass; the X11 WM has only the `RandR` gamma ramp (`blue_light`), which cannot scale or crop
-//! pixels. So this module owns the state only: the level is committed from the settings sync
-//! point and stepped by the shortcuts, and nothing is drawn at a level above 1.0 on X11.
-//! The `RandR` CRTC transform is the candidate scanout mechanism; it is not implemented here.
+//! This module owns the level: it is committed from the settings sync point and stepped by the
+//! shortcuts. The output side is `zoom_transform`, which sends the level to the server as a `RandR`
+//! CRTC transform (the X11 analogue of the Wayland composite scale).
 //!
 //! Precedent: `wm-wayland/src/zoom.rs` (same step and clamp, mirrored here because that module
 //! is Smithay-facing and this crate must not depend on it). Choice only; nothing copied.
@@ -40,8 +38,7 @@ pub(crate) fn set_committed(level: f64) {
     LEVEL.with(|slot| slot.set(level));
 }
 
-/// The runtime magnifier level (read by tests; the shortcut path only steps it).
-#[cfg(test)]
+/// The runtime magnifier level, read by the output path and by tests.
 pub(crate) fn level() -> f64 {
     LEVEL.with(Cell::get)
 }
@@ -65,7 +62,7 @@ pub(crate) fn dispatch(action: &str) -> bool {
     }) else {
         return false;
     };
-    eprintln!("flamewm: zoom level {next} (state only; X11 has no magnifier output path)");
+    eprintln!("flamewm: zoom level {next}");
     true
 }
 
