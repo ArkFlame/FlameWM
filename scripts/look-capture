@@ -49,11 +49,22 @@ shot() {
   sleep 0.5
 }
 
+# shell_panel NAME: the shell's D-Bus service (com.arkflame.FlameWM1) is owned by the WM, so start flamewm first.
+shell_panel() {
+  local name="$1" wm
+  "$BIN/flamewm" >"$OUT/flamewm.log" 2>&1 &
+  wm=$!
+  sleep 4
+  shot "$name" "$BIN/flamewm-shell"
+  kill "$wm" 2>/dev/null || true; wait "$wm" 2>/dev/null || true
+}
+
 run_all() {
+  shell_panel shell-panel
   shot task-manager "$BIN/flamewm-task-manager"
   shot assistant "$BIN/flamewm-assistant"
   shot archiver "$BIN/flamewm-archiver" "$WORK/sample.tar.gz"
 }
 : >"$OUT/stability.txt"
-dbus-run-session -- bash -c "$(declare -f frame_hash frame_mean shot); OUT='$OUT' BIN='$BIN' WORK='$WORK'; $(declare -f run_all); run_all"
+dbus-run-session -- bash -c "$(declare -f frame_hash frame_mean shot shell_panel); OUT='$OUT' BIN='$BIN' WORK='$WORK'; $(declare -f run_all); run_all"
 echo LOOK_CAPTURE_DONE
