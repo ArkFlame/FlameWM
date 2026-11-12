@@ -15,7 +15,7 @@ dbus = { version = "=0.9.12", default-features = false }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 calloop = "=0.14.4"
 inotify = { version = "=0.11.4", default-features = false }
-rustix = { version = "=1.1.4", default-features = false, features = ["fs", "std", "time"] }
+rustix = { version = "=1.1.4", default-features = false, features = ["fs", "process", "std", "time"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
 x11rb = { version = "=0.14.0", default-features = false, features = ["randr", "shape", "xkb"] }
 

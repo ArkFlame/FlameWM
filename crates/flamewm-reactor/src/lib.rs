@@ -305,6 +305,24 @@ impl ReactorHandle {
     {
         insert_fd_source(&self.0, pipe, Interest::READ, callback)
     }
+
+    /// One-shot timer for registration from a dispatch callback. `callback` runs once after
+    /// `delay`. For a timer that must not outlive its owner, check a flag inside `callback`.
+    pub fn register_timer<C>(
+        &self,
+        delay: Duration,
+        mut callback: C,
+    ) -> calloop::Result<RegistrationToken>
+    where
+        C: FnMut() + 'static,
+    {
+        self.0
+            .insert_source(Timer::from_duration(delay), move |_, _, _| {
+                callback();
+                TimeoutAction::Drop
+            })
+            .map_err(Into::into)
+    }
 }
 
 fn insert_fd_source<F, C>(

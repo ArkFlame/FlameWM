@@ -77,6 +77,25 @@ impl ChildPipe {
         self.child.kill()
     }
 
+    /// Process id of the child. Valid until the child is reaped with [`ChildPipe::wait`].
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Sends SIGKILL to `pid`. For a timer that holds no pipe. The caller must pass the pid of a
+    /// child it has not reaped, and must check that the child is still pending before calling.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for a pid that does not fit a process id, or the kill error.
+    pub fn kill_pid(pid: u32) -> io::Result<()> {
+        let raw = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pid out of range"))?;
+        rustix::process::kill_process(raw, rustix::process::Signal::KILL).map_err(io::Error::from)
+    }
+
     /// Closes stdin and waits for the child to exit.
     ///
     /// # Errors
