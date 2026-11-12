@@ -176,7 +176,7 @@ input { cursor:text; }
 .volume-value { flex-grow:1; height:30px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid var(--rim); border-radius:var(--radius-sm); }
 .volume-track { width:100%; height:7px; background:var(--c-42474b); border-radius:var(--radius-sm); }
 .volume-track-fill { width:0%; height:7px; background:var(--accent); border-radius:var(--radius-sm); }
-.wifi-row { width:100%; min-height:42px; padding:var(--sp-2) 7px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border-radius:var(--radius-sm); cursor:default; }
+.wifi-row { width:100%; min-height:42px; padding:var(--sp-2) 7px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border-radius:var(--r-sm); cursor:default; }
 .wifi-row:hover { background:var(--accent-soft); }.wifi-status { color:var(--c-9fa6ac); font-size:var(--font-xs); margin-top:2px; }
 .network-slots { width:100%; display:flex; flex-direction:column; gap:var(--sp-1); }
 .audio-row { width:100%; display:flex; align-items:center; gap:var(--space-sm); }
