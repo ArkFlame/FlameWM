@@ -11,6 +11,7 @@ pub mod audio_protocol;
 pub mod background;
 pub mod backlight;
 pub mod bluetooth;
+pub mod bluetooth_agent;
 pub mod device_watch;
 pub mod icon_service;
 pub mod icon_theme;
