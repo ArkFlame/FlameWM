@@ -1,9 +1,10 @@
 //! XDND drop target on a private Xvfb: an XDND-enabled FlameWM window receives a file drop
 //! from an external XDND source (simulated over x11rb) and reports the dropped paths.
-//! Skips with a message when no `Xvfb` binary is installed or no display is free.
+//! Skips only when no `Xvfb` binary is installed; any other startup failure fails the test.
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+mod common;
+
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,47 +30,6 @@ const TARGET_TITLE: &str = "xdnd-target-test";
 const WAIT: Duration = Duration::from_secs(10);
 const TARGET_X: i32 = 40;
 const TARGET_Y: i32 = 50;
-
-struct TestServer(std::process::Child);
-
-impl Drop for TestServer {
-    /// Kills only the Xvfb process this test started.
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn start_server() -> Option<(TestServer, String)> {
-    for n in 96..120 {
-        let display = format!(":{n}");
-        if Path::new(&format!("/tmp/.X{n}-lock")).exists() {
-            continue;
-        }
-        let child = Command::new("Xvfb")
-            .args([&display, "-screen", "0", "640x480x24", "-nolisten", "tcp"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let server = TestServer(child);
-        let deadline = Instant::now() + WAIT;
-        while Instant::now() < deadline {
-            if x11rb::connect(Some(&display)).is_ok() {
-                // Another server may have claimed this number after the lock check; accept
-                // the display only when its lock file names the Xvfb this test started.
-                let owned = std::fs::read_to_string(format!("/tmp/.X{n}-lock"))
-                    .is_ok_and(|pid| pid.trim() == server.0.id().to_string());
-                if owned {
-                    return Some((server, display));
-                }
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    None
-}
 
 fn document() -> RuntimeDocument {
     RuntimeDocument::new(CompiledDocument {
@@ -168,8 +128,7 @@ fn next_message(conn: &RustConnection, kind: u32) -> Option<[u32; 5]> {
 fn xdnd_two_windows_on_private_xvfb() {
     // Each scenario gets its own private Xvfb so no X state carries over between them.
     for scenario in [drop_scenario as fn(&str), drag_scenario as fn(&str)] {
-        let Some((_server, display)) = start_server() else {
-            eprintln!("skipped: Xvfb not available or no free display");
+        let Some((_server, display)) = common::start_server().expect("private Xvfb starts") else {
             return;
         };
         // SAFETY: this integration test is the only code in its process touching DISPLAY, and

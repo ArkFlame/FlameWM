@@ -2,10 +2,10 @@
 //! own (client messages other clients address to the root, as EWMH requests do) must be dropped,
 //! never re-queued. A re-queued event is read again on the next pass forever: the app spins at
 //! full CPU and never handles input, paints or closes again.
-//! Skips with a message when no `Xvfb` binary is installed or no display is free.
+//! Skips only when no `Xvfb` binary is installed; any other startup failure fails the test.
 
-use std::path::Path;
-use std::process::{Command, Stdio};
+mod common;
+
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -22,44 +22,6 @@ use x11rb::rust_connection::RustConnection;
 
 const TITLE: &str = "foreign-event-livelock-test";
 const WAIT: Duration = Duration::from_secs(10);
-
-struct TestServer(std::process::Child);
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn start_server() -> Option<(TestServer, String)> {
-    for n in 120..140 {
-        let display = format!(":{n}");
-        if Path::new(&format!("/tmp/.X{n}-lock")).exists() {
-            continue;
-        }
-        let child = Command::new("Xvfb")
-            .args([&display, "-screen", "0", "640x480x24", "-nolisten", "tcp"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let server = TestServer(child);
-        let deadline = Instant::now() + WAIT;
-        while Instant::now() < deadline {
-            if x11rb::connect(Some(&display)).is_ok() {
-                let owned = std::fs::read_to_string(format!("/tmp/.X{n}-lock"))
-                    .is_ok_and(|pid| pid.trim() == server.0.id().to_string());
-                if owned {
-                    return Some((server, display));
-                }
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    None
-}
 
 fn document() -> RuntimeDocument {
     RuntimeDocument::new(CompiledDocument {
@@ -117,8 +79,7 @@ fn connect_test(display: &str) -> RustConnection {
 
 #[test]
 fn events_for_other_windows_never_stall_the_event_loop() {
-    let Some((_server, display)) = start_server() else {
-        eprintln!("skipped: Xvfb not available or no free display");
+    let Some((_server, display)) = common::start_server().expect("private Xvfb starts") else {
         return;
     };
     // SAFETY: this integration test is the only code in its process touching DISPLAY, and it
