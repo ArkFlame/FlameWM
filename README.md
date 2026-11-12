@@ -132,6 +132,23 @@ Defaults come from `crates/flamewm-platform/src/shortcuts.rs`. All bindings can 
 
 ## Install
 
+Quick install (Debian, Ubuntu, Mint, Pop, Arch, Manjaro, EndeavourOS, Fedora):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArkFlame/FlameWM/main/install.sh | sh
+```
+
+Safer, download and read it first:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ArkFlame/FlameWM/main/install.sh
+less install.sh
+sh install.sh --dry-run    # prints every action, changes nothing
+sh install.sh              # as root: /usr/local; otherwise ~/.local
+```
+
+`--prefix DIR`, `--ref TAG|BRANCH`, `--yes` and `--uninstall` are also available. Debian-family systems install the published `.deb` when the release has one; other systems build the latest release tag from source. The script never touches `~/.config`. Session entries are installed with the prefix written into them, but the lock-screen PAM file and the XDG menu under `/etc` are only installed with `--prefix /usr`.
+
 Tagged versions attach the Arch package and the `.deb` to the [GitHub releases](https://github.com/ArkFlame/FlameWM/releases). To build your own package, see [Packaging](#packaging).
 
 Debian and Ubuntu:
