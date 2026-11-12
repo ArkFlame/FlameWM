@@ -300,4 +300,27 @@ exec sleep 30
             .push((cookie.to_owned(), outcome))));
         assert!(seen.is_empty());
     }
+
+    /// Submit path: the typed bytes leave the dialog, the field is empty afterwards, and no Debug
+    /// output carries the password. The settle that the helper path reaches is covered by
+    /// `right_password_settles_success_once`, which runs the same `start_with` the submit route uses.
+    #[test]
+    fn submit_empties_field_and_debug_never_prints_password() {
+        let dialog = dialog_with(&["cookie-x"]);
+        dialog
+            .borrow_mut()
+            .active_mut()
+            .expect("active")
+            .input("s3cret-value");
+        let submission = dialog.borrow_mut().submit().expect("submission");
+        assert_eq!(submission.password_bytes(), b"s3cret-value");
+        assert!(dialog
+            .borrow()
+            .active()
+            .expect("active")
+            .password
+            .is_empty());
+        let rendered = format!("{:?} {:?}", dialog.borrow(), submission);
+        assert!(!rendered.contains("s3cret-value"), "{rendered}");
+    }
 }
