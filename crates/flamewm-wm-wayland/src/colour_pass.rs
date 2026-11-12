@@ -90,9 +90,13 @@ fn matrix_uniform(matrix: &ColourMatrix) -> Uniform<'static> {
     )
 }
 
-/// The composite source rectangle for a magnifier viewport, in buffer pixels.
-pub fn source_rect(view: Viewport) -> Rectangle<f64, Buffer> {
-    Rectangle::new(Point::from((view.x, view.y)), Size::from((view.w, view.h)))
+/// The composite source rectangle for a magnifier viewport, in buffer pixels. The viewport has a
+/// top-left origin, but the offscreen texture is sampled in GL row order (bottom-left origin), so
+/// the rectangle's bottom edge is `frame_h - (y + h)`. Runtime proof: pointer at the top showed the
+/// bottom band before this flip.
+pub fn source_rect(view: Viewport, frame_h: f64) -> Rectangle<f64, Buffer> {
+    let y = frame_h - view.y - view.h;
+    Rectangle::new(Point::from((view.x, y)), Size::from((view.w, view.h)))
 }
 
 /// Readback of the composited frame: `elements` go to an offscreen texture, which is drawn through
@@ -189,6 +193,31 @@ pub fn draw_composite(
 mod tests {
     use super::*;
     use crate::colour_filter::ColourFilter;
+
+    #[test]
+    fn source_rect_flips_the_top_left_viewport_into_gl_row_order() {
+        let view = Viewport {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        let rect = source_rect(view, 360.0);
+        assert_eq!((rect.loc.x, rect.loc.y), (10.0, 290.0));
+        assert_eq!((rect.size.w, rect.size.h), (100.0, 50.0));
+        // The viewport at the top of the frame samples the top rows: its flipped bottom edge is at
+        // the top of the GL rectangle, so a full-height view maps onto itself.
+        let full = source_rect(
+            Viewport {
+                x: 0.0,
+                y: 0.0,
+                w: 640.0,
+                h: 360.0,
+            },
+            360.0,
+        );
+        assert_eq!((full.loc.x, full.loc.y), (0.0, 0.0));
+    }
 
     #[test]
     fn uniform_is_row_major_and_named_as_the_shader_declares_it() {

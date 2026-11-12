@@ -182,6 +182,17 @@ pub(crate) fn output_at(outputs: &[Rect], x: f64, y: f64) -> Option<usize> {
     outputs.iter().position(|rect| rect.contains(x, y))
 }
 
+/// `(x, y)` relative to the origin of the output that contains it. A point on no output is returned
+/// unchanged, so a single-output session keeps its pointer as it is.
+pub(crate) fn relative_to_output(outputs: &[Rect], x: f64, y: f64) -> (f64, f64) {
+    output_at(outputs, x, y).map_or((x, y), |index| {
+        (
+            x - f64::from(outputs[index].x),
+            y - f64::from(outputs[index].y),
+        )
+    })
+}
+
 /// Whether a pointer hit lookup may run at `(x, y)`. With a placed row the point must lie on one of
 /// its outputs. An empty row (single or nested output) imposes no gate, so that lookup is unchanged.
 pub(crate) fn hit_on_layout(stored: &[Rect], x: f64, y: f64) -> bool {
@@ -443,5 +454,15 @@ mod tests {
         assert_eq!(output_for_rect(&rects, Rect::new(80, 10, 60, 50)), Some(1));
         assert_eq!(output_for_rect(&rects, Rect::new(300, 0, 10, 10)), None);
         assert_eq!(output_for_rect(&[], Rect::new(0, 0, 1, 1)), None);
+    }
+
+    #[test]
+    fn pointer_maps_into_the_output_under_it() {
+        let row = [Rect::new(0, 0, 800, 600), Rect::new(800, 0, 800, 600)];
+        assert_eq!(relative_to_output(&row, 1000.0, 100.0), (200.0, 100.0));
+        assert_eq!(relative_to_output(&row, 10.0, 20.0), (10.0, 20.0));
+        // Off every output: unchanged, so the single-output path keeps its coordinates.
+        assert_eq!(relative_to_output(&row, -5.0, 20.0), (-5.0, 20.0));
+        assert_eq!(relative_to_output(&[], 3.0, 4.0), (3.0, 4.0));
     }
 }

@@ -2,6 +2,7 @@
 # XTest pointer driver for scripts/break (no xdotool on the host).
 # Usage (DISPLAY must be the private sandbox display):
 #   pointer.py sweep Y X0 X1 N SECONDS   triangular sweep, N motion events spread over SECONDS
+#   pointer.py at X Y                    one absolute root-coordinate motion
 import ctypes
 import sys
 import time
@@ -15,6 +16,15 @@ xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_in
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "at":
+        x, y = int(sys.argv[2]), int(sys.argv[3])
+        dpy = x11.XOpenDisplay(None)
+        if not dpy:
+            print("pointer: cannot open display", file=sys.stderr)
+            return 2
+        xtst.XTestFakeMotionEvent(dpy, -1, x, y, 0)
+        x11.XFlush(dpy)
+        return 0
     if len(sys.argv) != 7 or sys.argv[1] != "sweep":
         print(__doc__, file=sys.stderr)
         return 2

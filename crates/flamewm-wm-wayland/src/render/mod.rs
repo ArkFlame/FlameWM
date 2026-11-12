@@ -510,15 +510,20 @@ fn render_into(
     };
     let matrix = effective_matrix(filter);
     let scale = state.output_scale();
+    // The pointer is followed in the frame of the output under it (layout space to output space).
+    let primary = [state.output_rect()];
+    let outputs = crate::output_layout::pointer_layout(&state.pointer_layout, &primary);
+    let (px, py) =
+        crate::output_layout::relative_to_output(outputs, state.pointer.x, state.pointer.y);
     let view = crate::zoom::viewport(
         state.zoom_follow,
         (f64::from(size.w), f64::from(size.h)),
         zoom,
-        (state.pointer.x * scale, state.pointer.y * scale),
+        (px * scale, py * scale),
         state.zoom_origin,
     );
     state.zoom_origin = Some((view.x, view.y));
-    let source = crate::colour_pass::source_rect(view);
+    let source = crate::colour_pass::source_rect(view, f64::from(size.h));
     if let Some(path) = state.dump.take() {
         // Readback goes through an offscreen texture: copying from the window surface target
         // left the GL context lost for the next swap (EGL_BAD_ALLOC), so the window path stays
