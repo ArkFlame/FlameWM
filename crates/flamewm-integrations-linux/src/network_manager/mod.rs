@@ -1,6 +1,8 @@
 //! `NetworkManager`'s system-bus source adapter.
 
 mod actions;
+#[cfg(test)]
+mod e2e_tests;
 mod reply;
 mod rules;
 #[cfg(test)]
@@ -231,8 +233,12 @@ pub struct NetworkManagerProvider {
 
 impl NetworkManagerProvider {
     pub fn connect() -> FlameResult<Self> {
-        Ok(Self {
-            pump: BusPump::connect(BusKind::System)?,
+        Ok(Self::with_pump(BusPump::connect(BusKind::System)?))
+    }
+
+    fn with_pump(pump: BusPump) -> Self {
+        Self {
+            pump,
             controller: NetworkController::default(),
             status: NetworkStatus::default(),
             pending: BTreeMap::new(),
@@ -246,7 +252,7 @@ impl NetworkManagerProvider {
             attempts: ConnectAttempts::default(),
             vpn_profiles: BTreeMap::new(),
             vpn_active: BTreeSet::new(),
-        })
+        }
     }
 
     pub fn start(&mut self) -> FlameResult<()> {

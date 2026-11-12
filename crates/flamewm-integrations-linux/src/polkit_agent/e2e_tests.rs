@@ -33,9 +33,9 @@ else
 fi
 "#;
 
-struct Daemon {
+pub(crate) struct Daemon {
     child: Child,
-    address: String,
+    pub(crate) address: String,
 }
 
 impl Drop for Daemon {
@@ -47,7 +47,7 @@ impl Drop for Daemon {
 
 /// Starts a private session-style `dbus-daemon` and returns its address, or `None` when the
 /// binary is unavailable.
-fn start_daemon(dir: &std::path::Path) -> Option<Daemon> {
+pub(crate) fn start_daemon(dir: &std::path::Path) -> Option<Daemon> {
     std::fs::create_dir_all(dir).ok()?;
     let mut child = Command::new("dbus-daemon")
         .args(["--session", "--nofork", "--print-address=1"])

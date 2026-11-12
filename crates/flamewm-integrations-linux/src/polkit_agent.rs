@@ -1136,4 +1136,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod e2e_tests;
+pub(crate) mod e2e_tests;
