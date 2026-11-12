@@ -180,6 +180,11 @@ impl ShellSurfaces {
                     .flatten()
             })
             .or_else(|| {
+                (surface == self.bluetooth)
+                    .then(|| self.bluetooth_output.clone())
+                    .flatten()
+            })
+            .or_else(|| {
                 let owns_popup = match self.transient {
                     Some(Transient::StartGroup) => surface == self.start,
                     Some(Transient::ContextMenu) => surface == self.task_menu,

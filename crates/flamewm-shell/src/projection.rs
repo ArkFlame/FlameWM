@@ -28,6 +28,7 @@ macro_rules! forward {
 }
 
 mod audio;
+mod bluetooth;
 mod calendar;
 mod clock;
 mod context_menu;
@@ -40,6 +41,7 @@ mod task_menu;
 mod weather;
 
 pub use audio::{project_audio, project_audio_full};
+pub use bluetooth::project_bluetooth;
 pub use calendar::project_calendar;
 use clock::month_name;
 pub use clock::{clock_time_text, local_date, project_clock, project_clock_at, ClockDisplay};

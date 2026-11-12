@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FlameWM Bluetooth pairing</title>
+  <link rel="stylesheet" href="../base/tokens.css">
+  <style>
+    :root { --surface:#000000bf; --rim:#ffffff7f; --text:#f1f2f3; --muted:#aeb4bb; --field:#ffffff1f; --field-rim:#ffffff4d; --error:#ff8a80; }
+    body { margin:0; background:var(--surface); color:var(--text); font-size:var(--font-md); }
+    .bluetooth-card { box-sizing:border-box; width:100%; padding:var(--space-xl); border:1px solid var(--rim); border-radius:var(--radius-md); background:var(--surface); display:flex; flex-direction:column; gap:var(--space-lg); }
+    .bluetooth-title { margin:0; font-size:var(--font-lg); font-weight:600; }
+    .bluetooth-message { margin:0; color:var(--text); }
+    .bluetooth-details { margin:0; display:flex; flex-direction:column; gap:var(--space-xs); color:var(--muted); font-size:var(--font-sm); }
+    .bluetooth-label { color:var(--muted); font-size:var(--font-sm); }
+    .bluetooth-entry { box-sizing:border-box; width:100%; height:28px; padding:0px var(--space-md); border:1px solid var(--field-rim); border-radius:var(--radius-sm); background:var(--field); color:var(--text); }
+    .bluetooth-error { min-height:16px; margin:0; color:var(--error); font-size:var(--font-sm); }
+    .bluetooth-actions { display:flex; justify-content:flex-end; gap:var(--space-md); }
+    .bluetooth-button { height:28px; padding:0px var(--space-xl); border:1px solid var(--field-rim); border-radius:var(--radius-sm); background:var(--field); color:var(--text); }
+  </style>
+</head>
+<body>
+  <section id="bluetooth" class="bluetooth-card" role="dialog" aria-labelledby="bluetooth-title">
+    <h1 id="bluetooth-title" class="bluetooth-title">Bluetooth pairing</h1>
+    <p id="bluetooth-message" class="bluetooth-message">&#8203;</p>
+    <dl id="bluetooth-details" class="bluetooth-details">&#8203;</dl>
+    <span id="bluetooth-label" class="bluetooth-label">&#8203;</span>
+    <!-- Typed text arrives as X key events on the card, not through this node; it shows only the masked value. -->
+    <div id="bluetooth-entry" class="bluetooth-entry" role="textbox" aria-readonly="true" aria-label="PIN or passkey">&#8203;</div>
+    <p id="bluetooth-error" class="bluetooth-error" role="alert">&#8203;</p>
+    <div class="bluetooth-actions">
+      <button id="bluetooth-reject" class="bluetooth-button" type="button" data-action="bluetooth.reject">Reject</button>
+      <button id="bluetooth-accept" class="bluetooth-button" type="button" data-action="bluetooth.accept">Accept</button>
+    </div>
+  </section>
+</body>
+</html>

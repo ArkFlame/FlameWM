@@ -22,6 +22,9 @@ index.html 320x240 nodes=1051 fnv=47d68c70ea786b83
 lock/lock.html 1280x800 nodes=51 fnv=8d09ae7f8bb34b11
 lock/lock.html 701x438 nodes=51 fnv=554f3d6f14b4dd39
 lock/lock.html 320x240 nodes=51 fnv=20b489df97ed4bb9
+shell/bluetooth.html 1280x800 nodes=19 fnv=87cc50c4885f8969
+shell/bluetooth.html 701x438 nodes=19 fnv=cce4536ab8a0f1e5
+shell/bluetooth.html 320x240 nodes=19 fnv=0e9f3c0be485ef39
 shell/calendar.html 1280x800 nodes=225 fnv=c8c2cd3d8ddf98bc
 shell/calendar.html 701x438 nodes=225 fnv=479f195bf5dac0a8
 shell/calendar.html 320x240 nodes=225 fnv=44ffa34692249f5f

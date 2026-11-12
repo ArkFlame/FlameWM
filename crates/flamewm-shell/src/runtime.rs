@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+pub mod bluetooth_surface;
+mod card_surface;
 pub mod launcher_surface;
 pub mod polkit_surface;
 pub mod start_surface;
@@ -45,6 +47,8 @@ const TASK_MENU_ARTIFACT: &[u8] =
 const MEDIA_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-media.rwr"));
 const LAUNCHER_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"));
 const POLKIT_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-polkit.rwr"));
+const BLUETOOTH_ARTIFACT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-bluetooth.rwr"));
 // J07: audio/network/calendar artifacts live in the helper role
 // (`quick_controls::host`), not in the parent runtime.
 
@@ -567,6 +571,11 @@ pub struct ShellSurfaces {
     polkit_open: bool,
     /// Output the card opened on; `Some` while it is open. Card input resolves through it.
     polkit_output: Option<flamewm_api::OutputId>,
+    /// Bluetooth pairing card; open while the agent has a prompt or a display notice.
+    pub bluetooth: SurfaceHandle,
+    bluetooth_open: bool,
+    /// Output the pairing card opened on; `Some` while it is open.
+    bluetooth_output: Option<flamewm_api::OutputId>,
     panels: Vec<PanelSurfaceRecord>,
     selected_output: Option<flamewm_api::OutputId>,
     transient_output: Option<flamewm_api::OutputId>,

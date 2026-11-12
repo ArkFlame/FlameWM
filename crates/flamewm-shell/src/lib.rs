@@ -10,6 +10,7 @@ pub mod dock;
 pub mod icon_loader;
 pub mod launcher;
 use flamewm_debug::log_limit;
+pub mod bluetooth_dialog;
 pub mod notification_center;
 pub mod osd;
 pub mod panel;

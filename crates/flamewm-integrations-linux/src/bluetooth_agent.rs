@@ -42,7 +42,7 @@ const MAX_PIN_LEN: usize = 16;
 const MAX_PASSKEY: u32 = 999_999;
 /// Registration gate, mirroring `POLKIT_AGENT_CAN_ANSWER`. Stays false until a prompt card answers
 /// through `BluetoothAgent::decide`; the shell does not register the agent while it is false.
-pub const BLUETOOTH_AGENT_CAN_ANSWER: bool = false;
+pub const BLUETOOTH_AGENT_CAN_ANSWER: bool = true;
 const REGISTER: &str = "RegisterAgent";
 const REQUEST_DEFAULT: &str = "RequestDefaultAgent";
 const UNREGISTER: &str = "UnregisterAgent";
@@ -73,6 +73,15 @@ pub enum PromptKind {
     PinCode { device: String },
     /// `RequestPasskey`: the user types the passkey.
     Passkey { device: String },
+    /// `DisplayPasskey`: type `passkey` on the device; `entered` digits are typed so far. A notice
+    /// that is acknowledged at once, never queued.
+    DisplayPasskey {
+        device: String,
+        passkey: u32,
+        entered: u16,
+    },
+    /// `DisplayPinCode`: type `pin` on the device. A notice that is acknowledged at once.
+    DisplayPinCode { device: String, pin: String },
 }
 
 /// The answer chosen by the prompt UI. `Accept` carries the typed value for PIN and passkey
@@ -100,6 +109,9 @@ pub struct PromptQueue {
     next_id: u64,
     pending: BTreeMap<u64, Pending>,
     outbox: Vec<Message>,
+    /// Latest display notice. Each notice replaces the last: `BlueZ` resends passkeys as digits are
+    /// typed on the device.
+    notice: Option<PromptKind>,
 }
 
 impl PromptQueue {
@@ -163,6 +175,24 @@ impl PromptQueue {
     /// Takes the replies to send on the bus, in the order they were decided.
     pub fn take_outbox(&mut self) -> Vec<Message> {
         std::mem::take(&mut self.outbox)
+    }
+}
+
+/// Checks a typed PIN or passkey before the UI sends `Accept`, so the card can keep the prompt open
+/// and say why. Same rule `finish` applies to the reply: PIN 1 to 16 characters, passkey a number
+/// up to 999999. Other kinds carry no typed value and always pass.
+///
+/// # Errors
+/// Returns the message to show when the text is not a valid PIN or passkey.
+pub fn check_typed(kind: &PromptKind, text: &str) -> Result<(), &'static str> {
+    match kind {
+        PromptKind::PinCode { .. } if (1..=MAX_PIN_LEN).contains(&text.len()) => Ok(()),
+        PromptKind::PinCode { .. } => Err("PIN is 1 to 16 characters"),
+        PromptKind::Passkey { .. } => match text.parse::<u32>() {
+            Ok(passkey) if passkey <= MAX_PASSKEY => Ok(()),
+            _ => Err("Passkey is a number up to 999999"),
+        },
+        _ => Ok(()),
     }
 }
 
@@ -293,10 +323,40 @@ pub fn handle_agent_call(
         queue.enqueue(message, kind, now);
         return MessageDisposition::Handled;
     }
+    if let Some(kind) = notice_kind(message, &member) {
+        queue.notice = Some(kind);
+        return MessageDisposition::Reply(message.method_return());
+    }
     if ACKNOWLEDGED_METHODS.contains(&member.as_str()) {
         return MessageDisposition::Reply(message.method_return());
     }
     MessageDisposition::Unhandled
+}
+
+/// The display notice `BlueZ` sent with `member`, or `None` when the arguments do not match.
+fn notice_kind(message: &Message, member: &str) -> Option<PromptKind> {
+    let items = message.get_items();
+    match (member, items.as_slice()) {
+        (
+            "DisplayPasskey",
+            [
+                MessageItem::ObjectPath(path),
+                MessageItem::UInt32(passkey),
+                MessageItem::UInt16(entered),
+            ],
+        ) => Some(PromptKind::DisplayPasskey {
+            device: path.to_string(),
+            passkey: *passkey,
+            entered: *entered,
+        }),
+        ("DisplayPinCode", [MessageItem::ObjectPath(path), MessageItem::Str(pin)]) => {
+            Some(PromptKind::DisplayPinCode {
+                device: path.to_string(),
+                pin: pin.clone(),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Registered `BlueZ` pairing agent on a system-bus pump the caller owns.
@@ -354,6 +414,17 @@ impl BluetoothAgent {
     /// Pending decision requests for the prompt UI.
     pub fn prompts(&self) -> impl Iterator<Item = (u64, &PromptKind)> + '_ {
         self.prompts.prompts()
+    }
+
+    /// The display notice to type on the device, if one is showing.
+    #[must_use]
+    pub fn notice(&self) -> Option<&PromptKind> {
+        self.prompts.notice.as_ref()
+    }
+
+    /// Hides the display notice. Its reply was already sent when it arrived.
+    pub fn dismiss_notice(&mut self) {
+        self.prompts.notice = None;
     }
 
     /// Answers prompt `id` from the UI and sends its reply. Returns `false` for unknown ids.
@@ -581,6 +652,64 @@ mod tests {
             handle_agent_call(&other_iface, &mut queue, now),
             MessageDisposition::Unhandled
         ));
+    }
+
+    #[test]
+    fn display_notices_are_acknowledged_and_shown_not_queued() {
+        let mut queue = PromptQueue::default();
+        let now = Instant::now();
+        let passkey = call_with(
+            "DisplayPasskey",
+            &[
+                device(),
+                MessageItem::UInt32(123_456),
+                MessageItem::UInt16(2),
+            ],
+        );
+        assert!(matches!(
+            handle_agent_call(&passkey, &mut queue, now),
+            MessageDisposition::Reply(_)
+        ));
+        assert_eq!(queue.prompts().count(), 0);
+        assert!(matches!(
+            queue.notice,
+            Some(PromptKind::DisplayPasskey {
+                passkey: 123_456,
+                entered: 2,
+                ..
+            })
+        ));
+        let pin = call_with(
+            "DisplayPinCode",
+            &[device(), MessageItem::Str("0000".into())],
+        );
+        assert!(matches!(
+            handle_agent_call(&pin, &mut queue, now),
+            MessageDisposition::Reply(_)
+        ));
+        assert!(matches!(
+            &queue.notice,
+            Some(PromptKind::DisplayPinCode { pin, .. }) if pin == "0000"
+        ));
+    }
+
+    #[test]
+    fn typed_pin_and_passkey_are_checked_before_accept() {
+        let device = DEVICE.to_owned();
+        let pin = PromptKind::PinCode {
+            device: device.clone(),
+        };
+        assert!(check_typed(&pin, "1234").is_ok());
+        assert!(check_typed(&pin, "").is_err());
+        assert!(check_typed(&pin, &"1".repeat(17)).is_err());
+        let passkey = PromptKind::Passkey {
+            device: device.clone(),
+        };
+        assert!(check_typed(&passkey, "999999").is_ok());
+        assert!(check_typed(&passkey, "1000000").is_err());
+        assert!(check_typed(&passkey, "12a").is_err());
+        let authorize = PromptKind::Authorize { device };
+        assert!(check_typed(&authorize, "").is_ok());
     }
 
     #[test]

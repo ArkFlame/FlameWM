@@ -38,6 +38,7 @@ macro_rules! shell_stage {
     }};
 }
 
+mod bluetooth_session;
 mod control;
 mod dock;
 mod helpers;
@@ -105,6 +106,15 @@ pub(crate) struct ShellLoop {
     >,
     /// Reactor that runs the helper pipes. Set with `polkit_agent`.
     pub(crate) polkit_reactor: Option<flamewm_reactor::ReactorHandle>,
+    /// Prompts and display notices of the Bluetooth pairing card, with the typed value.
+    pub(crate) bluetooth_dialog:
+        std::rc::Rc<std::cell::RefCell<flamewm_shell::bluetooth_dialog::BluetoothDialog>>,
+    /// Pairing agent that answers `BlueZ`. Set only when the agent registers.
+    pub(crate) bluetooth_agent: Option<
+        std::rc::Rc<
+            std::cell::RefCell<flamewm_integrations_linux::bluetooth_agent::BluetoothAgent>,
+        >,
+    >,
     pub(crate) local_date: (i32, u8, u8),
     pub(crate) date_tracker: ClockDateTracker,
     pub(crate) audio_tab: AudioTab,
@@ -218,6 +228,8 @@ impl ShellLoop {
             polkit_dialog: Default::default(),
             polkit_agent: None,
             polkit_reactor: None,
+            bluetooth_dialog: Default::default(),
+            bluetooth_agent: None,
             local_date: projection::local_date(),
             date_tracker: ClockDateTracker::new(projection::local_date()),
             audio_tab: AudioTab::default(),

@@ -15,6 +15,7 @@ use flamewm_api::settings::SettingsSnapshot;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::{BusKind, BusWatch};
+use flamewm_integrations_linux::bluetooth_agent::{BluetoothAgent, BLUETOOTH_AGENT_CAN_ANSWER};
 use flamewm_integrations_linux::notifications;
 use flamewm_integrations_linux::polkit_agent::{AuthOutcome, PolkitAgent, PolkitEvent};
 use flamewm_reactor::{Reactor, SystemWallClock};
@@ -686,6 +687,22 @@ fn execute() -> Result<(), String> {
         None
     };
 
+    // Bluetooth pairing agent. It registers only when BLUETOOTH_AGENT_CAN_ANSWER is set, so a
+    // registered agent always has a pairing card that answers through `decide`. Without the system
+    // bus the shell runs without one.
+    let bluetooth = if BLUETOOTH_AGENT_CAN_ANSWER {
+        match BluetoothAgent::connect_system() {
+            Ok(agent) => Some(Rc::new(RefCell::new(agent))),
+            Err(error) => {
+                eprintln!("flamewm-shell: bluetooth agent disabled: {error}");
+                None
+            }
+        }
+    } else {
+        eprintln!("flamewm-shell: bluetooth agent not registered: no pairing card yet");
+        None
+    };
+
     let profile_interval = profile_interval_secs();
     let profile_due = Arc::new(AtomicBool::new(false));
     let profile_flag = Arc::clone(&profile_due);
@@ -845,6 +862,27 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register polkit source: {error}"))?;
     }
+    if let Some(agent) = bluetooth.as_ref() {
+        state.borrow_mut().bluetooth_agent = Some(Rc::clone(agent));
+        let watch = agent.borrow().watch();
+        let bluetooth_state = Rc::clone(agent);
+        // A new prompt changes only the card model; wake the loop so the card maps at once.
+        let bluetooth_wake = reactor.wake_deadline();
+        reactor
+            .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+                match bluetooth_state.borrow_mut().on_ready() {
+                    Ok(_) => {
+                        bluetooth_wake.set(Some(std::time::Instant::now()));
+                        flamewm_reactor::FdAction::Continue
+                    }
+                    Err(error) => {
+                        eprintln!("flamewm-shell: bluetooth D-Bus source failed: {error}");
+                        flamewm_reactor::FdAction::Remove
+                    }
+                }
+            })
+            .map_err(|error| format!("register bluetooth source: {error}"))?;
+    }
     let event_state = Rc::clone(&state);
     let tray_events = tray_host.clone();
     let tick_state = Rc::clone(&state);
@@ -949,6 +987,7 @@ fn execute() -> Result<(), String> {
                 tick_state.borrow_mut().set_output_pointer(pointer);
                 tick_state.borrow_mut().tick(runtime, &clock_due)?;
                 tick_state.borrow_mut().sync_polkit(runtime)?;
+                tick_state.borrow_mut().sync_bluetooth(runtime)?;
                 tick_state.borrow_mut().tick_tray(runtime);
                 if let Some(host) = notifications.as_ref() {
                     if let Err(error) = host.borrow_mut().tick(runtime, Some(&shared_wake)) {
@@ -984,6 +1023,11 @@ fn execute() -> Result<(), String> {
     if let Some(agent) = polkit.as_ref() {
         if let Err(error) = agent.borrow().shutdown() {
             eprintln!("flamewm-shell: polkit unregister failed: {error}");
+        }
+    }
+    if let Some(agent) = bluetooth.as_ref() {
+        if let Err(error) = agent.borrow_mut().shutdown() {
+            eprintln!("flamewm-shell: bluetooth unregister failed: {error}");
         }
     }
     run_result
