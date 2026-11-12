@@ -119,27 +119,24 @@ pub fn project_panel_geometry(
     let snapshot = view.snapshot;
     crate::projection::project_taskbar_height(document, view)?;
     let states = task_states(view);
+    let capacity = crate::projection::task_slot_capacity_for_view(&view);
+    let (rendered, overflow) =
+        crate::projection::task_slot_split(states.len(), view.items.activities, capacity);
     for index in 0..TASK_SLOT_COUNT {
-        document.visible(
-            &format!("task-slot-{}", index + 1),
-            view.items.activities && states.get(index).is_some(),
-        )?;
+        document.visible(&format!("task-slot-{}", index + 1), index < rendered)?;
     }
     crate::projection::project_task_slots_extent(
         document,
-        crate::projection::task_slots_extent_count(states.len(), view.items),
+        rendered + usize::from(overflow > 0),
         crate::projection::taskbar_is_vertical(&view),
     )?;
-    document.visible(
-        "task-overflow",
-        crate::projection::task_overflow_count(states.len(), view.items.activities) > 0,
-    )?;
+    crate::projection::project_task_overflow(document, overflow)?;
     document.visible("task-slot-insert", view.items.activities)?;
     crate::projection::project_pager_visibility(document, snapshot.workspaces.as_ref())?;
     crate::projection::project_element_backgrounds(
         document,
         view.items,
-        crate::projection::task_slots_rendered(states.len(), view.items),
+        rendered,
         crate::projection::tray_any_visible(&snapshot.system, view.items),
         view.items.clock,
     )?;
@@ -505,7 +502,12 @@ mod tests {
             doc.visible.contains_key("workspace-1"),
             "geometry owns pager count"
         );
-        assert!(doc.texts.is_empty(), "geometry writes no labels");
+        // The only label geometry owns is the "+N" overflow count, derived from the slot split.
+        assert!(
+            doc.texts.keys().all(|key| key == "task-overflow-label"),
+            "geometry writes only the overflow count label: {:?}",
+            doc.texts.keys().collect::<Vec<_>>()
+        );
         assert!(doc.images.is_empty(), "geometry writes no icons");
     }
 

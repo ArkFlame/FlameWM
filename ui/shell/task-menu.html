@@ -7,28 +7,44 @@
   <link rel="stylesheet" href="flamewm.css">
 </head>
 <body class="popup-body">
-  <section id="task-menu" class="context-menu compact-context" data-action="task.menu.surface">
-    <button id="context-task-activate" class="menu-row" data-action="task.menu.activate"><img src="assets/breeze/window-maximize.svg" width="16" height="16"><span>Activate</span></button>
-    <button id="context-task-close" class="menu-row" data-action="task.menu.close"><img src="assets/breeze/window-close.svg" width="16" height="16"><span>Close</span></button>
-    <button id="context-task-pin" class="menu-row" data-action="task.menu.pin"><img src="assets/breeze/list-add.svg" width="16" height="16"><span>Pin to Taskbar</span></button>
-    <button id="context-task-unpin" class="menu-row" data-action="task.menu.unpin"><img src="assets/breeze/list-remove.svg" width="16" height="16"><span>Unpin</span></button>
-    <button id="context-start-add" class="menu-row" data-action="start.menu.favorite"><img class="symbolic-icon favorite-icon" src="assets/breeze/favorite-filled.svg" width="16" height="16"><span>Add to favorites</span></button>
-    <button id="context-start-remove" class="menu-row" data-action="start.menu.favorite"><img class="symbolic-icon favorite-icon" src="assets/breeze/favorite-filled.svg" width="16" height="16"><span>Remove from favorites</span></button>
-    <button id="context-workspace-activate" class="menu-row" data-action="workspace.menu.activate"><img src="assets/breeze/go-next.svg" width="16" height="16"><span>Activate</span></button>
-    <button id="context-workspace-insert-after" class="menu-row" data-action="workspace.menu.insert-after"><img src="assets/breeze/list-add.svg" width="16" height="16"><span>Insert workspace after</span></button>
-    <button id="context-workspace-remove" class="menu-row" data-action="workspace.menu.remove"><img src="assets/breeze/edit-delete.svg" width="16" height="16"><span>Remove workspace</span></button>
-    <button id="context-taskbar-settings" class="menu-row" data-action="taskbar.menu.settings"><img src="assets/breeze/preferences-desktop.svg" width="16" height="16"><span>FlameWM Settings</span></button>
-    <button id="context-taskbar-task-manager" class="menu-row" data-action="taskbar.menu.task-manager"><img src="assets/breeze/preferences-system.svg" width="16" height="16"><span>Task Manager</span></button>
-      <button id="context-tray-0" class="menu-row" data-action="tray.menu.0"><span id="context-tray-0-label">Item</span></button>
-    <button id="context-tray-1" class="menu-row" data-action="tray.menu.1"><span id="context-tray-1-label">Item</span></button>
-    <button id="context-tray-2" class="menu-row" data-action="tray.menu.2"><span id="context-tray-2-label">Item</span></button>
-    <button id="context-tray-3" class="menu-row" data-action="tray.menu.3"><span id="context-tray-3-label">Item</span></button>
-    <button id="context-tray-4" class="menu-row" data-action="tray.menu.4"><span id="context-tray-4-label">Item</span></button>
-    <button id="context-tray-5" class="menu-row" data-action="tray.menu.5"><span id="context-tray-5-label">Item</span></button>
-    <button id="context-tray-6" class="menu-row" data-action="tray.menu.6"><span id="context-tray-6-label">Item</span></button>
-    <button id="context-tray-7" class="menu-row" data-action="tray.menu.7"><span id="context-tray-7-label">Item</span></button>
-    <button id="context-tray-8" class="menu-row" data-action="tray.menu.8"><span id="context-tray-8-label">Item</span></button>
-    <button id="context-tray-9" class="menu-row" data-action="tray.menu.9"><span id="context-tray-9-label">Item</span></button>
+  <section id="task-menu" class="context-menu compact-context" role="menu" data-action="task.menu.surface">
+    <button id="context-task-activate" class="menu-row" role="menuitem" data-action="task.menu.activate"><img src="assets/breeze/window-maximize.svg" width="16" height="16"><span>Activate</span></button>
+    <button id="context-task-close" class="menu-row" role="menuitem" data-action="task.menu.close"><img src="assets/breeze/window-close.svg" width="16" height="16"><span>Close</span></button>
+    <button id="context-task-pin" class="menu-row" role="menuitem" data-action="task.menu.pin"><img src="assets/breeze/list-add.svg" width="16" height="16"><span>Pin to Taskbar</span></button>
+    <button id="context-task-unpin" class="menu-row" role="menuitem" data-action="task.menu.unpin"><img src="assets/breeze/list-remove.svg" width="16" height="16"><span>Unpin</span></button>
+    <button id="context-start-add" class="menu-row" role="menuitem" data-action="start.menu.favorite"><img class="symbolic-icon favorite-icon" src="assets/breeze/favorite-filled.svg" width="16" height="16"><span>Add to favorites</span></button>
+    <button id="context-start-remove" class="menu-row" role="menuitem" data-action="start.menu.favorite"><img class="symbolic-icon favorite-icon" src="assets/breeze/favorite-filled.svg" width="16" height="16"><span>Remove from favorites</span></button>
+    <button id="context-workspace-activate" class="menu-row" role="menuitem" data-action="workspace.menu.activate"><img src="assets/breeze/go-next.svg" width="16" height="16"><span>Activate</span></button>
+    <button id="context-workspace-insert-after" class="menu-row" role="menuitem" data-action="workspace.menu.insert-after"><img src="assets/breeze/list-add.svg" width="16" height="16"><span>Insert workspace after</span></button>
+    <button id="context-workspace-remove" class="menu-row" role="menuitem" data-action="workspace.menu.remove"><img src="assets/breeze/edit-delete.svg" width="16" height="16"><span>Remove workspace</span></button>
+    <button id="context-taskbar-settings" class="menu-row" role="menuitem" data-action="taskbar.menu.settings"><img src="assets/breeze/preferences-desktop.svg" width="16" height="16"><span>FlameWM Settings</span></button>
+    <button id="context-taskbar-task-manager" class="menu-row" role="menuitem" data-action="taskbar.menu.task-manager"><img src="assets/breeze/preferences-system.svg" width="16" height="16"><span>Task Manager</span></button>
+      <button id="context-tray-0" class="menu-row" role="menuitem" data-action="tray.menu.0"><span id="context-tray-0-label">Item</span></button>
+    <button id="context-tray-1" class="menu-row" role="menuitem" data-action="tray.menu.1"><span id="context-tray-1-label">Item</span></button>
+    <button id="context-tray-2" class="menu-row" role="menuitem" data-action="tray.menu.2"><span id="context-tray-2-label">Item</span></button>
+    <button id="context-tray-3" class="menu-row" role="menuitem" data-action="tray.menu.3"><span id="context-tray-3-label">Item</span></button>
+    <button id="context-tray-4" class="menu-row" role="menuitem" data-action="tray.menu.4"><span id="context-tray-4-label">Item</span></button>
+    <button id="context-tray-5" class="menu-row" role="menuitem" data-action="tray.menu.5"><span id="context-tray-5-label">Item</span></button>
+    <button id="context-tray-6" class="menu-row" role="menuitem" data-action="tray.menu.6"><span id="context-tray-6-label">Item</span></button>
+    <button id="context-tray-7" class="menu-row" role="menuitem" data-action="tray.menu.7"><span id="context-tray-7-label">Item</span></button>
+    <button id="context-tray-8" class="menu-row" role="menuitem" data-action="tray.menu.8"><span id="context-tray-8-label">Item</span></button>
+    <button id="context-tray-9" class="menu-row" role="menuitem" data-action="tray.menu.9"><span id="context-tray-9-label">Item</span></button>
+    <button id="context-overflow-0" class="menu-row" role="menuitem" data-action="task.overflow.0"><span id="context-overflow-0-label">Window</span></button>
+    <button id="context-overflow-1" class="menu-row" role="menuitem" data-action="task.overflow.1"><span id="context-overflow-1-label">Window</span></button>
+    <button id="context-overflow-2" class="menu-row" role="menuitem" data-action="task.overflow.2"><span id="context-overflow-2-label">Window</span></button>
+    <button id="context-overflow-3" class="menu-row" role="menuitem" data-action="task.overflow.3"><span id="context-overflow-3-label">Window</span></button>
+    <button id="context-overflow-4" class="menu-row" role="menuitem" data-action="task.overflow.4"><span id="context-overflow-4-label">Window</span></button>
+    <button id="context-overflow-5" class="menu-row" role="menuitem" data-action="task.overflow.5"><span id="context-overflow-5-label">Window</span></button>
+    <button id="context-overflow-6" class="menu-row" role="menuitem" data-action="task.overflow.6"><span id="context-overflow-6-label">Window</span></button>
+    <button id="context-overflow-7" class="menu-row" role="menuitem" data-action="task.overflow.7"><span id="context-overflow-7-label">Window</span></button>
+    <button id="context-overflow-8" class="menu-row" role="menuitem" data-action="task.overflow.8"><span id="context-overflow-8-label">Window</span></button>
+    <button id="context-overflow-9" class="menu-row" role="menuitem" data-action="task.overflow.9"><span id="context-overflow-9-label">Window</span></button>
+    <button id="context-overflow-10" class="menu-row" role="menuitem" data-action="task.overflow.10"><span id="context-overflow-10-label">Window</span></button>
+    <button id="context-overflow-11" class="menu-row" role="menuitem" data-action="task.overflow.11"><span id="context-overflow-11-label">Window</span></button>
+    <button id="context-overflow-12" class="menu-row" role="menuitem" data-action="task.overflow.12"><span id="context-overflow-12-label">Window</span></button>
+    <button id="context-overflow-13" class="menu-row" role="menuitem" data-action="task.overflow.13"><span id="context-overflow-13-label">Window</span></button>
+    <button id="context-overflow-14" class="menu-row" role="menuitem" data-action="task.overflow.14"><span id="context-overflow-14-label">Window</span></button>
+    <button id="context-overflow-15" class="menu-row" role="menuitem" data-action="task.overflow.15"><span id="context-overflow-15-label">Window</span></button>
 </section>
 </body>
 </html>

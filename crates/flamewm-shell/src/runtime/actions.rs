@@ -76,6 +76,16 @@ impl ShellRuntime {
                     _ => None,
                 }
             }
+            ContextMenuKind::TaskOverflow { entries } => {
+                if self.snapshot.panels.revision != menu.revision {
+                    return None;
+                }
+                let index: usize = action.strip_prefix("task.overflow.")?.parse().ok()?;
+                entries
+                    .get(index)?
+                    .window
+                    .map(ControlRequest::ActivateWindow)
+            }
             ContextMenuKind::Taskbar
             | ContextMenuKind::StartApp(_)
             | ContextMenuKind::TrayItem { .. } => None,

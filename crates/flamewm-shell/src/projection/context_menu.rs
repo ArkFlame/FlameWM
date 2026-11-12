@@ -2,6 +2,8 @@
 
 use super::*;
 
+use crate::taskbar::context_menu::TASK_OVERFLOW_MENU_ROWS;
+
 pub fn project_context_menu(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
@@ -35,6 +37,9 @@ pub fn project_context_menu(
     for index in 0..crate::tray_host::TRAY_MENU_ROWS {
         document.visible(&format!("context-tray-{index}"), false)?;
     }
+    for index in 0..TASK_OVERFLOW_MENU_ROWS {
+        document.visible(&format!("context-overflow-{index}"), false)?;
+    }
     let Some(state) = state else {
         return Ok(());
     };
@@ -52,6 +57,13 @@ pub fn project_context_menu(
         crate::ContextMenuKind::Taskbar => {
             for row in crate::taskbar::context_menu::taskbar_menu() {
                 document.visible(&format!("context-{}", row.id), true)?;
+            }
+        }
+        crate::ContextMenuKind::TaskOverflow { entries } => {
+            for (index, state) in entries.iter().take(TASK_OVERFLOW_MENU_ROWS).enumerate() {
+                let label = crate::projection::task_label(snapshot, state);
+                document.text(&format!("context-overflow-{index}-label"), label.to_owned())?;
+                document.visible(&format!("context-overflow-{index}"), true)?;
             }
         }
         crate::ContextMenuKind::TrayItem { rows, .. } => {

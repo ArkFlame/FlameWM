@@ -10,6 +10,12 @@ const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
 const TASK_ICON_LOGICAL_PX: f32 = 25.0;
 /// `.task-slot` width in CSS px (`ui/shell/flamewm.css`).
 const TASK_SLOT_WIDTH: f32 = 42.0;
+/// Fixed chrome beside the task cells, in CSS px: start capsule (44), workspace pager (51), clock
+/// (74) and a tray budget of six buttons. shortcut: fixed budget, not measured; revisit when the
+/// `#tray-group` and `#clock` widths are read back from the document.
+const TASK_CHROME_RESERVED_PX: f32 = 44.0 + 51.0 + 74.0 + 6.0 * TRAY_BUTTON_WIDTH;
+/// Cells that can fit: the eight task slots plus the overflow cell.
+const TASK_CELL_CAPACITY_MAX: usize = TASK_SLOT_COUNT + 1;
 /// `.underline` track width and heights in CSS px; the projection re-applies them scaled and
 /// centered on the slot so the line cannot drift from the icon at another `taskbarHeight`.
 const TASK_LINE_WIDTH: f32 = 28.0;
@@ -707,6 +713,9 @@ pub fn project_panel(
             .as_ref()
             .map(|workspaces| workspaces.active_index),
     );
+    let capacity = task_slot_capacity_for_view(&view);
+    let (rendered, overflow) = task_slot_split(states.len(), view.items.activities, capacity);
+    let states = &states[..rendered];
     let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
         (String::new(), String::new(), String::new(), String::new());
     for index in 0..TASK_SLOT_COUNT {
@@ -731,13 +740,7 @@ pub fn project_panel(
             states.get(index).is_some_and(|state| state.focused),
         )?;
         if let Some(state) = states.get(index) {
-            let label = snapshot
-                .applications
-                .iter()
-                .find(|application| application.id == state.app_id)
-                .map(|application| application.name.as_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or(state.app_id.as_str());
+            let label = task_label(snapshot, state);
             let px = task_icon_device_px(view.output);
             let icon = resolve_icon(icon_resolver, &state.icon_name, IconSize::new(px, px))?;
             document.image_rgb8(&icon_id, icon)?;
@@ -773,13 +776,10 @@ pub fn project_panel(
     }
     project_task_slots_extent(
         document,
-        task_slots_extent_count(states.len(), view.items),
+        rendered + usize::from(overflow > 0),
         taskbar_is_vertical(&view),
     )?;
-    project_task_overflow(
-        document,
-        task_overflow_count(states.len(), view.items.activities),
-    )?;
+    project_task_overflow(document, overflow)?;
     document.visible("task-slot-insert", view.items.activities)?;
 
     project_pager(document, snapshot.workspaces.as_ref())?;
@@ -793,19 +793,68 @@ pub fn project_panel(
     project_element_backgrounds(
         document,
         view.items,
-        task_slots_rendered(states.len(), view.items),
+        rendered,
         tray_any_visible(&snapshot.system, view.items),
         view.items.clock,
     )
 }
 
-/// Windows past the rendered buttons; `#task-overflow` shows them as `+N` instead of clipping silently.
-pub(crate) fn task_overflow_count(states: usize, activities: bool) -> usize {
-    if activities {
-        states.saturating_sub(TASK_SLOT_COUNT)
-    } else {
-        0
+/// Display label of a task slot: the application name, falling back to its app id.
+pub(crate) fn task_label<'a>(
+    snapshot: &'a ShellSnapshot,
+    state: &'a flamewm_shell_core::TaskVisualState,
+) -> &'a str {
+    snapshot
+        .applications
+        .iter()
+        .find(|application| application.id == state.app_id)
+        .map(|application| application.name.as_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(state.app_id.as_str())
+}
+
+/// Task cells a bar of `panel` length fits on an output at `scale_percent`. No geometry keeps the cap.
+pub(crate) fn task_slot_capacity_for_panel(
+    panel: Option<&flamewm_api::panels::PanelSnapshot>,
+    scale_percent: u16,
+) -> usize {
+    let Some(panel) = panel else {
+        return TASK_CELL_CAPACITY_MAX;
+    };
+    task_slot_capacity_for_length(
+        panel.geometry.width.max(panel.geometry.height),
+        scale_percent,
+    )
+}
+
+/// Cells for a bar of `length_px` device px; the output's shell scale maps it to CSS px first.
+pub(crate) fn task_slot_capacity_for_length(length_px: i32, scale_percent: u16) -> usize {
+    let css = length_px as f32 * 100.0 / f32::from(scale_percent.max(1));
+    let cells = (css - scaled(TASK_CHROME_RESERVED_PX)) / scaled(TASK_SLOT_WIDTH);
+    (cells.max(0.0) as usize).min(TASK_CELL_CAPACITY_MAX)
+}
+
+/// Cell capacity for one projected panel view.
+pub(crate) fn task_slot_capacity_for_view(view: &PanelView<'_>) -> usize {
+    task_slot_capacity_for_panel(
+        view.panel,
+        view.output.map_or(100, |output| output.shell_scale_percent),
+    )
+}
+
+/// Splits `total` window tasks into rendered slots and the overflow count. A full bar gives its
+/// last cell to the `+N` overflow cell; `taskbarActivities` off hides the whole area.
+pub(crate) fn task_slot_split(total: usize, activities: bool, capacity: usize) -> (usize, usize) {
+    if !activities {
+        return (0, 0);
     }
+    let cells = if total <= capacity {
+        TASK_SLOT_COUNT
+    } else {
+        capacity.saturating_sub(1)
+    };
+    let rendered = total.min(cells.min(TASK_SLOT_COUNT));
+    (rendered, total - rendered)
 }
 
 /// Shows `#task-overflow` as `+N` when windows exceed the rendered buttons.
@@ -817,30 +866,47 @@ pub(crate) fn project_task_overflow(
     document.text_ref("task-overflow-label", &format!("+{overflow}"))
 }
 
-/// Cells `#task-slots` lays out: the rendered buttons plus the overflow cell when it shows.
-pub(crate) fn task_slots_extent_count(states: usize, items: TaskbarItems) -> usize {
-    task_slots_rendered(states, items)
-        + usize::from(task_overflow_count(states, items.activities) > 0)
-}
-
 #[cfg(test)]
 mod task_overflow_tests {
     use super::*;
 
     #[test]
-    fn overflow_counts_windows_past_the_rendered_buttons() {
-        assert_eq!(task_overflow_count(TASK_SLOT_COUNT, true), 0);
-        assert_eq!(task_overflow_count(TASK_SLOT_COUNT + 3, true), 3);
-        assert_eq!(task_overflow_count(TASK_SLOT_COUNT + 3, false), 0);
+    fn split_keeps_eight_slots_and_counts_the_rest() {
+        assert_eq!(
+            task_slot_split(TASK_SLOT_COUNT, true, TASK_CELL_CAPACITY_MAX),
+            (8, 0)
+        );
+        assert_eq!(
+            task_slot_split(TASK_SLOT_COUNT + 3, true, TASK_CELL_CAPACITY_MAX),
+            (8, 3)
+        );
+        assert_eq!(
+            task_slot_split(TASK_SLOT_COUNT + 3, false, TASK_CELL_CAPACITY_MAX),
+            (0, 0)
+        );
     }
-}
 
-/// Window buttons `#task-slots` renders: `taskbarActivities` off hides the whole area.
-pub(crate) fn task_slots_rendered(states: usize, items: TaskbarItems) -> usize {
-    if items.activities {
-        states.min(TASK_SLOT_COUNT)
-    } else {
-        0
+    #[test]
+    fn narrow_bar_gives_the_last_cell_to_the_overflow_count() {
+        assert_eq!(task_slot_split(5, true, 3), (2, 3));
+        assert_eq!(task_slot_split(2, true, 3), (2, 0));
+        assert_eq!(task_slot_split(4, true, 0), (0, 4));
+    }
+
+    #[test]
+    fn capacity_is_bar_length_minus_chrome_in_css_px() {
+        let _guard = taskbar_scale::test_lock();
+        taskbar_scale::set_factor(1.0);
+        let chrome = TASK_CHROME_RESERVED_PX as i32;
+        assert_eq!(task_slot_capacity_for_length(chrome + 42 * 3, 100), 3);
+        assert_eq!(task_slot_capacity_for_length(chrome + 42 * 3 - 1, 100), 2);
+        assert_eq!(
+            task_slot_capacity_for_length(4000, 100),
+            TASK_CELL_CAPACITY_MAX
+        );
+        // A 200% shell scale halves the CSS length of the same device bar.
+        assert_eq!(task_slot_capacity_for_length(2 * (chrome + 42 * 3), 200), 3);
+        assert_eq!(task_slot_capacity_for_length(0, 100), 0);
     }
 }
 

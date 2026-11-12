@@ -168,6 +168,10 @@ pub enum ContextMenuKind {
     Taskbar,
     /// Start application row (Secondary on `start.app.N`); one favorite toggle row.
     StartApp(flamewm_api::DesktopAppId),
+    /// Overflow popup: taskbar windows past the rendered slots; row N is action `task.overflow.N`.
+    TaskOverflow {
+        entries: Vec<flamewm_shell_core::TaskVisualState>,
+    },
     /// Flat dbusmenu popup of one `StatusNotifier` item; row N is action `tray.menu.N`.
     TrayItem {
         key: flamewm_tray::ItemKey,

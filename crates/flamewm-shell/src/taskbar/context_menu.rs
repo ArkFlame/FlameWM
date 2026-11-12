@@ -134,6 +134,10 @@ pub fn workspace_action(
     }
 }
 
+/// Overflow popup rows; row N is action `task.overflow.N` (rows exist in `ui/shell/task-menu.html`).
+/// shortcut: 16 rows; windows past the sixteenth are not listed. Revisit when the list needs paging.
+pub const TASK_OVERFLOW_MENU_ROWS: usize = 16;
+
 /// Taskbar-background actions, with stable ids used by the context-menu projection.
 pub const TASKBAR_ROW_SETTINGS: &str = "taskbar-settings";
 pub const TASKBAR_ROW_TASK_MANAGER: &str = "taskbar-task-manager";
@@ -177,6 +181,9 @@ pub fn visible_row_count_for_kind(
         crate::ContextMenuKind::TrayItem { rows, .. } => {
             rows.len().min(crate::tray_host::TRAY_MENU_ROWS)
         }
+        crate::ContextMenuKind::TaskOverflow { entries } => {
+            entries.len().min(TASK_OVERFLOW_MENU_ROWS)
+        }
     }
 }
 
@@ -211,9 +218,14 @@ mod taskbar_menu_tests {
     #[test]
     fn every_markup_menu_row_has_canonical_icon_size_and_action() {
         // Tray rows are text-only: their labels come from the item's dbusmenu layout.
+        // Overflow rows are text-only too: their labels are live window titles.
         let (tray, rows): (Vec<&str>, Vec<&str>) = menu_rows(TASK_MENU_HTML)
             .into_iter()
             .partition(|line| line.contains("data-action=\"tray.menu."));
+        let rows: Vec<&str> = rows
+            .into_iter()
+            .filter(|line| !line.contains("data-action=\"task.overflow."))
+            .collect();
         assert_eq!(rows.len(), 11);
         assert_eq!(tray.len(), crate::tray_host::TRAY_MENU_ROWS);
         for line in rows {
@@ -361,6 +373,7 @@ mod taskbar_menu_tests {
                     !line.contains("data-action=\"confirm.")
                         && !line.contains("data-action=\"downloads.notice.")
                         && !line.contains("data-action=\"tray.menu.")
+                        && !line.contains("data-action=\"task.overflow.")
                 })
                 .collect();
             assert!(!rows.is_empty(), "{name} menu has rows");

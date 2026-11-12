@@ -418,6 +418,22 @@ impl ShellLoop {
             return Ok(());
         }
 
+        if action == "task.overflow" {
+            if event.action.phase == ActionPhase::Release && event.action.inside {
+                if let Some(pointer) = self.surfaces.root_pointer_for_output(
+                    runtime,
+                    &output,
+                    event.action.x,
+                    event.action.y,
+                ) {
+                    self.shell.open_task_overflow_menu(Some(pointer));
+                    self.close_quick_control_nonfatal();
+                    return self.apply_controls(runtime);
+                }
+            }
+            return Ok(());
+        }
+
         if let Some(slot) = slot_of(action, "task.slot.") {
             if event.action.phase == ActionPhase::Release && event.action.inside {
                 self.click_task_slot(runtime, slot)?;

@@ -38,6 +38,48 @@ impl ShellRuntime {
         }
     }
 
+    /// Opens the overflow popup that lists the taskbar windows the shown output does not render.
+    pub fn open_task_overflow_menu(&mut self, pointer: Option<flamewm_api::Point>) {
+        let entries = self.task_overflow_entries();
+        if entries.is_empty() {
+            return;
+        }
+        self.push_context_menu(
+            ContextMenuKind::TaskOverflow { entries },
+            self.snapshot.panels.revision,
+            pointer,
+            None,
+        );
+    }
+
+    /// Activatable windows past the rendered slots, split exactly as the taskbar projection splits them.
+    pub(crate) fn task_overflow_entries(&self) -> Vec<flamewm_shell_core::TaskVisualState> {
+        let Some(output) = self.shown_panel_output() else {
+            return Vec::new();
+        };
+        let states = self.task_states_on(output);
+        let panel = self
+            .snapshot
+            .panels
+            .panels
+            .iter()
+            .find(|panel| &panel.output == output);
+        let scale = self
+            .snapshot
+            .displays
+            .outputs
+            .iter()
+            .find(|candidate| &candidate.id == output)
+            .map_or(100, |candidate| candidate.shell_scale_percent);
+        let capacity = crate::projection::task_slot_capacity_for_panel(panel, scale);
+        let (rendered, _) = crate::projection::task_slot_split(states.len(), true, capacity);
+        states
+            .into_iter()
+            .skip(rendered)
+            .filter(|state| state.window.is_some())
+            .collect()
+    }
+
     /// Opens the flat dbusmenu popup for a tray item at a root-coordinate pointer anchor.
     pub fn open_tray_menu(
         &mut self,

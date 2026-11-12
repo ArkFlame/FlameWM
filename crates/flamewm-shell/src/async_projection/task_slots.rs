@@ -158,6 +158,9 @@ pub fn project_task_slots_async(
     bump_task_view_epoch();
     let snapshot = view.snapshot;
     let states = task_states(view);
+    let capacity = crate::projection::task_slot_capacity_for_view(&view);
+    let (rendered, overflow) =
+        crate::projection::task_slot_split(states.len(), view.items.activities, capacity);
     icon_cache.sync(&snapshot.applications);
     // Task-slot nodes only: labels, icons, line visibility, backgrounds,
     // slot visibility. Pager/tray/geometry untouched.
@@ -180,13 +183,7 @@ pub fn project_task_slots_async(
             view.task_progress,
         )?;
         if let Some(state) = states.get(index) {
-            let label = snapshot
-                .applications
-                .iter()
-                .find(|application| application.id == state.app_id)
-                .map(|application| application.name.as_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or(state.app_id.as_str());
+            let label = crate::projection::task_label(snapshot, state);
             document.text_ref(&label_id, label)?;
             let px = crate::projection::task_icon_device_px(view.output);
             schedule_visible(
@@ -217,16 +214,14 @@ pub fn project_task_slots_async(
             document.background_clear(&slot_id)?;
             crate::projection::project_task_line(document, &line_id, false)?;
         }
-        document.visible(
-            &slot_id,
-            view.items.activities && states.get(index).is_some(),
-        )?;
+        document.visible(&slot_id, index < rendered)?;
     }
     crate::projection::project_task_slots_extent(
         document,
-        crate::projection::task_slots_rendered(states.len(), view.items),
+        rendered + usize::from(overflow > 0),
         crate::projection::taskbar_is_vertical(&view),
     )?;
+    crate::projection::project_task_overflow(document, overflow)?;
     document.visible("task-slot-insert", view.items.activities)?;
     Ok(())
 }
