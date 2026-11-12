@@ -53,6 +53,11 @@ where
     use std::os::fd::AsRawFd;
     let (conn, screen_num) = x11rb::connect(None)?;
     let conn = Rc::new(conn);
+    // Dropped on every return from this function (exit, `?` error, unwind): restores identity.
+    let _zoom_reset = crate::zoom_transform::ResetOnExit::new(
+        Rc::clone(&conn),
+        conn.setup().roots[screen_num].root,
+    );
     let screen = &conn.setup().roots[screen_num];
     become_wm(conn.as_ref(), screen)?;
     if let Err(error) = flamewm_clipboard::spawn_keeper(None) {

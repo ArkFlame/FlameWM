@@ -22,6 +22,100 @@ thread_local! {
     static COMMITTED: Cell<f64> = const { Cell::new(ZOOM_LEVEL_MIN) };
     /// Runtime magnifier level, changed by the zoom shortcuts and reset by a settings sync.
     static LEVEL: Cell<f64> = const { Cell::new(ZOOM_LEVEL_MIN) };
+    /// Committed `zoomFollowMode`, read by the output path each turn.
+    static FOLLOW: Cell<FollowMode> = const { Cell::new(FollowMode::Proportional) };
+}
+
+/// How the magnified viewport tracks the pointer (`zoomFollowMode`), named as in `KWin`.
+/// Mirrors `wm-wayland` zoom.rs `FollowMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum FollowMode {
+    /// The pointer's place across the output maps to the viewport's place across the frame.
+    #[default]
+    Proportional,
+    /// The pointer stays at the viewport centre, clamped at the output edges.
+    Centred,
+    /// The viewport holds still until the pointer reaches its edge, then moves just far enough.
+    Push,
+}
+
+impl FollowMode {
+    /// Parses a `zoomFollowMode` value; unknown text is `None`.
+    pub(crate) fn from_setting(text: &str) -> Option<Self> {
+        match text {
+            "proportional" => Some(Self::Proportional),
+            "centred" => Some(Self::Centred),
+            "push" => Some(Self::Push),
+            _ => None,
+        }
+    }
+}
+
+/// The sampled part of the frame, in physical pixels with a top-left origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Viewport {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) w: f64,
+    pub(crate) h: f64,
+}
+
+/// The source rectangle for `zoom` following `pointer`, in physical pixels of a `size` output.
+/// `previous` is the last origin: `Push` holds it, and `None` centres on the pointer. At zoom 1 it
+/// is the whole output, and it never leaves the output.
+pub(crate) fn viewport(
+    mode: FollowMode,
+    size: (f64, f64),
+    zoom: f64,
+    pointer: (f64, f64),
+    previous: Option<(f64, f64)>,
+) -> Viewport {
+    let zoom = zoom.clamp(ZOOM_LEVEL_MIN, ZOOM_LEVEL_MAX);
+    let (w, h) = (size.0 / zoom, size.1 / zoom);
+    let centred = (pointer.0 - w / 2.0, pointer.1 - h / 2.0);
+    let (x, y) = match (mode, previous) {
+        (FollowMode::Proportional, _) => (
+            pointer.0 / size.0 * (size.0 - w),
+            pointer.1 / size.1 * (size.1 - h),
+        ),
+        (FollowMode::Push, Some((px, py))) => (push(px, pointer.0, w), push(py, pointer.1, h)),
+        (FollowMode::Centred | FollowMode::Push, _) => centred,
+    };
+    Viewport {
+        x: x.clamp(0.0, size.0 - w),
+        y: y.clamp(0.0, size.1 - h),
+        w,
+        h,
+    }
+}
+
+/// The least move of `origin` that keeps `at` inside `[origin, origin + len]`.
+fn push(origin: f64, at: f64, len: f64) -> f64 {
+    if at < origin {
+        at
+    } else if at > origin + len {
+        at - len
+    } else {
+        origin
+    }
+}
+
+/// The committed follow mode; the output path reads it on each turn.
+pub(crate) fn follow() -> FollowMode {
+    FOLLOW.with(Cell::get)
+}
+
+/// The committed `zoomFollowMode`; missing or unknown text is `Proportional`.
+pub(crate) fn follow_from_snapshot(snapshot: &SettingsSnapshot) -> FollowMode {
+    match snapshot.values.get("zoomFollowMode") {
+        Some(SettingValue::Text(value)) => FollowMode::from_setting(value).unwrap_or_default(),
+        _ => FollowMode::default(),
+    }
+}
+
+/// Records the committed follow mode from the settings sync point.
+pub(crate) fn set_follow(mode: FollowMode) {
+    FOLLOW.with(|slot| slot.set(mode));
 }
 
 /// The committed `zoomLevel`, clamped to 1.0..=8.0; a missing or non-numeric value is 1.0.
@@ -120,5 +214,86 @@ mod tests {
             SettingValue::Text("nope".to_owned()),
         );
         assert_eq!(committed_from_snapshot(&snapshot), 1.0);
+    }
+
+    const OUTPUT: (f64, f64) = (800.0, 600.0);
+
+    #[test]
+    fn follow_mode_parses_the_three_settings_only() {
+        assert_eq!(
+            FollowMode::from_setting("centred"),
+            Some(FollowMode::Centred)
+        );
+        assert_eq!(FollowMode::from_setting("push"), Some(FollowMode::Push));
+        assert_eq!(
+            FollowMode::from_setting("proportional"),
+            Some(FollowMode::Proportional)
+        );
+        assert_eq!(FollowMode::from_setting("diagonal"), None);
+    }
+
+    #[test]
+    fn unit_zoom_samples_the_whole_output_in_every_mode() {
+        for mode in [
+            FollowMode::Proportional,
+            FollowMode::Centred,
+            FollowMode::Push,
+        ] {
+            let v = viewport(mode, OUTPUT, 1.0, (123.0, 456.0), Some((50.0, 50.0)));
+            assert_eq!(
+                v,
+                Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 800.0,
+                    h: 600.0
+                },
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn centred_keeps_the_pointer_at_the_viewport_centre_and_clamps() {
+        let v = viewport(FollowMode::Centred, OUTPUT, 2.0, (400.0, 300.0), None);
+        assert_eq!(
+            v,
+            Viewport {
+                x: 200.0,
+                y: 150.0,
+                w: 400.0,
+                h: 300.0
+            }
+        );
+        let corner = viewport(FollowMode::Centred, OUTPUT, 2.0, (0.0, 0.0), None);
+        assert_eq!((corner.x, corner.y), (0.0, 0.0));
+    }
+
+    #[test]
+    fn proportional_maps_the_pointer_across_the_whole_frame() {
+        let left = viewport(FollowMode::Proportional, OUTPUT, 2.0, (0.0, 0.0), None);
+        let right = viewport(FollowMode::Proportional, OUTPUT, 2.0, (800.0, 600.0), None);
+        assert_eq!((left.x, left.y), (0.0, 0.0));
+        assert_eq!((right.x, right.y), (400.0, 300.0));
+    }
+
+    #[test]
+    fn push_holds_until_the_pointer_reaches_an_edge() {
+        let held = viewport(
+            FollowMode::Push,
+            OUTPUT,
+            2.0,
+            (250.0, 200.0),
+            Some((200.0, 150.0)),
+        );
+        assert_eq!((held.x, held.y), (200.0, 150.0));
+        let pushed = viewport(
+            FollowMode::Push,
+            OUTPUT,
+            2.0,
+            (700.0, 500.0),
+            Some((200.0, 150.0)),
+        );
+        assert_eq!((pushed.x, pushed.y), (300.0, 200.0));
     }
 }

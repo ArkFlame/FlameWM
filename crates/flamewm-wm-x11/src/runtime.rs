@@ -688,6 +688,7 @@ fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &Setti
         snapshot,
     ));
     crate::zoom::set_committed(crate::zoom::committed_from_snapshot(snapshot));
+    crate::zoom::set_follow(crate::zoom::follow_from_snapshot(snapshot));
     if let Some(observer) = observer.borrow_mut().as_mut() {
         observer(snapshot);
     }
