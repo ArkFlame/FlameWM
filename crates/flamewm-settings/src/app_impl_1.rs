@@ -840,6 +840,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     .set_shell_scale(percent)
                     .map_err(control_error)?;
             }
+            SettingsAction::DisplayPrimary => self.set_primary_display()?,
+            SettingsAction::DisplayRotation(rotation) => self.set_display_rotation(rotation)?,
             SettingsAction::DisplayKeep => {
                 self.client
                     .keep_display_mode(monotonic_now_ms())

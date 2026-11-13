@@ -363,6 +363,37 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
+    pub(crate) fn set_primary_display(&mut self) -> Result<(), String> {
+        let output = self
+            .selected_display()
+            .ok_or_else(|| {
+                "select an active monitor before changing the primary display".to_owned()
+            })?
+            .id
+            .clone();
+        self.pending_arrangement = None;
+        self.client
+            .set_primary_display(output, monotonic_now_ms())
+            .map(|_| ())
+            .map_err(control_error)
+    }
+
+    pub(crate) fn set_display_rotation(
+        &mut self,
+        rotation: flamewm_api::display::Rotation,
+    ) -> Result<(), String> {
+        let output = self
+            .selected_display()
+            .ok_or_else(|| "select an active monitor before rotating it".to_owned())?
+            .id
+            .clone();
+        self.pending_arrangement = None;
+        self.client
+            .set_display_rotation(output, rotation, monotonic_now_ms())
+            .map(|_| ())
+            .map_err(control_error)
+    }
+
     pub(crate) fn begin_display_mode(&mut self, mode: ModeId) -> Result<(), String> {
         let now_ms = monotonic_now_ms();
         self.pending_arrangement = None;
@@ -779,6 +810,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.text(
                 "display-selected-resolution",
                 format!("{} x {}", resolution.width, resolution.height),
+            )?;
+            document.attribute(
+                "display-primary",
+                "aria-checked",
+                &output.primary.to_string(),
             )?;
             self.sync_display_scale(
                 document,

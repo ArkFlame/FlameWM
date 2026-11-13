@@ -116,6 +116,10 @@ pub(crate) enum SettingsAction {
     ModePage(PageStep),
     DisplayBegin(ModeId),
     DisplayScale(u16),
+    /// Makes the selected output primary, as a revertible WM transaction.
+    DisplayPrimary,
+    /// Rotates the selected output, as a revertible WM transaction.
+    DisplayRotation(flamewm_api::display::Rotation),
     DisplayKeep,
     DisplayRevert,
     OpenUri(&'static str),
@@ -597,6 +601,14 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
             .map(|mode| SettingsAction::DisplayBegin(ModeId(mode)))
             .map_err(|_| format!("invalid display mode '{raw_mode}'"));
     }
+    if action == "settings.display.primary" {
+        return Ok(SettingsAction::DisplayPrimary);
+    }
+    if let Some(name) = action.strip_prefix("settings.display.rotation.") {
+        return rotation_from_name(name)
+            .map(SettingsAction::DisplayRotation)
+            .ok_or_else(|| format!("invalid display rotation '{name}'"));
+    }
     if let Some(percent) = action.strip_prefix("settings.display.scale.") {
         return percent
             .parse::<u16>()
@@ -854,4 +866,15 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.display.modes.next" => Ok(SettingsAction::ModePage(PageStep::Next)),
         _ => Err(format!("unknown settings action '{action}'")),
     }
+}
+
+fn rotation_from_name(name: &str) -> Option<flamewm_api::display::Rotation> {
+    use flamewm_api::display::Rotation;
+    Some(match name {
+        "normal" => Rotation::Normal,
+        "left" => Rotation::Left,
+        "right" => Rotation::Right,
+        "inverted" => Rotation::Inverted,
+        _ => return None,
+    })
 }
