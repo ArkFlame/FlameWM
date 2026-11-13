@@ -1051,3 +1051,44 @@ fn primary_and_rotation_send_typed_requests_with_current_generation() {
         ]
     );
 }
+
+#[test]
+fn per_output_scale_targets_selected_output_and_keeps_old_value_on_refusal() {
+    let mut client = fake_client([
+        Ok(ControlResponse::Displays(two_output_snapshot(5))),
+        Err(transaction_refusal("stale scale revision")),
+        Ok(ControlResponse::Unit),
+        Ok(ControlResponse::Displays(two_output_snapshot(6))),
+    ]);
+    client.refresh_displays().expect("initial snapshot");
+    client.ui.selected_output = Some(OutputId::new("DP-1"));
+
+    assert!(client.set_shell_scale(150).is_err());
+    assert_eq!(
+        client
+            .displays()
+            .and_then(|snapshot| snapshot.outputs.get(1))
+            .map(|output| output.shell_scale_percent),
+        Some(100),
+        "a refused scale write must not change the cached output"
+    );
+
+    client.set_shell_scale(150).expect("scale retry");
+    assert!(matches!(
+        client.transport.requests.as_slice(),
+        [
+            ControlRequest::GetDisplays,
+            ControlRequest::SetShellScale {
+                output: first,
+                percent: 150,
+                expected_revision: 5,
+            },
+            ControlRequest::SetShellScale {
+                output: second,
+                percent: 150,
+                expected_revision: 5,
+            },
+            ControlRequest::GetDisplays,
+        ] if first == &OutputId::new("DP-1") && second == &OutputId::new("DP-1")
+    ));
+}
