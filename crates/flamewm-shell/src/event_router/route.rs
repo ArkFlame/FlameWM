@@ -417,8 +417,8 @@ impl ShellLoop {
                         self.project_start(runtime)?;
                     }
                 }
-                "\n" => self
-                    .launch_start_slot(runtime, self.start_selection.highlighted().unwrap_or(0))?,
+                // Return launches on the typed-key path above; this text copy must not launch again.
+                "\n" => {}
                 value if !value.is_empty() => {
                     self.start_query.push_str(value);
                     self.start_selection.reset();
