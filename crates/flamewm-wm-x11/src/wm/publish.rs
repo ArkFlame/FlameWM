@@ -2,6 +2,14 @@ use super::*;
 use flamewm_api::workspace::{WORKSPACE_ROWS, grid_position, workspace_columns};
 
 /// `_NET_DESKTOP_GEOMETRY`: the whole two-row grid in pixels (columns x `WORKSPACE_ROWS` cells).
+/// The EWMH `_NET_WORKAREA` rect: the struts-reduced screen minus the Dock reserve.
+pub(super) fn published_work_area(
+    work: Rect,
+    dock: Option<(flamewm_window_core::dock_reserve::ReserveEdge, i32)>,
+) -> Rect {
+    super::outputs::with_dock_reserve(work, dock)
+}
+
 pub(super) fn desktop_geometry_payload(count: usize, screen: Rect) -> [u32; 2] {
     [
         (workspace_columns(count) as u32).saturating_mul(screen.width),
@@ -122,7 +130,8 @@ impl<C: Connection> Wm<'_, C> {
 
     pub(super) fn publish_workspace_metadata(&self) -> Result<(), ReplyError> {
         let root = self.screen().root;
-        let work = self.work_area();
+        // EWMH _NET_WORKAREA excludes docks, the same cut snap and maximise use per output.
+        let work = published_work_area(self.work_area(), self.applied_dock);
         self.set_property32(
             root,
             self.atoms.net_number_of_desktops,
@@ -245,5 +254,20 @@ impl<C: Connection> Wm<'_, C> {
             AtomEnum::WINDOW,
             &[self.active.unwrap_or(0)],
         )
+    }
+}
+
+#[cfg(test)]
+mod published_work_area_tests {
+    use super::*;
+    use flamewm_window_core::dock_reserve::ReserveEdge;
+
+    #[test]
+    fn workarea_excludes_bottom_dock_reserve() {
+        let screen = Rect::new(0, 0, 1280, 800);
+        let reserve = flamewm_window_core::dock_reserve::dock_extent(48);
+        let got = published_work_area(screen, Some((ReserveEdge::Bottom, reserve)));
+        assert_eq!(got, Rect::new(0, 0, 1280, (800 - reserve) as u32));
+        assert_eq!(published_work_area(screen, None), screen);
     }
 }

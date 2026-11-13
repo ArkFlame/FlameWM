@@ -54,6 +54,9 @@ pub const ACTION_TILE_LEFT: &str = "TileLeft";
 pub const ACTION_TILE_RIGHT: &str = "TileRight";
 pub const ACTION_TILE_UP: &str = "TileUp";
 pub const ACTION_TILE_DOWN: &str = "TileDown";
+/// Keyboard move (`Alt+F7`) and resize (`Alt+F8`) grabs, xfwm4-style: arrows, Return commits, Escape cancels.
+pub const ACTION_KEYBOARD_MOVE: &str = "KeyboardMove";
+pub const ACTION_KEYBOARD_RESIZE: &str = "KeyboardResize";
 /// Directional focus, `Super+Alt+arrow` by default.
 pub const ACTION_FOCUS_LEFT: &str = "FocusLeft";
 pub const ACTION_FOCUS_RIGHT: &str = "FocusRight";
