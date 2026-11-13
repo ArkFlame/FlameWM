@@ -10,6 +10,7 @@ use super::{ACCENT_NODE_IDS, SettingsApplication, solid_color};
 #[derive(Default)]
 struct ColorDocument {
     backgrounds: BTreeMap<String, UiColor>,
+    labels: BTreeMap<String, String>,
     reject_positions: bool,
 }
 
@@ -34,8 +35,12 @@ impl UiDocumentAccess for ColorDocument {
         crate::ui_contract::require_markup_id(_id)
     }
 
-    fn attribute(&mut self, id: &str, _name: &str, _value: &str) -> Result<(), String> {
-        crate::ui_contract::require_markup_id(id)
+    fn attribute(&mut self, id: &str, name: &str, value: &str) -> Result<(), String> {
+        crate::ui_contract::require_markup_id(id)?;
+        if name == "aria-label" {
+            self.labels.insert(id.to_owned(), value.to_owned());
+        }
+        Ok(())
     }
 
     fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
@@ -203,5 +208,26 @@ fn kde_accent_names_follow_the_nearest_named_colour() {
         (0xFD, 0xBC, 0x4B, "Yellow"),
     ] {
         assert_eq!(kde_accent_name(r, g, b), name, "#{r:02X}{g:02X}{b:02X}");
+    }
+}
+
+#[test]
+fn colour_wheel_opener_is_named_by_the_live_accent() {
+    for (accent, name) in [
+        ("#3DAEE9", "Blue"),
+        ("#EF4048", "Red"),
+        ("#9B59B6", "Purple"),
+    ] {
+        let application = application_with_accent(accent);
+        let mut document = ColorDocument::default();
+        application.sync(&mut document).expect("sync");
+        assert_eq!(
+            document
+                .labels
+                .get("color-accent-wheel")
+                .map(String::as_str),
+            Some(name),
+            "wheel name under {accent}"
+        );
     }
 }

@@ -138,6 +138,9 @@ impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
     }
 }
 
+/// Colour-wheel openers whose accessible name follows the live accent colour.
+const ACCENT_WHEEL_IDS: &[&str] = &["color-accent-wheel"];
+
 /// Paints every accent-coloured node (selected-sidebar line and ON toggles) with the live accent.
 pub(crate) fn sync_accent_nodes(
     document: &mut impl UiDocumentAccess,
@@ -146,6 +149,10 @@ pub(crate) fn sync_accent_nodes(
     let color = solid_color(accent)?;
     for id in ACCENT_NODE_IDS {
         document.background(id, color)?;
+    }
+    // The colour-wheel opener is named by the live accent, KDE Plasma style (D-swatch precedent).
+    for id in ACCENT_WHEEL_IDS {
+        document.attribute(id, "aria-label", kde_accent_name(color.r, color.g, color.b))?;
     }
     document.color_variable("--accent", color)?;
     flamewm_ui_x11::project_on_accent_token(document, color)?;
