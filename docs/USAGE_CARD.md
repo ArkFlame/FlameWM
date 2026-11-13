@@ -11,8 +11,8 @@ Precedent choices:
 
 Status:
 - Slice 1 (model, Codex parser, reset countdown, unit tests): unit-only, `scripts/gate flamewm-usage` EXIT 0.
-- Slice 2 (host fetch and config): not started.
+- Slice 2a (Claude OAuth + Command Code parsers, credential token reader, RFC 3339): unit-only, gate EXIT 0.
+- Slice 2b (host fetch with timeout, config via settings facade, fake HTTP server + temp HOME tests): not started.
 - Slice 3 (UI card, tray icon, `scripts/break/usage_card_proof.py`): not started.
 
-Providers: Codex parser only. Claude, OpenCode Go, Command Code, OpenDesign: not implemented
-(enum entries exist; no parser or source yet).
+Providers: Codex, Claude (OAuth file + API), Command Code (API key env COMMAND_CODE_API_KEY, /alpha) parsed. OpenCode Go: cookie-only in CodexBar (console scrape), not configured. OpenDesign: descriptor only, no usage source, not configured.

@@ -109,9 +109,176 @@ pub fn reset_countdown(now: i64, resets_at: Option<i64>) -> Option<String> {
     })
 }
 
+/// Claude OAuth usage (`GET https://api.anthropic.com/api/oauth/usage`, header `anthropic-beta: oauth-2025-04-20`).
+/// Reference: `.vendor/CodexBar-main/Sources/CodexBarCore/Providers/Claude/ClaudeOAuth/ClaudeOAuthUsageFetcher.swift`.
+/// Lanes: `five_hour` (5 h) and `seven_day` (7 d); `utilization` is percent, `resets_at` is RFC 3339.
+pub fn parse_claude_usage(body: &str) -> Result<Vec<UsageWindow>, UsageParseError> {
+    let root: Value = serde_json::from_str(body).map_err(|_| UsageParseError::Malformed)?;
+    let windows: Vec<UsageWindow> = [("five_hour", 5 * 3600), ("seven_day", 7 * 86_400)]
+        .iter()
+        .filter_map(|(key, seconds)| {
+            let lane = root.get(*key)?;
+            Some(UsageWindow {
+                used_percent: lane.get("utilization")?.as_f64()?.clamp(0.0, 100.0),
+                window_seconds: Some(*seconds),
+                resets_at: lane
+                    .get("resets_at")
+                    .and_then(Value::as_str)
+                    .and_then(rfc3339_unix),
+            })
+        })
+        .collect();
+    if windows.is_empty() {
+        return Err(UsageParseError::NoWindows);
+    }
+    Ok(windows)
+}
+
+/// Access token from the Claude CLI credentials file (`claudeAiOauth.accessToken`).
+/// The file lives at `$CLAUDE_CONFIG_DIR/.credentials.json`, or `~/.claude/.credentials.json` when unset.
+#[must_use]
+pub fn parse_claude_credentials(body: &str) -> Option<String> {
+    let root: Value = serde_json::from_str(body).ok()?;
+    let token = root.get("claudeAiOauth")?.get("accessToken")?.as_str()?;
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
+/// Command Code billing (`GET https://api.commandcode.ai/alpha/billing/credits`, `Authorization: Bearer <key>`).
+/// Lanes come from `windowLimits.fiveHour` / `windowLimits.weekly` (under `data` or the root), each with
+/// `used`, `cap` and `resetAt`. A lane without a positive `cap` is skipped.
+/// Reference: `.vendor/CodexBar-main/Sources/CodexBarCore/Providers/CommandCode/CommandCodeUsageFetcher.swift`.
+pub fn parse_commandcode_usage(body: &str) -> Result<Vec<UsageWindow>, UsageParseError> {
+    let root: Value = serde_json::from_str(body).map_err(|_| UsageParseError::Malformed)?;
+    let root = root.get("data").unwrap_or(&root);
+    let limits = root
+        .get("windowLimits")
+        .or_else(|| root.get("credits").and_then(|c| c.get("windowLimits")))
+        .ok_or(UsageParseError::NoWindows)?;
+    let windows: Vec<UsageWindow> = [("fiveHour", 5 * 3600), ("weekly", 7 * 86_400)]
+        .iter()
+        .filter_map(|(key, seconds)| {
+            let lane = limits.get(*key)?;
+            let cap = lane.get("cap")?.as_f64().filter(|c| *c > 0.0)?;
+            let used = lane.get("used").and_then(Value::as_f64).unwrap_or(0.0);
+            Some(UsageWindow {
+                used_percent: (used / cap * 100.0).clamp(0.0, 100.0),
+                window_seconds: Some(*seconds),
+                resets_at: lane
+                    .get("resetAt")
+                    .and_then(Value::as_str)
+                    .and_then(rfc3339_unix),
+            })
+        })
+        .collect();
+    if windows.is_empty() {
+        return Err(UsageParseError::NoWindows);
+    }
+    Ok(windows)
+}
+
+/// Unix seconds for an RFC 3339 timestamp such as `2026-11-12T10:00:00.123Z` or `...+02:00`.
+#[must_use]
+pub fn rfc3339_unix(text: &str) -> Option<i64> {
+    let b = text.as_bytes();
+    let num = |range: std::ops::Range<usize>| text.get(range)?.parse::<i64>().ok();
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hour, minute, second) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let mut rest = &text[19..];
+    if let Some(frac) = rest.strip_prefix('.') {
+        rest = frac.trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    let offset = match rest {
+        "Z" | "z" => 0,
+        _ => {
+            let sign = match rest.as_bytes().first()? {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let (oh, om) = (
+                rest.get(1..3)?.parse::<i64>().ok()?,
+                rest.get(4..6)?.parse::<i64>().ok()?,
+            );
+            sign * (oh * 3600 + om * 60)
+        }
+    };
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hour * 3600 + minute * 60 + second - offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CLAUDE_FIXTURE: &str = r#"{"five_hour":{"utilization":37.5,"resets_at":"2026-11-12T10:00:00.000000+00:00"},
+        "seven_day":{"utilization":104,"resets_at":"2026-11-15T00:00:00Z"},"extra_usage":null}"#;
+
+    #[test]
+    fn claude_usage_maps_five_hour_and_seven_day() {
+        let w = parse_claude_usage(CLAUDE_FIXTURE).unwrap();
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0].used_percent, 37.5);
+        assert_eq!(w[0].lane_name(), "session");
+        assert_eq!(w[0].resets_at, rfc3339_unix("2026-11-12T10:00:00Z"));
+        assert_eq!(w[1].used_percent, 100.0);
+        assert_eq!(w[1].lane_name(), "weekly");
+        assert_eq!(
+            parse_claude_usage(r#"{"extra_usage":null}"#),
+            Err(UsageParseError::NoWindows)
+        );
+    }
+
+    #[test]
+    fn claude_credentials_yield_only_a_nonempty_token() {
+        let body = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat-fixture","expiresAt":1}}"#;
+        assert_eq!(
+            parse_claude_credentials(body).as_deref(),
+            Some("sk-ant-oat-fixture")
+        );
+        assert_eq!(
+            parse_claude_credentials(r#"{"claudeAiOauth":{"accessToken":""}}"#),
+            None
+        );
+        assert_eq!(parse_claude_credentials("{bad"), None);
+    }
+
+    #[test]
+    fn commandcode_usage_uses_used_over_cap() {
+        let body = r#"{"success":true,"data":{"windowLimits":{
+            "fiveHour":{"used":30,"cap":120,"resetAt":"2026-11-12T10:00:00Z"},
+            "weekly":{"used":5,"cap":0,"resetAt":"2026-11-15T00:00:00Z"}}}}"#;
+        let w = parse_commandcode_usage(body).unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].used_percent, 25.0);
+        assert_eq!(w[0].lane_name(), "session");
+        assert_eq!(
+            parse_commandcode_usage(r#"{"credits":{}}"#),
+            Err(UsageParseError::NoWindows)
+        );
+    }
+
+    #[test]
+    fn rfc3339_handles_offsets_and_fractions() {
+        assert_eq!(rfc3339_unix("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(rfc3339_unix("1970-01-01T01:00:00+01:00"), Some(0));
+        assert_eq!(rfc3339_unix("2000-03-01T00:00:00.5Z"), Some(951_868_800));
+        assert_eq!(rfc3339_unix("2026-13"), None);
+    }
 
     const FIXTURE: &str = r#"{"plan_type":"plus","rate_limit":{
         "primary_window":{"used_percent":42,"reset_at":1000000,"limit_window_seconds":18000},
