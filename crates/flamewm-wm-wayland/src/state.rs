@@ -419,6 +419,8 @@ pub struct State {
         crate::output_layout::SurfaceOutputs<smithay::reexports::wayland_server::backend::ObjectId>,
     /// Scale of every DRM output by name, kept in step with `layout_outputs`; empty means primary only.
     pub output_scales: Vec<(String, f64)>,
+    /// Debug-only extra outputs for the nested backend (`debug_outputs`); empty unless env-enabled.
+    pub(crate) debug_outputs: crate::debug_outputs::VirtualOutputs,
     /// What clients asked the pointer to show (`wl_pointer.set_cursor`, `XWayland` included).
     pub client_cursor_status: CursorImageStatus,
     /// Resize cursor of the compositor handle under the pointer; it overrides the client's request.
@@ -599,6 +601,7 @@ impl State {
             output_handles: Vec::new(),
             surface_outputs: Default::default(),
             output_scales: Vec::new(),
+            debug_outputs: Default::default(),
             client_cursor_status: CursorImageStatus::default_named(),
             decor_cursor: None,
             cursor_status: CursorImageStatus::default_named(),

@@ -68,6 +68,7 @@ mod colour_filter;
 mod colour_pass;
 mod control;
 mod cursor;
+mod debug_outputs;
 mod dmabuf;
 #[cfg(feature = "drm")]
 #[allow(unsafe_code)]
@@ -648,6 +649,8 @@ fn run() -> Result<i32, Box<dyn Error>> {
         }
     };
     fill_backend_stages();
+    // Debug-only virtual outputs (env-gated); needs the primary size the backend just set.
+    debug_outputs::install_from_env(&mut state);
 
     // The socket exists before XWayland connects back to this compositor.
     let listening = match ListeningSocketSource::with_name(&socket_name) {

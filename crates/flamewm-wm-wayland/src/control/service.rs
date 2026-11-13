@@ -260,6 +260,7 @@ impl Service {
         self.finish_switcher_if_released(state);
         // Runs on every loop dispatch, input included: the bus wake alone never fires for a settings
         // file write, and an idle compositor has no timer.
+        crate::debug_outputs::poll_removal(state);
         self.sync_output_scale(state);
         self.sync_write_watch(state);
     }

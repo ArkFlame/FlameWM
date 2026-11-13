@@ -257,9 +257,14 @@ impl XdgShellHandler for State {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let id = self.alloc_id();
         let workspace = self.model.current_workspace();
-        let rect = self.model.cascade_rect(workspace);
+        let mut rect = self.model.cascade_rect(workspace);
+        let mut name = self.output_name_under_pointer();
+        // Debug seam: with virtual outputs configured, new windows open on the newest one.
+        if let Some((virtual_name, origin)) = self.debug_outputs.newest() {
+            rect = crate::model::Rect::new(origin.x + rect.x, origin.y + rect.y, rect.w, rect.h);
+            name = virtual_name;
+        }
         self.model.add(id, rect, workspace);
-        let name = self.output_name_under_pointer();
         self.set_surface_output(surface.wl_surface(), name);
         self.toplevels.push((id, surface));
         self.foreign_toplevel_open(id, ToplevelFacts::default());
