@@ -9,6 +9,15 @@ pub(crate) fn open_rename(
         state.menu = None;
         return sync_menu(document, state);
     };
+    open_rename_item(document, state, id)
+}
+
+/// Opens the inline rename editor on one item. Shared by the context menu and the F2 key.
+pub(crate) fn open_rename_item(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    id: String,
+) -> Result<(), String> {
     let source = state.model.items().find(|item| item.id == id).map(|item| {
         (
             item.id.clone(),
@@ -29,6 +38,32 @@ pub(crate) fn open_rename(
         buffer,
     });
     sync_rename_editor(document, state)
+}
+
+/// The one item F2 renames: exactly one renamable candidate among the selected items. The trash
+/// pseudo-item is never renamable, so it never blocks a single real selection. `None` otherwise.
+/// Precedent: xfdesktop and Plasma desktop (F2 on the sole selected icon), KDE Dolphin (F2 renames
+/// the current item only when one item is selected).
+pub(crate) fn sole_renamable(
+    candidates: impl IntoIterator<Item = (String, bool)>,
+) -> Option<String> {
+    let mut renamable = candidates
+        .into_iter()
+        .filter(|(_, renamable)| *renamable)
+        .map(|(id, _)| id);
+    let first = renamable.next()?;
+    renamable.next().is_none().then_some(first)
+}
+
+/// F2 target from the desktop selection model.
+pub(crate) fn rename_target_for_f2(state: &DesktopState) -> Option<String> {
+    sole_renamable(
+        state
+            .model
+            .items()
+            .filter(|item| state.selection.selected().contains(&item.id))
+            .map(|item| (item.id.clone(), item.kind != DesktopItemKind::TrashPseudo)),
+    )
 }
 
 pub(crate) fn sync_rename_editor(

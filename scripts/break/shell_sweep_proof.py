@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from PIL import Image
+from PIL import Image, ImageChops
 from Xlib import X, XK
 from Xlib import display as xdisplay
 from Xlib.ext import xtest
@@ -285,30 +285,32 @@ def run(bin_dir, out):
         check("Up from the first task row wraps to Pin (focus does not move to the task)",
               active_name() == active_before, f"active={active_name()!r} before={active_before!r}")
 
-        # Taskbar background menu has keyboard rows: Down, Down, Return fires Task Manager (row 2) and
-        # closes the menu; Down, Escape closes it without firing. Closure is a pixel check on the bar.
-        reset()
+        # Taskbar background menu has keyboard rows: Down moves to Task Manager (row 2) and Return fires it,
+        # closing the menu. Down then Escape closes without firing. Each case takes its own baseline in the
+        # same window state (reset, park, closed shot), so only the menu's presence changes the pixels.
+        def bar_baseline():
+            reset()
+            park()
+            return shot("taskbar-bg-closed.png")
+
+        base = bar_baseline()
         before = names()
-        park()
-        bar_closed = shot("taskbar-bg-closed.png")
         rclick(640, 777)
         park()
         bar_open = shot("taskbar-bg-open.png")
-        check("right-click on the taskbar background opens its menu", diff_count(bar_closed, bar_open) > 300,
-              f"changed={diff_count(bar_closed, bar_open)}")
-        tap("Down")
+        check("right-click on the taskbar background opens its menu", diff_count(base, bar_open) > 300,
+              f"changed={diff_count(base, bar_open)}")
         tap("Down")
         tap("Return")
         time.sleep(1.2)
         park()
         bar_after = shot("taskbar-bg-after-return.png")
-        check("Down, Down, Return on the taskbar menu fires one row and closes it",
-              diff_count(bar_closed, bar_after) < 300 and names() == before,
-              f"changed={diff_count(bar_closed, bar_after)} names_same={names() == before}")
+        check("Down, Return on the taskbar menu fires one row and closes it",
+              diff_count(base, bar_after) < 300 and names() == before,
+              f"changed={diff_count(base, bar_after)} names_same={names() == before}")
 
-        reset()
+        base = bar_baseline()
         before = names()
-        park()
         rclick(640, 777)
         park()
         tap("Down")
@@ -317,8 +319,8 @@ def run(bin_dir, out):
         park()
         bar_escaped = shot("taskbar-bg-escaped.png")
         check("Escape closes the taskbar menu without firing a row",
-              diff_count(bar_closed, bar_escaped) < 300 and names() == before,
-              f"changed={diff_count(bar_closed, bar_escaped)}")
+              diff_count(base, bar_escaped) < 300 and names() == before,
+              f"changed={diff_count(base, bar_escaped)}")
 
         d.flush()
         return all(verdicts)
@@ -405,8 +407,134 @@ def run_lock(bin_dir, out):
         xvfb.wait(timeout=10)
 
 
+def run_desktop(bin_dir, out):
+    """flamewm-desktop F2 rename on a private Xvfb with no fake windows. The icon's place is found by a
+    screenshot diff around creating Desktop/Note.txt. F2 opens the editor on the sole selected icon,
+    Escape cancels (file untouched), and a second F2 + edit + Return commits (file renamed on disk)."""
+    verdicts = []
+
+    def check(label, ok, detail):
+        verdicts.append(bool(ok))
+        print("PASS" if ok else "FAIL", label, detail, flush=True)
+
+    display_name = free_display()
+    os.makedirs(out, exist_ok=True)
+    home = os.path.join(out, "home-desktop")
+    desk = os.path.join(home, "Desktop")
+    os.makedirs(os.path.join(home, ".config"), exist_ok=True)
+    os.makedirs(desk, exist_ok=True)
+    bindir = os.path.join(out, "bin-desktop")
+    os.makedirs(bindir, exist_ok=True)
+    for name in ("flamewm", "flamewm-session", "flamewm-shell", "flamewm-desktop"):
+        shutil.copy(os.path.join(bin_dir, name), bindir)
+    xvfb = subprocess.Popen(["Xvfb", display_name, "-screen", "0", "1280x800x24", "-nolisten", "tcp", "-noreset"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    session = None
+    try:
+        for _ in range(50):
+            if os.path.exists(f"/tmp/.X11-unix/X{display_name[1:]}"):
+                break
+            time.sleep(0.2)
+        env = dict(os.environ, DISPLAY=display_name, HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config"),
+                   XDG_DATA_HOME=os.path.join(home, ".local/share"), XDG_RUNTIME_DIR=out, TMPDIR=out,
+                   XDG_CURRENT_DESKTOP="FlameWM", PATH=f"{bindir}:/usr/bin:/bin", LANG="C.UTF-8")
+        env.pop("WAYLAND_DISPLAY", None)
+        session = subprocess.Popen(["dbus-run-session", "--", os.path.join(bindir, "flamewm-session")],
+                                   env=env, start_new_session=True,
+                                   stdout=open(os.path.join(out, "session-desktop.out"), "w"), stderr=subprocess.STDOUT)
+        d = xdisplay.Display(display_name)
+        root = d.screen().root
+        time.sleep(8)
+
+        def shot(name):
+            dest = os.path.join(out, name)
+            subprocess.run(["import", "-window", "root", dest], check=True, env=dict(os.environ, DISPLAY=display_name))
+            return Image.open(dest).convert("RGB")
+
+        def diff_box(a, b):
+            return ImageChops.difference(a, b).getbbox()
+
+        def diff_count(a, b):
+            return sum(1 for x in range(0, 1280, 2) for y in range(0, 800, 2) if a.getpixel((x, y)) != b.getpixel((x, y)))
+
+        def tap(name):
+            code = d.keysym_to_keycode(XK.string_to_keysym(name))
+            xtest.fake_input(d, X.KeyPress, code)
+            d.sync()
+            time.sleep(0.15)
+            xtest.fake_input(d, X.KeyRelease, code)
+            d.sync()
+            time.sleep(0.5)
+
+        def click(x, y):
+            root.warp_pointer(x, y)
+            d.sync()
+            time.sleep(0.3)
+            xtest.fake_input(d, X.ButtonPress, 1)
+            xtest.fake_input(d, X.ButtonRelease, 1)
+            d.sync()
+            time.sleep(0.8)
+
+        def files():
+            return sorted(os.listdir(desk))
+
+        empty = shot("desktop-empty.png")
+        note = os.path.join(desk, "Note.txt")
+        with open(note, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        time.sleep(3)
+        with_note = shot("desktop-with-note.png")
+        # Icons fill from the top-left; the clock and wallpaper changes sit outside this crop.
+        region = (0, 0, 320, 240)
+        box = diff_box(empty.crop(region), with_note.crop(region))
+        check("Note.txt icon appears on the desktop", box is not None, f"box={box}")
+        if box is None:
+            return False
+        cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+        click(cx, cy)
+        selected = shot("desktop-selected.png")
+        tap("F2")
+        renaming = shot("desktop-f2.png")
+        check("F2 opens the rename editor on the sole selected icon", diff_count(selected, renaming) > 200,
+              f"changed={diff_count(selected, renaming)}")
+        tap("Escape")
+        cancelled = shot("desktop-escape.png")
+        check("Escape cancels the rename: file keeps its name and the editor closes",
+              files() == ["Note.txt"] and diff_count(selected, cancelled) < 200,
+              f"files={files()} changed={diff_count(selected, cancelled)}")
+
+        click(cx, cy)
+        tap("F2")
+        for _ in range(16):
+            tap("BackSpace")
+        tap("r")
+        tap("e")
+        tap("n")
+        tap("a")
+        tap("m")
+        tap("e")
+        tap("d")
+        tap("Return")
+        time.sleep(1.5)
+        check("F2, edit and Return commit the rename on disk",
+              files() == ["renamed"], f"files={files()}")
+        d.flush()
+        return all(verdicts)
+    finally:
+        if session is not None and session.poll() is None:
+            try:
+                os.killpg(session.pid, 15)
+            except ProcessLookupError:
+                pass
+            session.wait(timeout=10)
+        xvfb.terminate()
+        xvfb.wait(timeout=10)
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    sys.exit(0 if run(sys.argv[1], sys.argv[2]) and run_lock(sys.argv[1], sys.argv[2]) else 1)
+    # Every scenario runs even when an earlier one fails, so one run reports all verdicts.
+    results = [run(sys.argv[1], sys.argv[2]), run_lock(sys.argv[1], sys.argv[2]), run_desktop(sys.argv[1], sys.argv[2])]
+    sys.exit(0 if all(results) else 1)

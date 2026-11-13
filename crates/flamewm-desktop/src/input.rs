@@ -20,6 +20,20 @@ pub(crate) fn handle_desktop_key(
         paste_clipboard_files(state.directory.clone());
         return Ok(());
     }
+    // F2 starts inline rename of the sole selected item; Enter commits and Escape cancels through
+    // the rename editor's existing paths.
+    if key.phase == UiKeyPhase::Press
+        && key.key == "F2"
+        && key.modifiers.is_empty()
+        && state.rename.is_none()
+        && !sticky::is_editing(state)
+        && !state.widgets.is_editing()
+    {
+        return match rename_target_for_f2(state) {
+            Some(id) => open_rename_item(document, state, id),
+            None => Ok(()),
+        };
+    }
     if key.phase != UiKeyPhase::Press
         || key.key != "Delete"
         || !key.modifiers.is_empty()
