@@ -54,6 +54,11 @@ pub const ACTION_TILE_LEFT: &str = "TileLeft";
 pub const ACTION_TILE_RIGHT: &str = "TileRight";
 pub const ACTION_TILE_UP: &str = "TileUp";
 pub const ACTION_TILE_DOWN: &str = "TileDown";
+/// Edge-tile resize: moves the edge shared with the neighbouring snapped tile, `Super+Ctrl+Alt+arrow`.
+pub const ACTION_TILE_RESIZE_LEFT: &str = "TileResizeLeft";
+pub const ACTION_TILE_RESIZE_RIGHT: &str = "TileResizeRight";
+pub const ACTION_TILE_RESIZE_UP: &str = "TileResizeUp";
+pub const ACTION_TILE_RESIZE_DOWN: &str = "TileResizeDown";
 /// Keyboard move (`Alt+F7`) and resize (`Alt+F8`) grabs, xfwm4-style: arrows, Return commits, Escape cancels.
 pub const ACTION_KEYBOARD_MOVE: &str = "KeyboardMove";
 pub const ACTION_KEYBOARD_RESIZE: &str = "KeyboardResize";

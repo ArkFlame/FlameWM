@@ -79,13 +79,21 @@ pub(super) fn snapped_client(
     titlebars: bool,
     margin: i32,
 ) -> Rect {
-    let work = api_rect(work);
-    let tile = snap_geometry(
+    let tile = snapped_frame(target, work, floating_restore);
+    client_from_frame(apply_window_margin(tile, api_rect(work), margin), titlebars)
+}
+
+/// Un-margined tile frame of a snapped placement; the margin is applied on top of it.
+pub(super) fn snapped_frame(
+    target: SnapTarget,
+    work: Rect,
+    floating_restore: Rect,
+) -> flamewm_api::Rect {
+    snap_geometry(
         target,
-        work,
+        api_rect(work),
         flamewm_api::Size::new(floating_restore.w, floating_restore.h),
-    );
-    client_from_frame(apply_window_margin(tile, work, margin), titlebars)
+    )
 }
 
 pub(super) fn layout_rect(

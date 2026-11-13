@@ -3,7 +3,8 @@
 //! `Tile*` actions carry the Super+arrow bindings, as on the X11 engine.
 
 use flamewm_api::shortcuts::{
-    ACTION_TILE_DOWN, ACTION_TILE_LEFT, ACTION_TILE_RIGHT, ACTION_TILE_UP,
+    ACTION_TILE_DOWN, ACTION_TILE_LEFT, ACTION_TILE_RESIZE_DOWN, ACTION_TILE_RESIZE_LEFT,
+    ACTION_TILE_RESIZE_RIGHT, ACTION_TILE_RESIZE_UP, ACTION_TILE_RIGHT, ACTION_TILE_UP,
 };
 use flamewm_window_core::SnapTarget;
 use flamewm_window_core::keyboard_tile::{Direction, next_tile};
@@ -76,6 +77,37 @@ impl State {
     }
 }
 
+/// Shared-edge move per Super+Ctrl+Alt+arrow press, in frame pixels.
+const RESIZE_STEP: i32 = 24;
+
+/// Edge-tile resize direction for a shortcut action, or `None` for any other action.
+pub(super) fn resize_action(action: &str) -> Option<Direction> {
+    match action {
+        ACTION_TILE_RESIZE_LEFT => Some(Direction::Left),
+        ACTION_TILE_RESIZE_RIGHT => Some(Direction::Right),
+        ACTION_TILE_RESIZE_UP => Some(Direction::Up),
+        ACTION_TILE_RESIZE_DOWN => Some(Direction::Down),
+        _ => None,
+    }
+}
+
+impl State {
+    /// Moves the shared edge of the focused snapped tile. No snapped neighbour is a no-op.
+    pub(super) fn keyboard_tile_resize(&mut self, direction: Direction) {
+        let Some(id) = self.focused else {
+            return;
+        };
+        let work = self.work_area_of(id);
+        if let Some(partner) = self
+            .model
+            .resize_snapped_edge(id, direction, RESIZE_STEP, work)
+        {
+            self.apply_geometry(id);
+            self.apply_geometry(partner);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +125,14 @@ mod tests {
         assert_eq!(tile_action(ACTION_FOCUS_UP), None);
         assert_eq!(tile_action("MoveWindowLeft"), None);
         assert_eq!(tile_action("WorkspaceLeft"), None);
+    }
+
+    #[test]
+    fn only_resize_actions_map_to_edge_resize_directions() {
+        assert_eq!(resize_action(ACTION_TILE_RESIZE_LEFT), Some(D::Left));
+        assert_eq!(resize_action(ACTION_TILE_RESIZE_DOWN), Some(D::Down));
+        assert_eq!(resize_action(ACTION_TILE_LEFT), None);
+        assert_eq!(resize_action(ACTION_FOCUS_LEFT), None);
     }
 
     #[test]

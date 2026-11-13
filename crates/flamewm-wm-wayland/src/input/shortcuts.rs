@@ -55,6 +55,11 @@ impl State {
             self.keyboard_tile(direction);
             return;
         }
+        // Super+Ctrl+Alt+arrows move the shared edge of the snapped tile.
+        if let Some(direction) = keyboard_tile::resize_action(action) {
+            self.keyboard_tile_resize(direction);
+            return;
+        }
         // Super+Alt+arrows: focus the nearest visible window on that side, raised as X11 does.
         if let Some(direction) = focus_direction(action) {
             if let Some(target) = self

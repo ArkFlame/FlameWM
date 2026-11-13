@@ -51,7 +51,7 @@ pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 pub const ACTION_BRIGHTNESS_UP: &str = "BrightnessUp";
 pub const ACTION_BRIGHTNESS_DOWN: &str = "BrightnessDown";
 
-pub const ACTIONS: [&str; 73] = [
+pub const ACTIONS: [&str; 77] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_WORKSPACE_LEFT,
@@ -80,6 +80,10 @@ pub const ACTIONS: [&str; 73] = [
     ACTION_TILE_RIGHT,
     ACTION_TILE_UP,
     ACTION_TILE_DOWN,
+    flamewm_api::shortcuts::ACTION_TILE_RESIZE_LEFT,
+    flamewm_api::shortcuts::ACTION_TILE_RESIZE_RIGHT,
+    flamewm_api::shortcuts::ACTION_TILE_RESIZE_UP,
+    flamewm_api::shortcuts::ACTION_TILE_RESIZE_DOWN,
     ACTION_KEYBOARD_MOVE,
     ACTION_KEYBOARD_RESIZE,
     ACTION_FOCUS_LEFT,
@@ -250,6 +254,22 @@ impl Default for ShortcutRegistry {
             (
                 ACTION_TILE_DOWN.to_owned(),
                 KeyBinding::assigned("Super+Down"),
+            ),
+            (
+                flamewm_api::shortcuts::ACTION_TILE_RESIZE_LEFT.to_owned(),
+                KeyBinding::assigned("Super+Ctrl+Alt+Left"),
+            ),
+            (
+                flamewm_api::shortcuts::ACTION_TILE_RESIZE_RIGHT.to_owned(),
+                KeyBinding::assigned("Super+Ctrl+Alt+Right"),
+            ),
+            (
+                flamewm_api::shortcuts::ACTION_TILE_RESIZE_UP.to_owned(),
+                KeyBinding::assigned("Super+Ctrl+Alt+Up"),
+            ),
+            (
+                flamewm_api::shortcuts::ACTION_TILE_RESIZE_DOWN.to_owned(),
+                KeyBinding::assigned("Super+Ctrl+Alt+Down"),
             ),
             (
                 ACTION_FOCUS_LEFT.to_owned(),
@@ -642,7 +662,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 73);
+        assert_eq!(ACTIONS.len(), 77);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         assert_eq!(
             ShortcutRegistry::default().binding(ACTION_WINDOW_SWITCH_PREV),

@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::workspace::{GridDirection, MAX_WORKSPACES, grid_neighbor};
+use flamewm_window_core::edge_resize::{Axis, move_shared_edge};
+use flamewm_window_core::keyboard_tile::Direction;
 use flamewm_window_core::{SnapTarget, apply_window_margin, snap_geometry};
 
 mod geometry;
@@ -132,6 +134,8 @@ pub struct Managed {
     pub mode: Mode,
     /// `titlebars` as last applied by [`WindowModel::configure`]; false removes the band.
     pub titlebars: bool,
+    /// Un-margined tile frame of a snapped window; edge-tile resize moves this, then re-applies margin.
+    pub snap_frame: flamewm_api::Rect,
     /// Floating client rectangle retained across snapped/maximized/fullscreen placements.
     pub restore: Rect,
     /// Placement under maximize; keeping mode and rect separate preserves snapped resume state.
@@ -378,6 +382,7 @@ impl WindowModel {
             minimized: false,
             mode: Mode::Normal,
             titlebars: self.titlebars,
+            snap_frame: flamewm_api::Rect::new(rect.x, rect.y, rect.w, rect.h),
             restore: rect,
             maximize_restore_mode: Mode::Normal,
             maximize_restore_rect: rect,
@@ -690,7 +695,70 @@ impl WindowModel {
         };
         window.restore = restore;
         window.mode = Mode::Snapped(target);
+        window.snap_frame = snapped_frame(target, work, restore);
         window.rect = snapped_client(target, work, restore, titlebars, margin);
+    }
+
+    /// Moves the edge the focused snapped tile shares with its neighbour one `step` toward
+    /// `direction`, by the same amount on both sides. Both tiles stay `Mode::Snapped`; the next
+    /// Super+arrow tile step re-snaps to the canonical half or quarter. Returns the partner's id,
+    /// or `None` when no snapped neighbour shares that seam or the move would collapse a tile.
+    pub fn resize_snapped_edge(
+        &mut self,
+        id: WindowId,
+        direction: Direction,
+        step: i32,
+        work: Rect,
+    ) -> Option<WindowId> {
+        const MIN_TILE_EXTENT: i32 = 120;
+        let (titlebars, margin) = (self.titlebars, self.window_margin);
+        let focused = self.get(id)?;
+        if !matches!(focused.mode, Mode::Snapped(_)) {
+            return None;
+        }
+        let (frame, workspace) = (focused.snap_frame, focused.workspace);
+        let vertical = matches!(direction, Direction::Left | Direction::Right);
+        let forward = matches!(direction, Direction::Right | Direction::Down);
+        let axis = if vertical {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        };
+        let shared = match (vertical, forward) {
+            (true, true) => frame.x + frame.width,
+            (true, false) => frame.x,
+            (false, true) => frame.y + frame.height,
+            (false, false) => frame.y,
+        };
+        let edge = shared + if forward { step } else { -step };
+        let work = api_rect(work);
+        let partners: Vec<(WindowId, flamewm_api::Rect)> = self
+            .windows
+            .iter()
+            .filter(|w| {
+                w.id != id && w.workspace == workspace && matches!(w.mode, Mode::Snapped(_))
+            })
+            .map(|w| (w.id, w.snap_frame))
+            .collect();
+        for (other, partner) in partners {
+            let (first, second, ids) = if forward {
+                (frame, partner, (id, other))
+            } else {
+                (partner, frame, (other, id))
+            };
+            let Some((a, b)) = move_shared_edge(first, second, axis, edge, MIN_TILE_EXTENT) else {
+                continue;
+            };
+            for (wid, tile) in [(ids.0, a), (ids.1, b)] {
+                if let Some(window) = self.get_mut(wid) {
+                    window.snap_frame = tile;
+                    window.rect =
+                        client_from_frame(apply_window_margin(tile, work, margin), titlebars);
+                }
+            }
+            return Some(other);
+        }
+        None
     }
 
     /// Commits the top-center snap target as maximize, preserving its floating restore.

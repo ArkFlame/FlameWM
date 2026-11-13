@@ -753,6 +753,46 @@ fn fullscreen_has_no_frame_and_restores() {
 }
 
 #[test]
+fn edge_resize_moves_the_shared_seam_and_refuses_a_collapsed_tile() {
+    use flamewm_window_core::keyboard_tile::Direction;
+    let floating = Rect::new(120, 130, 640, 420);
+    let mut model = WindowModel::new(2);
+    model.configure(false, 0);
+    model.add(1, floating, 0);
+    model.add(2, floating, 0);
+    model.snap_to(1, SnapTarget::LeftHalf, WORK, floating);
+    model.snap_to(2, SnapTarget::RightHalf, WORK, floating);
+    assert_eq!(
+        model.resize_snapped_edge(1, Direction::Right, 100, WORK),
+        Some(2)
+    );
+    assert_eq!(model.get(1).unwrap().frame(), Rect::new(0, 0, 600, 700));
+    assert_eq!(model.get(2).unwrap().frame(), Rect::new(600, 0, 400, 700));
+    assert_eq!(
+        model.get(1).unwrap().mode,
+        Mode::Snapped(SnapTarget::LeftHalf)
+    );
+    // The right tile moving its left edge left hands the same seam back.
+    assert_eq!(
+        model.resize_snapped_edge(2, Direction::Left, 100, WORK),
+        Some(1)
+    );
+    assert_eq!(model.get(1).unwrap().frame(), Rect::new(0, 0, 500, 700));
+    // Pushing the seam past the 120 px minimum on the right tile is refused.
+    assert_eq!(
+        model.resize_snapped_edge(1, Direction::Right, 400, WORK),
+        None
+    );
+    assert_eq!(model.get(1).unwrap().frame(), Rect::new(0, 0, 500, 700));
+    // A floating window has no snapped seam to move.
+    model.add(3, floating, 0);
+    assert_eq!(
+        model.resize_snapped_edge(3, Direction::Right, 100, WORK),
+        None
+    );
+}
+
+#[test]
 fn snapped_modes_commit_every_shared_edge_and_corner_target() {
     let placements = [
         (SnapTarget::LeftHalf, Rect::new(0, 0, 500, 700)),
