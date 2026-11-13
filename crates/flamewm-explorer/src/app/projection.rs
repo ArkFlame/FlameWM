@@ -371,18 +371,9 @@ impl ExplorerApp {
         }
     }
 
-    pub(crate) fn project_dialog(&self, doc:&mut impl UiDocumentAccess)->Result<(),String> {
-        let Some(dialog)=self.dialog.as_ref() else {
-            doc.visible("dialog",false)?;
-            return Ok(());
-        };
-        doc.visible("dialog",true)?;
-        doc.background("dialog",self.theme.menu())?;
-        // Keep the modal inside small windows: its CSS width (460px) and fixed top are clamped to the window.
-        let dialog_w=460f32.min(self.window.0-16.0).max(1.0);
-        doc.size("dialog",dialog_w,200.0)?;
-        doc.position("dialog",((self.window.0-dialog_w)/2.0).max(0.0),150f32.min((self.window.1-200.0).max(8.0)))?;
-        let (title,lines,buttons):(String,Vec<String>,[Option<&str>;4])=match dialog {
+    /// Title, body lines and the four button slots (`None` hides a slot) for an open dialog.
+    pub(crate) fn dialog_model(dialog:&Dialog)->(String,Vec<String>,[Option<&'static str>;4]) {
+        match dialog {
             Dialog::Properties{props,size,..}=>(
                 props.path.file_name().unwrap_or(props.path.as_os_str()).to_string_lossy().into_owned(),
                 vec![
@@ -431,7 +422,21 @@ impl ExplorerApp {
                 ],
                 [Some("Retry"),None,None,Some("Close")],
             ),
+        }
+    }
+
+    pub(crate) fn project_dialog(&self, doc:&mut impl UiDocumentAccess)->Result<(),String> {
+        let Some(dialog)=self.dialog.as_ref() else {
+            doc.visible("dialog",false)?;
+            return Ok(());
         };
+        doc.visible("dialog",true)?;
+        doc.background("dialog",self.theme.menu())?;
+        // Keep the modal inside small windows: its CSS width (460px) and fixed top are clamped to the window.
+        let dialog_w=460f32.min(self.window.0-16.0).max(1.0);
+        doc.size("dialog",dialog_w,200.0)?;
+        doc.position("dialog",((self.window.0-dialog_w)/2.0).max(0.0),150f32.min((self.window.1-200.0).max(8.0)))?;
+        let (title,lines,buttons)=Self::dialog_model(dialog);
         doc.text("dialog-title",title)?;
         for (i,line) in (0..4).zip(lines.into_iter().chain(std::iter::repeat(String::new()))) {
             doc.text(&format!("dialog-line-{i}"),line)?;
@@ -441,6 +446,9 @@ impl ExplorerApp {
             doc.visible(&id,label.is_some())?;
             if let Some(label)=label {doc.text(&id,(*label).to_owned())?;}
         }
+        // The focused button carries the ring; Enter activates it (WAI-ARIA APG alertdialog).
+        let focused=super::input::dialog_focus_slot(&buttons,self.dialog_focus).map(|i|format!("dialog-b{}",i+1));
+        doc.set_focus_node(focused.as_deref())?;
         Ok(())
     }
 

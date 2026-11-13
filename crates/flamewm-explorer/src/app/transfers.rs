@@ -250,6 +250,8 @@ impl ExplorerApp {
 
     /// Button slots: primary, secondary, tertiary, cancel. Each dialog kind decides what they mean.
     pub(crate) fn dialog_action(&mut self,slot:&str) {
+        // Focus starts on the primary button for the next dialog, whatever this one ended on.
+        self.dialog_focus=0;
         // Permissions are edited in the address field; Enter applies, Escape cancels that edit only.
         if let (Some(Dialog::Properties{props,..}),"primary")=(self.dialog.as_ref(),slot) {
             self.field.set(format!("{:o}",props.mode&0o7777));

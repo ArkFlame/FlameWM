@@ -1,5 +1,13 @@
 use super::super::*;
 
+/// Button slots in dialog order; a dialog action name is the slot's `explorer.dialog.<slot>` suffix.
+pub(crate) const DIALOG_SLOTS:[&str;4]=["primary","secondary","tertiary","cancel"];
+
+/// The focused slot when it is visible, else the first visible slot (`None` when no button shows).
+pub(crate) fn dialog_focus_slot(slots:&[Option<&str>;4],wanted:usize)->Option<usize>{
+    if slots.get(wanted).is_some_and(Option::is_some) {Some(wanted)} else {slots.iter().position(Option::is_some)}
+}
+
 impl ExplorerApp {
     /// Clamps a rubber-band point into the file list: right of the sidebar, below the header, above the status strip.
     pub(crate) fn clamp_to_list(&self,x:f32,y:f32)->(f32,f32) {
@@ -281,12 +289,15 @@ impl ExplorerApp {
             }
             return;
         }
-        // Dialogs swallow keys; Enter confirms the primary button and Escape cancels. Checked before type-ahead so a
-        // typed letter under a modal confirmation cannot move the selection behind it.
+        // Dialogs swallow keys. Tab and Shift+Tab cycle the visible buttons; Enter or Space activates the focused one
+        // (the primary button until Tab moves focus); Escape cancels. Checked before type-ahead so a typed letter
+        // under a modal confirmation cannot move the selection behind it.
         if self.dialog.is_some() {
+            let slots=self.dialog.as_ref().map_or([None;4],|dialog|Self::dialog_model(dialog).2);
             match name.as_str() {
                 "escape"=>self.dialog_action("cancel"),
-                "return"|"enter"=>self.dialog_action("primary"),
+                "tab"|"iso_left_tab"=>self.step_dialog_focus(slots,shift||name=="iso_left_tab"),
+                "return"|"enter"|"space"|" "=>if let Some(index)=dialog_focus_slot(&slots,self.dialog_focus) {self.dialog_action(DIALOG_SLOTS[index]);},
                 _=>{},
             }
             return;
@@ -328,6 +339,16 @@ impl ExplorerApp {
             "keysym(0xff57)"=>{let count=self.model.tab().filtered_count();if count>0{self.select_index(count-1,shift);}},
             _=>{}
         }
+    }
+
+    /// Moves dialog focus to the next (or previous) visible button, wrapping at the ends.
+    pub(crate) fn step_dialog_focus(&mut self,slots:[Option<&'static str>;4],reverse:bool){
+        let visible:Vec<usize>=(0..DIALOG_SLOTS.len()).filter(|&i|slots[i].is_some()).collect();
+        let Some(&first)=visible.first() else {return};
+        let current=dialog_focus_slot(&slots,self.dialog_focus).unwrap_or(first);
+        let position=visible.iter().position(|&i|i==current).unwrap_or(0);
+        let next=if reverse {(position+visible.len()-1)%visible.len()} else {(position+1)%visible.len()};
+        self.dialog_focus=visible[next];
     }
 
     pub(crate) fn step_selection(&mut self,delta:isize,extend:bool){

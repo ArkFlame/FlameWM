@@ -174,6 +174,11 @@ pub trait UiDocumentAccess {
     fn focused_action(&self) -> Option<&str> {
         None
     }
+    /// Gives the node `id` the keyboard focus ring (`None` clears it). Windows that route Tab themselves
+    /// (no keyboard-focus owner) use this to paint the focused control's `:focus-visible` style.
+    fn set_focus_node(&mut self, _id: Option<&str>) -> Result<(), String> {
+        Ok(())
+    }
     /// Like `text`, but borrows: unchanged text costs no allocation. The default forwards to `text`.
     fn text_ref(&mut self, id: &str, text: &str) -> Result<(), String> {
         self.text(id, text.to_owned())
@@ -606,6 +611,19 @@ impl UiDocumentAccess for UiDocumentView<'_> {
 
     fn request_close(&mut self) {
         self.document.request_close();
+    }
+
+    fn set_focus_node(&mut self, id: Option<&str>) -> Result<(), String> {
+        let node = match id {
+            Some(id) => Some(
+                self.document
+                    .node_by_id(id)
+                    .ok_or_else(|| format!("no node `{id}` to focus"))?,
+            ),
+            None => None,
+        };
+        self.document.set_focus(node);
+        Ok(())
     }
 
     fn focused_action(&self) -> Option<&str> {

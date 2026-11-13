@@ -81,3 +81,31 @@ fn permissions_field_takes_keys_while_properties_is_open_and_escape_only_ends_th
     assert!(app.edit.is_none(), "Escape ends the permissions edit");
     assert!(app.dialog.is_some(), "Escape must not close the Properties dialog it sits in");
 }
+
+#[test]
+fn tab_cycles_visible_confirm_buttons_and_enter_activates_the_focused_one() {
+    let (mut app, rx, _scan_rx, _chooser_rx) = app();
+    app.dialog = Some(Dialog::Confirm { title: "Move to trash?".into(), lines: Vec::new(), pending: Pending::Trash(Vec::new()) });
+    assert_eq!(app.dialog_focus, 0, "focus starts on the primary button");
+    // Confirm shows only OK (slot 0) and Cancel (slot 3): Tab skips the hidden slots and wraps.
+    app.key_inner(&key_press("Tab", None));
+    assert_eq!(app.dialog_focus, 3);
+    app.key_inner(&key_press("Tab", None));
+    assert_eq!(app.dialog_focus, 0);
+    app.key_inner(&key_press("Tab", None));
+    app.key_inner(&key_press("Return", None));
+    assert!(app.dialog.is_none(), "Enter on the focused Cancel closes the dialog");
+    assert!(rx.try_recv().is_err(), "Cancel must not run the pending trash");
+}
+
+#[test]
+fn shift_tab_moves_back_and_space_activates_the_focused_button() {
+    let (mut app, rx, _scan_rx, _chooser_rx) = app();
+    app.dialog = Some(Dialog::Confirm { title: "Move to trash?".into(), lines: Vec::new(), pending: Pending::Trash(Vec::new()) });
+    let shift_tab = UiKeyEvent { phase: UiKeyPhase::Press, modifiers: vec!["Shift".into()], key: "Tab".into(), text: None };
+    app.key_inner(&shift_tab);
+    assert_eq!(app.dialog_focus, 3, "Shift+Tab from the first button wraps to Cancel");
+    app.key_inner(&key_press("space", Some(" ")));
+    assert!(app.dialog.is_none());
+    assert!(rx.try_recv().is_err());
+}

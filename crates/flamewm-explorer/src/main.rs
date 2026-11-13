@@ -303,7 +303,7 @@ struct ExplorerApp {
     /// Scrollbar thumb drag: pointer y and the origin at press time.
     scroll_drag:Option<(f32,usize)>,
     column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
-    dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
+    dialog:Option<Dialog>, dialog_focus:usize, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>, device_watch:Option<DeviceWatch>,
     context_place:Option<usize>, trash_base:PathBuf,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
