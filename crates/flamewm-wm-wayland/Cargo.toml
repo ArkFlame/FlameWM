@@ -80,6 +80,8 @@ drm = [
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+# wlr-layer-shell client bindings for examples/layer_client.rs (same crate as the server side above).
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # The workspace forbids unsafe code; this crate denies it so the drm module (feature `drm`) can allow it
 # for smithay's EGL initialisation. A module-level allow cannot override `forbid`.
