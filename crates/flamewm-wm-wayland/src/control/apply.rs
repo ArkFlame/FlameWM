@@ -25,7 +25,7 @@ pub(super) fn apply_command(state: &mut State, command: Command) {
         }
         Command::Maximize(id) => {
             state.refresh_dock_struts();
-            let work = state.work_area();
+            let work = state.work_area_of(id);
             state.model.toggle_maximize(id, work);
             state.apply_geometry(id);
         }

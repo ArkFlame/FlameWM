@@ -287,6 +287,67 @@ pub(crate) fn clamp_point_to_layout(x: f64, y: f64, outputs: &[Rect]) -> (f64, f
     nearest.map_or((x, y), |(point, _)| point)
 }
 
+/// Lifts an output-local layer zone (`non_exclusive_zone` of that output's map) to layout
+/// coordinates on `output`, clipped to the output.
+pub(crate) fn zone_in_layout(output: Rect, zone: Rect) -> Rect {
+    let left = (output.x + zone.x).max(output.x);
+    let top = (output.y + zone.y).max(output.y);
+    let right = (output.x + zone.x + zone.w).min(output.x + output.w);
+    let bottom = (output.y + zone.y + zone.h).min(output.y + output.h);
+    Rect::new(left, top, (right - left).max(0), (bottom - top).max(0))
+}
+
+/// Where a window homed on a removed output lands on `work`: the same offset from the removed
+/// output's origin, clamped so it stays inside `work`. A window larger than `work` keeps its size.
+pub(crate) fn migrate_rect(rect: Rect, removed: Rect, work: Rect) -> Rect {
+    let x = work.x + (rect.x - removed.x).clamp(0, (work.w - rect.w).max(0));
+    let y = work.y + (rect.y - removed.y).clamp(0, (work.h - rect.h).max(0));
+    Rect::new(x, y, rect.w, rect.h)
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn zone_lifts_to_the_output_origin_and_stays_on_it() {
+        let output = Rect::new(1000, 0, 1280, 800);
+        // A 32 px top panel on the second output is output-local.
+        assert_eq!(
+            zone_in_layout(output, Rect::new(0, 32, 1280, 768)),
+            Rect::new(1000, 32, 1280, 768)
+        );
+        // An overhanging zone is clipped to its output.
+        assert_eq!(
+            zone_in_layout(output, Rect::new(0, 0, 2000, 800)),
+            Rect::new(1000, 0, 1280, 800)
+        );
+        assert_eq!(zone_in_layout(output, Rect::new(0, 0, 0, 0)).w, 0);
+    }
+
+    #[test]
+    fn migration_keeps_the_relative_position_inside_the_remaining_work_area() {
+        let removed = Rect::new(1000, 0, 1280, 800);
+        let work = Rect::new(0, 0, 1280, 760);
+        assert_eq!(
+            migrate_rect(Rect::new(1100, 50, 400, 300), removed, work),
+            Rect::new(100, 50, 400, 300)
+        );
+        assert_eq!(
+            migrate_rect(Rect::new(2200, 700, 400, 300), removed, work),
+            Rect::new(880, 460, 400, 300)
+        );
+        assert_eq!(
+            migrate_rect(Rect::new(900, -20, 400, 300), removed, work),
+            Rect::new(0, 0, 400, 300)
+        );
+        assert_eq!(
+            migrate_rect(Rect::new(1100, 50, 2000, 900), removed, work).x,
+            0
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

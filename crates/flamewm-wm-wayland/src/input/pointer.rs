@@ -139,7 +139,7 @@ impl State {
                     let zone =
                         (self.snap_preview_enabled && target != SnapTarget::None).then(|| {
                             self.model
-                                .snap_client_geometry(id, target, self.work_area())
+                                .snap_client_geometry(id, target, self.pointer_work_area())
                                 .map_or_else(
                                     || frame_for_client(floating, titlebars),
                                     |client| frame_for_client(client, titlebars),

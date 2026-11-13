@@ -99,7 +99,7 @@ impl State {
                     if target == SnapTarget::None {
                         self.model.commit_move(id, candidate);
                     } else {
-                        let work = self.work_area();
+                        let work = self.pointer_work_area();
                         commit_move_snap(&mut self.model, id, target, work, candidate);
                     }
                     self.apply_geometry(id);

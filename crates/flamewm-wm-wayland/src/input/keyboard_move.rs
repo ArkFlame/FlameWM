@@ -53,7 +53,7 @@ impl State {
         }
         let rect = window.rect;
         self.refresh_dock_struts();
-        let work = self.work_area();
+        let work = self.work_area_of(id);
         let grab = KeyboardGrab::begin(mode, api_rect(rect), api_rect(work), MIN_SIZE);
         self.kbd_grab = Some((id, grab));
     }

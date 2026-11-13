@@ -52,7 +52,7 @@ impl State {
             return;
         };
         self.refresh_dock_struts();
-        let work = self.work_area();
+        let work = self.work_area_of(id);
         match next_tile(current, direction) {
             // Down from a bottom tile, or from maximized, restores the floating geometry.
             None => match mode {

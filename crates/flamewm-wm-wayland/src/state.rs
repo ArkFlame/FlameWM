@@ -17,7 +17,7 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::WinitGraphicsBackend;
-use smithay::desktop::{PopupManager, layer_map_for_output};
+use smithay::desktop::{PopupKind, PopupManager, layer_map_for_output};
 use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, PhysicalProperties, Subpixel};
@@ -817,6 +817,28 @@ impl State {
         for wl in crate::output_layout::homed_on(&homes, &name) {
             out.leave(&wl);
         }
+        // Windows homed on the removed output move onto the primary work area, keeping their offset
+        // from the removed output; their popups are dismissed because the output they opened on is gone.
+        let removed = self.output_rect_on(&name);
+        let work = self.work_area();
+        let moved: Vec<_> = self
+            .toplevels
+            .iter()
+            .filter(|(_, top)| self.output_name_of(top.wl_surface()) == name)
+            .map(|(id, top)| (*id, top.wl_surface().clone()))
+            .collect();
+        for (id, wl) in &moved {
+            if let Some(rect) = self.model.get(*id).map(|w| w.rect) {
+                self.model
+                    .set_rect(*id, crate::output_layout::migrate_rect(rect, removed, work));
+            }
+            for (popup, _) in PopupManager::popups_for_surface(wl) {
+                if let PopupKind::Xdg(xdg) = popup {
+                    xdg.send_popup_done();
+                }
+            }
+            self.apply_geometry(*id);
+        }
         let layers: Vec<smithay::desktop::LayerSurface> =
             layer_map_for_output(out).layers().cloned().collect();
         let primary = self.output.clone();
@@ -902,6 +924,50 @@ impl State {
             &struts,
             self.dock_reserve,
         )
+    }
+
+    /// Output-local layout rect of `name`: its row in the placed layout, or the primary output.
+    pub fn output_rect_on(&self, name: &str) -> Rect {
+        self.layout_outputs
+            .iter()
+            .position(|n| n == name)
+            .and_then(|index| self.pointer_layout.get(index).copied())
+            .unwrap_or_else(|| self.output_rect())
+    }
+
+    /// Work area of output `name`: its own layer zone lifted to layout coordinates. Unmanaged struts
+    /// and the Dock belong to the primary output, so they apply only there.
+    pub fn work_area_on(&self, name: &str) -> Rect {
+        if name == self.output.name() {
+            return self.work_area();
+        }
+        let out = self.output_handle(name);
+        let mut map = layer_map_for_output(&out);
+        map.arrange();
+        let zone = map.non_exclusive_zone();
+        let zone = Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h);
+        crate::output_layout::zone_in_layout(self.output_rect_on(name), zone)
+    }
+
+    /// Work area of the output the window's rect sits on, the primary output when none does.
+    pub fn work_area_of(&self, id: crate::model::WindowId) -> Rect {
+        let Some(rect) = self.model.get(id).map(|w| w.rect) else {
+            return self.work_area();
+        };
+        let primary = self.output.name();
+        let name = crate::output_layout::output_name_for_rect(
+            &self.pointer_layout,
+            &self.layout_outputs,
+            rect,
+            &primary,
+        )
+        .to_owned();
+        self.work_area_on(&name)
+    }
+
+    /// Work area of the output under the pointer, where snapping and move-snap apply.
+    pub fn pointer_work_area(&self) -> Rect {
+        self.work_area_on(&self.output_name_under_pointer())
     }
 
     /// Refit output-sized placements once, and only once, for each effective work-area change.

@@ -424,7 +424,7 @@ impl State {
         let want_max = on;
         let is_max = current == Mode::Maximized;
         if want_max != is_max && current != Mode::Fullscreen {
-            let work = self.work_area();
+            let work = self.work_area_of(id);
             self.model.toggle_maximize(id, work);
             self.apply_geometry(id);
         }

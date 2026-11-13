@@ -96,8 +96,9 @@ pub(super) fn snap_target_at(
     pointer: Point<f64, Logical>,
     activated: bool,
 ) -> SnapTarget {
-    let output = state.output_rect();
-    let work = state.work_area();
+    let name = state.output_name_under_pointer();
+    let output = state.output_rect_on(&name);
+    let work = state.work_area_on(&name);
     let (edge_snap, edge_px) = state.model.edge_snap();
     if !edge_snap {
         return SnapTarget::None;
