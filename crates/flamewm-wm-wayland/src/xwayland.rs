@@ -845,6 +845,8 @@ impl XwmHandler for State {
     }
 
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        // X11 owns the selection now: any text kept from a Wayland owner is stale.
+        self.compat.clipboard.slot_mut(selection).clear();
         match selection {
             SelectionTarget::Clipboard => {
                 set_data_device_selection(&self.display, &self.seat, mime_types, ());
@@ -856,6 +858,7 @@ impl XwmHandler for State {
     }
 
     fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
+        self.compat.clipboard.slot_mut(selection).clear();
         match selection {
             SelectionTarget::Clipboard => clear_data_device_selection(&self.display, &self.seat),
             SelectionTarget::Primary => clear_primary_selection(&self.display, &self.seat),

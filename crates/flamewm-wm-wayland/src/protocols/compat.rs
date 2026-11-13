@@ -68,6 +68,8 @@ pub struct CompatState {
     pub primary_selection: PrimarySelectionState,
     pub xdg_activation: XdgActivationState,
     pub idle_inhibitors: InhibitSet<WlSurface>,
+    /// Text kept after its owner exits (see `clipboard`).
+    pub clipboard: crate::clipboard::TextPersistence,
 }
 
 impl CompatState {
@@ -80,6 +82,7 @@ impl CompatState {
             primary_selection: PrimarySelectionState::new::<State>(display),
             xdg_activation: XdgActivationState::new::<State>(display),
             idle_inhibitors: InhibitSet::default(),
+            clipboard: crate::clipboard::TextPersistence::default(),
         }
     }
 }

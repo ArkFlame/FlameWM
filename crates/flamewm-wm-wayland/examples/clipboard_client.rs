@@ -402,6 +402,15 @@ fn read_offer(
     Ok(text)
 }
 
+/// The text argument, or the contents of the file named by `@<path>` (for selections over argv limits).
+fn text_arg(arg: Option<&String>, usage: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let arg = arg.ok_or(usage)?;
+    match arg.strip_prefix('@') {
+        Some(path) => Ok(std::fs::read_to_string(path)?),
+        None => Ok(arg.clone()),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let conn = Connection::connect_to_env()?;
@@ -420,7 +429,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.get(1).map(String::as_str) {
         Some("writer") => {
-            app.text = args.get(2).cloned().ok_or("writer needs <text>")?;
+            app.text = text_arg(args.get(2), "writer needs <text> or @<file>")?;
             let hold = Duration::from_millis(args.get(3).and_then(|v| v.parse().ok()).unwrap_or(15_000));
             map_window(&mut queue, &mut app, "FlameWM clipboard writer")?;
             let deadline = Instant::now() + Duration::from_secs(10);

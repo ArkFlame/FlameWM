@@ -79,6 +79,8 @@ mod input;
 mod zoom;
 // Compiled without the `drm` feature too: the D-Bus surface and the `Session` impl are the only
 // feature-gated parts, which keeps the pause/resume state machine testable on any host.
+#[path = "protocols/clipboard.rs"]
+mod clipboard;
 #[path = "protocols/compat.rs"]
 mod compat;
 mod lock_cover;

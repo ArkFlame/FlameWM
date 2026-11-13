@@ -1,5 +1,6 @@
 //! Smithay protocol handlers and delegate registrations for `State`.
 
+use crate::clipboard::write_off_loop;
 use flamewm_wm_wayland::protocols::toplevel::ToplevelFacts;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::utils::{
@@ -569,8 +570,13 @@ impl SelectionHandler for State {
         &mut self,
         ty: SelectionTarget,
         source: Option<SelectionSource>,
-        _seat: Seat<Self>,
+        seat: Seat<Self>,
     ) {
+        // An explicit clear drops the kept text; a new owner's text is read and kept (see `clipboard`).
+        match &source {
+            Some(source) => self.read_client_selection(ty, &source.mime_types(), seat),
+            None => self.compat.clipboard.slot_mut(ty).clear(),
+        }
         // Wayland clipboard owner changed: advertise its mime types to X11 clients.
         if let Some(xwm) = self.xwm.as_mut() {
             let mime_types = source.map(|source| source.mime_types());
@@ -588,6 +594,11 @@ impl SelectionHandler for State {
         _seat: Seat<Self>,
         _user_data: &(),
     ) {
+        // Kept text (a Wayland owner that exited, or one re-published by the compositor) is served here.
+        if let Some(bytes) = self.compat.clipboard.slot(ty).text(&mime_type) {
+            write_off_loop(bytes.to_vec(), fd);
+            return;
+        }
         // An X11 client pastes from a Wayland owner: stream the data into the X11 side.
         if let Some(xwm) = self.xwm.as_mut()
             && let Err(error) = xwm.send_selection(ty, mime_type, fd, self.loop_handle.clone())
