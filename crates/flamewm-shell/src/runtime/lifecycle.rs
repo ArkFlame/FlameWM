@@ -57,6 +57,15 @@ impl ShellSurfaces {
                 panel_anchor(&panel_snapshot, &output, metrics, 1),
             ),
         )?;
+        let usage = create_surface(
+            runtime,
+            USAGE_ARTIFACT,
+            status_popup_config(
+                USAGE_POPUP_TITLE,
+                flamewm_shell_core::USAGE_POPOVER_SIZE,
+                panel_anchor(&panel_snapshot, &output, metrics, 1),
+            ),
+        )?;
         let launcher = create_surface(
             runtime,
             LAUNCHER_ARTIFACT,
@@ -104,6 +113,7 @@ impl ShellSurfaces {
             start,
             task_menu,
             media,
+            usage,
             launcher,
             launcher_output: None,
             polkit,
@@ -130,7 +140,7 @@ impl ShellSurfaces {
     /// each surface unmaps at once. Reopen paths use it too, so a closing overlay is reversed
     /// by the following `show`.
     pub fn close_transients(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        for surface in [self.start, self.task_menu, self.media] {
+        for surface in [self.start, self.task_menu, self.media, self.usage] {
             let animated = dismiss_animates(
                 surface == self.start,
                 self.start_motion,

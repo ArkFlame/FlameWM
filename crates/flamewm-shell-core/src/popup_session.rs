@@ -8,6 +8,7 @@ pub enum PopupKind {
     Launcher,
     TaskContext,
     Media,
+    Usage,
     Audio,
     Network,
     Calendar,

@@ -57,6 +57,7 @@ mod start_session;
 mod start_view;
 mod timers;
 mod tray;
+mod usage;
 mod weather;
 
 use helpers::{
@@ -174,6 +175,8 @@ pub(crate) struct ShellLoop {
     pub(crate) weather: flamewm_shell::weather_host::WeatherHost,
     /// Set when the tray or the popup host must receive the current weather feed.
     pub(crate) weather_feed_pending: bool,
+    /// AI usage scheduler: fetches enabled providers on a timer and feeds the card.
+    pub(crate) usage: flamewm_shell::usage_host::UsageHost,
     /// Automatic location lookup cadence (opt-in via `autoLocationEnabled`).
     pub(crate) auto_lookup: flamewm_shell::weather_auto::AutoLookup,
     /// Completion wake shared by the weather and IP-lookup workers; the reactor watches its reader.
@@ -273,6 +276,7 @@ impl ShellLoop {
             switcher: flamewm_shell::switcher::SwitcherController::default(),
             weather: flamewm_shell::weather_host::WeatherHost::new(),
             weather_feed_pending: true,
+            usage: flamewm_shell::usage_host::UsageHost::default(),
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
             result_wake: flamewm_shell::weather_host::ResultWake::new().expect("result wake pair"),
             wake: None,

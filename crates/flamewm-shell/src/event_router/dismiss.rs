@@ -60,6 +60,7 @@ pub(crate) fn opener_group(action: &str) -> Option<&'static str> {
         "weather.open" => Some("weather"),
         "clock.open" => Some("calendar"),
         "media.open" | "media.toggle" => Some("media"),
+        "usage.open" => Some("usage"),
         _ => None,
     }
 }

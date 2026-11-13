@@ -189,6 +189,7 @@ impl ShellSurfaces {
                     Some(Transient::StartGroup) => surface == self.start,
                     Some(Transient::ContextMenu) => surface == self.task_menu,
                     Some(Transient::Media) => surface == self.media,
+                    Some(Transient::Usage) => surface == self.usage,
                     None => false,
                 };
                 owns_popup.then(|| self.transient_output.clone()).flatten()

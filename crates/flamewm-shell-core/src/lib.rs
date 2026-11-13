@@ -143,6 +143,8 @@ pub const NETWORK_POPOVER_SIZE: Size = Size::new(461, 453);
 pub const BATTERY_POPOVER_SIZE: Size = Size::new(300, 132);
 /// Weather popup: 300x320 logical px (matches ui/shell/weather.html root).
 pub const WEATHER_POPOVER_SIZE: Size = Size::new(300, 320);
+/// AI usage card: two provider rows with a percent bar, reset text and last-updated line.
+pub const USAGE_POPOVER_SIZE: Size = Size::new(300, 280);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioPopoverModel {

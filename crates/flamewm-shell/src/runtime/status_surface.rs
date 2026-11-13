@@ -25,9 +25,8 @@ pub fn edge_for_panel_edge(edge: PanelEdge) -> PopoverEdge {
     }
 }
 
-/// Full open transaction: anchor -> measure -> fit -> prepare ->
-/// present -> grab. Maps `PopupError` to the legacy `String` contract
-/// at this boundary.
+/// Full open transaction for the Media popup: anchor -> measure -> fit -> prepare ->
+/// present -> grab. Maps `PopupError` to the legacy `String` contract at this boundary.
 pub fn open(
     runtime: &mut SurfaceRuntime,
     panel: SurfaceHandle,
@@ -35,11 +34,30 @@ pub fn open(
     work_area: Rect,
     panel_edge: PanelEdge,
 ) -> Result<Rect, String> {
+    open_role(
+        runtime,
+        panel,
+        popup,
+        PopupRole::Media,
+        work_area,
+        panel_edge,
+    )
+}
+
+/// Full open transaction for any in-process status popup role (`Media`, `Usage`).
+pub fn open_role(
+    runtime: &mut SurfaceRuntime,
+    panel: SurfaceHandle,
+    popup: SurfaceHandle,
+    role: PopupRole,
+    work_area: Rect,
+    panel_edge: PanelEdge,
+) -> Result<Rect, String> {
     popup_controller::open_popup(
         runtime,
         panel,
         popup,
-        spec(),
+        PopupSpec::from_role(role, PopoverAlign::End),
         work_area,
         edge_for_panel_edge(panel_edge),
         panel_edge,

@@ -45,6 +45,9 @@ const START_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-
 const TASK_MENU_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-task-menu.rwr"));
 const MEDIA_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-media.rwr"));
+const USAGE_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-usage.rwr"));
+/// Title of the AI usage card popup surface.
+pub const USAGE_POPUP_TITLE: &str = "FlameWM usage";
 const LAUNCHER_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"));
 const POLKIT_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-polkit.rwr"));
 const BLUETOOTH_ARTIFACT: &[u8] =
@@ -302,6 +305,7 @@ pub fn output_at_root_point(
 enum Transient {
     StartGroup,
     Media,
+    Usage,
     ContextMenu,
 }
 
@@ -563,6 +567,8 @@ pub struct ShellSurfaces {
     pub start: SurfaceHandle,
     pub task_menu: SurfaceHandle,
     pub media: SurfaceHandle,
+    /// AI usage card popup; in-process status popup like media.
+    pub usage: SurfaceHandle,
     /// Top-center Launcher popup; `launcher_output` is `Some` while it is open.
     pub launcher: SurfaceHandle,
     launcher_output: Option<flamewm_api::OutputId>,

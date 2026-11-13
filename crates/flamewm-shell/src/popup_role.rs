@@ -33,6 +33,8 @@ pub enum PopupRole {
     Calendar,
     Battery,
     Weather,
+    /// AI subscription usage card, opened from the `tray-usage` panel button.
+    Usage,
     /// Top-center application launcher. Never anchored to a panel node: `source_node_id`
     /// is inert for it and placement comes from `runtime::launcher_surface`.
     Launcher,
@@ -51,6 +53,7 @@ impl PopupRole {
             Self::Calendar => "clock-popup",
             Self::Battery => "battery-popup",
             Self::Weather => "weather-popup",
+            Self::Usage => "usage-popup",
             Self::Launcher => "launcher-popup",
         }
     }
@@ -66,6 +69,7 @@ impl PopupRole {
             Self::Calendar => "clock-button",
             Self::Battery => "tray-battery",
             Self::Weather => "tray-weather",
+            Self::Usage => "tray-usage",
             Self::Launcher => "task-start",
         }
     }
@@ -84,6 +88,7 @@ impl PopupRole {
             Self::Calendar => "calendar",
             Self::Battery => "battery",
             Self::Weather => "weather",
+            Self::Usage => "usage",
             Self::Launcher => "launcher",
         }
     }
@@ -94,7 +99,7 @@ impl PopupRole {
     #[must_use]
     pub const fn quick_control_kind(self) -> Option<QuickControlKind> {
         match self {
-            Self::Start | Self::Media | Self::Launcher => None,
+            Self::Start | Self::Media | Self::Usage | Self::Launcher => None,
             Self::Audio => Some(QuickControlKind::Audio),
             Self::Network => Some(QuickControlKind::Network),
             Self::Calendar => Some(QuickControlKind::Calendar),
@@ -126,6 +131,7 @@ mod popup_contract_tests {
             }
             PopupRole::Battery => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr")),
             PopupRole::Weather => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-weather.rwr")),
+            PopupRole::Usage => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-usage.rwr")),
             PopupRole::Launcher => {
                 include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"))
             }
@@ -145,6 +151,7 @@ mod popup_contract_tests {
             PopupRole::Calendar => Size::new(300, 320),
             PopupRole::Battery => flamewm_shell_core::BATTERY_POPOVER_SIZE,
             PopupRole::Weather => flamewm_shell_core::WEATHER_POPOVER_SIZE,
+            PopupRole::Usage => flamewm_shell_core::USAGE_POPOVER_SIZE,
             PopupRole::Launcher => Size::new(600, 360),
         }
     }
@@ -166,6 +173,7 @@ mod popup_contract_tests {
             PopupRole::Calendar,
             PopupRole::Battery,
             PopupRole::Weather,
+            PopupRole::Usage,
             PopupRole::Launcher,
         ] {
             let mut document = flamewm_ui_x11::decode_document(artifact_bytes(role))
@@ -274,6 +282,10 @@ mod tests {
         assert_eq!(PopupRole::Battery.intrinsic_node_id(), "battery-popup");
         assert_eq!(PopupRole::Weather.intrinsic_node_id(), "weather-popup");
         assert_eq!(PopupRole::Weather.source_node_id(), "tray-weather");
+        assert_eq!(PopupRole::Usage.intrinsic_node_id(), "usage-popup");
+        assert_eq!(PopupRole::Usage.source_node_id(), "tray-usage");
+        assert_eq!(PopupRole::Usage.semantic_name(), "usage");
+        assert_eq!(PopupRole::Usage.quick_control_kind(), None);
         assert_eq!(PopupRole::Weather.semantic_name(), "weather");
     }
 

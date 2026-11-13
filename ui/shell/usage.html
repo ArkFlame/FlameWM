@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FlameWM usage</title>
+  <link rel="stylesheet" href="../base/tokens.css">
+  <link rel="stylesheet" href="flamewm.css">
+</head>
+<body class="popup-body">
+  <section id="usage-popup" class="tray-popup usage-popup" role="dialog" aria-labelledby="usage-title" data-action="popup.surface">
+    <div id="usage-title" class="usage-title">AI usage</div>
+    <div class="usage-row" id="usage-row-codex" role="group" aria-labelledby="usage-codex-name">
+      <div class="usage-row-head"><span id="usage-codex-name" class="usage-name">ChatGPT / Codex</span><span id="usage-codex-percent" class="usage-percent">--</span></div>
+      <div class="usage-track" id="usage-codex-track" role="meter" aria-labelledby="usage-codex-name" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="usage-codex-fill" class="usage-fill"></div></div>
+      <div id="usage-codex-reset" class="usage-reset">Not configured</div>
+    </div>
+    <div class="usage-row" id="usage-row-claude" role="group" aria-labelledby="usage-claude-name">
+      <div class="usage-row-head"><span id="usage-claude-name" class="usage-name">Claude</span><span id="usage-claude-percent" class="usage-percent">--</span></div>
+      <div class="usage-track" id="usage-claude-track" role="meter" aria-labelledby="usage-claude-name" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="usage-claude-fill" class="usage-fill"></div></div>
+      <div id="usage-claude-reset" class="usage-reset">Not configured</div>
+    </div>
+    <div class="usage-row" id="usage-row-opencode-go" role="group" aria-labelledby="usage-opencode-go-name">
+      <div class="usage-row-head"><span id="usage-opencode-go-name" class="usage-name">OpenCode Go</span><span id="usage-opencode-go-percent" class="usage-percent">--</span></div>
+      <div class="usage-track" id="usage-opencode-go-track" role="meter" aria-labelledby="usage-opencode-go-name" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="usage-opencode-go-fill" class="usage-fill"></div></div>
+      <div id="usage-opencode-go-reset" class="usage-reset">Not configured</div>
+    </div>
+    <div class="usage-row" id="usage-row-command-code" role="group" aria-labelledby="usage-command-code-name">
+      <div class="usage-row-head"><span id="usage-command-code-name" class="usage-name">Command Code</span><span id="usage-command-code-percent" class="usage-percent">--</span></div>
+      <div class="usage-track" id="usage-command-code-track" role="meter" aria-labelledby="usage-command-code-name" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="usage-command-code-fill" class="usage-fill"></div></div>
+      <div id="usage-command-code-reset" class="usage-reset">Not configured</div>
+    </div>
+    <div class="usage-row" id="usage-row-opendesign" role="group" aria-labelledby="usage-opendesign-name">
+      <div class="usage-row-head"><span id="usage-opendesign-name" class="usage-name">OpenDesign</span><span id="usage-opendesign-percent" class="usage-percent">--</span></div>
+      <div class="usage-track" id="usage-opendesign-track" role="meter" aria-labelledby="usage-opendesign-name" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="usage-opendesign-fill" class="usage-fill"></div></div>
+      <div id="usage-opendesign-reset" class="usage-reset">Not configured</div>
+    </div>
+    <div class="usage-footer">
+      <span id="usage-updated" class="usage-updated">Not updated yet</span>
+      <button id="usage-close" class="usage-close" data-action="popover.close" aria-label="Close usage">Close</button>
+    </div>
+  </section>
+</body>
+</html>

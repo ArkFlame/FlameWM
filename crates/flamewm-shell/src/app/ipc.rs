@@ -213,6 +213,9 @@ impl ShellLoop {
         // already-projected document, so content must land before measure.
         // J07: only media projects in-process; helper kinds are unreachable
         // here (routed to the supervisor before this call).
+        if name == "usage" {
+            return self.project_usage_card(runtime);
+        }
         let snapshot = self.shell.snapshot();
         if name == "media" {
             runtime.with_document(self.surfaces.media, |document| {

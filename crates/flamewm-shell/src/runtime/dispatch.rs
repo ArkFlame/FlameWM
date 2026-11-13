@@ -37,7 +37,7 @@ impl ShellRuntime {
                         interaction: interaction.clone(),
                     }),
                 "media.open" | "media.toggle" | "volume.open" | "network.open" | "battery.open"
-                | "clock.open" | "weather.open" => Some(ShellControl::OpenPopover {
+                | "clock.open" | "weather.open" | "usage.open" => Some(ShellControl::OpenPopover {
                     name: action.split('.').next().unwrap_or(action).to_owned(),
                     output,
                     interaction,

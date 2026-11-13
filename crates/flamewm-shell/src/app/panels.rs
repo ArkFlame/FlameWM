@@ -258,6 +258,7 @@ impl ShellLoop {
         let untracked_popup_open = active_popup.is_none()
             && (self.surfaces.is_start_group_open()
                 || self.surfaces.is_media_open()
+                || self.surfaces.is_usage_open()
                 || self.context_menu.is_some()
                 || self.quick_kind_open.is_some());
         if !preserve_popup {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::popup_role::PopupRole;
 
 pub(super) fn should_close_transients_for_context_menu(kind: &ContextMenuKind) -> bool {
     !matches!(kind, ContextMenuKind::StartApp(_))
@@ -20,7 +21,7 @@ impl ShellSurfaces {
         }
         // A closing Start overlay is reversed by `show`, so it must not be cut short here.
         if start_toggle_animates(self.start_motion) {
-            for surface in [self.task_menu, self.media] {
+            for surface in [self.task_menu, self.media, self.usage] {
                 runtime.close_surface(surface).map_err(ui_error)?;
             }
         } else {
@@ -114,6 +115,11 @@ impl ShellSurfaces {
     }
 
     #[must_use]
+    pub fn is_usage_open(&self) -> bool {
+        self.transient == Some(Transient::Usage)
+    }
+
+    #[must_use]
     pub fn is_media_open(&self) -> bool {
         self.transient == Some(Transient::Media)
     }
@@ -138,9 +144,11 @@ impl ShellSurfaces {
         name: &str,
         output: &flamewm_api::OutputId,
     ) -> Result<(), String> {
-        if name != "media" {
-            return Err(format!("unsupported shell popup {name}"));
-        }
+        let (popup, transient, role) = match name {
+            "media" => (self.media, Transient::Media, PopupRole::Media),
+            "usage" => (self.usage, Transient::Usage, PopupRole::Usage),
+            _ => return Err(format!("unsupported shell popup {name}")),
+        };
         let (panel_handle, scale_percent, work_area, edge) = self
             .for_output(output)
             .map(|panel| {
@@ -154,13 +162,13 @@ impl ShellSurfaces {
             .ok_or_else(|| format!("popup output {output} is unavailable"))?;
         self.close_transients(runtime)?;
         runtime
-            .set_slide(self.media, self.popup_slide)
+            .set_slide(popup, self.popup_slide)
             .map_err(ui_error)?;
         runtime
-            .apply_output_scale(self.media, panel_ui_scale(scale_percent))
+            .apply_output_scale(popup, panel_ui_scale(scale_percent))
             .map_err(ui_error)?;
-        status_surface::open(runtime, panel_handle, self.media, work_area, edge)?;
-        self.transient = Some(Transient::Media);
+        status_surface::open_role(runtime, panel_handle, popup, role, work_area, edge)?;
+        self.transient = Some(transient);
         self.transient_output = Some(output.clone());
         Ok(())
     }

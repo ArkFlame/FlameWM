@@ -318,10 +318,12 @@ impl ShellLoop {
                         continue;
                     }
                     self.project_status_content(runtime, &name)?;
-                    let Ok(transition) = self.popup_session.open(
-                        flamewm_shell_core::popup_session::PopupKind::Media,
-                        target.clone(),
-                    ) else {
+                    let kind = if name == "usage" {
+                        flamewm_shell_core::popup_session::PopupKind::Usage
+                    } else {
+                        flamewm_shell_core::popup_session::PopupKind::Media
+                    };
+                    let Ok(transition) = self.popup_session.open(kind, target.clone()) else {
                         continue;
                     };
                     match self

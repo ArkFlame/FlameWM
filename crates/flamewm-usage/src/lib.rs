@@ -217,6 +217,60 @@ pub fn parse_commandcode_usage(body: &str) -> Result<Vec<UsageWindow>, UsagePars
     Ok(windows)
 }
 
+/// Proof seam (`FLAMEWM_USAGE_FIXTURE`): a JSON array of snapshots, so the card can be proven
+/// with no network and no credentials. Shape:
+/// `[{"provider":"claude","state":"ready","windows":[{"used_percent":37,"window_seconds":18000,"resets_at":1000}]},
+///   {"provider":"command_code","state":"not_configured"},{"provider":"claude","state":"failed"}]`
+/// Unknown providers are skipped. A `ready` entry with no usable window becomes `Failed`.
+pub fn parse_fixture(body: &str, now: i64) -> Result<Vec<ProviderSnapshot>, UsageParseError> {
+    let root: Value = serde_json::from_str(body).map_err(|_| UsageParseError::Malformed)?;
+    let entries = root.as_array().ok_or(UsageParseError::Malformed)?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let provider = match entry.get("provider")?.as_str()? {
+                "codex" => UsageProvider::Codex,
+                "claude" => UsageProvider::Claude,
+                "opencode_go" => UsageProvider::OpenCodeGo,
+                "command_code" => UsageProvider::CommandCode,
+                "opendesign" => UsageProvider::OpenDesign,
+                _ => return None,
+            };
+            let state = match entry.get("state")?.as_str()? {
+                "ready" => {
+                    let windows: Vec<UsageWindow> = entry
+                        .get("windows")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(fixture_window)
+                        .collect();
+                    if windows.is_empty() {
+                        ProviderState::Failed("no usage windows")
+                    } else {
+                        ProviderState::Ready(windows)
+                    }
+                }
+                "failed" => ProviderState::Failed("fixture failure"),
+                _ => ProviderState::NotConfigured,
+            };
+            Some(ProviderSnapshot {
+                provider,
+                state,
+                updated_at: Some(now),
+            })
+        })
+        .collect())
+}
+
+fn fixture_window(lane: &Value) -> Option<UsageWindow> {
+    Some(UsageWindow {
+        used_percent: lane.get("used_percent")?.as_f64()?.clamp(0.0, 100.0),
+        window_seconds: lane.get("window_seconds").and_then(Value::as_i64),
+        resets_at: lane.get("resets_at").and_then(Value::as_i64),
+    })
+}
+
 /// Unix seconds for an RFC 3339 timestamp such as `2026-11-12T10:00:00.123Z` or `...+02:00`.
 #[must_use]
 pub fn rfc3339_unix(text: &str) -> Option<i64> {
@@ -341,6 +395,27 @@ mod tests {
             parse_commandcode_usage(r#"{"credits":{}}"#),
             Err(UsageParseError::NoWindows)
         );
+    }
+
+    #[test]
+    fn fixture_maps_states_and_skips_unknown_providers() {
+        let body = r#"[{"provider":"claude","state":"ready","windows":[{"used_percent":150,"window_seconds":18000,"resets_at":100}]},
+            {"provider":"command_code","state":"not_configured"},{"provider":"nope","state":"ready"},
+            {"provider":"codex","state":"ready","windows":[]},{"provider":"claude","state":"failed"}]"#;
+        let snaps = parse_fixture(body, 7).unwrap();
+        assert_eq!(snaps.len(), 4);
+        let ProviderState::Ready(windows) = &snaps[0].state else {
+            panic!("ready")
+        };
+        assert_eq!(
+            (windows[0].used_percent, windows[0].resets_at),
+            (100.0, Some(100))
+        );
+        assert_eq!(snaps[1].state, ProviderState::NotConfigured);
+        assert_eq!(snaps[2].state, ProviderState::Failed("no usage windows"));
+        assert_eq!(snaps[3].state, ProviderState::Failed("fixture failure"));
+        assert_eq!(snaps[0].updated_at, Some(7));
+        assert_eq!(parse_fixture("{}", 0), Err(UsageParseError::Malformed));
     }
 
     #[test]

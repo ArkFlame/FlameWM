@@ -3,8 +3,10 @@
 //! Credentials are read on the worker from the provider's documented file or env var and are
 //! never stored on this type or rendered.
 
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flamewm_usage::{
@@ -82,8 +84,19 @@ impl UsageHost {
 /// Production fetch on a worker thread: one request per enabled provider, bounded by the
 /// fetch timeout. Tokens come from `$CLAUDE_CONFIG_DIR` or `$HOME` and `COMMAND_CODE_API_KEY`.
 #[must_use]
-pub fn spawn_usage_fetch(providers: Vec<UsageProvider>) -> mpsc::Receiver<UsageResult> {
-    spawn_worker("flamewm-usage", None, move || {
+pub fn spawn_usage_fetch(
+    providers: Vec<UsageProvider>,
+    waker: Option<Arc<UnixStream>>,
+) -> mpsc::Receiver<UsageResult> {
+    spawn_worker("flamewm-usage", waker, move || {
+        // Proof seam: a fixture file replaces the network and credential reads entirely.
+        if let Some(path) = std::env::var_os("FLAMEWM_USAGE_FIXTURE") {
+            let now = chrono::Utc::now().timestamp();
+            return std::fs::read_to_string(path)
+                .ok()
+                .and_then(|body| flamewm_usage::parse_fixture(&body, now).ok())
+                .unwrap_or_default();
+        }
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         let config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
         let now = chrono::Utc::now().timestamp();

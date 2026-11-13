@@ -60,6 +60,7 @@ impl ShellLoop {
         // Shell-owned and helper-owned popups share one active session.
         if self.surfaces.is_start_group_open()
             || self.surfaces.is_media_open()
+            || self.surfaces.is_usage_open()
             || take_context_menu_for_popup(&mut self.context_menu)
         {
             if let Err(error) = self.close_transients(runtime) {
@@ -148,6 +149,9 @@ impl ShellLoop {
         if self.surfaces.is_media_open() {
             return Some("media");
         }
+        if self.surfaces.is_usage_open() {
+            return Some("usage");
+        }
         self.quick_kind_open.map(quick_popup_group)
     }
 
@@ -191,6 +195,9 @@ impl ShellLoop {
     pub(crate) fn open_popup_name(&self) -> Option<&'static str> {
         if self.surfaces.is_media_open() {
             return Some("media");
+        }
+        if self.surfaces.is_usage_open() {
+            return Some("usage");
         }
         None
     }

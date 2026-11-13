@@ -157,6 +157,7 @@ impl ShellLoop {
         self.project_settings(runtime)?;
         self.sync_dock(runtime);
         self.tick_weather(runtime);
+        self.tick_usage(runtime);
         // Signal-queued controls (StartMenuToggleRequested -> ToggleStart) arrive
         // on the control-signal fd, not an X event, so no event route drains
         // them. Drain through the same apply_controls the click path uses, then
