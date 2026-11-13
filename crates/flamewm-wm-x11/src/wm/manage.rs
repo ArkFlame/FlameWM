@@ -610,6 +610,7 @@ impl<C: Connection> Wm<'_, C> {
         window: Window,
         restore_to_root: bool,
     ) -> Result<(), ReplyError> {
+        self.end_keyboard_grab(Some(window))?;
         // Remember the normal (non-snapped, non-maximized) frame for the next window of this app.
         if let Some(client) = self.clients.get(&window) {
             let rect = client.placement.floating_restore.to_legacy();

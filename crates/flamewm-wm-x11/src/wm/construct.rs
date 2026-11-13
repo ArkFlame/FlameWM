@@ -129,6 +129,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             focus_guard: Default::default(),
             stack_layers: HashMap::new(),
             switcher: switcher::Switcher::default(),
+            kbd_grab: None,
+            kbd_pending: None,
             mru: switcher::Mru::default(),
             switcher_signal: None,
             switcher_thumbs: Default::default(),

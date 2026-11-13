@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use flamewm_api::shortcuts::KeyBinding;
+use flamewm_api::shortcuts::{ACTION_KEYBOARD_MOVE, ACTION_KEYBOARD_RESIZE, KeyBinding};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
@@ -231,6 +231,8 @@ impl KeycodeLookup for KeyboardTable {
 pub struct Grab {
     pub keycode: u8,
     pub modifiers: u16,
+    /// Keyboard-sync passive grab: the WM must `AllowEvents` after handling its press.
+    pub sync: bool,
 }
 
 /// A grab owned by an action. An optional grab may fail without failing the
@@ -309,6 +311,7 @@ pub fn resolve(
                 grab: Grab {
                     keycode,
                     modifiers: chord.modifiers | variant,
+                    sync: matches!(action, ACTION_KEYBOARD_MOVE | ACTION_KEYBOARD_RESIZE),
                 },
                 optional: is_optional_keysym(chord.keysym),
                 server_grab: !is_modifier_only_chord(chord),
@@ -505,7 +508,11 @@ impl<C: Connection> GrabBackend for XGrabBackend<'_, C> {
                 ModMask::from(grab.modifiers),
                 grab.keycode,
                 GrabMode::ASYNC,
-                GrabMode::ASYNC,
+                if grab.sync {
+                    GrabMode::SYNC
+                } else {
+                    GrabMode::ASYNC
+                },
             )
             .map_err(|error| FlameError::new(ErrorCode::IoFailure, error.to_string()))?;
         match cookie.check() {
@@ -614,7 +621,11 @@ mod tests {
     }
 
     fn base_grab(keycode: u8, modifiers: u16) -> Grab {
-        Grab { keycode, modifiers }
+        Grab {
+            keycode,
+            modifiers,
+            sync: false,
+        }
     }
 
     /// Stages `pairs` against the standard lookup and commits them.

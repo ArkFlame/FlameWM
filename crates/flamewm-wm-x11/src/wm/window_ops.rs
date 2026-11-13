@@ -457,6 +457,18 @@ impl<C: Connection> Wm<'_, C> {
         } else {
             rect.height.saturating_sub(STEP_H as u32).max(96)
         };
+        self.apply_floating_rect(client, rect)
+    }
+
+    /// Sets a floating client's outer rect and repaints it; shared by resize steps and keyboard grabs.
+    pub(super) fn apply_floating_rect(
+        &mut self,
+        client: Window,
+        rect: Rect,
+    ) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get_mut(&client) else {
+            return Ok(());
+        };
         state.set_outer(rect);
         state.placement.current = RootRect::from_legacy(rect);
         state.placement.floating_restore = state.placement.current;

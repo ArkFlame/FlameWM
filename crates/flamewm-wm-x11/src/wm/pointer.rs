@@ -46,6 +46,7 @@ impl<C: Connection> Wm<'_, C> {
         &mut self,
         event: ButtonPressEvent,
     ) -> Result<(), ReplyError> {
+        self.end_keyboard_grab(None)?;
         self.focus_guard
             .note_user_activity(std::time::Instant::now());
         if self.clients.contains_key(&event.event) {

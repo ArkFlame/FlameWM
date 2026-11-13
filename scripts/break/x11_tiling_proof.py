@@ -25,6 +25,14 @@ def approx(a, b, tol):
     return all(abs(x - y) <= tol for x, y in zip(a, b))
 
 
+def wait_grab(frame_fn, d):
+    """Blocks until the WM has begun the keyboard grab: it warps the pointer to the window centre after the grab succeeds."""
+    def centred(q):
+        f = frame_fn()
+        return abs(q.root_x - (f[0] + f[2] // 2)) <= 2 and abs(q.root_y - (f[1] + f[3] // 2)) <= 2
+    return settle(lambda: d.screen().root.query_pointer(), centred)
+
+
 def settle(fn, pred, timeout=3.0):
     end = time.time() + timeout
     value = fn()
@@ -180,6 +188,59 @@ def main():
             time.sleep(0.05)
         r = settle(frame, lambda r: r == g0)
         check("titlebar double-click restores exact geometry", r == g0 and not maximized(), f"got={r} want={g0}")
+
+        # 2b. keyboard move (Alt+F7) and resize (Alt+F8), xfwm4-style: arrows step, Return commits, Escape cancels
+        g = frame()
+        tap("Alt_L", "F7")
+        p = wait_grab(frame, d)
+        check("Alt+F7 warps pointer to window centre", abs(p.root_x - (g[0] + g[2] // 2)) <= 2
+              and abs(p.root_y - (g[1] + g[3] // 2)) <= 2, (p.root_x, p.root_y))
+        tap("Right")
+        tap("Right")
+        tap("Down")
+        want = (g[0] + 32, g[1] + 16, g[2], g[3])
+        r = settle(frame, lambda r: r == want)
+        check("Alt+F7 arrows move 16px per step", r == want, f"got={r} want={want}")
+        tap("Escape")
+        r = settle(frame, lambda r: r == g)
+        check("Escape cancels keyboard move to exact origin", r == g, f"got={r} want={g}")
+        tap("Alt_L", "F7")
+        wait_grab(frame, d)
+        tap("Right")
+        tap("Return")
+        want = (g[0] + 16, g[1], g[2], g[3])
+        r = settle(frame, lambda r: r == want)
+        check("Return commits keyboard move", r == want, f"got={r} want={want}")
+        tap("Alt_L", "F7")
+        wait_grab(frame, d)
+        tap("Left")
+        tap("Return")
+        r = settle(frame, lambda r: r == g)
+        check("keyboard move back to origin", r == g, f"got={r} want={g}")
+        tap("Alt_L", "F8")
+        wait_grab(frame, d)
+        tap("Right")
+        tap("Down")
+        tap("Return")
+        want = (g[0], g[1], g[2] + 10, g[3] + 10)
+        r = settle(frame, lambda r: r == want)
+        check("Alt+F8 arrows resize 10px per step and Return commits", r == want, f"got={r} want={want}")
+        tap("Alt_L", "F8")
+        wait_grab(frame, d)
+        tap("Right")
+        tap("Right")
+        tap("Right")
+        tap("Escape")
+        r = settle(frame, lambda r: r == want)
+        check("Escape cancels keyboard resize to pre-grab size", r == want, f"got={r} want={want}")
+        tap("Alt_L", "F8")
+        wait_grab(frame, d)
+        tap("Left")
+        tap("Up")
+        tap("Return")
+        r = settle(frame, lambda r: r == g)
+        check("keyboard resize back to origin size", r == g, f"got={r} want={g}")
+        print("info _NET_WORKAREA", root_prop("_NET_WORKAREA")[:4], "maximised_frame", area, flush=True)
 
         # 3. drag to top-left corner: preview overlay while held, then release into the quarter
         fr = frame()

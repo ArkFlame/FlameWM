@@ -50,7 +50,14 @@ impl<C: Connection> Wm<'_, C> {
             Event::LeaveNotify(event) => self.handle_leave(event)?,
             Event::ButtonPress(event) => self.handle_button_press(event)?,
             Event::ButtonRelease(event) => self.handle_button_release(event)?,
-            Event::KeyPress(event) => self.handle_key_press(event)?,
+            Event::KeyPress(event) => {
+                // Sync-keyboard passive grabs (Alt+F7/F8) freeze input until thawed here, after the
+                // grab begins, so the next key reaches the grab. A no-op when nothing is frozen.
+                let time = event.time;
+                let result = self.handle_key_press(event);
+                self.conn.allow_events(Allow::SYNC_KEYBOARD, time)?;
+                result?;
+            }
             Event::KeyRelease(event) => self.handle_key_release(event)?,
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             // The root never selects core motion (hot corners use XI raw motion); a root motion
@@ -88,6 +95,10 @@ impl<C: Connection> Wm<'_, C> {
     pub(super) fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyError> {
         self.focus_guard
             .note_user_activity(std::time::Instant::now());
+        // An open keyboard move/resize grab owns every key, ahead of the raw-feed claim check.
+        if self.kbd_grab.is_some() {
+            return self.keyboard_grab_key(event.detail);
+        }
         // The raw feed may already have dispatched this key while a client held the keyboard.
         if self.raw_claimed(event.time, event.detail) {
             return Ok(());
@@ -228,6 +239,8 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_TILE_RIGHT => self.keyboard_tile(Direction::Right)?,
             ACTION_TILE_UP => self.keyboard_tile(Direction::Up)?,
             ACTION_TILE_DOWN => self.keyboard_tile(Direction::Down)?,
+            ACTION_KEYBOARD_MOVE => self.begin_keyboard_move()?,
+            ACTION_KEYBOARD_RESIZE => self.begin_keyboard_resize()?,
             ACTION_FOCUS_LEFT => self.focus_direction(GridDirection::Left)?,
             ACTION_FOCUS_RIGHT => self.focus_direction(GridDirection::Right)?,
             ACTION_FOCUS_UP => self.focus_direction(GridDirection::Up)?,
@@ -352,6 +365,8 @@ impl<C: Connection> Wm<'_, C> {
 
     /// Bare-Super release only completes a tap; Start toggles at batch commit.
     pub(super) fn handle_key_release(&mut self, event: KeyReleaseEvent) -> Result<(), ReplyError> {
+        // A keyboard grab refused on key press retries once the activating passive grab releases.
+        self.retry_pending_keyboard_grab()?;
         self.super_tap.release_super(event.detail, event.time);
         Ok(())
     }
