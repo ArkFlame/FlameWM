@@ -19,6 +19,7 @@ mod api_key;
 mod appearance;
 mod close;
 mod color_picker;
+mod display_canvas;
 mod display_modes;
 mod display_paging;
 mod dock_page;
@@ -145,6 +146,8 @@ fn written_values(requests: &RefCell<Vec<ControlRequest>>, key: &str) -> Vec<Set
 #[derive(Default)]
 struct ProbeDocument {
     texts: BTreeMap<String, String>,
+    positions: BTreeMap<String, (f32, f32)>,
+    sizes: BTreeMap<String, (f32, f32)>,
     visible: BTreeMap<String, bool>,
     highlighted: BTreeMap<String, bool>,
     foregrounds: BTreeMap<String, Option<UiColor>>,
@@ -201,11 +204,15 @@ impl UiDocumentAccess for ProbeDocument {
     }
 
     fn position(&mut self, _id: &str, _left: f32, _top: f32) -> Result<(), String> {
-        crate::ui_contract::require_markup_id(_id)
+        crate::ui_contract::require_markup_id(_id)?;
+        self.positions.insert(_id.to_owned(), (_left, _top));
+        Ok(())
     }
 
     fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
-        crate::ui_contract::require_markup_id(_id)
+        crate::ui_contract::require_markup_id(_id)?;
+        self.sizes.insert(_id.to_owned(), (_width, _height));
+        Ok(())
     }
 
     fn background(&mut self, id: &str, _color: UiColor) -> Result<(), String> {

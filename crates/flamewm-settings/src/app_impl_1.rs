@@ -22,6 +22,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             applied_cursor_theme: None,
             monitor_drag: None,
             pending_arrangement: None,
+            canvas_drag: None,
+            canvas_hint: None,
+            canvas_snap: None,
             display_canvas: None,
             scale_drag: None,
             scale_slider_focused: false,
@@ -77,6 +80,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(slider) = glass_slider(&event.action) {
             return self.handle_glass_slider_drag(slider, event, document);
         }
+        if let Some(raw_index) = event.action.strip_prefix("settings.display.canvas.")
+            && let Ok(index) = raw_index.parse::<usize>()
+        {
+            return self.handle_canvas_pointer(index, event, document);
+        }
         if let Some(raw_slot) = event.action.strip_prefix("settings.display.select.")
             && let Ok(slot) = raw_slot.parse::<usize>()
         {
@@ -115,12 +123,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
                             return Err("display topology changed during monitor drag".into());
                         }
                         self.client.select_output(&pressed_id);
-                        let side = if distance < 0.0 {
-                            display_layout::Side::Left
-                        } else {
-                            display_layout::Side::Right
-                        };
-                        self.arrange_display(side)?;
                         return self.settle(document);
                     }
                 }
@@ -529,6 +531,113 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
+    /// The canvas to draw or drag: the pending layout if any, else one built from the last WM
+    /// snapshot without a round trip.
+    pub(crate) fn canvas_source(&self) -> Option<display_canvas::CanvasLayout> {
+        self.display_canvas.clone().or_else(|| {
+            let snapshot = self.client.displays()?;
+            let selected = self.client.ui().selected_output.as_ref()?;
+            display_canvas::CanvasLayout::from_snapshot(snapshot, selected).ok()
+        })
+    }
+
+    /// A canvas built from a fresh WM snapshot, for starting an edit.
+    fn fresh_canvas(&mut self) -> Result<display_canvas::CanvasLayout, String> {
+        self.client.refresh_displays().map_err(control_error)?;
+        let snapshot = self
+            .client
+            .displays()
+            .ok_or_else(|| "display state unavailable".to_owned())?;
+        let selected = self
+            .client
+            .ui()
+            .selected_output
+            .clone()
+            .ok_or_else(|| "select an active monitor first".to_owned())?;
+        display_canvas::CanvasLayout::from_snapshot(snapshot, &selected)
+    }
+
+    /// Press, move and release on canvas node `index`. Release commits a moved layout through
+    /// the keep/revert transaction; a press without movement only selects the output.
+    pub(crate) fn handle_canvas_pointer(
+        &mut self,
+        index: usize,
+        event: &UiActionEvent,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
+        match event.phase {
+            UiActionPhase::Press => {
+                let mut canvas = match self.display_canvas.take() {
+                    Some(canvas) => canvas,
+                    None => self.fresh_canvas()?,
+                };
+                if index >= canvas.outputs().len() {
+                    self.display_canvas = Some(canvas);
+                    return Ok(());
+                }
+                let start = canvas.outputs()[index].rect;
+                canvas.select_index(index);
+                let id = canvas.selected_id().clone();
+                self.client.select_output(&id);
+                self.display_canvas = Some(canvas);
+                self.canvas_drag = Some(display_canvas::CanvasDrag {
+                    index,
+                    pointer: (event.x, event.y),
+                    start: (start.x, start.y),
+                    moved: false,
+                });
+                self.settle(document)
+            }
+            UiActionPhase::Motion => {
+                let Some(drag) = self.canvas_drag.as_mut() else {
+                    return Ok(());
+                };
+                if drag.index != index {
+                    return Ok(());
+                }
+                let dx = event.x - drag.pointer.0;
+                let dy = event.y - drag.pointer.1;
+                if !drag.moved && dx.abs() + dy.abs() < 4.0 {
+                    return Ok(());
+                }
+                drag.moved = true;
+                let start = drag.start;
+                let Some(canvas) = self.display_canvas.as_mut() else {
+                    return Ok(());
+                };
+                let (lx, ly) = canvas.px_to_logical(dx, dy);
+                let preview = canvas.drag_to(index, (start.0 + lx, start.1 + ly));
+                self.canvas_snap = preview.snapped_to;
+                self.canvas_hint = Some(
+                    if !preview.legal {
+                        "Blocked: overlaps a monitor or splits the group"
+                    } else if preview.snapped_to.is_some() {
+                        "Snapped to an edge"
+                    } else {
+                        "Free position"
+                    }
+                    .to_owned(),
+                );
+                self.settle(document)
+            }
+            UiActionPhase::Release => {
+                let drag = self.canvas_drag.take();
+                self.canvas_snap = None;
+                self.canvas_hint = None;
+                if drag.is_some_and(|drag| drag.index == index && drag.moved)
+                    && self
+                        .display_canvas
+                        .as_ref()
+                        .is_some_and(display_canvas::CanvasLayout::is_dirty)
+                {
+                    self.commit_display_canvas()?;
+                }
+                self.settle(document)
+            }
+            UiActionPhase::Hover => Ok(()),
+        }
+    }
+
     /// Commits the canvas layout as one keep/revert arrangement, refusing stale positions.
     fn commit_display_canvas(&mut self) -> Result<(), String> {
         let canvas = self
@@ -888,6 +997,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::FontFamilyCycle => self.cycle_font_family()?,
             SettingsAction::Hotkey(action, operation) => self.handle_hotkey(action, operation)?,
             SettingsAction::DisplayArrange(side) => self.arrange_display(side)?,
+            SettingsAction::DisplayCanvasNode => {}
             SettingsAction::DisplaySelect(slot) => {
                 let generation = self
                     .client

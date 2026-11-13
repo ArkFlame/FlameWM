@@ -157,3 +157,5 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .shape-circle img { border-radius:12px; }
 .shape-square img { border-radius:5px; }
 .color-picker-error { width:100%; height:16px; color:var(--accent); font-size:var(--font-base); white-space:nowrap; overflow:hidden; }
+.display-canvas { position:relative; width:100%; height:220px; margin:8px 0; border-radius:8px; overflow:hidden; background:rgba(255,255,255,0.04); }
+.display-canvas-node { position:absolute; display:flex; align-items:center; justify-content:center; min-width:0; min-height:0; padding:0; border-radius:6px; font-size:12px; }

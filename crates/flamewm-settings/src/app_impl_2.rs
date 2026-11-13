@@ -789,12 +789,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 },
             )?;
         }
-        document.text(
-            "display-canvas-status",
-            self.display_canvas
-                .as_ref()
-                .map_or_else(String::new, display_canvas::CanvasLayout::status),
-        )?;
+        self.sync_display_canvas(document)?;
         project_pager(
             document,
             &OUTPUT_PAGER,

@@ -27,11 +27,68 @@ pub struct CanvasOutput {
     pub rect: Rect,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Markup nodes available for the canvas; outputs beyond this are not drawn.
+pub const CANVAS_NODES: usize = 8;
+
+/// Pointer drag on one canvas node. `start` is the node position at press time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasDrag {
+    pub index: usize,
+    pub pointer: (f32, f32),
+    pub start: (i32, i32),
+    pub moved: bool,
+}
+
+/// Canvas size in CSS pixels, and the margin kept around the scaled group.
+pub const CANVAS_WIDTH: f32 = 520.0;
+pub const CANVAS_HEIGHT: f32 = 220.0;
+const MARGIN: f32 = 12.0;
+
+/// Outcome of dropping an output at a logical position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Preview {
+    pub rect: Rect,
+    pub legal: bool,
+    /// Index of the neighbour the drop attached to, when `snap_drop` found an edge.
+    pub snapped_to: Option<usize>,
+}
+
+/// Fixed scale and origin that fit the reported group into the canvas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CanvasView {
+    scale: f32,
+    left: i32,
+    top: i32,
+}
+
+impl CanvasView {
+    fn fit(outputs: &[CanvasOutput]) -> Self {
+        let left = outputs.iter().map(|o| o.origin.x).min().unwrap_or(0);
+        let top = outputs.iter().map(|o| o.origin.y).min().unwrap_or(0);
+        let right = outputs
+            .iter()
+            .map(|o| o.origin.x + o.origin.width)
+            .max()
+            .unwrap_or(1);
+        let bottom = outputs
+            .iter()
+            .map(|o| o.origin.y + o.origin.height)
+            .max()
+            .unwrap_or(1);
+        let width = (right - left).max(1) as f32;
+        let height = (bottom - top).max(1) as f32;
+        let scale =
+            ((CANVAS_WIDTH - 2.0 * MARGIN) / width).min((CANVAS_HEIGHT - 2.0 * MARGIN) / height);
+        Self { scale, left, top }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CanvasLayout {
     outputs: Vec<CanvasOutput>,
     selected: usize,
     generation: u64,
+    view: CanvasView,
 }
 
 impl CanvasLayout {
@@ -53,10 +110,12 @@ impl CanvasLayout {
             .iter()
             .position(|output| &output.id == selected)
             .ok_or_else(|| "selected monitor is not an active RandR output".to_owned())?;
+        let view = CanvasView::fit(&outputs);
         let layout = Self {
             outputs,
             selected,
             generation: snapshot.generation,
+            view,
         };
         if !layout.connected() {
             return Err("the current layout is not one connected group".into());
@@ -68,6 +127,23 @@ impl CanvasLayout {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    #[must_use]
+    pub fn outputs(&self) -> &[CanvasOutput] {
+        &self.outputs
+    }
+
+    #[must_use]
+    pub const fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    /// Selects the output at `index`; out-of-range indexes are ignored.
+    pub fn select_index(&mut self, index: usize) {
+        if index < self.outputs.len() {
+            self.selected = index;
+        }
     }
 
     #[must_use]
@@ -190,6 +266,71 @@ impl CanvasLayout {
                 ""
             }
         )
+    }
+
+    /// Node rectangles inside the bounded canvas, in CSS pixels: `(left, top, width, height)`.
+    #[must_use]
+    pub fn node_px(&self, index: usize) -> (f32, f32, f32, f32) {
+        let rect = self.outputs[index].rect;
+        let view = self.view;
+        (
+            MARGIN + (rect.x - view.left) as f32 * view.scale,
+            MARGIN + (rect.y - view.top) as f32 * view.scale,
+            rect.width as f32 * view.scale,
+            rect.height as f32 * view.scale,
+        )
+    }
+
+    /// Converts a pointer delta in CSS pixels to logical pixels at the canvas scale.
+    #[must_use]
+    pub fn px_to_logical(&self, dx: f32, dy: f32) -> (i32, i32) {
+        (
+            (dx / self.view.scale).round() as i32,
+            (dy / self.view.scale).round() as i32,
+        )
+    }
+
+    /// Where `index` would land if dropped at `wanted`: attached through `snap_drop` when an
+    /// edge is near, otherwise free. `legal` is false on overlap or a disconnected group.
+    #[must_use]
+    pub fn preview(&self, index: usize, wanted: (i32, i32)) -> Preview {
+        let size = (
+            self.outputs[index].rect.width,
+            self.outputs[index].rect.height,
+        );
+        let others: Vec<(usize, Rect)> = self
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(i, output)| (i, output.rect))
+            .collect();
+        let rects: Vec<Rect> = others.iter().map(|(_, rect)| *rect).collect();
+        let snapped = display_layout::snap_drop(&rects, size, wanted);
+        let rect = snapped.unwrap_or_else(|| Rect::new(wanted.0, wanted.1, size.0, size.1));
+        let snapped_to = snapped.and_then(|placed| {
+            others
+                .iter()
+                .find(|(_, other)| touches(placed, *other))
+                .map(|(i, _)| *i)
+        });
+        let mut trial = self.clone();
+        trial.outputs[index].rect = rect;
+        let legal = !others.iter().any(|(_, other)| overlaps(*other, rect)) && trial.connected();
+        Preview {
+            rect,
+            legal,
+            snapped_to,
+        }
+    }
+
+    /// Applies a drag step when legal; an illegal step leaves the last legal position.
+    pub fn drag_to(&mut self, index: usize, wanted: (i32, i32)) -> Preview {
+        let preview = self.preview(index, wanted);
+        if preview.legal {
+            self.outputs[index].rect = preview.rect;
+        }
+        preview
     }
 
     fn origin_offset(&self) -> (i32, i32) {
@@ -336,5 +477,57 @@ mod tests {
         assert_eq!(layout.status(), "HDMI-1 at 1920, 0");
         layout.nudge(Dir::Down).expect("slide");
         assert!(layout.status().contains("Enter keeps"));
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot, Rotation};
+    use flamewm_api::{ModeId, Size};
+
+    fn output(id: &str, geometry: Rect) -> OutputSnapshot {
+        OutputSnapshot {
+            id: OutputId::new(id),
+            connector: id.to_owned(),
+            edid_identity: format!("edid-{id}"),
+            connected: true,
+            primary: false,
+            geometry,
+            current_mode: ModeId(1),
+            modes: vec![DisplayMode {
+                id: ModeId(1),
+                resolution: Size::new(geometry.width, geometry.height),
+                refresh_millihz: 60_000,
+                preferred: true,
+            }],
+            shell_scale_percent: 100,
+            rotation: Rotation::Normal,
+        }
+    }
+
+    #[test]
+    fn drag_onto_another_output_is_blocked_and_keeps_the_last_legal_position() {
+        let snapshot = DisplaySnapshot {
+            generation: 1,
+            outputs: vec![
+                output("DP-1", Rect::new(0, 0, 1920, 1080)),
+                output("HDMI-1", Rect::new(1920, 0, 1280, 720)),
+            ],
+            pending: None,
+        };
+        let mut layout =
+            CanvasLayout::from_snapshot(&snapshot, &OutputId::new("HDMI-1")).expect("two");
+        let before = layout.outputs()[1].rect;
+        // Dropping HDMI-1 on top of DP-1 overlaps it, so the preview is illegal.
+        let blocked = layout.drag_to(1, (100, 100));
+        assert!(!blocked.legal);
+        assert_eq!(layout.outputs()[1].rect, before);
+        assert!(!layout.is_dirty());
+        // A legal edge drop applies and reports the neighbour it attached to.
+        let attached = layout.drag_to(1, (1920, 200));
+        assert!(attached.legal);
+        assert_eq!(attached.snapped_to, Some(0));
+        assert!(layout.is_dirty());
     }
 }

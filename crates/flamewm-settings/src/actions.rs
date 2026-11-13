@@ -109,6 +109,8 @@ pub(crate) enum SettingsAction {
     Hotkey(&'static str, HotkeyOperation),
     /// Output row `slot` on the current output page.
     DisplaySelect(usize),
+    /// Canvas node; pointer press, move and release are routed to `handle_canvas_pointer`.
+    DisplayCanvasNode,
     DisplayArrange(display_layout::Side),
     /// Mode row `slot` on the current mode page.
     DisplaySlot(usize),
@@ -579,6 +581,12 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
     }
     if action == "settings.display.arrange.right" {
         return Ok(SettingsAction::DisplayArrange(display_layout::Side::Right));
+    }
+    if let Some(index) = action.strip_prefix("settings.display.canvas.") {
+        return index
+            .parse::<usize>()
+            .map(|_| SettingsAction::DisplayCanvasNode)
+            .map_err(|_| format!("invalid canvas node '{index}'"));
     }
     if let Some(slot) = action.strip_prefix("settings.display.select.") {
         return slot

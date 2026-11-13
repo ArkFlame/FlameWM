@@ -131,6 +131,12 @@ pub struct SettingsApplication<T: ControlTransport> {
     file_manager_label: String,
     /// Planned arrangement sent to the WM; persisted only when its transaction is kept.
     pending_arrangement: Option<display_layout::Arrangement>,
+    /// Pointer drag on a canvas node, between press and release.
+    canvas_drag: Option<display_canvas::CanvasDrag>,
+    /// Live hint for the canvas status line while dragging.
+    canvas_hint: Option<String>,
+    /// Neighbour the dragged node is attached to, highlighted while dragging.
+    canvas_snap: Option<usize>,
     /// Keyboard arrangement canvas; `None` until the first arrow, Tab or Escape press.
     display_canvas: Option<display_canvas::CanvasLayout>,
 }

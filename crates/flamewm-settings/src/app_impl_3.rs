@@ -56,6 +56,69 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
+    /// Draws the canvas: one node per output, positioned in the bounded canvas, with the
+    /// selected output ringed and the snap target tinted while a drag is attached.
+    pub(crate) fn sync_display_canvas(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
+        let canvas = self.canvas_source().filter(|c| c.outputs().len() >= 2);
+        document.visible("display-canvas", canvas.is_some())?;
+        let accent = self.accent()?;
+        let subtle = UiColor {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 0x1a,
+        };
+        for index in 0..display_canvas::CANVAS_NODES {
+            let id = format!("display-canvas-node-{index}");
+            let Some(canvas) = canvas.as_ref().filter(|c| index < c.outputs().len()) else {
+                document.visible(&id, false)?;
+                continue;
+            };
+            document.visible(&id, true)?;
+            let (left, top, width, height) = canvas.node_px(index);
+            document.position(&id, left, top)?;
+            document.size(&id, width, height)?;
+            let output = &canvas.outputs()[index];
+            let rect = output.rect;
+            document.text(&id, output.connector.clone())?;
+            document.attribute(
+                &id,
+                "aria-label",
+                &format!(
+                    "{}, {} by {}, at {}, {}",
+                    output.connector, rect.width, rect.height, rect.x, rect.y
+                ),
+            )?;
+            let selected = index == canvas.selected_index();
+            document.attribute(&id, "aria-pressed", if selected { "true" } else { "false" })?;
+            document.border(&id, if selected { accent } else { subtle })?;
+            if self.canvas_snap == Some(index) {
+                document.background(
+                    &id,
+                    UiColor {
+                        r: accent.r,
+                        g: accent.g,
+                        b: accent.b,
+                        a: 0x40,
+                    },
+                )?;
+            } else {
+                document.background_clear(&id)?;
+            }
+        }
+        let status = canvas
+            .as_ref()
+            .map_or_else(String::new, display_canvas::CanvasLayout::status);
+        let text = match self.canvas_hint.as_deref() {
+            Some(hint) if !status.is_empty() => format!("{status}. {hint}"),
+            _ => status,
+        };
+        document.text("display-canvas-status", text)
+    }
+
     pub(crate) fn sync_display_scale(
         &self,
         document: &mut impl UiDocumentAccess,
