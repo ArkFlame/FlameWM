@@ -490,6 +490,7 @@ impl<C: Connection> Wm<'_, C> {
             client: window,
             frame,
             placement: crate::client::placement_floating(crate::client::rect_to_root(outer)),
+            snap_resize: None,
             hints,
             outer,
             workspace,

@@ -46,6 +46,8 @@ pub struct ManagedClient {
     pub transient_for: Option<Window>,
     pub minimized: bool,
     pub sticky: bool,
+    /// Edge-tile resize result for a snapped client; valid only while the placement still matches.
+    pub snap_resize: Option<SnapResize>,
     pub ignore_unmap: u8,
     pub kind: WindowKind,
     /// All-control hover target: `Some` when the pointer is inside the
@@ -97,6 +99,15 @@ pub fn placement_floating(current: RootRect) -> PlacementState {
         floating_restore: current,
         resume: None,
     }
+}
+
+/// Un-margined tile of an edge-tile resize, with the placement rect it produced. It is honoured
+/// only while the client still sits in `target` at exactly `rect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapResize {
+    pub target: crate::frame::model::SnapTarget,
+    pub tile: RootRect,
+    pub rect: RootRect,
 }
 
 impl ManagedClient {
@@ -175,6 +186,7 @@ mod tests {
             client: 1,
             frame: 2,
             placement: floating,
+            snap_resize: None,
             hints: ClientSizeHints::default(),
             outer: root_to_rect(start),
             workspace: 0,

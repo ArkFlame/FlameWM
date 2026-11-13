@@ -198,6 +198,17 @@ pub fn reduce_owned(
             ]);
             (state, effects)
         }
+        FrameEvent::SnapTile { tile } => {
+            let rect = state.layout_rect(tile);
+            state.placement.current = rect;
+            let mut effects = configure_effects(rect, state.extents);
+            effects.extend([
+                FrameEffect::LayoutInput,
+                FrameEffect::PaintChrome,
+                FrameEffect::ApplyShape,
+            ]);
+            (state, effects)
+        }
         FrameEvent::Snap { target } => {
             let rect = state.layout_rect(snap_rect(state.work_area, target));
             state.session = InteractionSession::Idle;

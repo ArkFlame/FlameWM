@@ -239,6 +239,18 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_TILE_RIGHT => self.keyboard_tile(Direction::Right)?,
             ACTION_TILE_UP => self.keyboard_tile(Direction::Up)?,
             ACTION_TILE_DOWN => self.keyboard_tile(Direction::Down)?,
+            flamewm_api::shortcuts::ACTION_TILE_RESIZE_LEFT => {
+                self.keyboard_tile_resize(Direction::Left)?;
+            }
+            flamewm_api::shortcuts::ACTION_TILE_RESIZE_RIGHT => {
+                self.keyboard_tile_resize(Direction::Right)?;
+            }
+            flamewm_api::shortcuts::ACTION_TILE_RESIZE_UP => {
+                self.keyboard_tile_resize(Direction::Up)?;
+            }
+            flamewm_api::shortcuts::ACTION_TILE_RESIZE_DOWN => {
+                self.keyboard_tile_resize(Direction::Down)?;
+            }
             ACTION_KEYBOARD_MOVE => self.begin_keyboard_move()?,
             ACTION_KEYBOARD_RESIZE => self.begin_keyboard_resize()?,
             ACTION_FOCUS_LEFT => self.focus_direction(GridDirection::Left)?,

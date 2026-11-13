@@ -241,6 +241,10 @@ pub enum FrameEvent {
     Snap {
         target: SnapTarget,
     },
+    /// Edge-tile resize: moves a snapped frame to the un-margined `tile`, keeping its snap mode.
+    SnapTile {
+        tile: RootRect,
+    },
     ToggleMax,
     ToggleFullscreen,
     Cancel,
