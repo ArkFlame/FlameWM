@@ -4,6 +4,8 @@
 //! `XDG_RUNTIME_DIR`, so no mmap or unsafe code is needed). Environment:
 //! - `FLAMEWM_TEST_COLOR` (hex, default `2E86C1`), `FLAMEWM_TEST_SIZE` (default `320x200`),
 //! - `FLAMEWM_TEST_HOLD_MS` (default `6000`): how long the window stays mapped.
+//! - `FLAMEWM_TEST_CONFIGURE_LOG` (optional path): every toplevel configure is appended as
+//!   `w h maximized activated` (state flags as 0/1), so a proof can read the client-reported geometry.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -19,6 +21,8 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 
 #[derive(Default)]
 struct App {
+    configure_log: Option<PathBuf>,
+    pending_configure: Option<(i32, i32, bool, bool)>,
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
@@ -82,6 +86,12 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for App {
     ) {
         if let xdg_surface::Event::Configure { serial } = event {
             state.pending_serial = Some(serial);
+            let pending = state.pending_configure.take();
+            if let (Some(path), Some((w, h, max, act))) = (state.configure_log.as_ref(), pending)
+                && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path)
+            {
+                let _ = writeln!(f, "{w} {h} {} {}", u8::from(max), u8::from(act));
+            }
         }
     }
 }
@@ -95,8 +105,27 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_toplevel::Event::Close = event {
-            state.closed = true;
+        match event {
+            xdg_toplevel::Event::Close => state.closed = true,
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => {
+                // Each state is a native-endian u32 in the byte array.
+                let has = |want: xdg_toplevel::State| {
+                    states
+                        .chunks_exact(4)
+                        .any(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) == want as u32)
+                };
+                state.pending_configure = Some((
+                    width,
+                    height,
+                    has(xdg_toplevel::State::Maximized),
+                    has(xdg_toplevel::State::Activated),
+                ));
+            }
+            _ => {}
         }
     }
 }
@@ -144,7 +173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut queue = conn.new_event_queue();
     let qh = queue.handle();
     let _registry = conn.display().get_registry(&qh, ());
-    let mut app = App::default();
+    let mut app = App {
+        configure_log: std::env::var_os("FLAMEWM_TEST_CONFIGURE_LOG").map(PathBuf::from),
+        ..App::default()
+    };
     queue.roundtrip(&mut app)?;
 
     let compositor = app.compositor.clone().ok_or("no wl_compositor")?;
