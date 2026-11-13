@@ -11,6 +11,7 @@ pub const EDGE_THRESHOLD: i32 = 16;
 pub const CORNER_THRESHOLD: i32 = 2 * EDGE_THRESHOLD;
 
 pub mod dock_reserve;
+pub mod edge_resize;
 pub mod geometry_memory;
 pub mod keyboard_move_resize;
 pub mod keyboard_tile;
