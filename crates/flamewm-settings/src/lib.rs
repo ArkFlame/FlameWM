@@ -128,6 +128,8 @@ pub struct SettingsApplication<T: ControlTransport> {
     /// Index of the installed application offered by the Startup picker.
     startup_pick: usize,
     file_manager_label: String,
+    /// Planned arrangement sent to the WM; persisted only when its transaction is kept.
+    pending_arrangement: Option<display_layout::Arrangement>,
 }
 
 /// Typed API key text not yet saved, with the inline message for the last Enter.

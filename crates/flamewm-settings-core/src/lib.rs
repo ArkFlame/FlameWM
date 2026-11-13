@@ -3,7 +3,7 @@
 //! The GUI process is intentionally separate from the WM process. It owns only transient UI state
 //! and cached immutable snapshots; all authoritative mutations cross Flame Control.
 
-use flamewm_api::display::{DisplayMode, DisplaySnapshot};
+use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputPlacement};
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::ShortcutSnapshot;
@@ -520,6 +520,28 @@ impl<T: ControlTransport> SettingsClient<T> {
         let response = self.transport.call(ControlRequest::BeginDisplayMode {
             output,
             mode,
+            expected_generation: snapshot.generation,
+            now_ms,
+        })?;
+        let ControlResponse::Transaction(transaction) = response else {
+            return Err(unexpected_response("display transaction"));
+        };
+        self.ui.pending_display_transaction = Some(transaction);
+        Ok(transaction)
+    }
+
+    /// Starts the WM-owned arrangement transaction; keep/revert follow the mode path.
+    pub fn set_display_arrangement(
+        &mut self,
+        placements: Vec<OutputPlacement>,
+        now_ms: u64,
+    ) -> Result<TransactionId, ControlError> {
+        let snapshot = self
+            .displays
+            .as_ref()
+            .ok_or_else(|| missing_snapshot("display"))?;
+        let response = self.transport.call(ControlRequest::SetDisplayArrangement {
+            placements,
             expected_generation: snapshot.generation,
             now_ms,
         })?;

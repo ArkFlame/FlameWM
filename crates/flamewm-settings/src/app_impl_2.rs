@@ -354,33 +354,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let Some(layout) = display_layout::plan(snapshot, &output, side)? else {
             return Ok(());
         };
-        display_layout::apply(&layout)?;
-        // Readback must confirm every output's geometry, mode, scale and primary.
-        // No success or persistence solely from xrandr's exit status.
-        self.client.refresh_displays().map_err(control_error)?;
-        let observed = self
-            .client
-            .displays()
-            .ok_or_else(|| "display readback unavailable".to_owned())?;
-        if let Err(error) = display_layout::verify(&layout, observed) {
-            let rollback = display_layout::rollback_if_safe(&layout, observed);
-            // Best-effort recovery must never be misreported as an accepted
-            // commit, even if the rollback command itself exited successfully.
-            let _ = self.client.refresh_displays();
-            return Err(match rollback {
-                Ok(()) => format!("{error}; previous monitor positions requested"),
-                Err(reason) => format!("{error}; rollback unavailable: {reason}"),
-            });
-        }
-        self.pages.generation = Some(observed.generation);
-        if let Err(error) = display_layout::persist_verified(&layout) {
-            return Err(format!("monitor layout applied but not saved: {error}"));
-        }
+        // The WM applies the placements in a keep/revert transaction (15 s deadline).
+        // The order is persisted only when the user keeps it.
+        self.client
+            .set_display_arrangement(display_layout::placements(&layout), monotonic_now_ms())
+            .map_err(control_error)?;
+        self.pending_arrangement = Some(layout);
         Ok(())
     }
 
     pub(crate) fn begin_display_mode(&mut self, mode: ModeId) -> Result<(), String> {
         let now_ms = monotonic_now_ms();
+        self.pending_arrangement = None;
         self.client
             .begin_display_mode(mode, now_ms)
             .map(|_| ())

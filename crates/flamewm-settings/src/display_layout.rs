@@ -1,14 +1,10 @@
-//! Bounded Settings display arrangement. Geometry planning is pure; native effects
-//! occur only after explicit user release and fresh snapshot validation.
-//!
-//! The current control protocol has no atomic `RandR` topology mutation. Until it
-//! does, this is a single argv-based xrandr invocation with mandatory readback,
-//! not a second cached display authority. No shell interpolation or modeset flags.
+//! Bounded Settings display arrangement. Geometry planning is pure. The WM owns the
+//! native `RandR` effect: Settings sends typed placements through the control
+//! keep/revert transaction, and persists the order only after the user keeps it.
 use std::collections::BTreeSet;
-use std::process::Command;
 
-use flamewm_api::display::{DisplaySnapshot, OutputSnapshot};
-use flamewm_api::{ModeId, OutputId, Rect};
+use flamewm_api::display::{DisplaySnapshot, OutputPlacement, OutputSnapshot};
+use flamewm_api::{OutputId, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -20,16 +16,11 @@ pub enum Side {
 pub struct OutputPosition {
     pub id: OutputId,
     pub connector: String,
-    pub before: Rect,
     pub after: Rect,
-    pub mode: ModeId,
-    pub primary: bool,
-    pub scale: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arrangement {
-    pub generation: u64,
     pub outputs: Vec<OutputPosition>,
 }
 
@@ -44,10 +35,8 @@ pub fn active_outputs(snapshot: &DisplaySnapshot) -> Vec<&OutputSnapshot> {
     outputs
 }
 
-/// Move an output one neighboring slot, retaining every active mode, rotation,
-/// primary flag and per-output shell scale. The resulting contiguous horizontal
-/// strip has no transient/overlapping CRTC positions to depend on.
-/// `Ok(None)` is a boundary/no-op, and must never issue a `RandR` request.
+/// Move an output one neighboring slot. The result is a contiguous horizontal strip
+/// with no overlapping outputs. `Ok(None)` is a boundary/no-op.
 pub fn plan(
     snapshot: &DisplaySnapshot,
     output: &OutputId,
@@ -107,145 +96,29 @@ pub fn plan(
         planned.push(OutputPosition {
             id: candidate.id.clone(),
             connector: candidate.connector.clone(),
-            before: candidate.geometry,
             after,
-            mode: candidate.current_mode,
-            primary: candidate.primary,
-            scale: candidate.shell_scale_percent,
         });
     }
-    Ok(Some(Arrangement {
-        generation: snapshot.generation,
-        outputs: planned,
-    }))
+    Ok(Some(Arrangement { outputs: planned }))
 }
 
-/// One xrandr invocation updates every active output. --fb covers unequal-width
-/// rotations before the output positions are applied; no mode/rate/scale flags.
-pub fn placement_args(plan: &Arrangement, previous: bool) -> Result<Vec<String>, String> {
-    if plan.outputs.is_empty() {
-        return Err("empty monitor layout".into());
-    }
-    let mut args = Vec::with_capacity(plan.outputs.len() * 4 + 2);
-    let mut max_right = 0i32;
-    let mut max_bottom = 0i32;
-    for output in &plan.outputs {
-        let rect = if previous {
-            output.before
-        } else {
-            output.after
-        };
-        if !rect.is_valid() || rect.x < 0 || rect.y < 0 {
-            return Err(
-                "negative or invalid framebuffer placement cannot be sent to xrandr".into(),
-            );
-        }
-        max_right = max_right.max(
-            rect.x
-                .checked_add(rect.width)
-                .ok_or_else(|| "display framebuffer X overflow".to_owned())?,
-        );
-        max_bottom = max_bottom.max(
-            rect.y
-                .checked_add(rect.height)
-                .ok_or_else(|| "display framebuffer Y overflow".to_owned())?,
-        );
-    }
-    args.extend(["--fb".to_owned(), format!("{max_right}x{max_bottom}")]);
-    for output in &plan.outputs {
-        let rect = if previous {
-            output.before
-        } else {
-            output.after
-        };
-        args.extend([
-            "--output".to_owned(),
-            output.connector.clone(),
-            "--pos".to_owned(),
-            format!("{}x{}", rect.x, rect.y),
-        ]);
-    }
-    Ok(args)
-}
-
-pub fn apply(plan: &Arrangement) -> Result<(), String> {
-    let args = placement_args(plan, false)?;
-    let result = Command::new("xrandr")
-        .args(&args)
-        .output()
-        .map_err(|error| format!("xrandr could not apply monitor layout: {error}"))?;
-    if !result.status.success() {
-        return Err(format!(
-            "RandR rejected monitor layout: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        ));
-    }
-    Ok(())
-}
-
-/// Reject success based only on the subprocess exit code. A true commit needs
-/// a new authoritative WM snapshot with identical modes/primary/scale/positions.
-pub fn verify(plan: &Arrangement, current: &DisplaySnapshot) -> Result<(), String> {
-    if current.pending.is_some() {
-        return Err("a display mode confirmation became pending during arrangement".into());
-    }
-    let active = active_outputs(current);
-    if active.len() != plan.outputs.len() {
-        return Err("active output topology changed during arrangement".into());
-    }
-    for intended in &plan.outputs {
-        let observed = active
-            .iter()
-            .find(|output| output.id == intended.id && output.connector == intended.connector)
-            .ok_or_else(|| format!("{} disappeared during arrangement", intended.connector))?;
-        if observed.geometry != intended.after
-            || observed.current_mode != intended.mode
-            || observed.primary != intended.primary
-            || observed.shell_scale_percent != intended.scale
-        {
-            return Err(format!(
-                "{} did not reach its committed geometry and mode",
-                intended.connector
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Rollback is permissible only if the same physical output identities,
-/// primary state and display modes still exist. A hotplug or concurrent mode
-/// change must not be overridden with coordinates from an obsolete snapshot.
-pub fn rollback_if_safe(plan: &Arrangement, observed: &DisplaySnapshot) -> Result<(), String> {
-    if observed.pending.is_some() || active_outputs(observed).len() != plan.outputs.len() {
-        return Err("cannot roll back changed monitor topology".into());
-    }
-    for old in &plan.outputs {
-        if !active_outputs(observed).iter().any(|output| {
-            output.id == old.id
-                && output.connector == old.connector
-                && output.current_mode == old.mode
-                && output.primary == old.primary
-        }) {
-            return Err("cannot roll back a changed output identity or mode".into());
-        }
-    }
-    let args = placement_args(plan, true)?;
-    let result = Command::new("xrandr")
-        .args(args)
-        .output()
-        .map_err(|error| format!("could not start RandR rollback: {error}"))?;
-    if !result.status.success() {
-        return Err(format!(
-            "RandR rollback rejected: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        ));
-    }
-    Ok(())
+/// Typed `SetDisplayArrangement` payload for the WM transaction.
+#[must_use]
+pub fn placements(plan: &Arrangement) -> Vec<OutputPlacement> {
+    plan.outputs
+        .iter()
+        .map(|output| OutputPlacement {
+            output: output.id.clone(),
+            x: output.after.x,
+            y: output.after.y,
+        })
+        .collect()
 }
 
 /// Only the pre-existing two-output session persistence format can be written
 /// here. Multi-output persistence requires the session owner's typed schema.
-pub fn persist_verified(plan: &Arrangement) -> Result<(), String> {
+/// Call only after the WM reports a kept transaction.
+pub fn persist_kept(plan: &Arrangement) -> Result<(), String> {
     if plan.outputs.len() != 2 {
         return Err(
             "multi-output layout persistence requires the session owner's updated schema".into(),
@@ -259,7 +132,7 @@ pub fn persist_verified(plan: &Arrangement) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_api::Rect;
+    use flamewm_api::{ModeId, Rect};
 
     fn output(id: &str, x: i32, y: i32, width: i32, height: i32) -> OutputSnapshot {
         OutputSnapshot {
@@ -285,33 +158,31 @@ mod tests {
         }
     }
     #[test]
-    fn swapped_unequal_resolutions_have_correct_nonoverlapping_framebuffer() {
-        let snapshot = snap();
-        let layout = plan(&snapshot, &OutputId::new("HDMI-1"), Side::Left)
+    fn swapped_unequal_resolutions_form_gap_free_strip() {
+        let layout = plan(&snap(), &OutputId::new("HDMI-1"), Side::Left)
             .unwrap()
             .unwrap();
-        assert_eq!(layout.outputs[0].connector, "HDMI-1");
+        assert_eq!(layout.outputs[0].id, OutputId::new("HDMI-1"));
         assert_eq!(layout.outputs[0].after, Rect::new(0, 0, 2560, 1440));
         assert_eq!(layout.outputs[1].after, Rect::new(2560, 0, 1920, 1080));
         assert_eq!(
-            placement_args(&layout, false).unwrap().join(" "),
-            "--fb 4480x1440 --output HDMI-1 --pos 0x0 --output DP-1 --pos 2560x0"
+            placements(&layout),
+            vec![
+                OutputPlacement {
+                    output: OutputId::new("HDMI-1"),
+                    x: 0,
+                    y: 0,
+                },
+                OutputPlacement {
+                    output: OutputId::new("DP-1"),
+                    x: 2560,
+                    y: 0,
+                },
+            ]
         );
-        let mut readback = snapshot;
-        for new in &layout.outputs {
-            readback
-                .outputs
-                .iter_mut()
-                .find(|o| o.id == new.id)
-                .unwrap()
-                .geometry = new.after;
-        }
-        assert!(verify(&layout, &readback).is_ok());
-        readback.outputs[1].geometry.width = 2560;
-        assert!(verify(&layout, &readback).is_err());
     }
     #[test]
-    fn four_outputs_adjacent_swap_preserves_modes_and_y_offsets() {
+    fn four_outputs_adjacent_swap_normalizes_y_offsets() {
         let mut snapshot = snap();
         snapshot
             .outputs
@@ -323,7 +194,7 @@ mod tests {
         let positions: Vec<_> = layout
             .outputs
             .iter()
-            .map(|o| (o.connector.as_str(), o.after))
+            .map(|o| (o.id.as_str(), o.after))
             .collect();
         assert_eq!(
             positions,
@@ -334,8 +205,6 @@ mod tests {
                 ("eDP-1", Rect::new(5680, 100, 1280, 800)),
             ]
         );
-        assert!(layout.outputs[2].primary);
-        assert_eq!(layout.outputs[2].scale, 125);
     }
     #[test]
     fn no_effect_at_boundaries_and_untrusted_outputs_rejected() {

@@ -21,6 +21,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             appearance_tab: AppearanceTab::Theme,
             applied_cursor_theme: None,
             monitor_drag: None,
+            pending_arrangement: None,
             scale_drag: None,
             scale_slider_focused: false,
             nav_query: String::new(),
@@ -839,11 +840,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     .set_shell_scale(percent)
                     .map_err(control_error)?;
             }
-            SettingsAction::DisplayKeep => self
-                .client
-                .keep_display_mode(monotonic_now_ms())
-                .map_err(control_error)?,
+            SettingsAction::DisplayKeep => {
+                self.client
+                    .keep_display_mode(monotonic_now_ms())
+                    .map_err(control_error)?;
+                if let Some(layout) = self.pending_arrangement.take() {
+                    display_layout::persist_kept(&layout)
+                        .map_err(|error| format!("monitor layout kept but not saved: {error}"))?;
+                }
+            }
             SettingsAction::DisplayRevert => {
+                self.pending_arrangement = None;
                 self.client.revert_display_mode().map_err(control_error)?;
             }
             SettingsAction::OpenUri(uri) => self.start_open_uri(uri)?,
