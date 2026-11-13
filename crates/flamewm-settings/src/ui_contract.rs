@@ -192,6 +192,8 @@ fn output(id: &str, primary: bool, modes: usize) -> OutputSnapshot {
         current_mode: ModeId(1),
         modes: modes_list,
         shell_scale_percent: 100,
+
+        rotation: flamewm_api::display::Rotation::Normal,
     }
 }
 

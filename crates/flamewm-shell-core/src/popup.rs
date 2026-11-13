@@ -770,6 +770,8 @@ mod panel_popup_edge_tests {
             current_mode: flamewm_api::ModeId(1),
             modes: Vec::new(),
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         };
         let cases = [
             (

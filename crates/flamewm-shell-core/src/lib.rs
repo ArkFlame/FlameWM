@@ -802,6 +802,8 @@ mod tests {
             current_mode: ModeId(1),
             modes: Vec::new(),
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         };
         let displays = DisplaySnapshot {
             generation: 1,

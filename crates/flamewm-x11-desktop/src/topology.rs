@@ -164,6 +164,19 @@ fn arrange(
 
 /// Maps the typed quarter-turn to the `RandR` rotation bit (clockwise from native orientation).
 #[must_use]
+/// `RandR` CRTC rotation bit back to the API rotation. Unknown bits read as `Normal`.
+pub fn rotation_from_bit(bit: randr::Rotation) -> Rotation {
+    if bit == randr::Rotation::ROTATE90 {
+        Rotation::Right
+    } else if bit == randr::Rotation::ROTATE180 {
+        Rotation::Inverted
+    } else if bit == randr::Rotation::ROTATE270 {
+        Rotation::Left
+    } else {
+        Rotation::Normal
+    }
+}
+
 pub fn rotation_bit(rotation: Rotation) -> randr::Rotation {
     match rotation {
         Rotation::Normal => randr::Rotation::ROTATE0,

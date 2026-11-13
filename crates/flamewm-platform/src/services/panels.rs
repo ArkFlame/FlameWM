@@ -333,6 +333,8 @@ mod tests {
             current_mode: ModeId(u64::from(w != 0)),
             modes: Vec::new(),
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         };
         let first = DisplaySnapshot {
             generation: 1,
@@ -378,6 +380,8 @@ mod tests {
                 current_mode: ModeId(0),
                 modes: Vec::new(),
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         }));
@@ -399,6 +403,8 @@ mod tests {
             current_mode: ModeId(0),
             modes: Vec::new(),
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         };
         assert!(!service.sync_outputs(&DisplaySnapshot {
             generation: 1,
@@ -426,6 +432,8 @@ mod tests {
                 current_mode: ModeId(1),
                 modes: Vec::new(),
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         });
@@ -454,6 +462,8 @@ mod tests {
                     current_mode: ModeId(1),
                     modes: Vec::new(),
                     shell_scale_percent: scale,
+
+                    rotation: flamewm_api::display::Rotation::Normal,
                 }],
                 pending: None,
             };
@@ -487,6 +497,8 @@ mod tests {
                 current_mode: ModeId(1),
                 modes: Vec::new(),
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         };
@@ -522,6 +534,8 @@ mod tests {
                 current_mode: ModeId(1),
                 modes: Vec::new(),
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         };
@@ -554,6 +568,8 @@ mod tests {
                 current_mode: ModeId(1),
                 modes: Vec::new(),
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             };
         let mut service = PanelService::default();
         let mut snapshot = DisplaySnapshot {

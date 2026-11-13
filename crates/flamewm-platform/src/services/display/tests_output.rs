@@ -104,6 +104,8 @@ impl DisplayPort for TwoOutputPort {
                         .map(|id| mode(id.0, 1920, 1080, false))
                         .collect(),
                     shell_scale_percent: 100,
+
+                    rotation: flamewm_api::display::Rotation::Normal,
                 })
                 .collect(),
             pending: None,

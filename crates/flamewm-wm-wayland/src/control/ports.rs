@@ -150,6 +150,7 @@ impl DisplayPort for WaylandDesktop {
                     preferred: true,
                 }],
                 shell_scale_percent: nested_output_scale_percent(),
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         })

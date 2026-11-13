@@ -1023,6 +1023,8 @@ impl DisplayPort for X11Desktop {
                 current_mode,
                 modes,
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             });
         }
         if outputs.is_empty() {
@@ -1038,6 +1040,8 @@ impl DisplayPort for X11Desktop {
                     current_mode: ModeId(0),
                     modes: Vec::new(),
                     shell_scale_percent: 100,
+
+                    rotation: flamewm_api::display::Rotation::Normal,
                 });
             }
         }
@@ -1146,6 +1150,8 @@ mod output_derivation_tests {
             current_mode: ModeId(1),
             modes: Vec::new(),
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         }
     }
 

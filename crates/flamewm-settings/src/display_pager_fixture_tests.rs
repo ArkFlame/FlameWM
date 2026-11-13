@@ -32,6 +32,8 @@ fn five_output_twelve_mode_snapshot() -> DisplaySnapshot {
                 current_mode: ModeId(first_mode_id + 10),
                 modes,
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }
         })
         .collect();

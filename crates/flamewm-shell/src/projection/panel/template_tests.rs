@@ -256,6 +256,8 @@ fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
             current_mode: flamewm_api::ModeId(1),
             modes: Vec::new(),
             shell_scale_percent: 125,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         });
     snapshot
         .panels

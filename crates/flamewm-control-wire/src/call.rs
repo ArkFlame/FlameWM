@@ -533,7 +533,7 @@ pub(crate) const fn session_method(action: SessionAction) -> &'static str {
     }
 }
 
-fn rotation_to_wire(rotation: Rotation) -> u32 {
+pub(crate) fn rotation_to_wire(rotation: Rotation) -> u32 {
     match rotation {
         Rotation::Normal => 0,
         Rotation::Left => 1,
@@ -542,7 +542,7 @@ fn rotation_to_wire(rotation: Rotation) -> u32 {
     }
 }
 
-fn rotation_from_wire(value: u32) -> Result<Rotation, ControlError> {
+pub(crate) fn rotation_from_wire(value: u32) -> Result<Rotation, ControlError> {
     match value {
         0 => Ok(Rotation::Normal),
         1 => Ok(Rotation::Left),

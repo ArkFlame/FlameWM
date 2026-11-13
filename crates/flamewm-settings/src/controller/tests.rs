@@ -330,6 +330,8 @@ fn display_snapshot() -> DisplaySnapshot {
                 preferred: true,
             }],
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         }],
         pending: None,
     }

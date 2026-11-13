@@ -339,7 +339,7 @@ impl DisplayPort for X11Desktop {
                 continue;
             }
             let crtc = info.crtc;
-            let (geometry, current_mode) = if crtc != 0 {
+            let (geometry, current_mode, rotation) = if crtc != 0 {
                 let c = self
                     .conn
                     .randr_get_crtc_info(crtc, resources.config_timestamp)
@@ -354,9 +354,14 @@ impl DisplayPort for X11Desktop {
                         i32::from(c.height),
                     ),
                     ModeId(u64::from(c.mode)),
+                    crate::topology::rotation_from_bit(c.rotation),
                 )
             } else {
-                (Rect::default(), ModeId(0))
+                (
+                    Rect::default(),
+                    ModeId(0),
+                    flamewm_api::display::Rotation::Normal,
+                )
             };
             let modes = shared::display_modes(&info.modes, &resources.modes);
             outputs.push(OutputSnapshot {
@@ -369,6 +374,7 @@ impl DisplayPort for X11Desktop {
                 current_mode,
                 modes,
                 shell_scale_percent: 100,
+                rotation,
             });
         }
         // Some nested and legacy X servers do not implement RandR primary.

@@ -1508,3 +1508,36 @@ fn bluetooth_snapshot_round_trips_and_absent_keys_decode_to_default() {
         BluetoothSnapshot::default()
     );
 }
+
+#[test]
+fn output_rotation_round_trips_and_defaults_to_normal_when_absent() {
+    use crate::decode::output_snapshot;
+    use crate::encode::output_wire_value;
+    use crate::wire::WireValue;
+    use flamewm_api::display::{OutputSnapshot, Rotation};
+    use flamewm_api::{ModeId, OutputId, Rect};
+    let output = OutputSnapshot {
+        id: OutputId::new("DP-1"),
+        connector: "DP-1".to_owned(),
+        edid_identity: String::new(),
+        connected: true,
+        primary: true,
+        geometry: Rect::new(0, 0, 1920, 1080),
+        current_mode: ModeId(1),
+        modes: Vec::new(),
+        shell_scale_percent: 100,
+        rotation: Rotation::Left,
+    };
+    let value = output_wire_value(&output);
+    assert_eq!(
+        output_snapshot(&value).expect("decode").rotation,
+        Rotation::Left
+    );
+    // An older peer that omits the key still decodes, as the unrotated default.
+    let WireValue::Dict(mut dict) = value else {
+        panic!("output encodes as a dict");
+    };
+    dict.remove("rotation");
+    let legacy = output_snapshot(&WireValue::Dict(dict)).expect("legacy decode");
+    assert_eq!(legacy.rotation, Rotation::Normal);
+}

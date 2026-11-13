@@ -317,6 +317,8 @@ fn panel_output(id: &str, geometry: flamewm_api::Rect) -> flamewm_api::display::
         current_mode: flamewm_api::ModeId(1),
         modes: Vec::new(),
         shell_scale_percent: 100,
+
+        rotation: flamewm_api::display::Rotation::Normal,
     }
 }
 

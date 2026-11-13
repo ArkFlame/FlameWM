@@ -54,6 +54,8 @@ impl DisplayPort for TwoModePort {
                 current_mode: self.mode,
                 modes: vec![mode(1, 1920, 1080, true), mode(2, 1280, 720, false)],
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         })

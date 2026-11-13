@@ -61,6 +61,8 @@ fn display_snapshot() -> DisplaySnapshot {
                 preferred: true,
             }],
             shell_scale_percent: 100,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         }],
         pending: None,
     }
@@ -807,6 +809,8 @@ fn two_output_display_snapshot() -> DisplaySnapshot {
         current_mode: ModeId(current),
         modes,
         shell_scale_percent: 100,
+
+        rotation: flamewm_api::display::Rotation::Normal,
     };
     DisplaySnapshot {
         generation: 5,

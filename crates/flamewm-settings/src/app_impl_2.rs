@@ -816,6 +816,30 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "aria-checked",
                 &output.primary.to_string(),
             )?;
+            for (id, rotation) in [
+                (
+                    "display-rotation-normal",
+                    flamewm_api::display::Rotation::Normal,
+                ),
+                (
+                    "display-rotation-left",
+                    flamewm_api::display::Rotation::Left,
+                ),
+                (
+                    "display-rotation-inverted",
+                    flamewm_api::display::Rotation::Inverted,
+                ),
+                (
+                    "display-rotation-right",
+                    flamewm_api::display::Rotation::Right,
+                ),
+            ] {
+                document.attribute(
+                    id,
+                    "aria-checked",
+                    &(output.rotation == rotation).to_string(),
+                )?;
+            }
             self.sync_display_scale(
                 document,
                 self.scale_drag

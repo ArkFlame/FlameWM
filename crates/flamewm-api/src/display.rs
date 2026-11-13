@@ -19,6 +19,8 @@ pub struct OutputSnapshot {
     pub current_mode: ModeId,
     pub modes: Vec<DisplayMode>,
     pub shell_scale_percent: u16,
+    /// Current panel rotation; the WM reports it, peers that omit it read as `Normal`.
+    pub rotation: Rotation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

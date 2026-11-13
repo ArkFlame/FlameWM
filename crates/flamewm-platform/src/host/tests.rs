@@ -166,6 +166,8 @@ fn fake_display(shell_scale_percent: u16) -> DisplaySnapshot {
             current_mode: ModeId(1),
             modes: Vec::new(),
             shell_scale_percent,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         }],
         pending: None,
     }

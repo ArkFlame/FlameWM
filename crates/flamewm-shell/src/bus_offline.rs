@@ -30,6 +30,8 @@ pub fn offline_snapshot(root: (u32, u32)) -> ShellSnapshot {
                 current_mode: flamewm_api::ModeId(0),
                 modes: Vec::new(),
                 shell_scale_percent: 100,
+
+                rotation: flamewm_api::display::Rotation::Normal,
             }],
             pending: None,
         },

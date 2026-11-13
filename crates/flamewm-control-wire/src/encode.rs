@@ -496,6 +496,10 @@ pub(crate) fn output_wire_value(output: &OutputSnapshot) -> WireValue {
         WireValue::U32(u32::from(output.shell_scale_percent)),
     );
     item.insert(
+        "rotation".to_owned(),
+        WireValue::U32(crate::call::rotation_to_wire(output.rotation)),
+    );
+    item.insert(
         "modes".to_owned(),
         WireValue::Array(
             output

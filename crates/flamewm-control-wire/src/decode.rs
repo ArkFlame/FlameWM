@@ -192,6 +192,10 @@ pub(crate) fn output_snapshot(value: &WireValue) -> Result<OutputSnapshot, Contr
         current_mode: ModeId(dict_u64(dict, "mode")?),
         modes,
         shell_scale_percent: u16::try_from(scale).map_err(|_| invalid("scale exceeds u16"))?,
+        rotation: match dict.get("rotation") {
+            Some(_) => crate::call::rotation_from_wire(dict_u32(dict, "rotation")?)?,
+            None => flamewm_api::display::Rotation::Normal,
+        },
     })
 }
 

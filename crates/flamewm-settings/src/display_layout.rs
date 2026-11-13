@@ -193,6 +193,8 @@ mod tests {
             current_mode: ModeId(1),
             modes: vec![],
             shell_scale_percent: 125,
+
+            rotation: flamewm_api::display::Rotation::Normal,
         }
     }
     fn snap() -> DisplaySnapshot {

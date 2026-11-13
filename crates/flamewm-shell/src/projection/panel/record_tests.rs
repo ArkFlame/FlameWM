@@ -12,6 +12,8 @@ fn output(id: &str, x: i32, scale: u16) -> flamewm_api::display::OutputSnapshot 
         current_mode: flamewm_api::ModeId::default(),
         modes: Vec::new(),
         shell_scale_percent: scale,
+
+        rotation: flamewm_api::display::Rotation::Normal,
     }
 }
 
