@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use flamewm_integrations_linux::bluetooth_agent::{Decision, PromptKind};
-use flamewm_shell::bluetooth_dialog::Shown;
+use flamewm_shell::bluetooth_dialog::{button_activation, Shown};
 use flamewm_shell::projection;
 use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
@@ -62,6 +62,10 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         input: &str,
     ) -> Result<(), UiBackendError> {
+        let focus = self.bluetooth_dialog.borrow().focus();
+        if let Some(action) = button_activation(Some(input), focus) {
+            return self.route_bluetooth_action(runtime, action);
+        }
         match input {
             "\u{1b}" => self.bluetooth_reject(),
             "\n" => self.bluetooth_accept(),

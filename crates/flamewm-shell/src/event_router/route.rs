@@ -214,6 +214,18 @@ impl ShellLoop {
                 return self.project_overflow_menu(runtime);
             }
         }
+        if self.surfaces.is_bluetooth_open()
+            && action == "__flamewm.ui.key"
+            && event.action.phase == ActionPhase::Press
+        {
+            // Pairing card: Tab leaves the PIN field into the buttons and walks them.
+            let payload = event.action.text.as_deref().unwrap_or_default();
+            let focus = self.bluetooth_dialog.borrow().focus();
+            if let Some(next) = crate::bluetooth_dialog::tab_focus_after_key(payload, focus) {
+                self.bluetooth_dialog.borrow_mut().set_focus(Some(next));
+                return self.sync_bluetooth(runtime);
+            }
+        }
         if !self.surfaces.is_media_open() {
             self.media_focus = None;
         }

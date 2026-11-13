@@ -1,7 +1,40 @@
 //! Bluetooth pairing card model: the prompt or notice on screen, the typed PIN or passkey, and the
 //! error line. The agent owns the queue; this model holds only what the card has typed.
 
+//! Keyboard model: while the typed field has focus, printable keys and Space edit the value. Tab
+//! leaves the field into the two buttons and walks them (Shift+Tab backward, wrapping). Space on a
+//! focused button activates it once; Enter always accepts. Precedent: WAI-ARIA APG dialog (Tab
+//! moves between controls, Space activates a button) and KDE bluedevil's pairing wizard, whose
+//! PIN page hands focus to its buttons. KDE is not vendored under `.vendor/`; idea only.
+
 use flamewm_integrations_linux::bluetooth_agent::{check_typed, Decision, PromptKind};
+
+use crate::focus_keys::tab_focus_after;
+
+/// Focus stops on the card, in Tab order: Reject, then Accept.
+pub const BUTTON_IDS: [&str; 2] = ["bluetooth-reject", "bluetooth-accept"];
+/// Action dispatched by each button, indexed like `BUTTON_IDS`.
+pub const BUTTON_ACTIONS: [&str; 2] = ["bluetooth.reject", "bluetooth.accept"];
+
+/// Focus after a typed Tab on the card; `None` for any other key.
+#[must_use]
+pub fn tab_focus_after_key(payload: &str, focus: Option<usize>) -> Option<usize> {
+    tab_focus_after(payload, focus, BUTTON_IDS.len())
+}
+
+/// Action of the focused button when a typed Space activates it; `None` otherwise. Enter is not
+/// listed: it accepts the prompt on every focus.
+#[must_use]
+pub fn button_activation(text: Option<&str>, focus: Option<usize>) -> Option<&'static str> {
+    let index = focus.filter(|index| *index < BUTTON_ACTIONS.len())?;
+    matches!(text, Some(" ")).then_some(BUTTON_ACTIONS[index])
+}
+
+/// Focus ring per button: true on the focused button, false elsewhere.
+#[must_use]
+pub fn button_focus_ring(focus: Option<usize>) -> [bool; BUTTON_IDS.len()] {
+    std::array::from_fn(|index| focus == Some(index))
+}
 
 /// Longest typed value. A PIN is at most 16 characters; a passkey is at most six digits.
 pub const MAX_TYPED_CHARS: usize = 16;
@@ -19,16 +52,29 @@ pub struct BluetoothDialog {
     active: Option<u64>,
     typed: String,
     error: Option<&'static str>,
+    /// Focused button index (see `BUTTON_IDS`); `None` keeps focus on the typed field.
+    focus: Option<usize>,
 }
 
 impl BluetoothDialog {
-    /// Keeps the typed text with its prompt: any other prompt id, or a notice (`None`), clears it.
+    /// Keeps the typed text with its prompt: any other prompt id, or a notice (`None`), clears it
+    /// and returns focus to the field.
     pub fn follow(&mut self, id: Option<u64>) {
         if id != self.active {
             self.active = id;
             self.typed.clear();
             self.error = None;
+            self.focus = None;
         }
+    }
+
+    #[must_use]
+    pub fn focus(&self) -> Option<usize> {
+        self.focus
+    }
+
+    pub fn set_focus(&mut self, focus: Option<usize>) {
+        self.focus = focus;
     }
 
     #[must_use]
