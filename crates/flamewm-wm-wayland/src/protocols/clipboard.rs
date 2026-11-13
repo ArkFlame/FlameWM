@@ -7,6 +7,7 @@
 //! selection larger than `MAX_TEXT_BYTES` or unreadable within `READ_TIMEOUT` is not kept.
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;
@@ -33,6 +34,78 @@ pub const TEXT_MIMES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UT
 pub const MAX_TEXT_BYTES: usize = 1 << 20;
 /// A source that has not finished sending within this time is not kept.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(2);
+/// Clipboard history length. Klipper's default (`klipper/historymodel.cpp`, `MaxClipItems`).
+pub const HISTORY_LEN: usize = 20;
+/// Preview length in characters for one history entry.
+pub const PREVIEW_CHARS: usize = 120;
+/// KDE/KeePassXC convention (`x-kde-passwordManagerHint`): a source offering it holds a secret.
+pub const PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
+
+/// True when a selection's offered mime types mark it as a password-manager secret.
+pub fn is_sensitive(offered: &[String]) -> bool {
+    offered.iter().any(|mime| mime == PASSWORD_HINT)
+}
+
+/// Single-line preview of a history entry: the first non-empty line, trimmed, at most
+/// `PREVIEW_CHARS` characters (ellipsis when cut).
+#[cfg_attr(not(test), allow(dead_code))] // shown by the control wire in the next slice
+pub fn preview(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if line.chars().count() <= PREVIEW_CHARS {
+        return line.to_owned();
+    }
+    let mut cut: String = line.chars().take(PREVIEW_CHARS - 1).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
+/// Newest-first history of distinct text entries on CLIPBOARD. Each entry has a stable id.
+/// Pure memory: no I/O, no timers.
+#[derive(Default)]
+pub struct TextHistory {
+    next_id: u64,
+    items: VecDeque<(u64, String)>,
+}
+
+impl TextHistory {
+    /// Adds `text` at the front, moving an equal entry there with a fresh id. Returns false for
+    /// empty text, non-UTF-8 text (caller's job), or text above `MAX_TEXT_BYTES`.
+    pub fn push(&mut self, text: String) -> bool {
+        if text.is_empty() || text.len() > MAX_TEXT_BYTES {
+            return false;
+        }
+        if let Some(pos) = self.items.iter().position(|(_, item)| *item == text) {
+            self.items.remove(pos);
+        }
+        self.next_id += 1;
+        self.items.push_front((self.next_id, text));
+        self.items.truncate(HISTORY_LEN);
+        true
+    }
+
+    /// Entries newest first, as (id, text).
+    #[cfg_attr(not(test), allow(dead_code))] // listed by the control wire in the next slice
+    pub fn entries(&self) -> impl Iterator<Item = (u64, &str)> {
+        self.items.iter().map(|(id, text)| (*id, text.as_str()))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))] // used by select
+    pub fn get(&self, id: u64) -> Option<&str> {
+        self.items
+            .iter()
+            .find(|(item_id, _)| *item_id == id)
+            .map(|(_, text)| text.as_str())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))] // used by clear
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+}
 
 /// The preferred text mime type among those a selection offers, or None for a non-text selection.
 pub fn pick_text_mime(offered: &[String]) -> Option<&'static str> {
@@ -98,6 +171,9 @@ impl TextSlot {
 pub struct TextPersistence {
     clipboard: TextSlot,
     primary: TextSlot,
+    /// Clipboard text history (PRIMARY is not recorded).
+    #[cfg_attr(not(test), allow(dead_code))] // read by the control wire in the next slice
+    pub history: TextHistory,
 }
 
 impl TextPersistence {
@@ -125,7 +201,8 @@ impl State {
         offered: &[String],
         seat: Seat<Self>,
     ) {
-        let Some(mime) = pick_text_mime(offered) else {
+        // Password-manager secrets are never kept, in the slot or in the history.
+        let Some(mime) = pick_text_mime(offered).filter(|_| !is_sensitive(offered)) else {
             self.compat.clipboard.slot_mut(ty).clear();
             return;
         };
@@ -230,6 +307,17 @@ impl State {
         {
             return;
         }
+        if ty == SelectionTarget::Clipboard
+            && let Some(text) = self
+                .compat
+                .clipboard
+                .slot(ty)
+                .text(mime)
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .map(str::to_owned)
+        {
+            self.compat.clipboard.history.push(text);
+        }
         let seat = self.seat.clone();
         let offers = vec![mime.to_owned()];
         match ty {
@@ -238,6 +326,29 @@ impl State {
             }
             SelectionTarget::Primary => set_primary_selection(&self.display, &seat, offers, ()),
         }
+    }
+}
+
+impl State {
+    /// Makes history entry `id` the CLIPBOARD selection, served like a kept owner's text. False when
+    /// the id is unknown.
+    #[allow(dead_code)] // called by the control wire in the next slice
+    pub(crate) fn select_clipboard_history(&mut self, id: u64) -> bool {
+        let Some(text) = self.compat.clipboard.history.get(id).map(str::to_owned) else {
+            return false;
+        };
+        let slot = self.compat.clipboard.slot_mut(SelectionTarget::Clipboard);
+        let generation = slot.begin();
+        slot.complete(generation, TEXT_MIMES[0], Some(text.into_bytes()));
+        let seat = self.seat.clone();
+        set_data_device_selection(&self.display, &seat, vec![TEXT_MIMES[0].to_owned()], ());
+        true
+    }
+
+    /// Empties the clipboard history. The current selection is left as it is.
+    #[allow(dead_code)] // called by the control wire in the next slice
+    pub(crate) fn clear_clipboard_history(&mut self) {
+        self.compat.clipboard.history.clear();
     }
 }
 
@@ -342,6 +453,76 @@ mod tests {
         assert!(!slot.complete(old, "text/plain", Some(b"old".to_vec())));
         assert!(slot.complete(new, "text/plain", Some(b"new".to_vec())));
         assert_eq!(slot.text("text/plain"), Some(&b"new"[..]));
+    }
+
+    fn text_entry(history: &TextHistory) -> Vec<&str> {
+        history.entries().map(|(_, text)| text).collect()
+    }
+
+    #[test]
+    fn history_is_newest_first_and_dedupe_moves_to_front() {
+        let mut history = TextHistory::default();
+        assert!(history.push("one".into()));
+        assert!(history.push("two".into()));
+        assert!(history.push("three".into()));
+        assert_eq!(text_entry(&history), ["three", "two", "one"]);
+        assert!(history.push("one".into()));
+        assert_eq!(text_entry(&history), ["one", "three", "two"]);
+        let ids: Vec<u64> = history.entries().map(|(id, _)| id).collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            3
+        );
+    }
+
+    #[test]
+    fn history_keeps_twenty_entries_and_evicts_oldest() {
+        let mut history = TextHistory::default();
+        for tag in 0..=HISTORY_LEN {
+            assert!(history.push(format!("item {tag}")));
+        }
+        assert_eq!(history.entries().count(), HISTORY_LEN);
+        assert_eq!(history.entries().next().map(|(_, t)| t), Some("item 20"));
+        assert!(history.entries().all(|(_, text)| text != "item 0"));
+    }
+
+    #[test]
+    fn history_rejects_empty_and_oversize_and_clears() {
+        let mut history = TextHistory::default();
+        assert!(!history.push(String::new()));
+        assert!(!history.push("x".repeat(MAX_TEXT_BYTES + 1)));
+        assert!(history.push("x".repeat(MAX_TEXT_BYTES)));
+        assert_eq!(history.entries().count(), 1);
+        history.clear();
+        assert_eq!(history.entries().count(), 0);
+    }
+
+    #[test]
+    fn history_select_by_id_and_unknown_id() {
+        let mut history = TextHistory::default();
+        history.push("first".into());
+        history.push("second".into());
+        let (first_id, _) = history.entries().last().unwrap();
+        assert_eq!(history.get(first_id), Some("first"));
+        assert_eq!(history.get(u64::MAX), None);
+    }
+
+    #[test]
+    fn sensitive_hint_marks_selection_secret() {
+        assert!(is_sensitive(&mimes(&["text/plain", PASSWORD_HINT])));
+        assert!(!is_sensitive(&mimes(&["text/plain;charset=utf-8"])));
+    }
+
+    #[test]
+    fn preview_is_one_line_and_capped() {
+        assert_eq!(preview("  first line \nsecond"), "first line");
+        assert_eq!(preview("\n\n  \nreal"), "real");
+        assert_eq!(preview(""), "");
+        let long = "a".repeat(300);
+        let shown = preview(&long);
+        assert_eq!(shown.chars().count(), PREVIEW_CHARS);
+        assert!(shown.ends_with('\u{2026}'));
     }
 
     #[test]
