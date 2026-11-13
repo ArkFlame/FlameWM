@@ -222,3 +222,34 @@ Process notes:
 - A worker report that `zoomfollow.sh` was absent was wrong. The script exists (`scripts/break/zoomfollow.sh`) and ran PASS 18/18 in `8df097ac`.
 - Commits pushed before a final rebase re-gate: `4be2a408`, `f44e83b6`, `79c2505b`, `25ddb667`, `9b5c18fa`, `ceab2b25`, `89959c83`, `860deeed`, `5bec483d`. Their gate closure is unchanged by inspection; they were not re-gated after the final rebase. `07c311d4` was re-gated after its push.
 - The earlier launch-once "not reproduced" claim was wrong; corrected in `5bec483d` and in BACKLOG.md.
+
+## 10. Addendum: reconcile a0ebcdad..e265bda0
+
+Landed on origin/main after the a0ebcdad reconcile (14 commits, oldest first). Claims follow the commit bodies and the runs they name; nothing here was re-run.
+
+- `5d46bf0e` X11 tiling, snap preview and titlebar double-click proof (executed 15/15 on build a0ebcdad).
+- `dc3f121f` X11 clipboard manager: not provided (no code; grep finds no selection hook in `flamewm-wm-x11`).
+- `01bb2495` Wayland clipboard and PRIMARY text kept after the owner exits (7 unit tests and `clipboard_persist.sh` PASS, executed; text only).
+- `6dca4ffc` audio slider keys step from the last target; focus ring; `shell_keys_proof.py` 32 PASS (executed, private Xvfb).
+- `743adbb2` nested-Wayland tiling and snap proof script (run result not in the commit body).
+- `c3e9d2c4` Alt+F7/F8 geometry; `_NET_WORKAREA` excludes the Dock reserve (unit).
+- `d9305d17` X11 Alt+F7/F8 keyboard move and resize; section 2b 23/23 in four runs, 22/23 in one (pointer drag-away check).
+- `e265bda0` Wayland Alt+F7/F8 keyboard move and resize (unit only; no nested proof, no pointer warp).
+- `54d21102`, `91400f0a`, `f5261e1e`, `951e66ed` AI usage data path (unit only; UI and tray card pending).
+- `12e16203` settings keyboard proof on a private bus; known failing Tab ring check (stop 17).
+- `7be74efe` Ctrl+Q closes Settings; Escape clears the sidebar search; sidebar focus ring (proof not clean at that commit).
+
+Unverified claims, stated as such in BACKLOG.md:
+
+- Wayland tiling 12/12 (`743adbb2`): the figure is not in any commit body (`wl-tiling-proof`).
+- Settings Tab focus ring (`12e16203`, `7be74efe`): failing; no fix commit in range; the "fixed in the next slice" note has no matching commit (`settings-keys-proof`).
+- X11 Alt+F7/F8 (`d9305d17`): one run 22/23 on the drag-away check; no FocusOut ungrab in the body (`kbd-move-x11`).
+- Wayland Alt+F7/F8 (`e265bda0`): no runtime proof, no pointer warp (`kbd-move-wl`).
+- Usage card (`951e66ed` and the three before it): no UI, no live provider call (`usage-card`).
+
+Process notes:
+
+- A worker once started a settings binary outside a private bus; the probe reached the host bus. No known write. Not a product bug (`12e16203` body).
+- Commits with a `Claude Haiku 5.5` trailer instead of `Claude Sonnet 5.5`: `e7cfa0ed`, `9750110d`, `a546c29e`, `860deeed`. Not rewritten; main is shared.
+- `8fde93ca` was claimed pushed. It is not an ancestor of origin/main; only its rebased copy `c3e9d2c4` reached main, with the same subject.
+- This report lives at `docs/history/SESSION_REPORT_2026-11-12.md` (the brief named `docs/`; the path was not moved).
