@@ -7,7 +7,8 @@ XDG_CONFIG_HOME in a temp dir. XTest keys drive the page. Checks:
   - Tab walks the sidebar then the page controls, and each stop paints a focus ring (pixel diff);
   - Space toggles the focused switch exactly once, and Return toggles it back exactly once (the
     value in $XDG_CONFIG_HOME/flamewm/settings.toml, written by the WM, is the oracle);
-  - the search field takes one typed character per key and Escape clears it.
+  - the search field takes one typed character per key and Escape clears it;
+  - every sidebar page (nav.rs NAV_PAGES) opens and each of 20 Tab stops paints a focus ring, Shift+Tab steps back.
 
 Usage: settings_keys_proof.py BIN_DIR OUT_DIR
   BIN_DIR: directory with flamewm, flamewm-session, flamewm-shell, flamewm-desktop, flamewm-settings.
@@ -15,6 +16,7 @@ Prints one PASS/FAIL line per check; exit 0 only when every check passed.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +31,7 @@ WINDOW_TITLE = "System Settings"
 TOGGLE_X = 600  # page controls sit right of the sidebar (window x >= 186)
 PAGE_X = 190  # window-relative x where the page starts (the sidebar is 187px wide)
 SETTINGS_KEY = "highContrast"
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def free_display():
@@ -93,12 +96,19 @@ def run(bin_dir, out):
         d = xdisplay.Display(display)
         root = d.screen().root
 
-        def key(name, wait=0.8):
+        def key(name, wait=0.8, mods=()):
+            held = [d.keysym_to_keycode(XK.string_to_keysym(m)) for m in mods]
             code = d.keysym_to_keycode(XK.string_to_keysym(name))
+            for m in held:
+                xtest.fake_input(d, X.KeyPress, m)
+            d.sync()
+            time.sleep(0.05 if not held else 0.2)
             xtest.fake_input(d, X.KeyPress, code)
             d.sync()
             time.sleep(0.05)
             xtest.fake_input(d, X.KeyRelease, code)
+            for m in reversed(held):
+                xtest.fake_input(d, X.KeyRelease, m)
             d.sync()
             time.sleep(wait)
 
@@ -297,6 +307,61 @@ def run(bin_dir, out):
         if displays.poll() is None:
             os.killpg(displays.pid, 15)
             displays.wait(timeout=10)
+
+        # Per-page walk: every sidebar page opens, Tab paints a ring on every stop for a full walk (no silent
+        # stop, so no keyboard trap that leaves focus unchanged), and Shift+Tab steps back.
+        slugs = re.findall(r'\("([a-z-]+)", "[^"]+"\)', open(os.path.join(REPO, "crates/flamewm-settings/src/nav.rs"), encoding="utf-8").read())
+        check("sidebar lists every page", len(slugs) == 17, f"pages={len(slugs)}")
+        for slug in slugs:
+            page = subprocess.Popen([os.path.join(bindir, "flamewm-settings"), "--page", slug], env=env,
+                                    start_new_session=True, stdout=open(os.path.join(out, f"page-{slug}.out"), "w"),
+                                    stderr=subprocess.STDOUT)
+            settings = page
+            pwindow = None
+            for _ in range(60):
+                found = find_window(WINDOW_TITLE)
+                if found:
+                    pwindow = found[0]
+                    break
+                time.sleep(0.5)
+            if pwindow is None:
+                check(f"page {slug} opens", False, "no window")
+                os.killpg(page.pid, 15)
+                continue
+            time.sleep(4)
+            pwindow.set_input_focus(X.RevertToParent, X.CurrentTime)
+            d.sync()
+            time.sleep(1)
+            pgeom = pwindow.get_geometry()
+            porigin = pwindow.translate_coords(root, 0, 0)
+            pbox = (-porigin.x, -porigin.y, -porigin.x + pgeom.width, -porigin.y + pgeom.height)
+
+            def pshot(name):
+                path = os.path.join(out, name + ".png")
+                subprocess.run(["import", "-window", "root", path], check=True, env=dict(os.environ, DISPLAY=display))
+                return Image.open(path).convert("RGB").crop(pbox)
+
+            prev = pshot(f"{slug}-base")
+            silent = []
+            steps = 20
+            for index in range(steps):
+                key("Tab", wait=0.4)
+                cur = pshot(f"{slug}-tab-{index:02d}")
+                if not changed(prev, cur):
+                    silent.append(index)
+                prev = cur
+            walked = prev
+            key("Tab", wait=0.4, mods=("Shift_L",))
+            back = pshot(f"{slug}-shift-tab")
+            check(f"page {slug}: each of {steps} Tab stops paints a ring, Shift+Tab steps back",
+                  not silent and changed(walked, back), f"silent={silent}")
+            ctrl_key("q")
+            try:
+                page.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(page.pid, 15)
+                page.wait(timeout=10)
+            settings = None
 
         d.flush()
         return all(verdicts)
