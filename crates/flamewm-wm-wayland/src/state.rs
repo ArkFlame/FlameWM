@@ -458,6 +458,11 @@ pub struct State {
     pub super_tap: bool,
     /// Keycodes whose press was consumed as a shortcut; their release is consumed too.
     pub swallowed_keys: Vec<u32>,
+    /// Open Alt+F7/F8 keyboard move or resize: the focused window and its grab state.
+    pub kbd_grab: Option<(
+        WindowId,
+        flamewm_window_core::keyboard_move_resize::KeyboardGrab,
+    )>,
     pub backend: Option<WinitGraphicsBackend<GlowRenderer>>,
     pub dump: Option<PathBuf>,
     pub dumped: bool,
@@ -614,6 +619,7 @@ impl State {
             focus_follows_mouse: crate::input::saved_focus_follows_mouse(),
             super_tap: false,
             swallowed_keys: Vec::new(),
+            kbd_grab: None,
             backend: None,
             dump: None,
             dumped: false,

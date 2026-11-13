@@ -39,6 +39,7 @@ pub(super) fn completes_double_click(
 
 impl State {
     pub(super) fn on_button<I: InputBackend>(&mut self, event: &impl PointerButtonEvent<I>) {
+        self.end_keyboard_move();
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };

@@ -133,6 +133,13 @@ impl State {
                         state.super_tap = true;
                         return FilterResult::Intercept(None);
                     }
+                    // An open Alt+F7/F8 grab owns its arrow, Return and Escape presses.
+                    if state.kbd_grab.is_some()
+                        && state.keyboard_grab_key(handle.modified_sym().raw())
+                    {
+                        state.swallowed_keys.push(keycode.raw());
+                        return FilterResult::Intercept(None);
+                    }
                     state.super_tap = false;
                     let mods = mods_of(mods);
                     let found = name_candidates(&raw, &modified)

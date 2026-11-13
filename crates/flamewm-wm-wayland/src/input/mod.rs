@@ -85,6 +85,7 @@ fn name_candidates<'a>(raw: &'a str, modified: &'a str) -> impl Iterator<Item = 
 
 mod buttons;
 mod keyboard;
+mod keyboard_move;
 mod keyboard_tile;
 mod move_feedback;
 mod pointer;

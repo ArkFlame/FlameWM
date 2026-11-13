@@ -45,6 +45,11 @@ impl State {
             }
             return;
         }
+        // Alt+F7 move and Alt+F8 resize, as on X11.
+        if let Some(mode) = keyboard_move::grab_mode(action) {
+            self.begin_keyboard_move(mode);
+            return;
+        }
         // Super+arrows are keyboard tiling, as on X11.
         if let Some(direction) = keyboard_tile::tile_action(action) {
             self.keyboard_tile(direction);
