@@ -13,6 +13,7 @@ pub(crate) struct Recorded {
     pub(crate) texts: HashMap<String, String>,
     pub(crate) visible: HashMap<String, bool>,
     pub(crate) attributes: HashMap<(String, String), String>,
+    pub(crate) opacities: HashMap<String, f32>,
 }
 
 impl Recorded {
@@ -113,6 +114,7 @@ impl<D: UiDocumentAccess> UiDocumentAccess for Recording<'_, D> {
         self.inner.font_weight(id, weight)
     }
     fn opacity(&mut self, id: &str, opacity: f32) -> Result<(), String> {
+        self.recorded.opacities.insert(id.to_owned(), opacity);
         self.inner.opacity(id, opacity)
     }
     fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {

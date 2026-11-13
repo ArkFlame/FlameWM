@@ -891,6 +891,48 @@ fn launcher_toggle_requested_round_trips_through_wire() {
 
 // The switcher signal carries its full entry list in MRU order; the decoder keeps order.
 #[test]
+fn switcher_entry_flags_round_trip_and_default_false() {
+    let flagged = ControlSignal::WindowSwitcherChanged {
+        open: true,
+        immediate: false,
+        selected: 0,
+        entries: vec![
+            SwitcherEntry {
+                title: "Minimised".to_owned(),
+                app_id: String::new(),
+                thumb: None,
+                minimised: true,
+                other_workspace: false,
+            },
+            SwitcherEntry {
+                title: "Elsewhere".to_owned(),
+                app_id: String::new(),
+                thumb: None,
+                minimised: false,
+                other_workspace: true,
+            },
+        ],
+    };
+    assert_eq!(decode_signal(&encode_signal(&flagged)), Ok(flagged));
+    // A visible entry writes no flag keys, so an older shell sees exactly the legacy shape and decodes false.
+    let plain = ControlSignal::WindowSwitcherChanged {
+        open: true,
+        immediate: false,
+        selected: 0,
+        entries: vec![SwitcherEntry {
+            title: "Plain".to_owned(),
+            app_id: String::new(),
+            thumb: None,
+            minimised: false,
+            other_workspace: false,
+        }],
+    };
+    let wire = encode_signal(&plain);
+    assert!(!format!("{wire:?}").contains("minimised"));
+    assert_eq!(decode_signal(&wire), Ok(plain));
+}
+
+#[test]
 fn window_switcher_changed_round_trips_through_wire() {
     let signal = ControlSignal::WindowSwitcherChanged {
         open: true,
@@ -900,11 +942,15 @@ fn window_switcher_changed_round_trips_through_wire() {
             SwitcherEntry {
                 title: "Terminal".to_owned(),
                 app_id: "org.flame.terminal".to_owned(),
+                minimised: false,
+                other_workspace: false,
                 thumb: None,
             },
             SwitcherEntry {
                 title: "Files".to_owned(),
                 app_id: String::new(),
+                minimised: false,
+                other_workspace: false,
                 thumb: None,
             },
         ],
@@ -971,6 +1017,8 @@ fn switcher_thumb_round_trips_and_rejects_mismatched_pixels() {
         entries: vec![SwitcherEntry {
             title: "Red".to_owned(),
             app_id: String::new(),
+            minimised: false,
+            other_workspace: false,
             thumb: Some(thumb.clone()),
         }],
     };
@@ -983,6 +1031,8 @@ fn switcher_thumb_round_trips_and_rejects_mismatched_pixels() {
         entries: vec![SwitcherEntry {
             title: String::new(),
             app_id: String::new(),
+            minimised: false,
+            other_workspace: false,
             thumb: Some(SwitcherThumb {
                 width: 2,
                 height: 2,
@@ -1018,11 +1068,15 @@ fn switcher_reference_thumb_round_trips_without_pixels() {
             SwitcherEntry {
                 title: "Same".to_owned(),
                 app_id: String::new(),
+                minimised: false,
+                other_workspace: false,
                 thumb: Some(reference.clone()),
             },
             SwitcherEntry {
                 title: "New".to_owned(),
                 app_id: String::new(),
+                minimised: false,
+                other_workspace: false,
                 thumb: Some(fresh.clone()),
             },
         ],

@@ -266,6 +266,20 @@ fn create(runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError>
 const THUMB_BOX_W: f32 = 64.0;
 const THUMB_BOX_H: f32 = 36.0;
 
+/// Opacity of a minimised or other-workspace preview. Not a CSS token: the UI compiler accepts only colour and length custom properties.
+pub const HIDDEN_PREVIEW_OPACITY: f32 = 0.45;
+
+/// Small label on a row whose window is not on screen; empty for a visible window.
+fn state_label(entry: &SwitcherEntry) -> &'static str {
+    if entry.minimised {
+        "minimised"
+    } else if entry.other_workspace {
+        "other workspace"
+    } else {
+        ""
+    }
+}
+
 /// Display size for a `w` x `h` preview fitted into the row box. Never upscales.
 #[must_use]
 pub fn thumb_fit(w: u32, h: u32) -> (f32, f32) {
@@ -296,6 +310,13 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
             Some(entry) => {
                 document.text_ref(&label_id, row_label(entry))?;
                 document.visible(&row_id, true)?;
+                let hidden = entry.minimised || entry.other_workspace;
+                let dim = if hidden { HIDDEN_PREVIEW_OPACITY } else { 1.0 };
+                document.opacity(&icon_id, dim)?;
+                document.opacity(&thumb_id, dim)?;
+                let state_id = format!("switcher-row-{row}-state");
+                document.text_ref(&state_id, state_label(entry))?;
+                document.visible(&state_id, hidden)?;
                 if let Some(thumb) = entry.thumb.as_ref().filter(|t| t.is_well_formed()) {
                     let (w, h) = thumb_fit(thumb.width, thumb.height);
                     let mut hasher = DefaultHasher::new();
@@ -334,6 +355,8 @@ mod tests {
         SwitcherEntry {
             title: title.to_owned(),
             app_id: app_id.to_owned(),
+            minimised: false,
+            other_workspace: false,
             thumb: None,
         }
     }
@@ -342,6 +365,8 @@ mod tests {
         SwitcherEntry {
             title: String::new(),
             app_id: String::new(),
+            minimised: false,
+            other_workspace: false,
             thumb: Some(SwitcherThumb {
                 width: 1,
                 height: 1,
@@ -349,6 +374,53 @@ mod tests {
                 rgba,
             }),
         }
+    }
+
+    fn switcher_row(title: &str, minimised: bool, other_workspace: bool) -> SwitcherEntry {
+        SwitcherEntry {
+            title: title.to_owned(),
+            app_id: String::new(),
+            thumb: None,
+            minimised,
+            other_workspace,
+        }
+    }
+
+    // A minimised or other-workspace row dims its preview and names its state; a visible row does neither.
+    #[test]
+    fn hidden_rows_dim_their_preview_and_name_their_state() {
+        let frame = SwitcherFrame {
+            open: true,
+            immediate: false,
+            selected: 0,
+            entries: vec![
+                switcher_row("Visible", false, false),
+                switcher_row("Minimised", true, false),
+                switcher_row("Elsewhere", false, true),
+            ],
+        };
+        let mut inner = crate::test_recorder::NullDocument;
+        let mut doc = crate::test_recorder::Recording::new(&mut inner);
+        paint(&mut doc, &frame).expect("paint");
+        let rec = &doc.recorded;
+        assert_eq!(rec.opacities.get("switcher-row-1-thumb"), Some(&1.0));
+        assert_eq!(
+            rec.opacities.get("switcher-row-2-thumb"),
+            Some(&HIDDEN_PREVIEW_OPACITY)
+        );
+        assert_eq!(
+            rec.opacities.get("switcher-row-3-icon"),
+            Some(&HIDDEN_PREVIEW_OPACITY)
+        );
+        assert_eq!(rec.visible.get("switcher-row-1-state"), Some(&false));
+        assert_eq!(
+            rec.texts.get("switcher-row-2-state").map(String::as_str),
+            Some("minimised")
+        );
+        assert_eq!(
+            rec.texts.get("switcher-row-3-state").map(String::as_str),
+            Some("other workspace")
+        );
     }
 
     // Regression: an unchanged preview arrives as a reference and the shell reuses its pixels.

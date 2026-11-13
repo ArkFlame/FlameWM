@@ -772,6 +772,8 @@ mod tests {
             entries: vec![SwitcherEntry {
                 title: "Terminal".to_owned(),
                 app_id: "terminal".to_owned(),
+                minimised: false,
+                other_workspace: false,
                 thumb: None,
             }],
         });
@@ -786,6 +788,8 @@ mod tests {
             entries: vec![SwitcherEntry {
                 title: "Terminal".to_owned(),
                 app_id: "terminal".to_owned(),
+                minimised: false,
+                other_workspace: false,
                 thumb: Some(flamewm_api::switcher::SwitcherThumb {
                     width: 64,
                     height: 36,

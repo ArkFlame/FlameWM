@@ -238,17 +238,25 @@ impl Service {
                     .iter()
                     .zip(thumbs)
                     .map(|(id, thumb)| {
-                        let (title, app_id) = windows
+                        let active = i32::try_from(windows.active_workspace).unwrap_or(-1);
+                        let (title, app_id, minimised, other_workspace) = windows
                             .windows
                             .iter()
                             .find(|window| window.reference.id == *id)
-                            .map_or((String::new(), String::new()), |window| {
-                                (window.title.clone(), window.app_id.as_str().to_owned())
+                            .map_or((String::new(), String::new(), false, false), |window| {
+                                (
+                                    window.title.clone(),
+                                    window.app_id.as_str().to_owned(),
+                                    window.state == WindowState::Minimized,
+                                    !window.sticky && window.workspace.index != active,
+                                )
                             });
                         SwitcherEntry {
                             title,
                             app_id,
                             thumb,
+                            minimised,
+                            other_workspace,
                         }
                     })
                     .collect();

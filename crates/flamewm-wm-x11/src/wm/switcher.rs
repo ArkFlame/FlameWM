@@ -359,10 +359,14 @@ impl<C: Connection> Wm<'_, C> {
                 title: state.title.to_string(),
                 app_id: state.wm_class.to_string(),
                 thumb: None,
+                minimised: state.minimized,
+                other_workspace: !state.sticky && state.workspace != self.current_workspace,
             },
             None => SwitcherEntry {
                 title: String::new(),
                 app_id: String::new(),
+                minimised: false,
+                other_workspace: false,
                 thumb: None,
             },
         }
@@ -686,6 +690,8 @@ mod tests {
             entries: vec![SwitcherEntry {
                 title: String::new(),
                 app_id: String::new(),
+                minimised: false,
+                other_workspace: false,
                 thumb: Some(pixels.clone()),
             }],
         };
@@ -696,6 +702,8 @@ mod tests {
         let mut entries = vec![SwitcherEntry {
             title: String::new(),
             app_id: String::new(),
+            minimised: false,
+            other_workspace: false,
             thumb: Some(reference),
         }];
         carry_pixels(Some(&previous), &mut entries);

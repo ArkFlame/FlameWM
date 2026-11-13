@@ -7,6 +7,10 @@ pub struct SwitcherEntry {
     pub app_id: String,
     /// Window preview when the WM has one ready. Absent (`None`) keeps the `title`/`app_id` row.
     pub thumb: Option<flamewm_api::switcher::SwitcherThumb>,
+    /// Minimised: the thumbnail is the last frame it showed while visible; the shell dims it.
+    pub minimised: bool,
+    /// On another workspace (not sticky): listed with its last frame, dimmed like a minimised one.
+    pub other_workspace: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +297,13 @@ pub(crate) fn switcher_entry_wire_value(entry: &SwitcherEntry) -> WireValue {
         ("title", WireValue::String(entry.title.clone())),
         ("appId", WireValue::String(entry.app_id.clone())),
     ]);
+    // Flags are written only when set; an older shell ignores them and a legacy payload decodes to false.
+    if entry.minimised {
+        dict.insert("minimised".to_owned(), WireValue::Bool(true));
+    }
+    if entry.other_workspace {
+        dict.insert("otherWorkspace".to_owned(), WireValue::Bool(true));
+    }
     // The `thumb` key is written only when a preview exists; older shells ignore unknown keys.
     // A reference preview (unchanged content) omits `rgba`; the shell reuses its cached pixels.
     if let Some(thumb) = &entry.thumb {
@@ -314,6 +325,16 @@ pub(crate) fn switcher_entry(value: &WireValue) -> Result<SwitcherEntry, Control
     Ok(SwitcherEntry {
         title: dict_string(dict, "title")?.to_owned(),
         app_id: dict_string(dict, "appId")?.to_owned(),
+        minimised: dict
+            .get("minimised")
+            .map(|v| required_bool(v, "minimised"))
+            .transpose()?
+            .unwrap_or(false),
+        other_workspace: dict
+            .get("otherWorkspace")
+            .map(|v| required_bool(v, "otherWorkspace"))
+            .transpose()?
+            .unwrap_or(false),
         // A payload without `thumb` (the legacy shape) decodes to no preview.
         thumb: dict.get("thumb").map(switcher_thumb).transpose()?,
     })

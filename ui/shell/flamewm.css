@@ -303,7 +303,7 @@ input { cursor:text; }
 /* Alt+Tab switcher: the launcher's list rows and surface; only the card width and the accent selection differ. */
 .switcher-popup { width:420px; }
 .switcher-highlight { background:var(--accent); }
-.switcher-row { color:var(--text); }
+.switcher-row { color:var(--text); } .switcher-state { padding-left:var(--space-sm); font-size:var(--font-xs); color:var(--text); white-space:nowrap; }
 
 /* Vertical taskbar (panel-vertical.html, Left/Right edges). The bar is one column of the
    thickness-wide panel window; every rule is scoped to .panel-vertical so Top/Bottom are unchanged.
