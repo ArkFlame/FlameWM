@@ -47,7 +47,7 @@ pub use calendar::project_calendar;
 use clock::month_name;
 pub use clock::{clock_time_text, local_date, project_clock, project_clock_at, ClockDisplay};
 pub use context_menu::project_context_menu;
-pub use media::project_media;
+pub use media::{project_media, project_media_focus, MEDIA_STOP_IDS};
 pub use network::{
     bluetooth_row_status, bluetooth_trust_action, project_bluetooth_row, project_network,
     project_network_details, project_network_full, project_network_secret, project_network_status,

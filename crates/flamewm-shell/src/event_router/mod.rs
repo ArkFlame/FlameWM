@@ -21,6 +21,7 @@ macro_rules! shell_stage {
 mod dismiss;
 mod drag;
 mod helpers;
+mod media_keys;
 mod overflow_keys;
 mod route;
 mod taskdrag;

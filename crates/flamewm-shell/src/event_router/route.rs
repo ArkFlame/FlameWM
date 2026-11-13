@@ -214,6 +214,31 @@ impl ShellLoop {
                 return self.project_overflow_menu(runtime);
             }
         }
+        if !self.surfaces.is_media_open() {
+            self.media_focus = None;
+        }
+        if self.surfaces.is_media_open() {
+            // Media card focus: Tab walks the transport stops; Enter or Space on a focused stop
+            // activates it and keeps focus there. Escape closes the card on the generic path.
+            if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
+                let payload = event.action.text.as_deref().unwrap_or_default();
+                if let Some(next) = super::media_keys::media_focus_after_tab(
+                    payload,
+                    self.media_focus,
+                    super::media_keys::MEDIA_FOCUS_STOPS,
+                ) {
+                    self.media_focus = Some(next);
+                    return self.project_media_focus(runtime);
+                }
+            }
+            if let Some(media_action) = super::media_keys::media_activation(typed, self.media_focus)
+            {
+                if let Some(request) = self.context_system_request(media_action) {
+                    self.submit(request);
+                }
+                return Ok(());
+            }
+        }
         if self.surfaces.is_usage_open() {
             // Usage card focus: Tab walks its stops; Enter or Space on a focused stop closes it.
             if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {

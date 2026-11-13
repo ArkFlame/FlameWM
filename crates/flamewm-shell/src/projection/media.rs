@@ -63,6 +63,24 @@ pub fn project_media(
     Ok(())
 }
 
+/// Element id of each transport stop, in Tab order; the focus ring is drawn on it.
+pub const MEDIA_STOP_IDS: [&str; 3] = ["media-previous", "media-playpause", "media-next"];
+
+/// Focus ring on the transport stop with Tab-order index `focus`; clears the ring from the rest.
+pub fn project_media_focus(
+    document: &mut impl UiDocumentAccess,
+    focus: Option<usize>,
+) -> Result<(), String> {
+    for (index, id) in MEDIA_STOP_IDS.iter().enumerate() {
+        if focus == Some(index) {
+            document.border(id, crate::projection::task_accent())?;
+        } else {
+            document.border_clear(id)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod media_projection_tests {
     use super::*;
