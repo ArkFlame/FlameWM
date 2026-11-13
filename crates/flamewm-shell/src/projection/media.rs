@@ -86,6 +86,29 @@ mod media_projection_tests {
     use super::*;
     use crate::async_projection::tests::FakeDoc;
 
+    // REGRESSION: document.border only sets colour; the transport stops need a 1px border
+    // box in the CSS for the focus ring to paint, and every MEDIA_STOP_ID must exist in media.html.
+    // MUTATION: removing `border:1px solid` from .media-control or renaming a stop id fails here.
+    #[test]
+    fn media_focus_ids_exist_in_html_with_a_ring_border_box() {
+        let html = include_str!("../../../../ui/shell/media.html");
+        let css = include_str!("../../../../ui/shell/flamewm.css");
+        for id in MEDIA_STOP_IDS {
+            assert!(
+                html.contains(&format!("id=\"{id}\"")),
+                "{id} missing from media.html"
+            );
+        }
+        let rule = css
+            .lines()
+            .find(|line| line.starts_with(".media-control {"))
+            .expect(".media-control rule");
+        assert!(
+            rule.contains("border:1px solid"),
+            "ring needs a border box: {rule}"
+        );
+    }
+
     // REGRESSION: the popup has one title row and no artist line, so project_media
     // must not write `media-artist` (the compiled artifact no longer has that node).
     #[test]

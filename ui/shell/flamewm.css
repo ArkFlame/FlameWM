@@ -167,7 +167,7 @@ input { cursor:text; }
 .media-popup { display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; width:276px; height:80px; padding:var(--sp-3) var(--space-lg); gap:var(--space-sm); border-radius:24px; }
 .media-title { width:100%; display:flex; align-items:center; justify-content:center; font-size:var(--fs-md); font-weight:600; white-space:nowrap; overflow:hidden; }
 .media-controls { display:flex; align-items:center; justify-content:center; gap:14px; }
-.media-control { width:36px; height:36px; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); border-radius:var(--r-pill); cursor:default; }.media-control.is-disabled { opacity:0.4; cursor:default; }
+.media-control { width:36px; height:36px; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); border-radius:var(--r-pill); cursor:default; border:1px solid transparent; }.media-control.is-disabled { opacity:0.4; cursor:default; }
 .media-control.is-disabled:hover { background:transparent; }
 .volume-line { height:34px; display:flex; align-items:center; gap:var(--sp-3); }
 .volume-icon-button { width:30px; height:30px; display:flex; align-items:center; justify-content:center; background:transparent; border-radius:var(--radius-sm); }
