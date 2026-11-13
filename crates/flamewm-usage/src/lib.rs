@@ -4,7 +4,48 @@
 //! (`wham/usage` payload: `rate_limit.primary_window` / `secondary_window`, each with
 //! `used_percent`, `reset_at` (unix seconds) and `limit_window_seconds`).
 
+use std::path::Path;
+
 use serde_json::Value;
+
+mod fetch;
+pub use fetch::{CLAUDE_BASE, COMMANDCODE_BASE, TIMEOUT_SECS, fetch_snapshot};
+
+/// What the card shows for one provider. `Failed` carries a fixed, secret-free reason.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProviderState {
+    NotConfigured,
+    Ready(Vec<UsageWindow>),
+    Failed(&'static str),
+}
+
+/// Typed per-provider result handed from the fetch worker to the shell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProviderSnapshot {
+    pub provider: UsageProvider,
+    pub state: ProviderState,
+    /// Unix seconds when the fetch finished.
+    pub updated_at: Option<i64>,
+}
+
+/// Access token for Claude from `$CLAUDE_CONFIG_DIR/.credentials.json`, else `<home>/.claude/.credentials.json`.
+/// Reads only that file; returns `None` when it is missing or unreadable.
+#[must_use]
+pub fn claude_token(home: &Path, config_dir: Option<&str>) -> Option<String> {
+    let dir = config_dir
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| home.join(".claude"), Into::into);
+    parse_claude_credentials(&std::fs::read_to_string(dir.join(".credentials.json")).ok()?)
+}
+
+/// Command Code API key from `COMMAND_CODE_API_KEY`, trimmed; `None` when empty or unset.
+#[must_use]
+pub fn commandcode_token(api_key: Option<&str>) -> Option<String> {
+    api_key
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_owned)
+}
 
 /// Providers the usage card can show. Only `Codex` has a parser so far.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,6 +282,36 @@ mod tests {
             parse_claude_usage(r#"{"extra_usage":null}"#),
             Err(UsageParseError::NoWindows)
         );
+    }
+
+    #[test]
+    fn claude_token_reads_home_or_config_dir_only() {
+        let root = std::env::temp_dir().join(format!("flamewm-usage-test-{}", std::process::id()));
+        let home = root.join("home");
+        let config = root.join("config");
+        for dir in [home.join(".claude"), config.clone()] {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        std::fs::write(
+            home.join(".claude/.credentials.json"),
+            r#"{"claudeAiOauth":{"accessToken":"home-token"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            config.join(".credentials.json"),
+            r#"{"claudeAiOauth":{"accessToken":"config-token"}}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_token(&home, None).as_deref(), Some("home-token"));
+        assert_eq!(claude_token(&home, Some("")).as_deref(), Some("home-token"));
+        assert_eq!(
+            claude_token(&home, config.to_str()).as_deref(),
+            Some("config-token")
+        );
+        assert_eq!(claude_token(&root.join("empty"), None), None);
+        assert_eq!(commandcode_token(Some("  ")), None);
+        assert_eq!(commandcode_token(Some(" key ")).as_deref(), Some("key"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
