@@ -102,7 +102,8 @@ pub(crate) fn project_snapshot(
                         document,
                         &snapshot.system.brightness,
                     )?;
-                    crate::projection::project_input_row(document, &snapshot.system.audio)
+                    crate::projection::project_input_row(document, &snapshot.system.audio)?;
+                    project_power_focus(document, snapshot.power_focus)
                 }
                 QuickControlKind::Weather => project_weather_popup(
                     document,

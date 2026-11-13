@@ -42,7 +42,9 @@ mod popup;
 
 mod consts;
 use consts::*;
+mod power_keys;
 mod titles;
+use power_keys::*;
 pub use titles::*;
 mod debug_util;
 use debug_util::*;

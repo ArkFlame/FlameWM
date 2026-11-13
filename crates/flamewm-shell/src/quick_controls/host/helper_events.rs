@@ -18,6 +18,9 @@ pub fn route_helper_event(
         snapshot.audio_focus_slot = None;
         snapshot.audio_key_base = None;
     }
+    if surfaces.open != Some(QuickControlKind::Battery) {
+        snapshot.power_focus = None;
+    }
     let action = event.action.action.as_str();
     if action == "network.secret.focus" {
         snapshot.network_secret_focused = true;
@@ -39,6 +42,15 @@ pub fn route_helper_event(
             if text == "\u{1b}" {
                 surfaces.close(runtime);
                 return true;
+            }
+            if surfaces.open == Some(QuickControlKind::Battery) {
+                if let Some(power_action) = power_activation(Some(text), snapshot.power_focus) {
+                    if let Some(request) = helper_control_request(power_action, snapshot) {
+                        crate::control_actions::enqueue_action(dispatcher, request);
+                    }
+                    *reprojection = true;
+                    return true;
+                }
             }
             if snapshot.weather_search.focused {
                 match text {
@@ -111,6 +123,20 @@ pub fn route_helper_event(
     }
     // Typed keys drive the audio focus model only; the keyboard.input text copy of a
     // key is not applied here, so each press is delivered once.
+    // Power card: Tab walks the six stops; Enter or Space on the focused stop activates it
+    // (keyboard.input Release below). Escape closes through that same keyboard.input path.
+    if action == "__flamewm.ui.key"
+        && event.action.phase == ActionPhase::Press
+        && surfaces.open == Some(QuickControlKind::Battery)
+    {
+        if let Some(payload) = event.action.text.as_deref() {
+            if let Some(next) = power_key_action(payload, snapshot.power_focus) {
+                snapshot.power_focus = Some(next);
+                *reprojection = true;
+            }
+        }
+        return true;
+    }
     if action == "__flamewm.ui.key"
         && event.action.phase == ActionPhase::Press
         && surfaces.open == Some(QuickControlKind::Audio)

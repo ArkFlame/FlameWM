@@ -26,6 +26,7 @@
     .battery-input-mute { width:60px; height:18px; display:flex; justify-content:center; color:var(--text); }
     .battery-input-step { width:24px; height:18px; display:flex; justify-content:center; color:var(--text); }
     .battery-input-value { width:62px; height:18px; display:flex; justify-content:center; color:var(--text); }
+    .power-stop { border:1px solid transparent; box-sizing:border-box; }
   </style>
 </head>
 <body class="popup-body">
@@ -59,19 +60,19 @@
       <div id="battery-rate" class="battery-rate" title="Battery power">&#8203;</div>
     </div>
     <div id="battery-cpu" class="battery-cpu">&#8203;</div>
-    <div id="battery-profile" class="battery-profile" data-action="power.profile.cycle" title="Power profile">&#8203;</div>
+    <div id="battery-profile" class="power-stop battery-profile" data-action="power.profile.cycle" title="Power profile">&#8203;</div>
     <div id="battery-brightness" class="battery-brightness">
       <span class="battery-brightness-label">Brightness</span>
-      <span id="battery-brightness-down" class="battery-brightness-step" data-action="brightness.down" title="Dim">&#8722;</span>
+      <span id="battery-brightness-down" class="power-stop battery-brightness-step" data-action="brightness.down" title="Dim">&#8722;</span>
       <span id="battery-brightness-value" class="battery-brightness-value">&#8203;</span>
-      <span id="battery-brightness-up" class="battery-brightness-step" data-action="brightness.up" title="Brighten">+</span>
+      <span id="battery-brightness-up" class="power-stop battery-brightness-step" data-action="brightness.up" title="Brighten">+</span>
     </div>
     <div id="battery-input" class="battery-input">
       <span class="battery-input-label">Microphone</span>
-      <span id="battery-input-mute" class="battery-input-mute" data-action="input.mute" role="button" aria-label="Microphone mute" title="Microphone mute">Mute</span>
-      <span id="battery-input-down" class="battery-input-step" data-action="input.down" role="button" aria-label="Decrease microphone volume" title="Quieter">&#8722;</span>
+      <span id="battery-input-mute" class="power-stop battery-input-mute" data-action="input.mute" role="button" aria-label="Microphone mute" title="Microphone mute">Mute</span>
+      <span id="battery-input-down" class="power-stop battery-input-step" data-action="input.down" role="button" aria-label="Decrease microphone volume" title="Quieter">&#8722;</span>
       <span id="battery-input-value" class="battery-input-value">&#8203;</span>
-      <span id="battery-input-up" class="battery-input-step" data-action="input.up" role="button" aria-label="Increase microphone volume" title="Louder">+</span>
+      <span id="battery-input-up" class="power-stop battery-input-step" data-action="input.up" role="button" aria-label="Increase microphone volume" title="Louder">+</span>
     </div>
   </section>
 </body>
