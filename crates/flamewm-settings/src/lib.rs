@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Instant;
 
 pub mod control;
+mod display_canvas;
 mod display_layout;
 pub mod file_chooser;
 pub mod runtime;
@@ -130,6 +131,8 @@ pub struct SettingsApplication<T: ControlTransport> {
     file_manager_label: String,
     /// Planned arrangement sent to the WM; persisted only when its transaction is kept.
     pending_arrangement: Option<display_layout::Arrangement>,
+    /// Keyboard arrangement canvas; `None` until the first arrow, Tab or Escape press.
+    display_canvas: Option<display_canvas::CanvasLayout>,
 }
 
 /// Typed API key text not yet saved, with the inline message for the last Enter.

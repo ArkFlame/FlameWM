@@ -22,6 +22,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             applied_cursor_theme: None,
             monitor_drag: None,
             pending_arrangement: None,
+            display_canvas: None,
             scale_drag: None,
             scale_slider_focused: false,
             nav_query: String::new(),
@@ -301,6 +302,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
         {
             return self.settle(document);
         }
+        if event.phase == UiKeyPhase::Release
+            && event.modifiers.is_empty()
+            && self.client.ui().page == SettingsPage::Displays
+            && !self.keyboard_captured()
+        {
+            let focused = document.focused_action().map(str::to_owned);
+            if self.display_canvas_key(&event.key, focused.as_deref())? {
+                return self.settle(document);
+            }
+        }
         // Escape clears the sidebar search and leaves the field, as the search field promises.
         if event.phase == UiKeyPhase::Release && event.key == "Escape" && self.nav_search_focused {
             self.nav_query.clear();
@@ -452,6 +463,89 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for error in errors {
             eprintln!("settings: cursor theme reload failed: {error}");
         }
+    }
+
+    /// Keyboard path of the Displays canvas. Arrows nudge the selected output, Tab cycles
+    /// outputs, Enter keeps a dirty layout through the WM transaction, and Escape discards it.
+    /// Returns `false` when the key belongs to the focused control instead.
+    pub(crate) fn display_canvas_key(
+        &mut self,
+        key: &str,
+        focused: Option<&str>,
+    ) -> Result<bool, String> {
+        if focused.is_some_and(|action| !action.starts_with("settings.display.")) {
+            return Ok(false);
+        }
+        let dirty = self
+            .display_canvas
+            .as_ref()
+            .is_some_and(display_canvas::CanvasLayout::is_dirty);
+        match key {
+            "Left" | "Right" | "Up" | "Down" | "Tab" if self.output_count() >= 2 => {
+                if self.display_canvas.is_none() {
+                    self.client.refresh_displays().map_err(control_error)?;
+                    let snapshot = self
+                        .client
+                        .displays()
+                        .ok_or_else(|| "display state unavailable".to_owned())?;
+                    let selected = self
+                        .client
+                        .ui()
+                        .selected_output
+                        .clone()
+                        .ok_or_else(|| "select an active monitor first".to_owned())?;
+                    self.display_canvas = Some(display_canvas::CanvasLayout::from_snapshot(
+                        snapshot, &selected,
+                    )?);
+                }
+                let canvas = self
+                    .display_canvas
+                    .as_mut()
+                    .ok_or("display canvas missing")?;
+                if key == "Tab" {
+                    canvas.select_next();
+                    let id = canvas.selected_id().clone();
+                    self.client.select_output(&id);
+                    return Ok(true);
+                }
+                let dir = match key {
+                    "Left" => display_canvas::Dir::Left,
+                    "Right" => display_canvas::Dir::Right,
+                    "Up" => display_canvas::Dir::Up,
+                    _ => display_canvas::Dir::Down,
+                };
+                canvas.nudge(dir)?;
+                Ok(true)
+            }
+            "Enter" if dirty => {
+                self.commit_display_canvas()?;
+                Ok(true)
+            }
+            "Escape" if self.display_canvas.is_some() => {
+                self.display_canvas = None;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Commits the canvas layout as one keep/revert arrangement, refusing stale positions.
+    fn commit_display_canvas(&mut self) -> Result<(), String> {
+        let canvas = self
+            .display_canvas
+            .clone()
+            .ok_or_else(|| "no display layout to keep".to_owned())?;
+        self.client.refresh_displays().map_err(control_error)?;
+        if self.client.displays().map_or(0, |s| s.generation) != canvas.generation() {
+            self.display_canvas = None;
+            return Err("display topology changed; the canvas was reset".into());
+        }
+        self.client
+            .set_display_arrangement(canvas.placements(), monotonic_now_ms())
+            .map_err(control_error)?;
+        self.display_canvas = None;
+        self.pending_arrangement = Some(canvas.arrangement());
+        Ok(())
     }
 
     pub(crate) fn settle(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -879,6 +973,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::DisplayRevert => {
                 self.pending_arrangement = None;
+                self.display_canvas = None;
                 self.client.revert_display_mode().map_err(control_error)?;
             }
             SettingsAction::OpenUri(uri) => self.start_open_uri(uri)?,

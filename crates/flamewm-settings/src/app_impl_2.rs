@@ -372,6 +372,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .id
             .clone();
         self.pending_arrangement = None;
+        self.display_canvas = None;
         self.client
             .set_primary_display(output, monotonic_now_ms())
             .map(|_| ())
@@ -388,6 +389,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .id
             .clone();
         self.pending_arrangement = None;
+        self.display_canvas = None;
         self.client
             .set_display_rotation(output, rotation, monotonic_now_ms())
             .map(|_| ())
@@ -397,6 +399,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
     pub(crate) fn begin_display_mode(&mut self, mode: ModeId) -> Result<(), String> {
         let now_ms = monotonic_now_ms();
         self.pending_arrangement = None;
+        self.display_canvas = None;
         self.client
             .begin_display_mode(mode, now_ms)
             .map(|_| ())
@@ -786,6 +789,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 },
             )?;
         }
+        document.text(
+            "display-canvas-status",
+            self.display_canvas
+                .as_ref()
+                .map_or_else(String::new, display_canvas::CanvasLayout::status),
+        )?;
         project_pager(
             document,
             &OUTPUT_PAGER,

@@ -109,9 +109,6 @@ pub fn plan(
 /// `s_snapArea` (`.vendor/LingmoOS-main/shell32/kscreen/kcm/output_model.cpp`).
 /// Only edge-adjacent candidates qualify, so the layout stays one connected group.
 /// `None` means no legal drop was near `wanted`; the caller keeps the old position.
-// shortcut: not wired into the release path yet (drag still swaps neighbours); revisit when
-// the drag preview lands and passes pointer deltas here.
-#[cfg_attr(not(test), allow(dead_code))]
 #[must_use]
 pub fn snap_drop(others: &[Rect], size: (i32, i32), wanted: (i32, i32)) -> Option<Rect> {
     const SNAP_AREA: i32 = 80;
@@ -149,7 +146,6 @@ pub fn snap_drop(others: &[Rect], size: (i32, i32), wanted: (i32, i32)) -> Optio
     best.map(|(_, rect)| rect)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn rects_overlap(a: Rect, b: Rect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }

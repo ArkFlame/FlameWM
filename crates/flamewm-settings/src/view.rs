@@ -70,6 +70,7 @@ mod tests {
         "display-output-size-2",
         "display-output-name-3",
         "display-output-size-3",
+        "display-canvas-status",
         "display-selected-title",
         "display-selected-resolution",
         "display-scale-value",
