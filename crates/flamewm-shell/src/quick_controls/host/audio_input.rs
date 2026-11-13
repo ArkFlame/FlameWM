@@ -26,6 +26,67 @@ pub(crate) fn audio_slot_command(action: &str) -> Option<(usize, &str)> {
     Some((slot, command))
 }
 
+/// Keyboard value for one slider (WAI-ARIA APG slider): Up/Right +1 step, Down/Left -1 step,
+/// `Page_Up`/`Page_Down` +/-10 steps, Home/End min/max. `None` for any other key.
+pub(crate) fn slider_key_value(key: &str, spec: flamewm_ui_core::range::RangeSpec) -> Option<f32> {
+    let value = match key {
+        "Up" | "Right" => spec.value + spec.step,
+        "Down" | "Left" => spec.value - spec.step,
+        "Page_Up" => spec.value + 10.0 * spec.step,
+        "Page_Down" => spec.value - 10.0 * spec.step,
+        "Home" => spec.min,
+        "End" => spec.max,
+        _ => return None,
+    };
+    Some(spec.clamp_value(value))
+}
+
+/// Tab moves focus forward, Shift+Tab backward, wrapping over `count` visible rows.
+pub(crate) fn next_audio_focus(focus: Option<usize>, count: usize, backward: bool) -> usize {
+    match focus {
+        None => 0,
+        Some(slot) if backward => (slot + count - 1) % count,
+        Some(slot) => (slot + 1) % count,
+    }
+}
+
+/// Typed key while the audio popup is open. Tab moves focus; the first slider key on an
+/// unfocused list only focuses row 0; otherwise the focused row's slider moves one key step.
+pub(crate) fn audio_key_request(
+    snapshot: &mut QuickControlSnapshot,
+    payload: &str,
+) -> Option<ControlRequest> {
+    let (modifiers, key) = flamewm_shell::launcher::parse_typed_key(payload)?;
+    let rows = crate::taskbar::status::audio::visible_rows(
+        &snapshot.system.audio,
+        snapshot.audio_tab,
+        snapshot.audio_scroll_offset,
+    );
+    let count = rows.len();
+    if count == 0 {
+        return None;
+    }
+    let focus = snapshot.audio_focus_slot.filter(|&slot| slot < count);
+    if key == "Tab" {
+        let backward = modifiers.split('+').any(|modifier| modifier == "Shift");
+        snapshot.audio_focus_slot = Some(next_audio_focus(focus, count, backward));
+        return None;
+    }
+    let Some(slot) = focus else {
+        snapshot.audio_focus_slot = Some(0);
+        return None;
+    };
+    let row = rows.into_iter().nth(slot)?;
+    let spec = snapshot.audio_settings.slider_spec(row.volume_percent);
+    let value = slider_key_value(key, spec)?;
+    crate::taskbar::status::audio::system_action_for_row(
+        &snapshot.system,
+        &row.id,
+        Some(value.round() as u8),
+        None,
+    )
+}
+
 /// Pointer x on the slider track -> snapped percent under the current cap.
 pub(crate) fn audio_pointer_request(
     snapshot: &QuickControlSnapshot,
@@ -162,4 +223,47 @@ pub(crate) fn helper_control_request(
         _ => return None,
     };
     crate::taskbar::status::audio::system_action_for_row(system, &row.id, percent, muted)
+}
+
+#[cfg(test)]
+mod slider_key_tests {
+    use super::*;
+    use flamewm_ui_core::range::RangeSpec;
+
+    fn spec(value: f32, max: f32) -> RangeSpec {
+        RangeSpec::new(0.0, max, 1.0, value)
+    }
+
+    #[test]
+    fn arrows_step_one_and_clamp_at_the_ends() {
+        assert_eq!(slider_key_value("Up", spec(50.0, 100.0)), Some(51.0));
+        assert_eq!(slider_key_value("Right", spec(50.0, 100.0)), Some(51.0));
+        assert_eq!(slider_key_value("Down", spec(50.0, 100.0)), Some(49.0));
+        assert_eq!(slider_key_value("Left", spec(50.0, 100.0)), Some(49.0));
+        assert_eq!(slider_key_value("Up", spec(100.0, 100.0)), Some(100.0));
+        assert_eq!(slider_key_value("Down", spec(0.0, 100.0)), Some(0.0));
+    }
+
+    #[test]
+    fn paging_moves_ten_steps_and_home_end_reach_the_range() {
+        assert_eq!(slider_key_value("Page_Up", spec(50.0, 100.0)), Some(60.0));
+        assert_eq!(slider_key_value("Page_Down", spec(50.0, 100.0)), Some(40.0));
+        assert_eq!(slider_key_value("Page_Up", spec(95.0, 100.0)), Some(100.0));
+        assert_eq!(slider_key_value("Home", spec(50.0, 100.0)), Some(0.0));
+        assert_eq!(slider_key_value("End", spec(50.0, 150.0)), Some(150.0));
+    }
+
+    #[test]
+    fn other_keys_do_not_move_a_slider() {
+        assert_eq!(slider_key_value("Return", spec(50.0, 100.0)), None);
+        assert_eq!(slider_key_value("a", spec(50.0, 100.0)), None);
+    }
+
+    #[test]
+    fn tab_wraps_forward_and_backward_and_starts_at_row_zero() {
+        assert_eq!(next_audio_focus(None, 3, false), 0);
+        assert_eq!(next_audio_focus(Some(0), 3, false), 1);
+        assert_eq!(next_audio_focus(Some(2), 3, false), 0);
+        assert_eq!(next_audio_focus(Some(0), 3, true), 2);
+    }
 }

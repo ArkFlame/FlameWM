@@ -14,6 +14,9 @@ pub fn route_helper_event(
     reprojection: &mut bool,
 ) -> bool {
     sync_network_secret(snapshot);
+    if surfaces.open != Some(QuickControlKind::Audio) {
+        snapshot.audio_focus_slot = None;
+    }
     let action = event.action.action.as_str();
     if action == "network.secret.focus" {
         snapshot.network_secret_focused = true;
@@ -102,6 +105,20 @@ pub fn route_helper_event(
             .and_then(|(_, dy)| dy.parse::<f32>().ok())
         {
             scroll_audio_rows(snapshot, dy);
+        }
+        return true;
+    }
+    // Typed keys drive the audio focus model only; the keyboard.input text copy of a
+    // key is not applied here, so each press is delivered once.
+    if action == "__flamewm.ui.key"
+        && event.action.phase == ActionPhase::Press
+        && surfaces.open == Some(QuickControlKind::Audio)
+    {
+        if let Some(payload) = event.action.text.as_deref() {
+            if let Some(request) = audio_key_request(snapshot, payload) {
+                crate::control_actions::enqueue_action(dispatcher, request);
+            }
+            *reprojection = true;
         }
         return true;
     }
