@@ -38,7 +38,10 @@ pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
             backdrop_blur: true,
         },
     );
-    let rgb = if appearance.reduce_transparency {
+    // highContrast: the opaque surface is the palette surface (pure black on Dark, white on Light).
+    let rgb = if crate::glass::high_contrast_from_settings(snapshot) {
+        crate::glass::palette_from_settings(snapshot).surface.0
+    } else if appearance.reduce_transparency {
         material.tint_rgb
     } else if !is_group_custom(snapshot, "surface") {
         // Custom surface off: the theme default. Dark is the Dark surface, Light the Light surface, so
@@ -908,5 +911,30 @@ mod surface_theme_default_tests {
             (fill.alpha, fill.rgb),
             (255, flamewm_skin::palette::LIGHT_PANEL.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod high_contrast_tests {
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+    use super::surface_fill;
+
+    /// highContrast (WCAG 1.4.11): menus and Start are opaque and take the palette surface, so
+    /// glass alpha and tint cannot make them translucent or grey.
+    #[test]
+    fn high_contrast_menu_fill_is_opaque_palette_surface() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("highContrast".into(), SettingValue::Boolean(true));
+        let fill = surface_fill(&snapshot);
+        assert_eq!((fill.rgb, fill.alpha), (0x0000_0000, 255));
+    }
+
+    #[test]
+    fn default_menu_fill_stays_translucent() {
+        let fill = surface_fill(&SettingsSnapshot::new(1));
+        assert_ne!(fill.alpha, 255);
     }
 }

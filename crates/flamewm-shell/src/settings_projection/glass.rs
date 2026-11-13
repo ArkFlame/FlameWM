@@ -51,7 +51,9 @@ pub(super) fn blur_px_to_percent(blur_px: u16) -> u8 {
 /// `surfaceOpacity` / `surfaceBlurPercent` pair.
 #[must_use]
 pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
-    (
+    // highContrast and reduceTransparency both resolve to the flat (opaque, unblurred) material.
+    flamewm_ui_core::glass::window_backdrop_material(
+        snapshot,
         percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
         percent_setting(snapshot, "surfaceBlurPercent", DEFAULT_SURFACE_BLUR_PERCENT),
     )

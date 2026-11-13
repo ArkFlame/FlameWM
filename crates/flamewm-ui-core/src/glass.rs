@@ -511,7 +511,10 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         _ => defaults.tint_rgb,
     };
     Appearance {
-        reduce_transparency: flag("reduceTransparency", defaults.reduce_transparency),
+        // highContrast (WCAG 1.4.11, KDE High Contrast, Windows contrast themes) also makes every
+        // material opaque with no blur, the same flat look as reduceTransparency.
+        reduce_transparency: flag("reduceTransparency", defaults.reduce_transparency)
+            || high_contrast_from_settings(snapshot),
         glass_opacity_percent,
         tint_rgb,
         glass_blur_px,
@@ -1238,5 +1241,30 @@ mod surface_opacity_mapping_tests {
             appearance_from_settings(&snapshot).glass_opacity_percent,
             75
         );
+    }
+}
+
+#[cfg(test)]
+mod high_contrast_flat_tests {
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+    use super::{appearance_from_settings, window_backdrop_material};
+
+    /// highContrast turns the translucent material flat, the same as reduceTransparency.
+    #[test]
+    fn high_contrast_resolves_to_flat_material() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("highContrast".into(), SettingValue::Boolean(true));
+        assert!(appearance_from_settings(&snapshot).reduce_transparency);
+        assert_eq!(window_backdrop_material(&snapshot, 67, 40), (100, 0));
+    }
+
+    #[test]
+    fn default_material_keeps_surface_opacity_and_blur() {
+        let snapshot = SettingsSnapshot::new(1);
+        assert!(!appearance_from_settings(&snapshot).reduce_transparency);
+        assert_eq!(window_backdrop_material(&snapshot, 67, 40), (67, 40));
     }
 }
