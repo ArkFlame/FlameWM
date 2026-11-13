@@ -899,3 +899,155 @@ fn two_output_fixture_reaches_every_mode_and_begins_exact_output_and_mode() {
         })
     );
 }
+
+fn two_output_snapshot(generation: u64) -> DisplaySnapshot {
+    let mut snapshot = display_snapshot();
+    snapshot.generation = generation;
+    let mut right = snapshot.outputs[0].clone();
+    right.id = OutputId::new("DP-1");
+    right.connector = "DP-1".to_owned();
+    right.edid_identity = "edid-right".to_owned();
+    right.primary = false;
+    right.geometry = Rect::new(1920, 0, 1280, 720);
+    right.shell_scale_percent = 100;
+    snapshot.outputs[0].primary = true;
+    snapshot.outputs.push(right);
+    snapshot
+}
+
+fn transaction_refusal(message: &str) -> ControlError {
+    ControlError {
+        name: "com.arkflame.FlameWM1.Error.Conflict",
+        code: flamewm_api::ErrorCode::Conflict,
+        message: message.to_owned(),
+    }
+}
+
+#[test]
+fn display_arrangement_sends_placements_then_keep_clears_pending_and_refreshes() {
+    let placements = vec![
+        OutputPlacement {
+            output: OutputId::new("DP-1"),
+            x: 0,
+            y: 0,
+        },
+        OutputPlacement {
+            output: OutputId::new("HDMI-1"),
+            x: 1280,
+            y: 0,
+        },
+    ];
+    let mut client = fake_client([
+        Ok(ControlResponse::Displays(two_output_snapshot(3))),
+        Ok(ControlResponse::Transaction(TransactionId(9))),
+        Ok(ControlResponse::Unit),
+        Ok(ControlResponse::Displays(two_output_snapshot(4))),
+    ]);
+    client.refresh_displays().expect("initial snapshot");
+    let transaction = client
+        .set_display_arrangement(placements.clone(), 1_000)
+        .expect("arrangement transaction");
+    assert_eq!(transaction, TransactionId(9));
+    assert_eq!(
+        client.ui().pending_display_transaction,
+        Some(TransactionId(9))
+    );
+
+    client.keep_display_mode(1_500).expect("keep");
+    assert_eq!(client.ui().pending_display_transaction, None);
+    assert_eq!(
+        client.transport.requests.as_slice(),
+        [
+            ControlRequest::GetDisplays,
+            ControlRequest::SetDisplayArrangement {
+                placements,
+                expected_generation: 3,
+                now_ms: 1_000,
+            },
+            ControlRequest::KeepDisplayMode {
+                transaction: TransactionId(9),
+                now_ms: 1_500,
+            },
+            ControlRequest::GetDisplays,
+        ]
+    );
+}
+
+#[test]
+fn display_revert_clears_pending_without_keep_and_refusal_keeps_no_pending() {
+    let mut client = fake_client([
+        Ok(ControlResponse::Displays(two_output_snapshot(3))),
+        Err(transaction_refusal("arrangement refused")),
+        Ok(ControlResponse::Transaction(TransactionId(11))),
+        Ok(ControlResponse::Unit),
+        Ok(ControlResponse::Displays(two_output_snapshot(4))),
+    ]);
+    client.refresh_displays().expect("initial snapshot");
+    assert!(
+        client
+            .set_primary_display(OutputId::new("DP-1"), 1)
+            .is_err()
+    );
+    assert_eq!(client.ui().pending_display_transaction, None);
+
+    client
+        .set_primary_display(OutputId::new("DP-1"), 2)
+        .expect("primary transaction");
+    assert_eq!(
+        client.ui().pending_display_transaction,
+        Some(TransactionId(11))
+    );
+    client.revert_display_mode().expect("revert");
+    assert_eq!(client.ui().pending_display_transaction, None);
+    assert!(matches!(
+        client.transport.requests.last(),
+        Some(ControlRequest::GetDisplays)
+    ));
+    assert!(client.transport.requests.iter().any(|request| matches!(
+        request,
+        ControlRequest::RevertDisplayMode {
+            transaction: TransactionId(11)
+        }
+    )));
+    assert!(
+        !client
+            .transport
+            .requests
+            .iter()
+            .any(|request| matches!(request, ControlRequest::KeepDisplayMode { .. }))
+    );
+}
+
+#[test]
+fn primary_and_rotation_send_typed_requests_with_current_generation() {
+    let mut client = fake_client([
+        Ok(ControlResponse::Displays(two_output_snapshot(7))),
+        Ok(ControlResponse::Transaction(TransactionId(20))),
+        Ok(ControlResponse::Transaction(TransactionId(21))),
+    ]);
+    client.refresh_displays().expect("initial snapshot");
+    client
+        .set_primary_display(OutputId::new("DP-1"), 100)
+        .expect("primary");
+    client.ui.pending_display_transaction = None;
+    client
+        .set_display_rotation(OutputId::new("DP-1"), Rotation::Left, 200)
+        .expect("rotation");
+    assert_eq!(
+        client.transport.requests.as_slice(),
+        [
+            ControlRequest::GetDisplays,
+            ControlRequest::SetPrimaryDisplay {
+                output: OutputId::new("DP-1"),
+                expected_generation: 7,
+                now_ms: 100,
+            },
+            ControlRequest::SetDisplayRotation {
+                output: OutputId::new("DP-1"),
+                rotation: Rotation::Left,
+                expected_generation: 7,
+                now_ms: 200,
+            },
+        ]
+    );
+}
