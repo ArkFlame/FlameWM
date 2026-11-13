@@ -228,6 +228,32 @@ pub(crate) fn output_for_rect(outputs: &[Rect], rect: Rect) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
+/// Output a new layer surface maps on: the one it requested when that output is live, else the output
+/// under the pointer. `live` lists every driven output, primary included.
+pub(crate) fn choose_layer_output<'a>(
+    requested: Option<&'a str>,
+    live: &[String],
+    pointer: &'a str,
+) -> &'a str {
+    requested
+        .filter(|name| live.iter().any(|output| output.as_str() == *name))
+        .unwrap_or(pointer)
+}
+
+/// Entries homed on `output`, in order. These are the surfaces that leave a removed output.
+pub(crate) fn homed_on<T: Clone>(homes: &[(T, String)], output: &str) -> Vec<T> {
+    homes
+        .iter()
+        .filter(|(_, home)| home == output)
+        .map(|(surface, _)| surface.clone())
+        .collect()
+}
+
+/// Whether a surface moving from `previous` to `next` changes output, so `wl_surface.leave` is due.
+pub(crate) fn changes_output(previous: &str, next: &str) -> bool {
+    previous != next
+}
+
 fn overlap_area(a: Rect, b: Rect) -> i64 {
     let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
     let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
@@ -519,6 +545,44 @@ mod tests {
         assert_eq!(output_for_rect(&rects, Rect::new(80, 10, 60, 50)), Some(1));
         assert_eq!(output_for_rect(&rects, Rect::new(300, 0, 10, 10)), None);
         assert_eq!(output_for_rect(&[], Rect::new(0, 0, 1, 1)), None);
+    }
+
+    #[test]
+    fn equal_overlap_goes_to_the_lower_index_output() {
+        let rects = [Rect::new(0, 0, 100, 100), Rect::new(100, 0, 100, 100)];
+        assert_eq!(output_for_rect(&rects, Rect::new(90, 0, 20, 10)), Some(0));
+    }
+
+    #[test]
+    fn layer_maps_on_its_requested_output_when_that_output_is_live() {
+        let live = ["DP-1".to_owned(), "DP-2".to_owned()];
+        assert_eq!(choose_layer_output(Some("DP-2"), &live, "DP-1"), "DP-2");
+    }
+
+    #[test]
+    fn layer_falls_back_to_the_pointer_output_when_request_is_absent_or_gone() {
+        let live = ["DP-1".to_owned(), "DP-2".to_owned()];
+        assert_eq!(choose_layer_output(None, &live, "DP-2"), "DP-2");
+        assert_eq!(choose_layer_output(Some("HDMI-9"), &live, "DP-2"), "DP-2");
+        // Nested or single output: the primary is the only live name and the pointer sits on it.
+        assert_eq!(choose_layer_output(None, &live[..1], "DP-1"), "DP-1");
+    }
+
+    #[test]
+    fn removed_output_surfaces_are_the_ones_homed_on_it() {
+        let homes = [
+            (1_u32, "DP-1".to_owned()),
+            (2, "DP-2".to_owned()),
+            (3, "DP-2".to_owned()),
+        ];
+        assert_eq!(homed_on(&homes, "DP-2"), vec![2, 3]);
+        assert!(homed_on(&homes, "HDMI-9").is_empty());
+    }
+
+    #[test]
+    fn leave_is_due_only_when_the_output_actually_changes() {
+        assert!(!changes_output("DP-1", "DP-1"));
+        assert!(changes_output("DP-1", "DP-2"));
     }
 
     #[test]

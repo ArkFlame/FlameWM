@@ -778,7 +778,7 @@ impl State {
     /// `wl_surface.enter` on the new one; smithay tracks each output's surfaces, so repeats are no-ops.
     pub fn set_surface_output(&mut self, surface: &WlSurface, name: String) {
         let previous = self.output_handle_of(surface);
-        if previous.name() != name {
+        if crate::output_layout::changes_output(&previous.name(), &name) {
             previous.leave(surface);
         }
         self.output_handle(&name).enter(surface);
@@ -798,14 +798,18 @@ impl State {
     #[cfg_attr(not(feature = "drm"), allow(dead_code))] // called only by the drm output sync
     pub(crate) fn retire_output(&mut self, out: &Output) {
         let name = out.name();
-        let stranded: Vec<WlSurface> = self
+        let homes: Vec<(WlSurface, String)> = self
             .toplevels
             .iter()
-            .map(|(_, top)| top.wl_surface().clone())
-            .filter(|wl| self.output_name_of(wl) == name)
+            .map(|(_, top)| {
+                (
+                    top.wl_surface().clone(),
+                    self.output_name_of(top.wl_surface()),
+                )
+            })
             .collect();
-        for wl in &stranded {
-            out.leave(wl);
+        for wl in crate::output_layout::homed_on(&homes, &name) {
+            out.leave(&wl);
         }
         let layers: Vec<smithay::desktop::LayerSurface> =
             layer_map_for_output(out).layers().cloned().collect();

@@ -460,10 +460,19 @@ impl WlrLayerShellHandler for State {
         _layer: Layer,
         namespace: String,
     ) {
-        let name = output
+        let requested = output
             .as_ref()
             .and_then(smithay::output::Output::from_resource)
-            .map_or_else(|| self.output_name_under_pointer(), |out| out.name());
+            .map(|out| out.name());
+        let live: Vec<String> = self
+            .output_handles
+            .iter()
+            .map(smithay::output::Output::name)
+            .chain([self.output.name()])
+            .collect();
+        let pointer = self.output_name_under_pointer();
+        let name = crate::output_layout::choose_layer_output(requested.as_deref(), &live, &pointer)
+            .to_owned();
         let out = self.output_handle(&name);
         self.set_surface_output(surface.wl_surface(), name);
         let desktop = DesktopLayer::new(surface, namespace);
