@@ -6,7 +6,7 @@ use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
 use flamewm_platform::chrome::ACCENT_SOFT_ALPHA;
 use flamewm_platform::settings::ClockFormat;
 use flamewm_skin::palette::Appearance;
-use flamewm_skin::shell_tones::FIXED_TONES;
+use flamewm_skin::shell_tones::{ToneRole, FIXED_TONES};
 use flamewm_ui_core::context_menu::shape_radius;
 use flamewm_ui_x11::surface_style::{
     project_surface_outline, surface_background as shared_surface_background,

@@ -28,9 +28,19 @@ pub(super) fn project_palette_tokens(
     } else {
         Appearance::Dark
     };
+    // highContrast: opaque chrome surfaces (`--c-1c2740` start menu, dock and panel tones) take the
+    // palette surface, so the fixed tones follow the same set as `--panel`. Translucent scrims keep
+    // their alpha.
+    let high_contrast = flamewm_ui_core::glass::high_contrast_from_settings(snapshot);
     for tone in FIXED_TONES {
         let color = tone.for_appearance(appearance);
-        let _ = document.color_variable(tone.name, rgb(color.color.0, color.alpha));
+        let (value, alpha) =
+            if high_contrast && tone.role == ToneRole::Surface && color.alpha == 0xff {
+                (palette.surface.0, 0xff)
+            } else {
+                (color.color.0, color.alpha)
+            };
+        let _ = document.color_variable(tone.name, rgb(value, alpha));
     }
     Ok(())
 }

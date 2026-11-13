@@ -1170,3 +1170,22 @@ fn icon_theme_name_prefers_snapshot_then_product_default() {
     assert_eq!(icon_theme_name(None), default);
     assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), default);
 }
+
+#[test]
+fn high_contrast_projects_opaque_palette_surfaces_and_keeps_scrims() {
+    let mut snapshot = SettingsSnapshot::new(1);
+    snapshot
+        .values
+        .insert("highContrast".into(), SettingValue::Boolean(true));
+    let mut doc = RecordingUiDoc::default();
+    project_accent_tokens(&mut doc, &snapshot).expect("project high contrast tokens");
+    // The start menu background is the opaque fixed tone; it must follow the palette surface.
+    assert_eq!(doc.variables["--c-1c2740"], rgb(0, 255));
+    // Translucent scrims keep their own alpha.
+    assert_eq!(doc.variables["--c-00000080"], rgb(0, 0x80));
+    assert_eq!(
+        super::glass::start_backdrop_percents(&snapshot),
+        (100, 0),
+        "high contrast start popup is flat"
+    );
+}
