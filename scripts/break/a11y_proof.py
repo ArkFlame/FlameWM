@@ -88,6 +88,13 @@ def grab(root, box):
     return Image.frombuffer("RGB", (w, h), raw, "raw", "BGRX", 0, 1)
 
 
+def changed_any(a, b, min_channel=4):
+    """Pixels where some RGB channel differs by at least `min_channel`. Dark fills differ by about
+    ten levels (the taskbar: (9,10,11) against (0,0,0)), below the luminance cut of changed_count."""
+    diff = ImageChops.difference(a, b)
+    return sum(1 for pixel in pixels(diff) if max(pixel) >= min_channel)
+
+
 def changed_count(a, b):
     diff = ImageChops.difference(a, b)
     return sum(diff.convert("L").histogram()[17:])
@@ -238,8 +245,8 @@ def run(bin_dir, out):
     finally:
         xvfb.terminate()
 
-    # The start popup is the palette-driven surface (--panel, --surface, --text). The taskbar is
-    # reported for the record only: its fill and clock do not follow the palette in this build.
+    # The start popup and the taskbar are palette-driven: highContrast changes both fills and the
+    # clock text colour (taskbar fill comes from the palette surface via dock_fill).
     box = default["box"]
     if box is None:
         check("start popup opens", False, "no popup region changed")
@@ -257,10 +264,15 @@ def run(bin_dir, out):
               f"default={def_ratio:.2f} bg={def_bg} fg={def_fg} high_contrast={hc_ratio:.2f}")
     taskbar_default = default["taskbar"].crop((CLOCK[0], CLOCK[1] - 742, CLOCK[2], CLOCK[3] - 742))
     taskbar_hc = contrast_on["taskbar"].crop((CLOCK[0], CLOCK[1] - 742, CLOCK[2], CLOCK[3] - 742))
-    print("INFO taskbar not palette-driven:",
-          f"changed_px={changed_count(default['taskbar'], contrast_on['taskbar'])}",
-          f"clock_ratio_default={text_contrast(taskbar_default)[0]:.2f}",
-          f"clock_ratio_hc={text_contrast(taskbar_hc)[0]:.2f}", flush=True)
+    taskbar_diff = changed_any(default["taskbar"], contrast_on["taskbar"])
+    check("high contrast changes the taskbar pixels", taskbar_diff >= TASKBAR_MIN_DIFF_PX,
+          f"changed_px={taskbar_diff} min={TASKBAR_MIN_DIFF_PX}")
+    clock_default, _, _ = text_contrast(taskbar_default)
+    clock_hc, clock_hc_bg, clock_hc_fg = text_contrast(taskbar_hc)
+    check("high contrast taskbar clock reaches 7:1", clock_hc >= CONTRAST_MIN,
+          f"ratio={clock_hc:.2f} bg={clock_hc_bg} fg={clock_hc_fg}")
+    check("default taskbar clock ratio is below the high-contrast ratio", clock_default < clock_hc,
+          f"default={clock_default:.2f} high_contrast={clock_hc:.2f}")
 
     reduced = popup_timeline(contrast_on)
     if reduced is not None:
