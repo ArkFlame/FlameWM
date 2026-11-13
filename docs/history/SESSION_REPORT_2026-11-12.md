@@ -295,3 +295,47 @@ Still unverified:
 - Displays: no multi-output or rotated runtime session; the 15 s revert deadline is not exercised.
 - Alt+Tab dimming: pixels not measured.
 - Multi-output: no pointer crossing between outputs.
+
+## 12. Addendum: reconcile d1d90785..83ebbc85
+
+Landed on origin/main after the section 11 reconcile (25 commits, oldest first, `git log d1d90785..origin/main`). Claims follow the commit bodies. "Owner report" marks a run no commit body records; it is not re-run here. Rows are in `docs/BACKLOG.md` "Landed since d1d90785".
+
+Keyboard sweeps:
+
+- Executed: `627a13b4` F2 rename (`run_desktop`, private Xvfb, all PASS; the lock-password checks in the same proof still FAIL). `d162695b` media card proof 6/6 (commit body; the focus-ring check had failed at `c9a3534d`).
+- Unit or static only: `b5db3437` taskbar, start app and tray rows (sweep not built or run), `d06f1519` power, `98168749` wifi, `bd1f3682` bluetooth pairing buttons, `fc7dcf58` audio raise switch, `e44347fc` ISO_Left_Tab. Power, wifi, bluetooth and audio need UPower, NetworkManager, a BlueZ agent prompt, or PulseAudio/PipeWire state that a private bus cannot fake.
+- Dialogs: `1e16cc0f` explorer modal keys and Properties permissions field, unit only.
+
+Launcher rescan: `2c601722` and `d3355c99` landed before d1d90785 but the BACKLOG row still said BLOCKED. `48f41502` drops the stale launch pre-check; `0228b273` is the executed proof (before `48f41502`, Enter fails with "application id not found"). `cmp-app-rescan` moved to DONE with this evidence. Not re-run here.
+
+Lock: `49eec46e` takes the X11 keyboard grab before the ~15 s settings setup, so keys typed in that window no longer reach other clients. The gap is closed in code. The owner reports `run_lock` 8/8; the commit body does not state it. Follow-ups are in flight and not on origin/main.
+
+Displays: `891204e1`, `f039cb18` (scripted transport), `62bdee42` (2D canvas, snap drag, keep/revert; 261 lib tests, no Xvfb run), `ec805821` (fixture seam, Escape cancels drag, `scripts/break/displays_canvas_proof.py`). The canvas proof FAILs at its first pixel check: the container is visible but no node pixels paint in the Outputs card. The canvas painted nothing at `62bdee42`. No canvas-paint fix is on origin/main at `83ebbc85`, so it stays an open product bug. Xvfb exposes one output; the 15 s revert deadline is not exercised. `21ec63d4` (section 11) gives a debug virtual-outputs seam with `multi_output.sh` 9/9; it is not hotplug.
+
+Accessibility:
+
+- `663614b1` and `c0341f6e` claimed runtime effects that were not true until `daa71a40` (Start popup pixels unchanged under highContrast), `841155c9`, `71052fd9` and `02dce1d1`.
+- `f081bd0d` and `83ebbc85` add `a11y_proof` checks for the taskbar and popup pixels; the run is not re-run here.
+- `64a2c909` repairs the ui-core CSS contract test that `b6e0b87b` broke on main. The `b6e0b87b` gate omitted flamewm-ui-core.
+- Latent or unrouted: autohide slide is behind SLIDE_ENABLED false; assistant OSD breathing is not routed (no commit); the toast has no timed motion to route.
+
+Notification centre: `b6e0b87b` (section 11) with `notif_center_proof.py` 9/9, re-run in section 11.
+
+Decisions resolved (BACKLOG "Decisions needed from the owner"): D-rescan by `2c601722` and `d3355c99` (opener-miss plus launch-time refresh gated on XDG dir mtimes, no file watch); D-swatch by `6dfc17b3` (swatches named statically) and `a5382c33` (colour-wheel opener named by the live accent, unit test).
+
+Process incidents. These are reported to this reconcile by the orchestrator and are not all verifiable from commit bodies:
+
+- Haiku trailers in this range: `e44347fc`, `c9a3534d`, `d162695b`. Earlier: `e7cfa0ed`, `9750110d`, `a546c29e`, `860deeed`, `81997d01`. Not rewritten; main is shared.
+- Pushes before the post-rebase gate, as admitted by the workers: `3a7e5fd3`, `1e16cc0f`, and the D slice `891204e1`.
+- A worker ran `pkill -f` against its own dbus-daemon.
+- The shared `scripts/gate` lock queued runs for an hour or more.
+
+Still unverified, current at `83ebbc85`:
+
+- Keyboard cards: power, wifi, bluetooth and audio are unit only. Media is the only card with an executed proof in this range (6/6 per `d162695b`).
+- `b5db3437` taskbar, start app and tray rows: sweep not run.
+- Displays: canvas paints nothing (open); two-output and rotated sessions not run; revert deadline not exercised.
+- Lock: `run_lock` 8/8 is an owner report; follow-ups not on main.
+- `settings-keys-proof` Tab focus ring still open from section 10.
+- Usage card: no live provider call (section 11).
+- `a11y_proof` runs for `f081bd0d` and `83ebbc85`: not re-run here.
