@@ -1215,6 +1215,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-usage"
+version = "0.1.7"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "flamewm-weather"
 version = "0.1.7"
 dependencies = [
