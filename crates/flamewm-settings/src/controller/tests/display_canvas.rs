@@ -226,3 +226,68 @@ fn arrow_key_nudges_the_selected_output_into_a_pending_layout() {
         .expect("projects");
     assert!(document.texts["display-canvas-status"].contains("Enter keeps"));
 }
+
+#[test]
+fn escape_during_pointer_drag_restores_the_node_and_sends_nothing() {
+    let (requests, mut transport) = recording_transport();
+    // One snapshot for the page load, one for the press that builds the canvas.
+    transport.responses.extend([
+        Ok(ControlResponse::Displays(two_output_snapshot())),
+        Ok(ControlResponse::Displays(two_output_snapshot())),
+    ]);
+    let mut application = displays_application(transport);
+    let mut document = ProbeDocument::default();
+    application
+        .handle_action(
+            &pointer(
+                "settings.display.canvas.1",
+                UiActionPhase::Press,
+                100.0,
+                50.0,
+            ),
+            &mut document,
+        )
+        .expect("press");
+    application
+        .handle_action(
+            &pointer(
+                "settings.display.canvas.1",
+                UiActionPhase::Motion,
+                100.0,
+                65.5,
+            ),
+            &mut document,
+        )
+        .expect("drag");
+    application
+        .handle_key_event(
+            &flamewm_ui_x11::UiKeyEvent {
+                phase: flamewm_ui_x11::UiKeyPhase::Release,
+                key: "Escape".to_owned(),
+                modifiers: Vec::new(),
+                text: None,
+            },
+            &mut document,
+        )
+        .expect("escape");
+    assert!(application.canvas_drag.is_none(), "escape ends the drag");
+    assert_eq!(document.texts["display-canvas-status"], "HDMI-1 at 1920, 0");
+    application
+        .handle_action(
+            &pointer(
+                "settings.display.canvas.1",
+                UiActionPhase::Release,
+                100.0,
+                65.5,
+            ),
+            &mut document,
+        )
+        .expect("late release");
+    assert!(
+        !requests
+            .borrow()
+            .iter()
+            .any(|r| matches!(r, ControlRequest::SetDisplayArrangement { .. })),
+        "a cancelled drag never reaches the WM"
+    );
+}

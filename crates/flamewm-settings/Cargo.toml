@@ -18,6 +18,7 @@ flamewm-settings-core = { path = "../flamewm-settings-core" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-session-core = { path = "../flamewm-session-core" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 

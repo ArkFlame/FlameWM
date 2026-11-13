@@ -304,6 +304,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
         {
             return self.settle(document);
         }
+        // Escape during a canvas pointer drag puts the node back where the press found it.
+        if event.phase == UiKeyPhase::Release
+            && event.key == "Escape"
+            && let Some(drag) = self.canvas_drag.take()
+        {
+            self.canvas_snap = None;
+            self.canvas_hint = None;
+            if let Some(canvas) = self.display_canvas.as_mut() {
+                canvas.drag_to(drag.index, drag.start);
+            }
+            return self.settle(document);
+        }
         if event.phase == UiKeyPhase::Release
             && event.modifiers.is_empty()
             && self.client.ui().page == SettingsPage::Displays

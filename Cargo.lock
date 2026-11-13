@@ -1070,6 +1070,7 @@ dependencies = [
  "flamewm-settings-core",
  "flamewm-ui-core",
  "flamewm-ui-x11",
+ "serde_json",
 ]
 
 [[package]]

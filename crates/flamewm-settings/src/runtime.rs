@@ -9,7 +9,7 @@ use flamewm_ui_x11::{
 
 use crate::SettingsApplication;
 use crate::control::{
-    KnownRevisions, SettingsControl, SettingsScope, SettingsSignals, SettingsWake, reproject_scope,
+    KnownRevisions, SettingsScope, SettingsSignals, SettingsWake, reproject_scope,
 };
 use crate::file_chooser::WallpaperChooserWake;
 use crate::view;
@@ -19,9 +19,7 @@ pub mod launch;
 pub use launch::SettingsLaunchOptions;
 
 pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
-    let mut application = SettingsApplication::new(
-        SettingsControl::connect_session().map_err(|error| error.to_string())?,
-    );
+    let mut application = SettingsApplication::new(crate::fixture_transport::connect()?);
     application.client_mut().set_page(options.page);
     application.appearance_tab = options.appearance_tab;
     let mut document = view::document_with_backdrop(application.client().settings())?;

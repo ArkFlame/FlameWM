@@ -14,6 +14,7 @@ pub mod control;
 mod display_canvas;
 mod display_layout;
 pub mod file_chooser;
+mod fixture_transport;
 pub mod runtime;
 pub mod theme_picker;
 pub mod view;
