@@ -106,6 +106,10 @@ impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
         self.inner.request_close();
     }
 
+    fn focused_action(&self) -> Option<&str> {
+        self.inner.focused_action()
+    }
+
     forward_writes! {
         text(id: &str, text: String);
         image_rgb8(id: &str, image: flamewm_ui_x11::RuntimeImage);

@@ -185,3 +185,66 @@ fn focused_scale_slider_arrow_key_applies_one_quarter_step() {
         )));
     }
 }
+
+#[test]
+fn arrow_keys_step_the_focused_slider_without_a_press() {
+    // WAI-ARIA slider: arrows change the value of the slider that has focus; no pointer press or
+    // Return activation arms it first.
+    let (requests, mut transport) = recording_transport();
+    let mut initial = display_snapshot();
+    initial.outputs[0].shell_scale_percent = 100;
+    let mut updated = display_snapshot();
+    updated.outputs[0].shell_scale_percent = 125;
+    transport.responses.extend([
+        Ok(ControlResponse::Displays(initial)),
+        Ok(ControlResponse::Unit),
+        Ok(ControlResponse::Displays(updated)),
+    ]);
+    let mut application = displays_application(transport);
+    let mut document = ProbeDocument {
+        focused: Some(crate::DISPLAY_SCALE_SLIDER.to_owned()),
+        ..ProbeDocument::default()
+    };
+    application
+        .handle_key_event(
+            &flamewm_ui_x11::UiKeyEvent {
+                phase: flamewm_ui_x11::UiKeyPhase::Release,
+                key: "Right".to_owned(),
+                modifiers: Vec::new(),
+                text: None,
+            },
+            &mut document,
+        )
+        .expect("step focused display scale");
+    assert!(requests.borrow().iter().any(|request| matches!(
+        request,
+        ControlRequest::SetShellScale { percent, .. } if *percent == 125
+    )));
+}
+
+#[test]
+fn arrow_keys_on_an_unfocused_slider_do_nothing() {
+    let (requests, mut transport) = recording_transport();
+    transport
+        .responses
+        .push_back(Ok(ControlResponse::Displays(display_snapshot())));
+    let mut application = displays_application(transport);
+    let mut document = ProbeDocument::default();
+    application
+        .handle_key_event(
+            &flamewm_ui_x11::UiKeyEvent {
+                phase: flamewm_ui_x11::UiKeyPhase::Release,
+                key: "Right".to_owned(),
+                modifiers: Vec::new(),
+                text: None,
+            },
+            &mut document,
+        )
+        .expect("arrow without focus");
+    assert!(
+        !requests
+            .borrow()
+            .iter()
+            .any(|request| matches!(request, ControlRequest::SetShellScale { .. }))
+    );
+}

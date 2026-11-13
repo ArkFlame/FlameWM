@@ -46,6 +46,26 @@ pub(crate) const GLASS_SLIDER_TRACK_HEIGHT: f64 = 6.0;
 pub(crate) const GLASS_SLIDER_THUMB_TOP: f64 = 0.0;
 pub(crate) const GLASS_SLIDER_TRAVEL: f64 = GLASS_SLIDER_TRACK_WIDTH - GLASS_SLIDER_THUMB;
 
+/// Target of a WAI-ARIA slider key: arrows step by one unit, PageUp/PageDown by ten, Home and End
+/// jump to the bounds. `None` for keys a slider does not handle.
+pub(crate) fn slider_key_target(
+    key: &str,
+    current: i64,
+    minimum: i64,
+    maximum: i64,
+) -> Option<i64> {
+    let target = match key {
+        "Right" | "Up" => current + 1,
+        "Left" | "Down" => current - 1,
+        "PageUp" => current + 10,
+        "PageDown" => current - 10,
+        "Home" => minimum,
+        "End" => maximum,
+        _ => return None,
+    };
+    Some(target.clamp(minimum, maximum))
+}
+
 pub(crate) fn glass_slider(action: &str) -> Option<&'static GlassSlider> {
     GLASS_SLIDERS.iter().find(|slider| slider.action == action)
 }
@@ -120,5 +140,34 @@ pub(crate) fn step(value: &str) -> Option<i8> {
         "down" => Some(-1),
         "up" => Some(1),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod key_target_tests {
+    use super::slider_key_target;
+
+    #[test]
+    fn arrows_step_one_unit_and_clamp_to_the_range() {
+        assert_eq!(slider_key_target("Right", 50, 0, 100), Some(51));
+        assert_eq!(slider_key_target("Up", 50, 0, 100), Some(51));
+        assert_eq!(slider_key_target("Left", 50, 0, 100), Some(49));
+        assert_eq!(slider_key_target("Down", 50, 0, 100), Some(49));
+        assert_eq!(slider_key_target("Right", 100, 0, 100), Some(100));
+        assert_eq!(slider_key_target("Left", 0, 0, 100), Some(0));
+    }
+
+    #[test]
+    fn page_keys_step_ten_and_home_end_jump_to_the_bounds() {
+        assert_eq!(slider_key_target("PageUp", 95, 4, 100), Some(100));
+        assert_eq!(slider_key_target("PageDown", 10, 4, 100), Some(4));
+        assert_eq!(slider_key_target("Home", 50, 4, 100), Some(4));
+        assert_eq!(slider_key_target("End", 50, 4, 100), Some(100));
+    }
+
+    #[test]
+    fn other_keys_are_not_slider_keys() {
+        assert_eq!(slider_key_target("Tab", 50, 0, 100), None);
+        assert_eq!(slider_key_target("a", 50, 0, 100), None);
     }
 }

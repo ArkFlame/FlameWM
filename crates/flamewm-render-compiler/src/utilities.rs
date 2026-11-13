@@ -702,12 +702,16 @@ mod tests {
     /// text colour #aeb9cc -> #aeb4bb, now from ui/base/base.css. Byte count unchanged.
     /// Re-pinned 827_242 / 0xc575_3a91_ac46_57f8 -> 828_052 / 0x4784_cecd_88bd_f6ea for the intended
     /// settings slider-track focus ring (`.slider-track:focus-visible` in ui/base/base.css).
+    /// Re-pinned 828_052 / 0x4784_cecd_88bd_f6ea -> 828_456 / 0xb788_7d9f_bc6a_259a (+404 bytes) for the
+    /// Re-pinned 828_456 -> 838_838 for the settings usage rows added by d98649e5 (settings.html).
+    /// Re-pinned 838_838 -> 845_055 for the settings primary and rotation rows added by 00c067b1 (settings.html).
+    /// intended sidebar nav-row focus ring (`.settings-nav .nav-row:focus-visible` in ui/base/base.css).
     #[test]
     fn settings_hotkeys_document_is_unchanged_by_utility_migration() {
         let page = ui_dir().join("settings.html");
         assert_eq!(
             compiled_page_digest(&page, true),
-            (828_052, 0x4784_cecd_88bd_f6ea)
+            (845_055, 0x81e8_93fd_cc87_db4b)
         );
     }
 

@@ -162,22 +162,28 @@ def run(bin_dir, out):
         # Wait for the search field's focus ring before typing: keys sent before the focus lands are lost.
         before_focus = shot("search-pre")
         key("Tab", wait=1.5)
-        search_base = shot("search-base")
-        check("Tab focuses the sidebar search (ring painted)", changed(before_focus, search_base) is not None,
+        search_tab = shot("search-base")
+        check("Tab focuses the sidebar search (ring painted)", changed(before_focus, search_tab) is not None,
               "search-pre vs search-base")
         # The search button activates on Return (settings.search.focus); only then do keys reach the field.
         key("Return", wait=1.5)
-        search_base = shot("search-active")
+        search_active = shot("search-active")
         key("z", wait=1.5)
         search_once = shot("search-z")
-        check("typed character changes the search field", changed(search_base, search_once) is not None,
-              "search-base vs search-z")
+        check("typed character changes the search field", changed(search_active, search_once) is not None,
+              "search-active vs search-z")
+        # Escape clears the field and leaves it (app: Escape clears the sidebar search); the cleared image
+        # must equal the focused-but-empty image painted before the field was activated.
         key("Escape")
         search_cleared = shot("search-escaped")
-        check("Escape restores the empty search field", changed(search_base, search_cleared) is None,
+        check("Escape restores the empty search field", changed(search_tab, search_cleared) is None,
               "search-base vs search-escaped")
-        key("z")
+        # Typing after Escape needs the field re-activated with Return; one character then renders the
+        # same image as the first typed character did.
+        key("Return", wait=1.5)
+        key("z", wait=1.5)
         search_again = shot("search-z-again")
+        key("Escape", wait=1.0)
         check("one typed character renders the same image after Escape", changed(search_once, search_again) is None,
               "search-z vs search-z-again")
 
@@ -244,7 +250,7 @@ def run(bin_dir, out):
             closed = False
         check("Ctrl+Q closes the settings window", closed, f"exit={settings.poll()} windows={len(find_window(WINDOW_TITLE))}")
 
-        # Displays slider: reopen on the Displays page, Tab until a Right press moves the pixels, then Left
+        # Displays slider: reopen on the Displays page, Tab (no Return) until a Right press moves the pixels, then Left
         # must restore the exact previous image (one arrow step each way).
         displays = subprocess.Popen([os.path.join(bindir, "flamewm-settings"), "--page", "displays"],
                                     env=env, start_new_session=True,
@@ -275,8 +281,7 @@ def run(bin_dir, out):
             prev = dshot("slider-base")
             for index in range(40):
                 key("Tab", wait=0.6)
-                # Keyboard activation (Return) on the focused track arms the slider; arrows then step it.
-                key("Return", wait=0.6)
+                # WAI-ARIA slider: arrows act on the focused slider alone; no Return activation.
                 pre = dshot(f"slider-tab-{index:02d}")
                 key("Right", wait=1.0)
                 after = dshot(f"slider-right-{index:02d}")

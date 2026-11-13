@@ -74,3 +74,24 @@ fn escape_clears_the_focused_sidebar_search() {
     assert!(!application.nav_search_focused);
     assert_eq!(document.close_requests, 0);
 }
+
+#[test]
+fn escape_clears_the_search_text_the_sidebar_shows() {
+    // The filter change must reach the document the window paints: the search text returns to
+    // the placeholder and the "no matches" row hides, in the same settle as the state change.
+    let mut application = closable_application();
+    let mut document = ProbeDocument::default();
+    application.nav_search_focused = true;
+    application.nav_query = "z".to_owned();
+    application
+        .handle_key_event(
+            &key(flamewm_ui_x11::UiKeyPhase::Release, "Escape", &[]),
+            &mut document,
+        )
+        .expect("escape");
+    assert_eq!(
+        document.texts.get("nav-search-text").map(String::as_str),
+        Some("Search")
+    );
+    assert_eq!(document.visible.get("nav-empty"), Some(&false));
+}

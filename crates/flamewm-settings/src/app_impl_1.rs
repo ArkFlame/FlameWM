@@ -307,7 +307,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.nav_search_focused = false;
             return self.settle(document);
         }
-        if event.phase == UiKeyPhase::Release && !self.hotkey_armed && self.scale_slider_focused {
+        let focused = document.focused_action();
+        if event.phase == UiKeyPhase::Release
+            && !self.hotkey_armed
+            && (self.scale_slider_focused || focused == Some(DISPLAY_SCALE_SLIDER))
+        {
             if event.key == "Escape" {
                 self.scale_slider_focused = false;
                 self.scale_drag = None;
@@ -337,6 +341,23 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
                 return self.settle(document);
             }
+        }
+        if let Some(slider) = focused.and_then(glass_slider)
+            && event.phase == UiKeyPhase::Release
+            && !self.hotkey_armed
+            && event.modifiers.is_empty()
+            && !(slider.key == "taskbarOpacityPercent" && self.taskbar_inherits())
+            && let Some(current) = self.number_setting(slider.key)
+            && let Some(target) =
+                slider_key_target(&event.key, current, slider.minimum, slider.maximum)
+        {
+            if target != current {
+                let target = u8::try_from(target).map_err(|_| "glass slider value out of range")?;
+                self.client
+                    .apply_setting(slider.key, SettingValue::Percent(target))
+                    .map_err(control_error)?;
+            }
+            return self.settle(document);
         }
         if event.phase == UiKeyPhase::Release && self.hotkey_armed {
             if let Some(binding) = bare_super_binding(event) {

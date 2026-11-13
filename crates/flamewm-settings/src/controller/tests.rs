@@ -151,11 +151,16 @@ struct ProbeDocument {
     variables: BTreeMap<String, UiColor>,
     attributes: BTreeMap<(String, String), String>,
     close_requests: usize,
+    focused: Option<String>,
 }
 
 impl UiDocumentAccess for ProbeDocument {
     fn request_close(&mut self) {
         self.close_requests += 1;
+    }
+
+    fn focused_action(&self) -> Option<&str> {
+        self.focused.as_deref()
     }
 
     fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {

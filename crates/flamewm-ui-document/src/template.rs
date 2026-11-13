@@ -169,6 +169,11 @@ pub trait UiDocumentAccess {
     /// Asks the window to close itself, as its close button does. The window loop applies it after
     /// the event, so a key handler never tears the window down mid-dispatch.
     fn request_close(&mut self) {}
+    /// Action of the focused control (`None` when nothing focused or it has no action). Lets a
+    /// handler route arrow keys to the slider that has keyboard focus, as WAI-ARIA requires.
+    fn focused_action(&self) -> Option<&str> {
+        None
+    }
     /// Like `text`, but borrows: unchanged text costs no allocation. The default forwards to `text`.
     fn text_ref(&mut self, id: &str, text: &str) -> Result<(), String> {
         self.text(id, text.to_owned())
@@ -587,6 +592,10 @@ impl UiDocumentAccess for UiDocument {
         self.document.request_close();
     }
 
+    fn focused_action(&self) -> Option<&str> {
+        crate::focus::action_for(&self.document.document, self.document.focus()?)
+    }
+
     fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         self.layout_box_by_id(id, viewport)
     }
@@ -597,6 +606,11 @@ impl UiDocumentAccess for UiDocumentView<'_> {
 
     fn request_close(&mut self) {
         self.document.request_close();
+    }
+
+    fn focused_action(&self) -> Option<&str> {
+        let document: &RuntimeDocument = &*self.document;
+        crate::focus::action_for(&document.document, document.focus()?)
     }
 
     fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
