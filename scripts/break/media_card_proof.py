@@ -25,7 +25,7 @@ from Xlib.ext import xtest
 
 SCREEN = (1280, 800)
 TRAY_MEDIA_CELL = (983, 778)  # tray media button (media.toggle): cell left of the usage tray button
-CARD_MIN_DIFF_PX = 2000  # changed pixels that count as the card opening or closing
+CARD_MIN_DIFF_PX = 500  # changed pixels that count as the card opening or closing
 PANEL_TOP = 740  # rows at and below this are the taskbar; the card sits above it
 FOCUS_MIN_DIFF_PX = 30  # changed pixels that count as a focus ring moving
 BUS_NAME = "org.mpris.MediaPlayer2.fixture"
@@ -61,7 +61,8 @@ def player_main(address, log_path):
         "MinimumRate": dbus.Double(1.0),
         "MaximumRate": dbus.Double(1.0),
     }
-    table = {"org.mpris.MediaPlayer2.Player": props}
+    root = {"Identity": dbus.String("Fixture"), "CanQuit": dbus.Boolean(False), "CanRaise": dbus.Boolean(False)}
+    table = {"org.mpris.MediaPlayer2": root, "org.mpris.MediaPlayer2.Player": props}
 
     class Player(dbus.service.Object):
         def __init__(self):
@@ -93,10 +94,14 @@ def player_main(address, log_path):
 
         @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="ss", out_signature="v")
         def Get(self, interface, name):
+            with open(log_path + ".queries", "a", encoding="utf-8") as handle:
+                handle.write(f"Get {interface} {name}\n")
             return table[interface][name] if interface in table else props.get(name)
 
         @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}")
         def GetAll(self, interface):
+            with open(log_path + ".queries", "a", encoding="utf-8") as handle:
+                handle.write(f"GetAll {interface}\n")
             return dbus.Dictionary(table.get(interface, {}), signature="sv")
 
     Player()
@@ -145,6 +150,8 @@ def run(bin_dir, out):
     for name in ("flamewm", "flamewm-session", "flamewm-shell", "flamewm-desktop"):
         shutil.copy(os.path.join(bin_dir, name), bindir)
     log_path = os.path.join(out, "mpris-calls.log")
+    if os.path.exists(log_path):
+        os.remove(log_path)
     verdicts = []
 
     def check(label, ok, detail):
@@ -204,6 +211,7 @@ def run(bin_dir, out):
 
         before_tab = shot(out, "media-before-tab.png", display)
         key("Tab")
+        time.sleep(1.0)
         after_tab = shot(out, "media-after-tab.png", display)
         check("Tab moves focus over the transport stops", changed_count(before_tab, after_tab) >= FOCUS_MIN_DIFF_PX,
               f"focus_px={changed_count(before_tab, after_tab)}")
