@@ -1,5 +1,6 @@
 //! `Service` lifecycle: bus connection, one bus turn per loop wake, and the post-dispatch hooks.
 
+use super::settings::{output_scale_to_apply, saved_shell_scales};
 use super::*;
 
 impl Service {
@@ -167,20 +168,20 @@ impl Service {
 
     /// Applies an output scale Settings saved since the last look. A scale write leaves the
     /// settings revision alone, so the settings file's mtime is the change signal; an unchanged
-    /// file costs one stat. Only the nested output is driven here (the DRM path sets scale at
+    /// file costs one stat. Called from `after_dispatch`, so the next loop turn (any input event or
+    /// bus wake) applies it. Only the nested output is driven here (the DRM path sets scale at
     /// build time).
     pub(super) fn sync_output_scale(&self, state: &mut State) {
         let stamp = std::fs::metadata(settings_path())
             .and_then(|meta| meta.modified())
             .ok();
-        if stamp == self.scale_stamp.get() {
+        let last = self.scale_stamp.replace(stamp);
+        let applied = (state.output_scale() * 100.0).round() as u16;
+        let Some(percent) = output_scale_to_apply(stamp, last, applied, || {
+            saved_shell_scales().get(super::OUTPUT_NAME).copied()
+        }) else {
             return;
-        }
-        self.scale_stamp.set(stamp);
-        let percent = nested_output_scale_percent();
-        if (state.output_scale() * 100.0).round() as u16 == percent {
-            return;
-        }
+        };
         let Some(mode) = state.output.current_mode() else {
             return;
         };
@@ -194,6 +195,7 @@ impl Service {
         let (w, h) =
             crate::presentation_scale::logical_output_size((mode.size.w, mode.size.h), percent);
         state.output_size = (w, h).into();
+        eprintln!("flamewm-wayland: output scale {percent}% (logical {w}x{h})");
         crate::presentation_scale::notify_scale_change(state, &before);
         state.request_redraw();
     }
@@ -233,7 +235,6 @@ impl Service {
         // this is the Wayland equivalent of the X11 settings sync point. It costs one map lookup on
         // an unchanged snapshot.
         self.sync_chrome_settings(state);
-        self.sync_output_scale(state);
         // Helper snapshots normally arrive through their own wake source; draining here too means a
         // missed or unavailable wake source only delays audio by one bus turn.
         self.drain_audio();
@@ -256,6 +257,9 @@ impl Service {
         }
         self.focus_new_popup(state);
         self.finish_switcher_if_released(state);
+        // Runs on every loop dispatch, input included: the bus wake alone never fires for a settings
+        // file write, and an idle compositor has no timer.
+        self.sync_output_scale(state);
         self.sync_write_watch(state);
     }
 

@@ -212,6 +212,85 @@ pub(crate) fn nested_output_scale_percent() -> u16 {
         .unwrap_or(100)
 }
 
+/// The percent to apply after a settings-file change, or `None` to leave the output alone.
+///
+/// An unchanged mtime (`stamp == last_stamp`) returns before `saved` runs, so an idle turn never
+/// parses the file. A missing or rejected scale keeps the applied one, so a half-written file cannot
+/// reset the output. A saved value is clamped into 100..=200 and returned only when it differs from
+/// `applied`, so a repeated look at the same value is a no-op.
+pub(super) fn output_scale_to_apply(
+    stamp: Option<std::time::SystemTime>,
+    last_stamp: Option<std::time::SystemTime>,
+    applied: u16,
+    saved: impl FnOnce() -> Option<u16>,
+) -> Option<u16> {
+    if stamp == last_stamp {
+        return None;
+    }
+    let percent = saved()?.clamp(100, 200);
+    (percent != applied).then_some(percent)
+}
+
+#[cfg(test)]
+mod output_scale_sync_tests {
+    use super::{output_scale_to_apply, shell_scales_from};
+    use std::time::{Duration, SystemTime};
+
+    fn at(secs: u64) -> Option<SystemTime> {
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+    }
+
+    #[test]
+    fn unchanged_mtime_applies_nothing_and_never_reads_the_file() {
+        let read = || -> Option<u16> { panic!("an unchanged mtime must not read the settings") };
+        assert_eq!(output_scale_to_apply(at(1), at(1), 100, read), None);
+    }
+
+    #[test]
+    fn changed_mtime_applies_the_saved_scale() {
+        assert_eq!(
+            output_scale_to_apply(at(2), at(1), 100, || Some(150)),
+            Some(150)
+        );
+    }
+
+    #[test]
+    fn same_saved_value_after_a_new_mtime_is_idempotent() {
+        assert_eq!(output_scale_to_apply(at(3), at(2), 150, || Some(150)), None);
+    }
+
+    #[test]
+    fn missing_scale_keeps_the_applied_one() {
+        assert_eq!(output_scale_to_apply(at(2), at(1), 150, || None), None);
+    }
+
+    #[test]
+    fn malformed_file_is_ignored() {
+        // The parser rejects a file with an unsupported step, so the scale reads as absent.
+        let saved = shell_scales_from("scale.wayland-0=137\n")
+            .get("wayland-0")
+            .copied();
+        assert_eq!(output_scale_to_apply(at(2), at(1), 150, || saved), None);
+    }
+
+    #[test]
+    fn out_of_range_values_clamp_into_the_accepted_range() {
+        assert_eq!(
+            output_scale_to_apply(at(2), None, 100, || Some(250)),
+            Some(200)
+        );
+        assert_eq!(
+            output_scale_to_apply(at(2), None, 150, || Some(50)),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn first_look_at_the_default_scale_is_a_no_op() {
+        assert_eq!(output_scale_to_apply(at(1), None, 100, || Some(100)), None);
+    }
+}
+
 /// The saved scale of the output at `index` in the display snapshot (see `output_layout`).
 #[cfg_attr(not(feature = "drm"), allow(dead_code))] // only the drm backend builds outputs per index
 pub(crate) fn output_scale_percent(index: usize) -> u16 {
