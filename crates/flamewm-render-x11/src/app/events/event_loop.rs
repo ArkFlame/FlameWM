@@ -372,6 +372,9 @@ impl X11App {
                         on_action,
                         &mut buffers,
                     )?;
+                    // A release can change the app's state (Escape clears a search) without any
+                    // paint path marking damage; repaint through the planner so the screen follows.
+                    self.mark_full();
                     if symbol == XK_SUPER_L || symbol == XK_SUPER_R {
                         if !self.super_chord_used {
                             let mut event = action_event(

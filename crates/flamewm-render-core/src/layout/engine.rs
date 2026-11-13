@@ -296,9 +296,6 @@ impl<'a> Engine<'a> {
         let cross_available = if is_row { height } else { width };
         let gap_total = style.gap * flow.len().saturating_sub(1) as f32;
         let mut bases = Vec::with_capacity(flow.len());
-        let mut total_base = gap_total;
-        let mut total_grow = 0.0f32;
-
         for &child in &flow {
             let child_style = self.style(child);
             let measured = self.measure_node(child, width, height);
@@ -307,14 +304,54 @@ impl<'a> Engine<'a> {
             } else {
                 child_style.height.resolve(height).unwrap_or(measured.1)
             };
-            let margin_main = if is_row {
+            bases.push((child, main, measured));
+        }
+
+        // Flex shrink (CSS default 1): when the items overflow the line, scroll containers give up
+        // size down to their automatic minimum of 0 (CSS Flexbox 4.5), in proportion to their size.
+        // Other items keep their content size as the minimum.
+        let margin_main_of = |child: u32| {
+            let child_style = self.style(child);
+            if is_row {
                 child_style.margin.horizontal()
             } else {
                 child_style.margin.vertical()
+            }
+        };
+        let scrolls_on_main = |child: u32| {
+            let child_style = self.style(child);
+            let overflow = if is_row {
+                child_style.overflow_x
+            } else {
+                child_style.overflow_y
             };
-            total_base += main + margin_main;
-            total_grow += child_style.flex_grow.max(0.0);
-            bases.push((child, main, measured));
+            overflow != Overflow::Visible
+        };
+        let margins_total: f32 = flow.iter().map(|&child| margin_main_of(child)).sum();
+        let content_total: f32 =
+            bases.iter().map(|(_, main, _)| main).sum::<f32>() + margins_total + gap_total;
+        let deficit = content_total - main_available;
+        if deficit > 0.0 {
+            let shrinkable: f32 = bases
+                .iter()
+                .filter(|(child, _, _)| scrolls_on_main(*child))
+                .map(|(_, main, _)| *main)
+                .sum();
+            if shrinkable > 0.0 {
+                let take = deficit.min(shrinkable);
+                for (child, main, _) in bases.iter_mut() {
+                    if scrolls_on_main(*child) {
+                        *main -= take * *main / shrinkable;
+                    }
+                }
+            }
+        }
+
+        let mut total_base = gap_total;
+        let mut total_grow = 0.0f32;
+        for (child, main, _) in &bases {
+            total_base += main + margin_main_of(*child);
+            total_grow += self.style(*child).flex_grow.max(0.0);
         }
 
         let remaining = (main_available - total_base).max(0.0);

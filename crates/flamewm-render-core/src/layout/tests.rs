@@ -539,3 +539,56 @@ fn measure_root_result_over_constraint_refused() {
         .expect_err("oversize result must fail");
     assert_eq!(err, IntrinsicMeasureError::ExceedsConstraint);
 }
+
+/// A 540px flex column holding a `nav-scroll` (flex-grow 1, min-height 0, overflow-y auto) whose
+/// content is 618px tall: the scroll container shrinks to the column, so its rows can scroll.
+#[test]
+fn scroll_container_shrinks_to_the_bounded_column() {
+    let column = Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        height: Length::Px(540.0),
+        ..Style::default()
+    };
+    let scroll = Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        min_height: Length::Px(0.0),
+        overflow_y: Overflow::Auto,
+        ..Style::default()
+    };
+    let tall = Style {
+        height: Length::Px(618.0),
+        ..Style::default()
+    };
+    let element = |parent, first_child, next_sibling, style: Style| CompiledNode {
+        kind: NodeKind::Element,
+        parent,
+        first_child,
+        next_sibling,
+        id: std::borrow::Cow::Borrowed(""),
+        action: std::borrow::Cow::Borrowed(""),
+        text: std::borrow::Cow::Borrowed(""),
+        image: None,
+        style: style.into(),
+        hover_style: None,
+        active_style: None,
+        focus_style: None,
+    };
+    let document = CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets: Vec::new(),
+        nodes: vec![
+            element(None, Some(1), None, column),
+            element(Some(0), Some(2), None, scroll),
+            element(Some(1), None, None, tall),
+        ],
+    };
+    let runtime = RuntimeDocument::new(document).unwrap();
+    let layout = LayoutEngine::compute(&runtime, 300.0, 540.0, InteractionState::default());
+    assert!((layout.boxes[1].rect.height - 540.0).abs() < 0.01);
+    assert!((layout.boxes[2].rect.height - 618.0).abs() < 0.01);
+}

@@ -104,3 +104,66 @@ impl RuntimeDocument {
         self.geometry_overrides.get(&index).copied()
     }
 }
+
+/// Offset change that brings `node` inside `view` along one axis: 0 when it is already visible.
+/// A node taller than the view aligns its start edge, as browsers do for `scrollIntoView`.
+pub fn reveal_delta_axis(view_start: f32, view_len: f32, node_start: f32, node_len: f32) -> f32 {
+    let view_end = view_start + view_len;
+    if node_len > view_len || node_start < view_start {
+        node_start - view_start
+    } else if node_start + node_len > view_end {
+        node_start + node_len - view_end
+    } else {
+        0.0
+    }
+}
+
+/// Scroll delta `(dx, dy)` that moves `node` into `view`, both in the same coordinate space.
+/// Scrolling by the delta moves the node's on-screen rectangle by `-delta`.
+pub fn reveal_delta(view: Rect, node: Rect) -> (f32, f32) {
+    (
+        reveal_delta_axis(view.x, view.width, node.x, node.width),
+        reveal_delta_axis(view.y, view.height, node.y, node.height),
+    )
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::{Rect, reveal_delta, reveal_delta_axis};
+
+    #[test]
+    fn visible_node_needs_no_scroll() {
+        assert_eq!(reveal_delta_axis(0.0, 100.0, 10.0, 20.0), 0.0);
+        assert_eq!(
+            reveal_delta_axis(0.0, 100.0, 80.0, 20.0),
+            0.0,
+            "bottom edge touches"
+        );
+    }
+
+    #[test]
+    fn node_below_scrolls_down_just_enough() {
+        // Node spans 90..110 in a 0..100 view: 10px more scroll puts its bottom on the edge.
+        assert_eq!(reveal_delta_axis(0.0, 100.0, 90.0, 20.0), 10.0);
+    }
+
+    #[test]
+    fn node_above_scrolls_up_by_its_gap() {
+        assert_eq!(reveal_delta_axis(50.0, 100.0, 30.0, 20.0), -20.0);
+    }
+
+    #[test]
+    fn node_taller_than_view_aligns_its_start_edge() {
+        assert_eq!(reveal_delta_axis(0.0, 50.0, 70.0, 80.0), 70.0);
+        assert_eq!(reveal_delta_axis(0.0, 50.0, -10.0, 80.0), -10.0);
+    }
+
+    #[test]
+    fn both_axes_are_independent() {
+        let view = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert_eq!(
+            reveal_delta(view, Rect::new(120.0, 95.0, 10.0, 10.0)),
+            (30.0, 5.0)
+        );
+    }
+}

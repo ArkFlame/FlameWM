@@ -27,6 +27,7 @@ from Xlib.ext import xtest
 
 WINDOW_TITLE = "System Settings"
 TOGGLE_X = 600  # page controls sit right of the sidebar (window x >= 186)
+PAGE_X = 190  # window-relative x where the page starts (the sidebar is 187px wide)
 SETTINGS_KEY = "highContrast"
 
 
@@ -158,9 +159,16 @@ def run(bin_dir, out):
         # Search: Tab lands on the search field first. A typed character filters the sidebar, and Escape
         # clears the field back to the empty-field image. A single character renders the same image each
         # time it is typed into a cleared field, so a doubled delivery would not reproduce it.
-        key("Tab")
+        # Wait for the search field's focus ring before typing: keys sent before the focus lands are lost.
+        before_focus = shot("search-pre")
+        key("Tab", wait=1.5)
         search_base = shot("search-base")
-        key("z")
+        check("Tab focuses the sidebar search (ring painted)", changed(before_focus, search_base) is not None,
+              "search-pre vs search-base")
+        # The search button activates on Return (settings.search.focus); only then do keys reach the field.
+        key("Return", wait=1.5)
+        search_base = shot("search-active")
+        key("z", wait=1.5)
         search_once = shot("search-z")
         check("typed character changes the search field", changed(search_base, search_once) is not None,
               "search-base vs search-z")
@@ -186,7 +194,11 @@ def run(bin_dir, out):
                 ring_stops += 1
             else:
                 silent.append(index)
-            if box_changed and box_changed[0] >= TOGGLE_X - left:
+            # A control stop is one whose change lies right of the sidebar. A stop can also repaint the
+            # sidebar (scroll reset), so test the page region alone rather than the change's left edge.
+            page_changed = changed(prev.crop((PAGE_X, 0, prev.width, prev.height)),
+                                   cur.crop((PAGE_X, 0, cur.width, cur.height)))
+            if page_changed:
                 first_control = index
                 break
             prev = cur
@@ -231,6 +243,55 @@ def run(bin_dir, out):
         except subprocess.TimeoutExpired:
             closed = False
         check("Ctrl+Q closes the settings window", closed, f"exit={settings.poll()} windows={len(find_window(WINDOW_TITLE))}")
+
+        # Displays slider: reopen on the Displays page, Tab until a Right press moves the pixels, then Left
+        # must restore the exact previous image (one arrow step each way).
+        displays = subprocess.Popen([os.path.join(bindir, "flamewm-settings"), "--page", "displays"],
+                                    env=env, start_new_session=True,
+                                    stdout=open(os.path.join(out, "displays.out"), "w"), stderr=subprocess.STDOUT)
+        settings = displays
+        dwindow = None
+        for _ in range(60):
+            found = find_window(WINDOW_TITLE)
+            if found:
+                dwindow = found[0]
+                break
+            time.sleep(0.5)
+        slider_step = None
+        if dwindow is not None:
+            time.sleep(4)
+            dwindow.set_input_focus(X.RevertToParent, X.CurrentTime)
+            d.sync()
+            time.sleep(1)
+            dgeom = dwindow.get_geometry()
+            dorigin = dwindow.translate_coords(root, 0, 0)
+            dbox = (-dorigin.x, -dorigin.y, -dorigin.x + dgeom.width, -dorigin.y + dgeom.height)
+
+            def dshot(name):
+                path = os.path.join(out, name + ".png")
+                subprocess.run(["import", "-window", "root", path], check=True, env=dict(os.environ, DISPLAY=display))
+                return Image.open(path).convert("RGB").crop(dbox)
+
+            prev = dshot("slider-base")
+            for index in range(40):
+                key("Tab", wait=0.6)
+                # Keyboard activation (Return) on the focused track arms the slider; arrows then step it.
+                key("Return", wait=0.6)
+                pre = dshot(f"slider-tab-{index:02d}")
+                key("Right", wait=1.0)
+                after = dshot(f"slider-right-{index:02d}")
+                if changed(pre, after) is not None:
+                    key("Left", wait=1.0)
+                    restored = dshot(f"slider-left-{index:02d}")
+                    slider_step = (index, changed(pre, restored) is None, changed(prev, restored) is None)
+                    break
+                prev = after
+        check("Displays slider: Right moves one step and Left restores it exactly",
+              slider_step is not None and slider_step[1],
+              f"stop={None if slider_step is None else slider_step[0]} restored={None if slider_step is None else slider_step[1]}")
+        if displays.poll() is None:
+            os.killpg(displays.pid, 15)
+            displays.wait(timeout=10)
 
         d.flush()
         return all(verdicts)

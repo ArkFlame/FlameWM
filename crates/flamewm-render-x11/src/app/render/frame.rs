@@ -1,4 +1,6 @@
+use super::scroll::is_scroll_container;
 use super::*;
+use flamewm_render_core::{ScrollDelta, reveal_delta};
 
 impl X11App {
     /// Mark damage without painting: merged (max coverage) latch consumed
@@ -19,11 +21,48 @@ impl X11App {
 
     /// Mirrors the document's keyboard focus into the interaction state. A change repaints
     /// through the input path, so only the focus ring's damage region is redrawn.
-    pub(crate) fn sync_keyboard_focus(&mut self, document: &RuntimeDocument) {
+    pub(crate) fn sync_keyboard_focus(&mut self, document: &mut RuntimeDocument) {
         if document.focus() != self.interaction.focus {
             self.interaction.focus = document.focus();
+            if self.reveal_focus(document) {
+                // A scroll moves every node in the container, so the focus ring's region alone is stale.
+                self.mark_full();
+            }
             self.mark_input_repaint();
         }
+    }
+
+    /// Scrolls each scroll container between the focused node and the root just enough to show
+    /// it, so keyboard focus never lands on a clipped row. Each container's applied scroll moves
+    /// the node by the same amount for the containers above it.
+    /// Returns whether any container scrolled.
+    fn reveal_focus(&self, document: &mut RuntimeDocument) -> bool {
+        let (Some(focus), Some(layout)) = (self.interaction.focus, self.layout.as_ref()) else {
+            return false;
+        };
+        let mut scrolled = false;
+        let mut node = layout.boxes[focus as usize].rect;
+        let mut ancestor = document.document.nodes[focus as usize].parent;
+        while let Some(index) = ancestor {
+            if is_scroll_container(document, index, self.interaction) {
+                let (dx, dy) = reveal_delta(layout.boxes[index as usize].rect, node);
+                if dx != 0.0 || dy != 0.0 {
+                    let before = document.scroll_offset(index);
+                    let metrics = layout.metrics_for(index, before);
+                    let after = document.apply_scroll_delta(
+                        index,
+                        ScrollDelta { dx, dy },
+                        (metrics.max_x, metrics.max_y),
+                    );
+                    scrolled |=
+                        after.offset_x != before.offset_x || after.offset_y != before.offset_y;
+                    node.x -= after.offset_x - before.offset_x;
+                    node.y -= after.offset_y - before.offset_y;
+                }
+            }
+            ancestor = document.document.nodes[index as usize].parent;
+        }
+        scrolled
     }
 
     /// Paint only when damage is latched or the document revision moved
