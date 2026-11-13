@@ -463,3 +463,40 @@ Newest first, one line per commit on origin/main.
 - `19edfe21` docs: correct README session-lock limitation (code exists, runtime unproven)
 - `b6535ee3` docs(backlog): repin stale path:line evidence refs
 - `eb6f1871` docs(backlog): consolidate open rows into BACKLOG.md and fix landed statuses
+
+## Landed since 0ff22150
+
+Reconcile of `0ff22150..21ec63d4` (origin/main `21ec63d4`, 22 commits, oldest first). Claims follow the commit bodies and the runs they name. Re-run on `21ec63d4` this session: `scripts/gate flamewm-wm-wayland` (EXIT_GUARD=0 EXIT_FMT=0 EXIT_CLIPPY=0 EXIT_TEST=0, 408 passed, 0 failed), `scripts/break/multi_output.sh` 9/9 PASS exit 0, `scripts/break/notif_center_proof.py` 9/9 PASS exit 0.
+
+- `042c56db` feat(shell): AI usage tray card popup with fixture seam (`usage-card`; no live provider call; OpenCode Go and OpenDesign not configured).
+- `5e382dbf` test(break): usage card proof on private Xvfb (`usage-card`).
+- `3966bd23` feat(usage): Tab focus on the usage card, Codex fetch, refreshSeconds key (`usage-card`).
+- `d98649e5` feat(usage): settings keys and rows, minute countdown refresh, narrow-panel hide (`usage-card`).
+- `a3cc2249` test(usage): proof expects seven checks after the Return check (`usage-card`).
+- `13a66467` switcher: dim and label minimised or other-workspace Alt+Tab rows. Nested proof (`scripts/break/alttab-thumb.sh`) asserts the flag only; dimmed pixels not measured.
+- `ed0a7d94` wm-wayland: Alt+Tab previews for minimised and other-workspace windows (Sonnet trailer).
+- `12e163d8` feat(wm-wayland): Alt+Tab previews refresh on repaint and keep last frames across opens (unit and nested checks as recorded in the commit).
+- `0f075f0f` feat(wm-wayland): per-output work area and window migration on output removal (see `21ec63d4`).
+- `915b9343` fix(settings): focus-only slider arrows; Escape search and proof oracles. `settings_keys_proof.py` 12/12 PASS, PROOF_EXIT=0 (private Xvfb and bus).
+- `7be74efe` feat(settings): Ctrl+Q closes Settings; Escape clears sidebar search; sidebar focus ring (proof was not clean at that commit; see the session report).
+- `81997d01` fix(layout): shrink scroll containers to bounded column; reveal focus in settings. Commit carries a `Claude Haiku 5.5` trailer, not Sonnet; not rewritten.
+- `1ab970ec` fix(settings): route display arrangement through the WM keep/revert transaction (`display-confirm`, 15 s deadline; unit only).
+- `66de4747` feat(settings): display client topology methods, free-drop snapping, non-fatal keep save (unit only).
+- `600e7b67` feat(session): persist monitor order for N outputs (v2), v1 read-compatible. Unit tests only; xrandr restore not run on a real multi-output session.
+- `00c067b1` feat(settings): primary and rotation rows for the selected output (unit only; not rendered or clicked).
+- `197e2728` feat(displays): report output rotation and show it on the selected output card. Unit and gate only; Xvfb exposes one output, so no multi-output or rotated runtime session.
+- `891204e1` test(settings-core): controller tests for display arrange, primary, rotation, keep and revert (scripted transport; unit only).
+- `f039cb18` test(settings-core): per-output shell scale targets the selected output (scripted transport; unit only).
+- `16fe5d6f` shell: name the notification centre list as a WAI-ARIA log (unit; `notif_center_proof.py` did not exist at that commit).
+- `b6e0b87b` shell: notification centre urgency, progress, keyboard and executed proof. `notif_center_proof.py` 9/9 PASS (commit body; re-run 9/9 on `21ec63d4`). Centre box is the full search region, so pixel checks are coarse.
+- `4de0de03` test(break): executed Alt+Tab switcher key sweep on private Xvfb (Tab, Right, Left, Shift+Tab, Escape, Return). The commit body names no pass count; the owner reports 10/10. Not re-run here.
+- `65fddb01` feat(shell): keyboard rows for task and workspace context menus (`shell_sweep_proof.py` task-menu checks PASS on a private Xvfb; baseline not re-executed).
+- `21ec63d4` test(wm-wayland): debug virtual-outputs seam and runtime proof for per-output work area and migration. `scripts/break/multi_output.sh` 9/9 PASS exit 0 on private Xvfb, private bus and nested compositor (re-run here). Caveats: the client pixel box is 320x200 and is checked inside the primary output only; no pointer crosses outputs; the removal path is a debug flag, not a hotplug event. Evidence is not committed.
+
+Open after this range:
+
+- Usage card: UI and tray popup landed; no live provider call. OpenCode Go and OpenDesign are not configured, so no provider data path was exercised.
+- Displays: multi-output and rotated sessions are unverified at runtime (Xvfb exposes one output); only unit and scripted-transport tests cover arrange, primary, rotation, keep and revert. The 15 s revert deadline is WM-owned and not exercised.
+- Alt+Tab minimised and other-workspace dimming: pixels unmeasured.
+- `8fde93ca` (Alt+F7/F8 keyboard move and resize, EWMH workarea) was reported pushed. It is not an ancestor of origin/main and is on no remote branch. Its rebased copy `c3e9d2c4` is on main with the same subject.
+- Commits with a `Claude Haiku 5.5` trailer instead of Sonnet: `e7cfa0ed`, `9750110d`, `a546c29e`, `860deeed`, `81997d01`. Not rewritten; main is shared.

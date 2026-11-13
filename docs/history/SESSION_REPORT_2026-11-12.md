@@ -253,3 +253,45 @@ Process notes:
 - Commits with a `Claude Haiku 5.5` trailer instead of `Claude Sonnet 5.5`: `e7cfa0ed`, `9750110d`, `a546c29e`, `860deeed`. Not rewritten; main is shared.
 - `8fde93ca` was claimed pushed. It is not an ancestor of origin/main; only its rebased copy `c3e9d2c4` reached main, with the same subject.
 - This report lives at `docs/history/SESSION_REPORT_2026-11-12.md` (the brief named `docs/`; the path was not moved).
+
+## 11. Addendum: reconcile 0ff22150..21ec63d4
+
+Landed on origin/main after the section 10 reconcile (22 commits, oldest first, `git log 0ff22150..21ec63d4`). Claims follow the commit bodies and the runs they name, except where a re-run is stated.
+
+Re-run on `21ec63d4` (detached private worktree, private cargo home and target, toolchain 1.89.0):
+
+- `scripts/gate flamewm-wm-wayland`: EXIT_GUARD=0, EXIT_FMT=0, EXIT_CLIPPY=0, EXIT_TEST=0, GATE_DONE all=0; 408 tests passed, 0 failed.
+- `scripts/break/multi_output.sh`: 9/9 PASS, exit 0. Evidence stayed in the worktree (`.agents/runtime/break/multi-output-20261113-054339`), not committed.
+- `scripts/break/notif_center_proof.py` (binaries built from `21ec63d4`): 9/9 PASS, exit 0. Evidence in the proof's private output directory.
+- No product bug found, so no fix commit.
+
+Landed, with the evidence each carries:
+
+- Usage card, `042c56db` to `a3cc2249`: tray popup with fixture seam, Tab focus, Codex fetch, refresh key, settings rows, private Xvfb proof (seven checks). No live provider call; OpenCode Go and OpenDesign are not configured.
+- `13a66467`, `ed0a7d94`: Alt+Tab rows dimmed and labelled for minimised or other-workspace windows. The nested proof asserts the flag, not the dimmed pixels.
+- `12e163d8`: Alt+Tab previews refresh on repaint and keep the last frames across opens.
+- `0f075f0f`, `21ec63d4`: per-output work area and window migration on output removal, behind a debug virtual-outputs seam. Runtime 9/9 (re-run above). Caveats: client pixel box 320x200, checked inside the primary output only; no pointer crosses outputs; removal is a debug flag, not a hotplug.
+- Displays, unit or scripted-transport only (Xvfb exposes one output): `1ab970ec` arrangement through the WM keep/revert transaction, `66de4747` topology methods and free-drop snapping, `600e7b67` persisted order for N outputs (v2, v1 read-compatible), `00c067b1` primary and rotation rows, `197e2728` rotation reported and shown, `891204e1` and `f039cb18` controller tests. Not run on a real multi-output or rotated session.
+- `915b9343`: focus-only slider arrows, Escape search. `settings_keys_proof.py` 12/12 PASS (commit body).
+- `7be74efe`: Ctrl+Q closes Settings, sidebar focus ring. Proof not clean at that commit; no fix in range is recorded for it.
+- `16fe5d6f`: notification centre list named as a WAI-ARIA log (unit).
+- `b6e0b87b`: notification centre urgency, progress, keyboard. `notif_center_proof.py` 9/9 (commit body, and re-run above).
+- `4de0de03`: Alt+Tab key sweep on private Xvfb. The commit body names no pass count; the owner reports 10/10. Not re-run.
+- `65fddb01`: keyboard rows for task and workspace context menus (`shell_sweep_proof.py` task-menu checks PASS per the commit body).
+- `81997d01`: layout and focus reveal in Settings. Commit carries a `Claude Haiku 5.5` trailer.
+
+Incidents and process notes:
+
+- Xvfb kill-by-name killed the private displays `:150` and `:241`. Kill by name must not be used for worker-owned processes; only PIDs the script started may be killed.
+- A settings worker reached the host session bus during a probe. No known write. Not a product bug.
+- `pkill -f` was used on the agent's own dbus-daemon. Recorded as a process error.
+- `8fde93ca` was claimed pushed. It is not an ancestor of origin/main and is on no remote branch. Only its rebased copy `c3e9d2c4` reached main, with the same subject.
+- Commits with a `Claude Haiku 5.5` trailer instead of Sonnet: `e7cfa0ed`, `9750110d`, `a546c29e`, `860deeed`, `81997d01`. Not rewritten; main is shared.
+- The `scripts/gate` queue was shared with other workers on the same cargo lock. The recon gate waited on that lock for a long period before running. Its first launch had died silently with an empty log; it was relaunched.
+
+Still unverified:
+
+- Usage card: no live provider call; no OpenCode Go or OpenDesign configuration exercised.
+- Displays: no multi-output or rotated runtime session; the 15 s revert deadline is not exercised.
+- Alt+Tab dimming: pixels not measured.
+- Multi-output: no pointer crossing between outputs.
