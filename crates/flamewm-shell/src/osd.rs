@@ -164,6 +164,8 @@ pub struct OsdState {
     last_workspace: Option<usize>,
     stage: Stage,
     deadline: Option<Instant>,
+    /// Fade after the hold; `ZERO` under reducedMotion, so the card hides at the end of its hold.
+    fade: Duration,
 }
 
 impl OsdState {
@@ -174,7 +176,17 @@ impl OsdState {
             last_workspace: None,
             stage: Stage::Hold,
             deadline: None,
+            fade: FADE,
         }
+    }
+
+    /// Applies `flamewm_api::motion::motion_scale` (hundredths; 0 = reducedMotion, no fade).
+    pub fn set_motion(&mut self, scale: u16) {
+        self.fade = if scale == 0 {
+            Duration::ZERO
+        } else {
+            FADE * 100 / u32::from(scale)
+        };
     }
 
     /// Records one observed level for its kind. The first observation of a kind is
@@ -226,9 +238,14 @@ impl OsdState {
             return false;
         }
         match self.stage {
+            Stage::Hold if self.fade.is_zero() => {
+                self.stage = Stage::Hold;
+                self.deadline = None;
+                true
+            }
             Stage::Hold => {
                 self.stage = Stage::Fade;
-                self.deadline = Some(now + FADE);
+                self.deadline = Some(now + self.fade);
                 false
             }
             Stage::Fade => {
@@ -291,6 +308,10 @@ impl OsdController {
         settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
+        if let Some(settings) = settings {
+            self.state
+                .set_motion(flamewm_api::motion::motion_scale(settings));
+        }
         let volume_changed = volume.is_some_and(|level| self.state.observe(level, now));
         let brightness_changed = brightness.is_some_and(|level| self.state.observe(level, now));
         let Some(level) = brightness
@@ -821,6 +842,29 @@ mod tests {
         assert!(state.expire(t0 + HOLD + FADE));
         assert_eq!(state.deadline(), None);
         assert!(!state.expire(t0 + HOLD * 10));
+    }
+
+    #[test]
+    fn reduced_motion_hides_at_the_end_of_hold_without_a_fade() {
+        let mut state = OsdState::new();
+        state.set_motion(0);
+        let t0 = Instant::now();
+        state.observe(Level::new(40, false, 150), t0);
+        state.observe(Level::new(41, false, 150), t0);
+        assert!(!state.expire(t0 + (HOLD - Duration::from_millis(1))));
+        assert!(state.expire(t0 + HOLD));
+        assert_eq!(state.deadline(), None);
+    }
+
+    #[test]
+    fn fade_duration_follows_motion_scale() {
+        let mut state = OsdState::new();
+        state.set_motion(50);
+        let t0 = Instant::now();
+        state.observe(Level::new(40, false, 150), t0);
+        state.observe(Level::new(41, false, 150), t0);
+        assert!(!state.expire(t0 + HOLD));
+        assert_eq!(state.deadline(), Some(t0 + HOLD + FADE * 2));
     }
 
     #[test]

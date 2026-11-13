@@ -39,6 +39,8 @@ pub struct AutoHide {
     last: Instant,
     /// True when the slide is animated; false snaps `progress` to the target on each step.
     animate: bool,
+    /// `motion_scale` in hundredths: the slide lasts `SLIDE * 100 / scale`.
+    scale: u16,
 }
 
 impl AutoHide {
@@ -55,14 +57,15 @@ impl AutoHide {
             progress: 0.0,
             last: now,
             animate: SLIDE_ENABLED,
+            scale: 100,
         }
     }
 
-    /// Forces the slide on or off, independent of `SLIDE_ENABLED`.
-    #[must_use]
-    pub fn with_animation(mut self, animate: bool) -> Self {
-        self.animate = animate;
-        self
+    /// Applies `flamewm_api::motion::motion_scale`: 0 (reducedMotion) snaps the dock, otherwise
+    /// the slide (when enabled) runs at `scale` hundredths of `SLIDE`'s speed.
+    pub fn set_motion(&mut self, scale: u16) {
+        self.animate = SLIDE_ENABLED && scale != 0;
+        self.scale = scale;
     }
 
     /// Applies the `dock.autoHide` setting. Turning it on starts the grace period.
@@ -132,7 +135,7 @@ impl AutoHide {
             self.progress = target;
             return;
         }
-        let stride = elapsed.as_secs_f32() / SLIDE.as_secs_f32();
+        let stride = elapsed.as_secs_f32() * f32::from(self.scale) / (100.0 * SLIDE.as_secs_f32());
         self.progress = if self.progress < target {
             (self.progress + stride).min(target)
         } else {
@@ -187,7 +190,37 @@ mod tests {
     }
 
     fn animated(auto_hide: bool, now: Instant) -> AutoHide {
-        AutoHide::new(auto_hide, now).with_animation(true)
+        AutoHide {
+            animate: true,
+            ..AutoHide::new(auto_hide, now)
+        }
+    }
+
+    #[test]
+    fn reduced_motion_hides_at_the_deadline_without_a_slide() {
+        let t0 = Instant::now();
+        let mut m = animated(true, t0);
+        m.set_motion(0);
+        m.step(t0 + HIDE_DELAY + Duration::from_millis(1));
+        assert!(m.is_hidden());
+    }
+
+    #[test]
+    fn slide_speed_follows_motion_scale() {
+        let t0 = Instant::now();
+        let at = t0 + HIDE_DELAY + Duration::from_millis(50);
+        for (scale, expected) in [(100_u16, 0.25_f32), (50, 0.125)] {
+            let mut m = AutoHide::new(true, t0);
+            m.set_motion(scale);
+            m.animate = true;
+            m.last = t0 + HIDE_DELAY;
+            m.step(at);
+            assert!(
+                (m.progress - expected).abs() < 1e-3,
+                "scale {scale}: {}",
+                m.progress
+            );
+        }
     }
 
     #[test]

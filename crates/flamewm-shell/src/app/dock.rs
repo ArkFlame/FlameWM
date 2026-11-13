@@ -222,6 +222,9 @@ impl ShellLoop {
                 )
         });
         let hide = settings.auto_hide && (!settings.auto_hide_covered || covered);
+        if let Some(motion) = self.settings_cache.as_ref() {
+            model.set_motion(flamewm_api::motion::motion_scale(motion));
+        }
         model.set_auto_hide(hide, now);
         model.set_fullscreen(snapshot.windows.iter().any(|window| {
             window.state == flamewm_api::window::WindowState::Fullscreen
