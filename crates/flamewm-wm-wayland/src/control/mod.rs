@@ -171,6 +171,8 @@ pub struct Service {
     /// Settings file mtime last read for the output scale; Settings writes the scale without a
     /// revision bump, so this stamp is what tells the compositor a scale was saved.
     scale_stamp: std::cell::Cell<Option<std::time::SystemTime>>,
+    /// Alt+Tab previews, kept across opens and bounded (see `ThumbCache`).
+    thumbs: RefCell<ThumbCache>,
     started: Instant,
     /// Set whenever the mirror changed, cleared by the publish in `after_dispatch`. A change seen by
     /// `turn` (which builds the mirror too) must still be announced, so the flag outlives `turn`.

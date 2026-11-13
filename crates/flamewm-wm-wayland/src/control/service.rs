@@ -160,6 +160,7 @@ impl Service {
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
             scale_stamp: std::cell::Cell::new(None),
+            thumbs: RefCell::new(ThumbCache::default()),
             started: Instant::now(),
             publish_pending: std::cell::Cell::new(false),
             write_watch: std::cell::Cell::new(None),

@@ -3,17 +3,23 @@
 use super::*;
 use flamewm_api::switcher::SwitcherThumb;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
-/// Most previews kept for one open switcher. Matches `MAX_THUMBS` in the X11 path
+/// Most previews kept across opens. Matches `MAX_THUMBS` in the X11 path
 /// (`crates/flamewm-wm-x11/src/wm/switcher_thumbs.rs`).
 const THUMB_CAP: usize = 24;
 
-/// Per-open preview cache. Previews are captured lazily while the switcher is open and dropped
-/// when it closes, so nothing stays resident while idle (docs/backlog/alttab.md, section 5).
+/// Shortest gap between two captures of one window while the switcher is open. Repaints inside it
+/// wait for the next due moment, so a busy client cannot cost a readback per commit.
+const MIN_REFRESH: Duration = Duration::from_millis(200);
+
+/// Preview cache shared by every open. Last capture wins and the oldest capture is evicted at
+/// `THUMB_CAP`, so a minimised or other-workspace window keeps its last frame across opens. The
+/// bound keeps the memory fixed (about 1.5 MiB at the 160x100 box).
 #[derive(Default)]
 pub(super) struct ThumbCache {
-    /// Oldest first. A repeat `store` for a window moves it to the back.
-    slots: VecDeque<(WindowId, SwitcherThumb)>,
+    /// Oldest capture first, with its capture time. A repeat `store` for a window moves it to the back.
+    slots: VecDeque<(WindowId, Instant, SwitcherThumb)>,
     /// Windows whose preview this open already sent, so later publishes send a reference only.
     announced: Vec<WindowId>,
 }
@@ -35,20 +41,34 @@ impl ThumbCache {
             thumb.generation =
                 NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         }
-        self.slots.retain(|(known, _)| *known != id);
+        self.slots.retain(|(known, _, _)| *known != id);
         self.announced.retain(|known| *known != id);
         if self.slots.len() == THUMB_CAP {
             self.slots.pop_front();
         }
-        self.slots.push_back((id, thumb));
+        self.slots.push_back((id, Instant::now(), thumb));
         true
+    }
+
+    /// Starts a new open: every kept preview's pixels are sent once again, so no open relies on
+    /// pixels a previous open sent.
+    pub(super) fn begin_open(&mut self) {
+        self.announced.clear();
+    }
+
+    /// True when `id` has no preview yet or its last capture is at least `MIN_REFRESH` old.
+    fn refresh_due(&self, id: WindowId, now: Instant) -> bool {
+        self.slots
+            .iter()
+            .find(|(known, _, _)| *known == id)
+            .is_none_or(|(_, captured, _)| now.duration_since(*captured) >= MIN_REFRESH)
     }
 
     /// The preview to publish for `id`, if one was stored for this open. The first publish carries
     /// pixels; later ones send the same generation without pixels, so a Tab press does not resend
     /// every preview.
     pub(super) fn wire(&mut self, id: WindowId) -> Option<SwitcherThumb> {
-        let (_, thumb) = self.slots.iter().find(|(known, _)| *known == id)?;
+        let (_, _, thumb) = self.slots.iter().find(|(known, _, _)| *known == id)?;
         if self.announced.contains(&id) {
             return Some(SwitcherThumb {
                 width: thumb.width,
@@ -62,13 +82,14 @@ impl ThumbCache {
     }
 }
 
-/// Alt+Tab state while the switcher is open: the window order, the highlighted entry and previews.
+/// Alt+Tab state while the switcher is open: the window order, the highlighted entry and the captures.
 pub(super) struct Switcher {
     order: Vec<WindowId>,
     selected: usize,
-    thumbs: ThumbCache,
     /// Windows whose preview the render path still has to capture, in switcher order.
     pending: VecDeque<WindowId>,
+    /// Listed windows that repainted while open. Each is re-queued once `MIN_REFRESH` has passed.
+    dirty: Vec<WindowId>,
 }
 
 /// What `emit_switcher` publishes: window order, highlighted index, and one optional preview per entry.
@@ -80,9 +101,9 @@ fn capture_queue(order: &[WindowId]) -> VecDeque<WindowId> {
 }
 
 impl Switcher {
-    /// The list `emit_switcher` publishes. Takes `&mut` because a preview is marked announced when sent.
-    fn view(&mut self) -> SwitcherView {
-        let thumbs = self.order.iter().map(|id| self.thumbs.wire(*id)).collect();
+    /// The list `emit_switcher` publishes. Takes the cache `&mut` because a preview is marked announced when sent.
+    fn view(&self, cache: &mut ThumbCache) -> SwitcherView {
+        let thumbs = self.order.iter().map(|id| cache.wire(*id)).collect();
         (self.order.clone(), self.selected, thumbs)
     }
 }
@@ -92,6 +113,7 @@ impl Service {
     /// highlighted; each further press advances the highlight. Nothing is focused until Alt is released.
     pub fn switcher_step(&self, state: &mut State) {
         let mut slot = self.switcher.borrow_mut();
+        let mut thumbs = self.thumbs.borrow_mut();
         match slot.as_mut() {
             Some(switcher) if !switcher.order.is_empty() => {
                 switcher.selected = (switcher.selected + 1) % switcher.order.len();
@@ -102,18 +124,20 @@ impl Service {
                 if order.len() < 2 {
                     return;
                 }
+                thumbs.begin_open();
                 *slot = Some(Switcher {
                     pending: capture_queue(&order),
                     order,
                     selected: 1,
-                    thumbs: ThumbCache::default(),
+                    dirty: Vec::new(),
                 });
                 // The render path captures the queued previews on the next frame.
                 state.request_redraw();
             }
         }
-        let view: Option<SwitcherView> = slot.as_mut().map(Switcher::view);
+        let view: Option<SwitcherView> = slot.as_ref().map(|switcher| switcher.view(&mut thumbs));
         drop(slot);
+        drop(thumbs);
         self.emit_switcher(view);
     }
 
@@ -133,17 +157,53 @@ impl Service {
     /// Keeps a rendered preview for the open switcher and republishes the list. With no open
     /// switcher, or a preview the cache refuses, nothing is published.
     pub(crate) fn store_switcher_thumb(&self, id: WindowId, thumb: SwitcherThumb) {
-        let view = {
-            let mut slot = self.switcher.borrow_mut();
-            let Some(switcher) = slot.as_mut() else {
-                return;
-            };
-            if !switcher.thumbs.store(id, thumb) {
-                return;
-            }
-            switcher.view()
+        let mut thumbs = self.thumbs.borrow_mut();
+        let slot = self.switcher.borrow();
+        let Some(switcher) = slot.as_ref() else {
+            return;
         };
+        if !thumbs.store(id, thumb) {
+            return;
+        }
+        let view = switcher.view(&mut thumbs);
+        drop(slot);
+        drop(thumbs);
         self.emit_switcher(Some(view));
+    }
+
+    /// A surface of `id` committed new pixels. A listed window queues a preview refresh while the
+    /// switcher is open; `promote_switcher_refreshes` releases it once `MIN_REFRESH` has passed.
+    /// True when a refresh now waits, so the caller wakes the render path.
+    pub(crate) fn note_switcher_commit(&self, id: WindowId) -> bool {
+        let mut slot = self.switcher.borrow_mut();
+        let Some(switcher) = slot.as_mut() else {
+            return false;
+        };
+        if !switcher.order.contains(&id) || switcher.pending.contains(&id) {
+            return false;
+        }
+        if !switcher.dirty.contains(&id) {
+            switcher.dirty.push(id);
+        }
+        true
+    }
+
+    /// Moves refreshes that are due into the capture queue. True while refreshes still wait, so the
+    /// render path keeps running until they come due.
+    pub(crate) fn promote_switcher_refreshes(&self, now: Instant) -> bool {
+        let mut slot = self.switcher.borrow_mut();
+        let Some(switcher) = slot.as_mut() else {
+            return false;
+        };
+        let thumbs = self.thumbs.borrow();
+        for id in std::mem::take(&mut switcher.dirty) {
+            if !thumbs.refresh_due(id, now) {
+                switcher.dirty.push(id);
+            } else if !switcher.pending.contains(&id) {
+                switcher.pending.push_back(id);
+            }
+        }
+        !switcher.dirty.is_empty()
     }
 
     /// Alt released: commits the highlighted window and closes the switcher overlay.
@@ -295,6 +355,33 @@ mod thumb_tests {
         let again = cache.wire(3).expect("stored");
         assert_eq!(again.generation, first.generation);
         assert!(again.is_reference(), "repeat publish is a reference");
+    }
+
+    #[test]
+    fn refresh_waits_out_the_interval_per_window() {
+        let mut cache = ThumbCache::default();
+        assert!(
+            cache.refresh_due(5, Instant::now()),
+            "uncached window is due"
+        );
+        assert!(cache.store(5, thumb(1, 1, 1)));
+        let now = Instant::now();
+        assert!(!cache.refresh_due(5, now), "fresh capture waits");
+        assert!(
+            cache.refresh_due(5, now + MIN_REFRESH),
+            "due after the interval"
+        );
+        assert!(cache.refresh_due(6, now), "other windows are independent");
+    }
+
+    #[test]
+    fn begin_open_resends_pixels_once_per_open() {
+        let mut cache = ThumbCache::default();
+        assert!(cache.store(4, thumb(1, 2, 2)));
+        assert!(!cache.wire(4).expect("stored").is_reference());
+        assert!(cache.wire(4).expect("stored").is_reference());
+        cache.begin_open();
+        assert!(!cache.wire(4).expect("stored").is_reference());
     }
 
     #[test]

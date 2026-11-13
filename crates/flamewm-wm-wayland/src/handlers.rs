@@ -112,6 +112,14 @@ impl CompositorHandler for State {
         let visible = commit_changes_pixels(surface);
         let before = buffer_geometry(surface);
         on_commit_buffer_handler::<Self>(surface);
+        // A repaint of a window the open switcher lists refreshes its preview (throttled there).
+        if visible
+            && let Some(id) = self.window_for_surface(surface)
+            && let Some(control) = self.control.clone()
+            && control.note_switcher_commit(id)
+        {
+            self.request_redraw();
+        }
         if reimports_on_resize(before, buffer_geometry(surface)) {
             self.import_resized_buffer(surface);
         }

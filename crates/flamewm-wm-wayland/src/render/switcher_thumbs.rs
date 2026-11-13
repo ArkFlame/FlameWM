@@ -24,6 +24,7 @@ pub fn serve_switcher_thumbs(state: &mut State, renderer: &mut GlowRenderer) {
     let Some(service) = state.control.clone() else {
         return;
     };
+    let refreshes_waiting = service.promote_switcher_refreshes(std::time::Instant::now());
     for _ in 0..CAPTURES_PER_FRAME {
         let Some(id) = service.next_switcher_capture() else {
             break;
@@ -34,7 +35,7 @@ pub fn serve_switcher_thumbs(state: &mut State, renderer: &mut GlowRenderer) {
             Err(error) => eprintln!("flamewm-wayland: switcher preview failed: {error}"),
         }
     }
-    if service.switcher_captures_pending() {
+    if refreshes_waiting || service.switcher_captures_pending() {
         state.request_redraw();
     }
 }
