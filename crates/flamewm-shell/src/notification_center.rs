@@ -572,4 +572,12 @@ mod toast_markup_tests {
         let html = include_str!("../../../ui/shell/notification.html");
         assert!(html.contains(r#"id="notification-card" class="notification-card" role="status""#));
     }
+
+    // Precedent: WAI-ARIA 1.2 log role for a history list that grows in order; the centre list is
+    // a log with a name, not an unnamed scroll region.
+    #[test]
+    fn centre_list_is_a_named_log_region() {
+        let html = include_str!("../../../ui/shell/notification-center.html");
+        assert!(html.contains(r#"id="nc-list" class="nc-list" data-scroll="nc-list" role="log" aria-label="Notifications""#));
+    }
 }
