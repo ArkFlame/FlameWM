@@ -110,6 +110,15 @@ const LIGHT_TASKBAR_MIN_ALPHA: u8 = 204;
 /// Tint. Reduce transparency yields the opaque Dock solid.
 #[must_use]
 pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    // highContrast (WCAG 1.4.11): the taskbar and its capsules take the opaque palette surface, the
+    // same as menus and Start, whatever the Dock material, tint or glass alpha says.
+    if crate::glass::high_contrast_from_settings(snapshot) {
+        return SurfaceFill {
+            rgb: crate::glass::palette_from_settings(snapshot).surface.0,
+            alpha: 255,
+            width: 1,
+        };
+    }
     // Inherit is the shared surface: same surfaceColor, glass alpha and reduce-transparency solid
     // as popups and widgets, so the taskbar cannot drift from them.
     if crate::glass::appearance_from_settings(snapshot).taskbar_mode
@@ -918,7 +927,7 @@ mod surface_theme_default_tests {
 mod high_contrast_tests {
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
-    use super::surface_fill;
+    use super::{dock_fill, surface_fill};
 
     /// highContrast (WCAG 1.4.11): menus and Start are opaque and take the palette surface, so
     /// glass alpha and tint cannot make them translucent or grey.
@@ -929,6 +938,17 @@ mod high_contrast_tests {
             .values
             .insert("highContrast".into(), SettingValue::Boolean(true));
         let fill = surface_fill(&snapshot);
+        assert_eq!((fill.rgb, fill.alpha), (0x0000_0000, 255));
+    }
+
+    /// The taskbar fill follows the palette under highContrast, not the Dock tint (9,10,11).
+    #[test]
+    fn high_contrast_dock_fill_is_opaque_palette_surface() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("highContrast".into(), SettingValue::Boolean(true));
+        let fill = dock_fill(&snapshot);
         assert_eq!((fill.rgb, fill.alpha), (0x0000_0000, 255));
     }
 
