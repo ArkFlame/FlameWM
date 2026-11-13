@@ -47,6 +47,10 @@ fn capture_window(
     renderer: &mut GlowRenderer,
     id: WindowId,
 ) -> Result<Option<SwitcherThumb>, Box<dyn std::error::Error>> {
+    // A hidden window keeps the frame it had when last visible (control/switcher.rs ThumbCache).
+    if state.model.is_hidden(id) {
+        return Ok(None);
+    }
     let Some((rect_w, rect_h)) = state.model.get(id).map(|m| (m.rect.w, m.rect.h)) else {
         return Ok(None);
     };
@@ -65,13 +69,35 @@ fn capture_window(
         return Ok(None);
     }
     let size = Size::from((width as i32, height as i32));
-    let rgba = offscreen_pixels(renderer, &state.output, &elements, size)?;
+    let rgba = thumb_pixels(renderer, &elements, size)?;
     Ok(Some(SwitcherThumb {
         width,
         height,
         generation: 0,
         rgba,
     }))
+}
+
+/// Reads back `elements` drawn into a `size` texture. The damage tracker is sized to the thumbnail,
+/// not the output: `OutputDamageTracker::from_output` sets the GL viewport to the output mode, which
+/// squeezes a thumbnail-sized draw into a corner of the texture (the preview came back background only).
+/// Precedent for the sized tracker: `render/dock_backdrop.rs`.
+fn thumb_pixels(
+    renderer: &mut GlowRenderer,
+    elements: &[Elem],
+    size: Size<i32, Physical>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let buffer_size: Size<i32, Buffer> = Size::from((size.w, size.h));
+    let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    let mut tracker = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+    {
+        let mut target = renderer.bind(&mut texture)?;
+        tracker.render_output(renderer, &mut target, 0, elements, CLEAR)?;
+    }
+    let target = renderer.bind(&mut texture)?;
+    let mapping =
+        renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Abgr8888)?;
+    Ok(renderer.map_texture(&mapping)?.to_vec())
 }
 
 /// Aspect-fit a source size into the preview box. Never upscales: a source smaller than the box

@@ -27,20 +27,30 @@ if [[ "${1:-}" == --inner ]]; then
     "$BIN_DIR/flamewm-wayland" >"$RUN/comp.log" 2>&1 &
   COMP=$!
   for _ in $(seq 1 150); do [[ -S "$XDG/$SOCK" ]] && break; sleep 0.2; done
+  # A repaints every 250 ms between red and blue, so its preview must change while the switcher is open.
+  # B shows green, then asks to be minimised at ~6 s (during the first open) and repaints to yellow
+  # while minimised. Its second-open preview must still be the green frame it had while visible.
   kids=()
-  for ((i = 1; i <= CLIENTS; i++)); do
-    WAYLAND_DISPLAY="$SOCK" "$ALTTAB_CLIENT_BIN" >"$RUN/client-$i.log" 2>&1 &
-    kids+=($!)
-    sleep 0.5
-  done
+  WAYLAND_DISPLAY="$SOCK" FLAMEWM_TEST_TITLE=repaint-A FLAMEWM_TEST_COLOR=FF0000 \
+    FLAMEWM_TEST_COLOR2=0000FF FLAMEWM_TEST_REPAINT_MS=250 FLAMEWM_TEST_HOLD_MS=60000 \
+    "$ALTTAB_CLIENT_BIN" >"$RUN/client-A.log" 2>&1 &
+  kids+=($!)
+  sleep 0.5
+  WAYLAND_DISPLAY="$SOCK" FLAMEWM_TEST_TITLE=minimised-B FLAMEWM_TEST_COLOR=00FF00 \
+    FLAMEWM_TEST_COLOR2=FFFF00 FLAMEWM_TEST_MINIMIZE_MS=6000 FLAMEWM_TEST_HOLD_MS=60000 \
+    "$ALTTAB_CLIENT_BIN" >"$RUN/client-B.log" 2>&1 &
+  kids+=($!)
   sleep 4
-  python3 -I "$HERE/alt_hold.py" 300 300 "$HOLD" >"$RUN/altab.log" 2>&1
-  hold_rc=$?
-  sleep 2
+  python3 -I "$HERE/alt_hold.py" 300 300 "$HOLD" >"$RUN/altab-open1.log" 2>&1
+  rc1=$?
+  sleep 3
+  python3 -I "$HERE/alt_hold.py" 300 300 "$HOLD" >"$RUN/altab-open2.log" 2>&1
+  rc2=$?
+  sleep 1
   alive=$(kill -0 "$COMP" 2>/dev/null && echo yes || echo no)
   kill "${kids[@]}" "$COMP" "$MON" 2>/dev/null
   wait 2>/dev/null
-  echo "inner: alt_hold_rc=$hold_rc compositor_alive_after_hold=$alive" >"$RUN/inner.txt"
+  echo "inner: alt_hold_rc=$rc1,$rc2 compositor_alive_after_hold=$alive" >"$RUN/inner.txt"
   exit 0
 fi
 
@@ -90,13 +100,15 @@ frames=$(for f in "$RUN"/client-*.log; do
     print "gap_median_ms=" g[int((NR + 1) / 2)] " gap_max_ms=" g[NR]
   }')
 frames="$frames counts=$(awk '{ s = s " " $2 } END { print s }' "$RUN/frame-counts.txt" 2>/dev/null)"
+pixels=$(python3 -I "$HERE/alttab_thumb_verdict.py" "$signals" 2>&1 | tee "$RUN/pixels.txt" | tail -1)
 verdict=FAIL
-if [[ "$rc" == 0 && "$thumbs" -gt 0 && "$panics" == 0 ]] && grep -q 'compositor_alive_after_hold=yes' "$RUN/inner.txt" 2>/dev/null; then
+if [[ "$rc" == 0 && "$thumbs" -gt 0 && "$panics" == 0 ]] && grep -q 'compositor_alive_after_hold=yes' "$RUN/inner.txt" 2>/dev/null \
+  && grep -q '^PIXELS: PASS' "$RUN/pixels.txt"; then
   verdict=PASS
 fi
 {
   echo "ALTTAB-THUMB: $verdict switcher_opens_signals=$opens entries_with_thumb_pixels=$thumbs panics=$panics $frames"
-  echo "run=$RUN inner_rc=$rc"
+  echo "run=$RUN inner_rc=$rc $pixels"
 } | tee "$RUN/verdict.txt"
 [[ "$verdict" == FAIL ]] && exit 1
 exit 0

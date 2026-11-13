@@ -5,9 +5,7 @@ use super::*;
 pub(super) fn apply_command(state: &mut State, command: Command) {
     match command {
         Command::Activate(id) => {
-            if state.model.get(id).is_some_and(|window| window.minimized) {
-                state.model.restore(id);
-            }
+            state.model.reveal(id);
             state.apply_geometry(id);
             state.set_focus(Some(id));
         }

@@ -404,9 +404,32 @@ impl WindowModel {
         self.windows
             .iter()
             .rev()
-            .filter(|w| w.workspace == self.current && !w.minimized)
+            .filter(|w| !self.is_hidden(w.id))
             .map(|w| w.id)
             .collect()
+    }
+
+    /// Alt+Tab order: every managed window, most recently stacked first. Minimised and
+    /// other-workspace windows stay listed, as in `KWin`'s `TabBox`, so their last frame can be shown.
+    pub fn switcher_order(&self) -> Vec<WindowId> {
+        self.windows.iter().rev().map(|w| w.id).collect()
+    }
+
+    /// True when `id` is minimised or on another workspace, so nothing of it is on screen.
+    pub fn is_hidden(&self, id: WindowId) -> bool {
+        self.get(id)
+            .is_some_and(|w| w.minimized || w.workspace != self.current)
+    }
+
+    /// Brings `id` on screen for focus: switches to its workspace, restores it if minimised and
+    /// raises it. False when the window is unknown.
+    pub fn reveal(&mut self, id: WindowId) -> bool {
+        let Some(workspace) = self.get(id).map(|w| w.workspace) else {
+            return false;
+        };
+        self.switch_workspace(workspace);
+        self.restore(id);
+        true
     }
 
     pub fn hit(&self, px: f64, py: f64) -> Option<Hit> {

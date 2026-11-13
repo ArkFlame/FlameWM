@@ -1292,3 +1292,24 @@ fn right_and_bottom_handles_leave_the_scrollbar_clickable() {
         Some(Hit::Resize(1))
     );
 }
+
+#[test]
+fn switcher_lists_minimised_and_other_workspace_windows_most_recent_first() {
+    let mut model = model_with(&[1, 2, 3]);
+    model.minimize(2);
+    model.switch_workspace(1);
+    assert_eq!(model.switcher_order(), vec![3, 2, 1]);
+    assert!(model.is_hidden(1) && model.is_hidden(2) && model.is_hidden(3));
+    assert!(model.visible_top_first().is_empty());
+}
+
+#[test]
+fn reveal_restores_a_minimised_window_and_switches_to_its_workspace() {
+    let mut model = model_with(&[1, 2]);
+    model.minimize(1);
+    model.switch_workspace(1);
+    assert!(model.reveal(1));
+    assert!(!model.is_hidden(1));
+    assert_eq!(model.visible_top_first(), vec![1, 2]);
+    assert!(!model.reveal(9), "unknown window is refused");
+}

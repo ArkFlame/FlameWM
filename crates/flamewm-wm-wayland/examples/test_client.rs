@@ -4,11 +4,15 @@
 //! `XDG_RUNTIME_DIR`, so no mmap or unsafe code is needed). Environment:
 //! - `FLAMEWM_TEST_COLOR` (hex, default `2E86C1`), `FLAMEWM_TEST_SIZE` (default `320x200`),
 //! - `FLAMEWM_TEST_HOLD_MS` (default `6000`): how long the window stays mapped.
+//! - `FLAMEWM_TEST_TITLE` (title), `FLAMEWM_TEST_COLOR2` (hex; with `FLAMEWM_TEST_REPAINT_MS` the
+//!   window alternates between the two colours every interval, a repainting client),
+//! - `FLAMEWM_TEST_MINIMIZE_MS`: after this many ms the client asks to be minimised
+//!   (`xdg_toplevel.set_minimized`) and repaints once to `FLAMEWM_TEST_COLOR2` while minimised.
 //! - `FLAMEWM_TEST_CONFIGURE_LOG` (optional path): every toplevel configure is appended as
 //!   `w h maximized activated` (state flags as 0/1), so a proof can read the client-reported geometry.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -145,6 +149,27 @@ ignore_events!(
     wl_surface::WlSurface
 );
 
+/// Rewrites the window's pixels in the shared file and commits the buffer again.
+fn paint(
+    file: &mut std::fs::File,
+    surface: &wl_surface::WlSurface,
+    buffer: &wl_buffer::WlBuffer,
+    color: u32,
+    width: i32,
+    height: i32,
+) -> std::io::Result<()> {
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for _ in 0..(width * height) {
+        pixels.extend_from_slice(&color.to_le_bytes());
+    }
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&pixels)?;
+    surface.attach(Some(buffer), 0, 0);
+    surface.damage_buffer(0, 0, width, height);
+    surface.commit();
+    Ok(())
+}
+
 fn parse_size(raw: &str) -> Option<(i32, i32)> {
     let (w, h) = raw.split_once('x')?;
     Some((w.parse().ok()?, h.parse().ok()?))
@@ -185,7 +210,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let surface = compositor.create_surface(&qh, ());
     let xdg = base.get_xdg_surface(&surface, &qh, ());
     let toplevel = xdg.get_toplevel(&qh, ());
-    toplevel.set_title("FlameWM test client".into());
+    toplevel.set_title(
+        std::env::var("FLAMEWM_TEST_TITLE").unwrap_or_else(|_| "FlameWM test client".into()),
+    );
     toplevel.set_app_id("flame-test".into());
     surface.commit();
     app.surface = Some(surface.clone());
@@ -225,9 +252,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.drawn = true;
     println!("flame-test: mapped {width}x{height} color={color:08X}");
 
-    let end = Instant::now() + hold;
+    let color2 = match std::env::var("FLAMEWM_TEST_COLOR2") {
+        Ok(raw) => 0xFF00_0000 | u32::from_str_radix(raw.trim_start_matches('#'), 16)?,
+        Err(_) => color,
+    };
+    let env_ms = |name: &str| {
+        Duration::from_millis(
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+        )
+    };
+    let repaint_every = env_ms("FLAMEWM_TEST_REPAINT_MS");
+    let minimize_after = env_ms("FLAMEWM_TEST_MINIMIZE_MS");
+    let start = Instant::now();
+    let mut next_paint = start;
+    let mut toggle = false;
+    let mut minimized = false;
+    let end = start + hold;
     while Instant::now() < end && !app.closed {
         queue.roundtrip(&mut app)?;
+        if !repaint_every.is_zero() && Instant::now() >= next_paint {
+            toggle = !toggle;
+            paint(
+                &mut file,
+                &surface,
+                &buffer,
+                if toggle { color2 } else { color },
+                width,
+                height,
+            )?;
+            next_paint += repaint_every;
+        }
+        if !minimized && !minimize_after.is_zero() && start.elapsed() >= minimize_after {
+            toplevel.set_minimized();
+            minimized = true;
+            paint(&mut file, &surface, &buffer, color2, width, height)?;
+            println!("flame-test: minimised, repainted to color={color2:08X}");
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     println!("flame-test: done closed={}", app.closed);

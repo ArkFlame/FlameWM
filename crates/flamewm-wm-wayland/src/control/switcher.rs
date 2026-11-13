@@ -95,9 +95,15 @@ pub(super) struct Switcher {
 /// What `emit_switcher` publishes: window order, highlighted index, and one optional preview per entry.
 type SwitcherView = (Vec<WindowId>, usize, Vec<Option<SwitcherThumb>>);
 
-/// Previews queued for one open: the first `THUMB_CAP` windows in switcher order.
-fn capture_queue(order: &[WindowId]) -> VecDeque<WindowId> {
-    order.iter().take(THUMB_CAP).copied().collect()
+/// Previews queued for one open: the first `THUMB_CAP` visible windows in switcher order. A hidden
+/// window (minimised or on another workspace) keeps the frame it had when last visible.
+fn capture_queue(order: &[WindowId], hidden: impl Fn(WindowId) -> bool) -> VecDeque<WindowId> {
+    order
+        .iter()
+        .copied()
+        .filter(|id| !hidden(*id))
+        .take(THUMB_CAP)
+        .collect()
 }
 
 impl Switcher {
@@ -120,13 +126,13 @@ impl Service {
             }
             Some(_) => {}
             None => {
-                let order = state.model.visible_top_first();
+                let order = state.model.switcher_order();
                 if order.len() < 2 {
                     return;
                 }
                 thumbs.begin_open();
                 *slot = Some(Switcher {
-                    pending: capture_queue(&order),
+                    pending: capture_queue(&order, |id| state.model.is_hidden(id)),
                     order,
                     selected: 1,
                     dirty: Vec::new(),
@@ -387,9 +393,15 @@ mod thumb_tests {
     #[test]
     fn capture_queue_is_capped_in_switcher_order() {
         let order: Vec<WindowId> = (0..THUMB_CAP as WindowId + 5).collect();
-        let queue = capture_queue(&order);
+        let queue = capture_queue(&order, |_| false);
         assert_eq!(queue.len(), THUMB_CAP);
         assert_eq!(queue.front(), Some(&0));
         assert_eq!(queue.back(), Some(&(THUMB_CAP as WindowId - 1)));
+    }
+
+    #[test]
+    fn capture_queue_skips_hidden_windows() {
+        let queue = capture_queue(&[1, 2, 3], |id| id == 2);
+        assert_eq!(queue, VecDeque::from([1, 3]));
     }
 }
