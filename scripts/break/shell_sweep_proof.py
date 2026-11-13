@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 
+from PIL import Image
 from Xlib import X, XK
 from Xlib import display as xdisplay
 from Xlib.ext import xtest
@@ -25,6 +26,8 @@ FAKE_WINDOWS = 4
 WINDOW_W, WINDOW_H = 300, 300
 SLOT_X = [50, 350, 650, 950]  # non-overlapping columns on the 1280x800 sandbox
 START = "Fake 0"
+# Task button centres on the 1280x800 sandbox taskbar (calibrated from taskbar-calibration.png).
+TASK_BUTTON = {0: (71, 777), 1: (113, 777), 2: (155, 777), 3: (197, 777)}  # 1280x800 sandbox taskbar, 4 tasks
 
 
 def free_display():
@@ -69,11 +72,18 @@ def run(bin_dir, out):
         root = d.screen().root
         atom = lambda n: d.intern_atom(n)  # noqa: E731
         time.sleep(8)
+        # One X connection per fake client: a WM "Close" without WM_DELETE_WINDOW kills the client, and
+        # that must not take the proof's own connection down with it.
+        clients = []
         for i in range(FAKE_WINDOWS):
-            w = root.create_window(SLOT_X[i], 100, WINDOW_W, WINDOW_H, 0, d.screen().root_depth,
-                                   X.InputOutput, background_pixel=0x3050A0 + i * 0x101010)
+            conn = xdisplay.Display(display_name)
+            clients.append(conn)
+            croot = conn.screen().root
+            w = croot.create_window(SLOT_X[i], 100, WINDOW_W, WINDOW_H, 0, conn.screen().root_depth,
+                                    X.InputOutput, background_pixel=0x3050A0 + i * 0x101010)
             w.set_wm_name(f"Fake {i}")
             w.map()
+            conn.flush()
         d.flush()
         time.sleep(5)
 
@@ -167,6 +177,75 @@ def run(bin_dir, out):
         reset()
         check("Return commits the one-step selection once", alt_session(["Tab"], finish="Return") == once,
               f"expected={once!r}")
+
+        # Taskbar task context menu: right-click a task button, arrows move the row, Return fires one
+        # row action, Escape closes and returns focus to the window that was active before the menu.
+        def rclick(x, y):
+            root.warp_pointer(x, y)
+            d.sync()
+            time.sleep(0.2)
+            xtest.fake_input(d, X.ButtonPress, 3)
+            xtest.fake_input(d, X.ButtonRelease, 3)
+            d.sync()
+            time.sleep(1.2)
+
+        def shot(name):
+            dest = os.path.join(out, name)
+            subprocess.run(["import", "-window", "root", dest], check=True, env=dict(os.environ, DISPLAY=display_name))
+            return Image.open(dest).convert("RGB")
+
+        def names():
+            return sorted(n for n in client_names() if n and n.startswith("Fake "))
+
+        park_pointer = (640, 300)
+
+        def park():
+            root.warp_pointer(*park_pointer)
+            d.sync()
+            time.sleep(0.5)
+
+        def diff_count(a, b):
+            return sum(1 for x in range(0, 1280, 4) for y in range(0, 800, 4) if a.getpixel((x, y)) != b.getpixel((x, y)))
+
+        reset()
+        before = names()
+        park()
+        shot("taskbar-calibration.png")
+        menu_closed = shot("task-menu-closed.png")
+        rclick(*TASK_BUTTON[1])
+        park()
+        menu_open = shot("task-menu-open.png")
+        check("right-click on a task button opens its menu", diff_count(menu_closed, menu_open) > 300,
+              f"changed={diff_count(menu_closed, menu_open)}")
+        for step in ("Down", "Down"):
+            tap(step)
+        tap("Return")
+        time.sleep(1.0)
+        after = names()
+        check("Down, Down, Return fires exactly one row action (Pin: no window closes)", after == before,
+              f"before={before} after={after}")
+        reset()
+        before = names()
+        rclick(*TASK_BUTTON[2])
+        tap("Down")
+        tap("Return")
+        time.sleep(1.5)
+        after = names()
+        closed = sorted(set(before) - set(after))
+        check("Down, Return on a task menu closes that task's window once", len(closed) == 1 and len(after) == len(before) - 1,
+              f"closed={closed}")
+
+        reset()
+        before = names()
+        active_before = active_name()
+        rclick(*TASK_BUTTON[3])
+        tap("Down")
+        tap("Escape")
+        time.sleep(0.8)
+        check("Escape closes the task menu without firing a row", names() == before,
+              f"names={names()}")
+        check("Escape returns focus to the window active before the menu", active_name() == active_before,
+              f"active={active_name()!r} before={active_before!r}")
 
         d.flush()
         return all(verdicts)

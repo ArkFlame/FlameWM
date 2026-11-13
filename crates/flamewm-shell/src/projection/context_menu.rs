@@ -45,13 +45,21 @@ pub fn project_context_menu(
         return Ok(());
     };
     match &state.kind {
-        crate::ContextMenuKind::Task(id) => task_menu::project_task_rows(document, snapshot, id)?,
+        crate::ContextMenuKind::Task(id) => {
+            task_menu::project_task_rows(document, snapshot, id, overflow_highlight)?;
+        }
         crate::ContextMenuKind::Workspace { index } => {
             if let Some(workspaces) = snapshot.workspaces.as_ref() {
-                for (entry, _) in crate::taskbar::context_menu::workspace_menu(workspaces, *index) {
-                    if let flamewm_ui_core::MenuEntry::Action { id, .. } = entry {
-                        document.visible(&format!("context-workspace-{id}"), true)?;
-                    }
+                let actions = crate::taskbar::context_menu::workspace_menu(workspaces, *index)
+                    .into_iter()
+                    .filter_map(|(entry, _)| match entry {
+                        flamewm_ui_core::MenuEntry::Action { id, .. } => Some(id),
+                        _ => None,
+                    });
+                for (row, id) in actions.enumerate() {
+                    let element = format!("context-workspace-{id}");
+                    document.visible(&element, true)?;
+                    mark_menu_row(document, &element, row == overflow_highlight)?;
                 }
             }
         }
@@ -66,20 +74,8 @@ pub fn project_context_menu(
                 let id = format!("context-overflow-{index}");
                 document.text(&format!("{id}-label"), label.to_owned())?;
                 document.visible(&id, true)?;
-                // WAI-ARIA APG menu button: one active item, roving tabindex. The highlight is
-                // the same accent-soft fill the pager uses for its active cell.
-                let highlighted = index == overflow_highlight;
-                document.attribute(
-                    &id,
-                    "aria-selected",
-                    if highlighted { "true" } else { "false" },
-                )?;
-                document.attribute(&id, "tabindex", if highlighted { "0" } else { "-1" })?;
-                if highlighted {
-                    document.background(&id, super::panel::pager_active_fill())?;
-                } else {
-                    document.background_clear(&id)?;
-                }
+                // WAI-ARIA APG menu button: one active item, roving tabindex.
+                mark_menu_row(document, &id, index == overflow_highlight)?;
             }
         }
         crate::ContextMenuKind::TrayItem { rows, .. } => {
@@ -100,6 +96,26 @@ pub fn project_context_menu(
         }
     }
     Ok(())
+}
+
+/// WAI-ARIA APG menu item state for one row: `aria-selected`, roving `tabindex`, and the pager's
+/// active fill on the highlighted row only.
+pub(super) fn mark_menu_row(
+    document: &mut impl UiDocumentAccess,
+    element: &str,
+    highlighted: bool,
+) -> Result<(), String> {
+    document.attribute(
+        element,
+        "aria-selected",
+        if highlighted { "true" } else { "false" },
+    )?;
+    document.attribute(element, "tabindex", if highlighted { "0" } else { "-1" })?;
+    if highlighted {
+        document.background(element, super::panel::pager_active_fill())
+    } else {
+        document.background_clear(element)
+    }
 }
 
 #[cfg(test)]

@@ -1,14 +1,60 @@
-//! Keyboard operation of the taskbar overflow menu, following the WAI-ARIA menu-button pattern:
-//! Down/Up/Home/End move the highlighted row, Enter or Space activates it. Escape closes through
-//! the shared route arm. Precedent: WAI-ARIA APG menu button (arrow, Home, End, Enter, Space).
-//! Focus return to the trigger is not wired: shell surfaces have no keyboard focus model.
+//! Keyboard operation of the open row menus (taskbar task, workspace and overflow), following the
+//! WAI-ARIA menu-button pattern: Down/Up/Home/End move the highlighted row, Enter or Space activates
+//! it through the same action id a mouse release uses. Escape closes through the shared route arm.
+//! Precedent: WAI-ARIA APG menu button; KDE Plasma context menus (plasma-desktop, .vendor) also let
+//! the arrows and Return drive the popup. Menus without a request mapping (taskbar background,
+//! start app, tray) have no keyboard rows yet.
 
-/// Number of rows the open overflow menu shows; zero when another menu, or none, is open.
-pub(crate) fn overflow_menu_rows(menu: Option<&flamewm_shell::ContextMenuState>) -> usize {
-    match menu.map(|menu| &menu.kind) {
-        Some(flamewm_shell::ContextMenuKind::TaskOverflow { entries }) => entries.len(),
-        _ => 0,
+use crate::runtime::{ContextMenuKind, ContextMenuState, ShellSnapshot};
+use crate::taskbar::context_menu::{task_menu_for_entry, workspace_menu, TASK_OVERFLOW_MENU_ROWS};
+
+/// Action ids of the open menu's keyboard rows, in visual order. Each id is dispatched the same way
+/// a mouse release on that row is (`context_menu_request_for_action`). Empty when no keyboard path.
+pub(crate) fn menu_row_actions(
+    menu: Option<&ContextMenuState>,
+    snapshot: &ShellSnapshot,
+) -> Vec<String> {
+    let Some(menu) = menu else {
+        return Vec::new();
+    };
+    match &menu.kind {
+        ContextMenuKind::TaskOverflow { entries } => {
+            (0..entries.len().min(TASK_OVERFLOW_MENU_ROWS))
+                .map(|index| format!("task.overflow.{index}"))
+                .collect()
+        }
+        ContextMenuKind::Task(id) => action_ids(
+            "task.menu.",
+            task_menu_for_entry(&snapshot.panels, &snapshot.windows, id),
+        ),
+        ContextMenuKind::Workspace { index } => {
+            snapshot.workspaces.as_ref().map_or_else(Vec::new, |ws| {
+                action_ids(
+                    "workspace.menu.",
+                    workspace_menu(ws, *index)
+                        .into_iter()
+                        .map(|(entry, _)| entry),
+                )
+            })
+        }
+        ContextMenuKind::Taskbar
+        | ContextMenuKind::StartApp(_)
+        | ContextMenuKind::TrayItem { .. } => Vec::new(),
     }
+}
+
+/// `prefix` + id for every action entry; separators are not keyboard rows.
+fn action_ids(
+    prefix: &str,
+    entries: impl IntoIterator<Item = flamewm_ui_core::MenuEntry>,
+) -> Vec<String> {
+    entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            flamewm_ui_core::MenuEntry::Action { id, .. } => Some(format!("{prefix}{id}")),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Highlighted row after a typed navigation key on the open overflow menu. `None` when the key is
@@ -33,18 +79,18 @@ pub(crate) fn overflow_menu_closes_on(payload: &str, rows: usize) -> bool {
         && flamewm_shell::launcher::parse_typed_key(payload).is_some_and(|(_, key)| key == "Tab")
 }
 
-/// Row action that a typed Enter or Space activates on the open overflow menu. `None` when no
-/// menu row exists or the text is another key.
-pub(crate) fn overflow_activation_row(
+/// Row index that a typed Enter or Space activates on the open menu. `None` when no row exists or
+/// the text is another key.
+pub(crate) fn overflow_activation_index(
     text: Option<&str>,
     rows: usize,
     highlight: usize,
-) -> Option<String> {
+) -> Option<usize> {
     if rows == 0 {
         return None;
     }
     match text? {
-        "\n" | "\r" | " " => Some(format!("task.overflow.{}", highlight.min(rows - 1))),
+        "\n" | "\r" | " " => Some(highlight.min(rows - 1)),
         _ => None,
     }
 }
@@ -57,25 +103,49 @@ mod tests {
     fn enter_and_space_activate_the_highlighted_row_while_rows_exist() {
         for text in ["\n", "\r", " "] {
             assert_eq!(
-                overflow_activation_row(Some(text), 3, 0).as_deref(),
-                Some("task.overflow.0"),
+                overflow_activation_index(Some(text), 3, 0),
+                Some(0),
                 "key {text:?}"
             );
             assert_eq!(
-                overflow_activation_row(Some(text), 3, 2).as_deref(),
-                Some("task.overflow.2"),
+                overflow_activation_index(Some(text), 3, 2),
+                Some(2),
                 "key {text:?}"
             );
         }
-        assert_eq!(overflow_activation_row(Some("\n"), 0, 0), None);
-        assert_eq!(overflow_activation_row(Some(" "), 0, 0), None);
+        assert_eq!(overflow_activation_index(Some("\n"), 0, 0), None);
+        assert_eq!(overflow_activation_index(Some(" "), 0, 0), None);
     }
 
     #[test]
     fn other_keys_and_missing_text_do_not_activate() {
-        assert_eq!(overflow_activation_row(Some("\u{1b}"), 3, 0), None);
-        assert_eq!(overflow_activation_row(Some("a"), 3, 0), None);
-        assert_eq!(overflow_activation_row(None, 3, 0), None);
+        assert_eq!(overflow_activation_index(Some("\u{1b}"), 3, 0), None);
+        assert_eq!(overflow_activation_index(Some("a"), 3, 0), None);
+        assert_eq!(overflow_activation_index(None, 3, 0), None);
+    }
+
+    #[test]
+    fn action_ids_skip_separators_and_keep_row_order() {
+        use flamewm_ui_core::MenuEntry;
+        let rows = vec![
+            MenuEntry::Action {
+                id: "activate".to_owned(),
+                label: "A".to_owned(),
+                icon: None,
+                enabled: true,
+            },
+            MenuEntry::Separator,
+            MenuEntry::Action {
+                id: "close".to_owned(),
+                label: "C".to_owned(),
+                icon: None,
+                enabled: true,
+            },
+        ];
+        assert_eq!(
+            action_ids("task.menu.", rows),
+            ["task.menu.activate", "task.menu.close"]
+        );
     }
 
     /// Typed-key payload `modifiers US key US text`, as the shell receives `__flamewm.ui.key`.
