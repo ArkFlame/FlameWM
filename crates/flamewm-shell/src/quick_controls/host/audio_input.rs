@@ -41,6 +41,31 @@ pub(crate) fn slider_key_value(key: &str, spec: flamewm_ui_core::range::RangeSpe
     Some(spec.clamp_value(value))
 }
 
+/// Visible audio rows on the card, one focus stop each.
+pub(crate) fn audio_row_count(snapshot: &QuickControlSnapshot) -> usize {
+    crate::taskbar::status::audio::visible_rows(
+        &snapshot.system.audio,
+        snapshot.audio_tab,
+        snapshot.audio_scroll_offset,
+    )
+    .len()
+}
+
+/// Focus stops in Tab order: one per visible row, then the raise-maximum toggle.
+pub(crate) fn audio_stop_count(rows: usize) -> usize {
+    rows + 1
+}
+
+/// Space or Enter on the focused raise-maximum toggle (the stop after `rows`) flips it once.
+/// Precedent: WAI-ARIA APG switch (Space and Enter toggle); the Tab walk is `focus_keys`.
+pub(crate) fn audio_raise_activation(
+    text: Option<&str>,
+    focus: Option<usize>,
+    rows: usize,
+) -> bool {
+    focus == Some(rows) && matches!(text, Some("\n" | "\r" | " "))
+}
+
 /// Tab moves focus forward, Shift+Tab backward, wrapping over `count` visible rows.
 pub(crate) fn next_audio_focus(focus: Option<usize>, count: usize, backward: bool) -> usize {
     match focus {
@@ -63,19 +88,21 @@ pub(crate) fn audio_key_request(
         snapshot.audio_scroll_offset,
     );
     let count = rows.len();
-    if count == 0 {
-        return None;
-    }
-    let focus = snapshot.audio_focus_slot.filter(|&slot| slot < count);
+    let stops = audio_stop_count(count);
+    let focus = snapshot.audio_focus_slot.filter(|&slot| slot < stops);
     if key == "Tab" {
         let backward = modifiers.split('+').any(|modifier| modifier == "Shift");
-        snapshot.audio_focus_slot = Some(next_audio_focus(focus, count, backward));
+        snapshot.audio_focus_slot = Some(next_audio_focus(focus, stops, backward));
         return None;
     }
     let Some(slot) = focus else {
         snapshot.audio_focus_slot = Some(0);
         return None;
     };
+    // The raise-maximum toggle stop takes Space or Enter (see `audio_raise_activation`), not a step.
+    if slot == count {
+        return None;
+    }
     let row = rows.into_iter().nth(slot)?;
     let base = key_base(
         snapshot.audio_key_base.as_ref(),
@@ -292,5 +319,29 @@ mod slider_key_tests {
         assert_eq!(next_audio_focus(Some(0), 3, false), 1);
         assert_eq!(next_audio_focus(Some(2), 3, false), 0);
         assert_eq!(next_audio_focus(Some(0), 3, true), 2);
+    }
+
+    // OBSERVABLE: the raise-maximum switch is the stop after the visible rows; Tab reaches it and
+    // wraps. MUTATION: dropping the extra stop, or counting it as a row, fails here.
+    #[test]
+    fn raise_switch_is_the_stop_after_the_rows_and_takes_space_or_enter() {
+        assert_eq!(audio_stop_count(3), 4);
+        assert_eq!(next_audio_focus(Some(2), audio_stop_count(3), false), 3);
+        assert_eq!(next_audio_focus(Some(3), audio_stop_count(3), false), 0);
+        for text in ["\n", "\r", " "] {
+            assert!(audio_raise_activation(Some(text), Some(3), 3));
+            assert!(!audio_raise_activation(Some(text), Some(2), 3));
+            assert!(!audio_raise_activation(Some(text), None, 3));
+        }
+        assert!(!audio_raise_activation(Some("x"), Some(3), 3));
+    }
+
+    // REGRESSION: the switch id exists in audio.html and its rule keeps a 1px border box, or the
+    // focus ring never paints.
+    #[test]
+    fn audio_raise_focus_id_exists_in_html_with_a_ring_border_box() {
+        let html = include_str!("../../../../../ui/shell/audio.html");
+        assert!(html.contains("id=\"audio-raise-track\""));
+        assert!(html.contains(".audio-raise-track { position:relative; width:39px; height:19px; box-sizing:border-box; border:1px solid"));
     }
 }

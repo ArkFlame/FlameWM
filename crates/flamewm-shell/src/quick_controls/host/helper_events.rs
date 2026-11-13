@@ -1,5 +1,25 @@
 use super::*;
 
+/// Flips raise-maximum and sends the settings change; shared by the switch click and the keyboard
+/// stop so both paths apply the same transaction once per activation.
+fn toggle_audio_raise(
+    snapshot: &mut QuickControlSnapshot,
+    dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
+) {
+    snapshot.audio_settings.raise_maximum = !snapshot.audio_settings.raise_maximum;
+    if let Some(dispatcher) = dispatcher {
+        let request = ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
+            expected_revision: snapshot.settings.revision,
+            changes: vec![flamewm_api::settings::SettingsChange {
+                key: AudioSettings::SETTINGS_KEY.to_owned(),
+                value: Some(SettingValue::Boolean(snapshot.audio_settings.raise_maximum)),
+            }],
+            reset_section: None,
+        });
+        crate::control_actions::enqueue_action(Some(dispatcher), request);
+    }
+}
+
 /// Route one helper surface event: Escape/outside closes the helper popup,
 /// typed audio/network actions forward via the existing dispatcher
 /// contract. Events inside the active popup or its submodules are kept;
@@ -41,6 +61,17 @@ pub fn route_helper_event(
         if let Some(text) = event.action.text.as_deref() {
             if text == "\u{1b}" {
                 surfaces.close(runtime);
+                return true;
+            }
+            if surfaces.open == Some(QuickControlKind::Audio)
+                && audio_raise_activation(
+                    Some(text),
+                    snapshot.audio_focus_slot,
+                    audio_row_count(snapshot),
+                )
+            {
+                toggle_audio_raise(snapshot, dispatcher);
+                *reprojection = true;
                 return true;
             }
             if surfaces.open == Some(QuickControlKind::Battery) {
@@ -178,23 +209,7 @@ pub fn route_helper_event(
                     *reprojection = true;
                 }
             }
-            "audio.raise.toggle" => {
-                snapshot.audio_settings.raise_maximum = !snapshot.audio_settings.raise_maximum;
-                if let Some(dispatcher) = dispatcher {
-                    let request =
-                        ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
-                            expected_revision: snapshot.settings.revision,
-                            changes: vec![flamewm_api::settings::SettingsChange {
-                                key: AudioSettings::SETTINGS_KEY.to_owned(),
-                                value: Some(SettingValue::Boolean(
-                                    snapshot.audio_settings.raise_maximum,
-                                )),
-                            }],
-                            reset_section: None,
-                        });
-                    crate::control_actions::enqueue_action(Some(dispatcher), request);
-                }
-            }
+            "audio.raise.toggle" => toggle_audio_raise(snapshot, dispatcher),
             "network.filter.clear" => snapshot.network_query.filter.clear(),
             "network.filter.focus" | "network.secret.focus" | "weather.location.focus" => {}
             value if value.starts_with("weather.location.pick.") => {

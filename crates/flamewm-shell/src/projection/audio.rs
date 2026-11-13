@@ -100,10 +100,12 @@ pub fn project_audio_full(
     Ok(())
 }
 
-/// Keyboard focus ring: the focused slider row gets the live accent outline; the others clear it.
+/// Keyboard focus ring: the focused slider row gets the live accent outline; the raise-maximum
+/// switch is the stop after the `rows` visible rows. The others clear it.
 pub fn project_audio_focus(
     document: &mut impl UiDocumentAccess,
     focus: Option<usize>,
+    rows: usize,
 ) -> Result<(), String> {
     for slot in 0..crate::taskbar::status::audio::AUDIO_POPUP_ROWS {
         let row = format!("audio-slot-{}", slot + 1);
@@ -113,7 +115,11 @@ pub fn project_audio_focus(
             document.border_clear(&row)?;
         }
     }
-    Ok(())
+    if focus == Some(rows) {
+        document.border("audio-raise-track", crate::projection::task_accent())
+    } else {
+        document.border_clear("audio-raise-track")
+    }
 }
 
 /// Lane x of the track's left edge (the `.audio-lane` starts 6px left of the track in audio.html).
