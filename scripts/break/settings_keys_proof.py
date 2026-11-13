@@ -130,6 +130,10 @@ def run(bin_dir, out):
         if window is None:
             return all(verdicts)
         time.sleep(4)
+        # Keys go to the focused window: ask the X server for focus on the settings window before typing.
+        window.set_input_focus(X.RevertToParent, X.CurrentTime)
+        d.sync()
+        time.sleep(1)
         geometry = window.get_geometry()
         origin = window.translate_coords(root, 0, 0)  # window origin on the root is the negated result
         left, top = -origin.x, -origin.y
@@ -150,6 +154,24 @@ def run(bin_dir, out):
                     if line.startswith(SETTINGS_KEY + "="):
                         return line.split("=", 1)[1].strip()
             return "0"
+
+        # Search: Tab lands on the search field first. A typed character filters the sidebar, and Escape
+        # clears the field back to the empty-field image. A single character renders the same image each
+        # time it is typed into a cleared field, so a doubled delivery would not reproduce it.
+        key("Tab")
+        search_base = shot("search-base")
+        key("z")
+        search_once = shot("search-z")
+        check("typed character changes the search field", changed(search_base, search_once) is not None,
+              "search-base vs search-z")
+        key("Escape")
+        search_cleared = shot("search-escaped")
+        check("Escape restores the empty search field", changed(search_base, search_cleared) is None,
+              "search-base vs search-escaped")
+        key("z")
+        search_again = shot("search-z-again")
+        check("one typed character renders the same image after Escape", changed(search_once, search_again) is None,
+              "search-z vs search-z-again")
 
         # Tab order: every press must paint a focus ring; the first page control sits right of the sidebar.
         prev = shot("tab-base")
@@ -185,6 +207,30 @@ def run(bin_dir, out):
         check("Return toggles the same switch back exactly once",
               after_return != after_space and after_return in ("0", "false"),
               f"after_space={after_space!r} after_return={after_return!r}")
+
+        def ctrl_key(name, wait=1.5):
+            ctrl = d.keysym_to_keycode(XK.string_to_keysym("Control_L"))
+            code = d.keysym_to_keycode(XK.string_to_keysym(name))
+            xtest.fake_input(d, X.KeyPress, ctrl)
+            d.sync()
+            time.sleep(0.3)
+            xtest.fake_input(d, X.KeyPress, code)
+            d.sync()
+            time.sleep(0.3)
+            xtest.fake_input(d, X.KeyRelease, code)
+            d.sync()
+            time.sleep(0.3)
+            xtest.fake_input(d, X.KeyRelease, ctrl)
+            d.sync()
+            time.sleep(wait)
+
+        ctrl_key("q")
+        try:
+            settings.wait(timeout=10)
+            closed = True
+        except subprocess.TimeoutExpired:
+            closed = False
+        check("Ctrl+Q closes the settings window", closed, f"exit={settings.poll()} windows={len(find_window(WINDOW_TITLE))}")
 
         d.flush()
         return all(verdicts)

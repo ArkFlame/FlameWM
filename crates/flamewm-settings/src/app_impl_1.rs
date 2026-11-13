@@ -282,11 +282,28 @@ impl<T: ControlTransport> SettingsApplication<T> {
         event: &UiKeyEvent,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        // Ctrl+Q closes the window, as KDE systemsettings does (KStandardShortcut::Quit).
+        if event.phase == UiKeyPhase::Press
+            && event.key.eq_ignore_ascii_case("q")
+            && event
+                .modifiers
+                .iter()
+                .any(|modifier| modifier.eq_ignore_ascii_case("ctrl"))
+        {
+            document.request_close();
+            return Ok(());
+        }
         // Escape cancels an in-progress monitor gesture without ever applying RandR.
         if event.phase == UiKeyPhase::Release
             && event.key == "Escape"
             && self.monitor_drag.take().is_some()
         {
+            return self.settle(document);
+        }
+        // Escape clears the sidebar search and leaves the field, as the search field promises.
+        if event.phase == UiKeyPhase::Release && event.key == "Escape" && self.nav_search_focused {
+            self.nav_query.clear();
+            self.nav_search_focused = false;
             return self.settle(document);
         }
         if event.phase == UiKeyPhase::Release && !self.hotkey_armed && self.scale_slider_focused {

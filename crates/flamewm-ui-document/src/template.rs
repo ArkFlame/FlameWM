@@ -166,6 +166,9 @@ impl RuntimeImage {
 
 pub trait UiDocumentAccess {
     fn text(&mut self, id: &str, text: String) -> Result<(), String>;
+    /// Asks the window to close itself, as its close button does. The window loop applies it after
+    /// the event, so a key handler never tears the window down mid-dispatch.
+    fn request_close(&mut self) {}
     /// Like `text`, but borrows: unchanged text costs no allocation. The default forwards to `text`.
     fn text_ref(&mut self, id: &str, text: &str) -> Result<(), String> {
         self.text(id, text.to_owned())
@@ -580,6 +583,10 @@ macro_rules! document_access_methods {
 impl UiDocumentAccess for UiDocument {
     document_access_methods!();
 
+    fn request_close(&mut self) {
+        self.document.request_close();
+    }
+
     fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         self.layout_box_by_id(id, viewport)
     }
@@ -587,6 +594,10 @@ impl UiDocumentAccess for UiDocument {
 
 impl UiDocumentAccess for UiDocumentView<'_> {
     document_access_methods!();
+
+    fn request_close(&mut self) {
+        self.document.request_close();
+    }
 
     fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         let document: &RuntimeDocument = &*self.document;

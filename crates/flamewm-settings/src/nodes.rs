@@ -102,6 +102,10 @@ impl<D: UiDocumentAccess + ?Sized> NodeFailures<'_, D> {
 }
 
 impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
+    fn request_close(&mut self) {
+        self.inner.request_close();
+    }
+
     forward_writes! {
         text(id: &str, text: String);
         image_rgb8(id: &str, image: flamewm_ui_x11::RuntimeImage);

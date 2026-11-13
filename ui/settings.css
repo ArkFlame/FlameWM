@@ -14,6 +14,8 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .nav-search-text { color:var(--text-secondary); font-size:var(--font-base); white-space:nowrap; }
 .hairline { height:1px; margin:0 14px; background:var(--line-soft); }
 .nav-row { width:187px; height:30px; display:flex; align-items:center; gap:var(--space-lg); padding-left:16px; background:transparent; border-radius:var(--radius-xl); }
+/* Positioned so the selection overlay (absolute) does not paint over the focused row. */
+.nav-row { position:relative; }
 .nav-row:hover { background:var(--nav-hover); }
 .nav-row:active { background:var(--nav-pressed); }
 .nav-row img { width:20px; height:20px; }

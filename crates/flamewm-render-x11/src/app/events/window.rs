@@ -56,6 +56,7 @@ impl X11App {
             if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
                 unsafe { self.flush_pending_window_resize(document, on_action)? };
                 unsafe { self.redraw_if_dirty(document)? };
+                self.close_requested |= document.take_close_request();
                 if self.close_requested {
                     return Ok(());
                 }
@@ -70,6 +71,7 @@ impl X11App {
             // The event may have opened a menu: arm before the next wake.
             unsafe { self.sync_raw_press_observer(press_watch) };
             unsafe { self.deliver_raw_presses(document, on_press)? };
+            self.close_requested |= document.take_close_request();
             if self.close_requested {
                 return Ok(());
             }

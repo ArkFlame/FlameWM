@@ -17,6 +17,7 @@ mod accessibility;
 mod animation_lock;
 mod api_key;
 mod appearance;
+mod close;
 mod color_picker;
 mod display_modes;
 mod display_paging;
@@ -149,9 +150,14 @@ struct ProbeDocument {
     foregrounds: BTreeMap<String, Option<UiColor>>,
     variables: BTreeMap<String, UiColor>,
     attributes: BTreeMap<(String, String), String>,
+    close_requests: usize,
 }
 
 impl UiDocumentAccess for ProbeDocument {
+    fn request_close(&mut self) {
+        self.close_requests += 1;
+    }
+
     fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
         self.variables.insert(name.to_owned(), color);
         Ok(())

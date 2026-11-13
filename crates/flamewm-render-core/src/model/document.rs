@@ -165,6 +165,8 @@ pub struct RuntimeDocument {
     /// Window backdrop change requested by the UI after window creation: `Some(None)` removes it,
     /// `Some(Some(spec))` installs or replaces it. The X11 loop takes it after the same reactor turn.
     pub(super) pending_window_backdrop: Option<Option<crate::backdrop::WindowBackdrop>>,
+    /// Set by the UI to close its own window, as the WM close request does. Taken by the X11 loop.
+    pub(super) pending_close: bool,
     pub(super) image_revision: FastMap<u16, u64>,
     pub(super) node_image_overrides: FastMap<u32, RuntimeImageOverride>,
     pub(super) geometry_overrides: FastMap<u32, GeometryOverride>,
@@ -244,6 +246,7 @@ impl RuntimeDocument {
             hidden_nodes: FastSet::default(),
             focus: None,
             pending_window_backdrop: None,
+            pending_close: false,
             image_revision: FastMap::default(),
             node_image_overrides: FastMap::default(),
             geometry_overrides: FastMap::default(),
@@ -286,6 +289,16 @@ impl RuntimeDocument {
     /// installed spec, so a request for the same spec repaints nothing.
     pub fn request_window_backdrop(&mut self, spec: Option<crate::backdrop::WindowBackdrop>) {
         self.pending_window_backdrop = Some(spec);
+    }
+
+    /// Asks the window loop to close this window, through the same path as WM_DELETE_WINDOW.
+    pub fn request_close(&mut self) {
+        self.pending_close = true;
+    }
+
+    /// Takes the close request, if any.
+    pub fn take_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_close)
     }
 
     /// Takes the pending backdrop request, if any. `Some(None)` means remove the backdrop.
