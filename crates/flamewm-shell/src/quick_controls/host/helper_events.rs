@@ -16,6 +16,7 @@ pub fn route_helper_event(
     sync_network_secret(snapshot);
     if surfaces.open != Some(QuickControlKind::Audio) {
         snapshot.audio_focus_slot = None;
+        snapshot.audio_key_base = None;
     }
     let action = event.action.action.as_str();
     if action == "network.secret.focus" {

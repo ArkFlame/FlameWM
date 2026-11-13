@@ -29,6 +29,31 @@ OVERFLOW_CELL = (407, 778)  # "+4" cell of the 1280x800 sandbox taskbar with 12 
 ROW_PITCH = 31  # overflow row pitch in px, measured from the rendered menu
 APPS = [("Proof Alpha", "proof-alpha"), ("Proof Beta", "proof-beta"), ("Proof Gamma", "proof-gamma")]
 FAKE_WINDOWS = 12
+TRAY_VOLUME_CELL = (1083, 778)  # tray speaker cell (volume.open), 1280x800 sandbox taskbar
+CLOCK_CELL = (1228, 778)  # clock cell (clock.open) that opens the calendar popup
+# Stands in for flamewm-audio-helper: records each volume request, then publishes the new level
+# after a delay, as PulseAudio would, so back-to-back keys see a stale projection.
+FAKE_AUDIO_HELPER = """#!/usr/bin/env python3
+import os, sys, time
+log = os.environ["FAKE_AUDIO_LOG"]
+volume = 50
+def publish(generation, server_generation):
+    sys.stdout.write(f"snapshot available {generation} {server_generation} {volume} 0 Fake_Speakers\\n")
+    sys.stdout.write(f"endpoint sink 1 {volume} 0 1 Fake_Speakers Fake_Speakers\\n")
+    sys.stdout.write("end\\n")
+    sys.stdout.flush()
+publish(1, 1)
+for line in sys.stdin:
+    fields = line.split()
+    if fields[:1] == ["get"]:
+        publish(1, 1)
+    elif fields[:1] == ["volume"]:
+        with open(log, "a", encoding="utf-8") as record:
+            record.write(line)
+        time.sleep(0.25)
+        volume = int(fields[2])
+        publish(int(fields[3]), int(fields[4]))
+"""
 
 
 def shot(out, name):
@@ -91,6 +116,11 @@ def run(bin_dir, out):
     os.makedirs(bindir, exist_ok=True)
     for name in ("flamewm", "flamewm-session", "flamewm-shell", "flamewm-desktop"):
         shutil.copy(os.path.join(bin_dir, name), bindir)
+    fake_helper = os.path.join(bindir, "flamewm-audio-helper")
+    with open(fake_helper, "w", encoding="utf-8") as script:
+        script.write(FAKE_AUDIO_HELPER)
+    os.chmod(fake_helper, 0o755)
+    audio_log = os.path.join(out, "audio-requests.log")
     verdicts = []
 
     def check(label, ok, detail):
@@ -107,7 +137,8 @@ def run(bin_dir, out):
             time.sleep(0.2)
         env = dict(os.environ, DISPLAY=DISPLAY, HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config"),
                    XDG_DATA_HOME=os.path.join(home, ".local/share"), XDG_RUNTIME_DIR=out, TMPDIR=out,
-                   XDG_CURRENT_DESKTOP="FlameWM", PATH=f"{bindir}:/usr/bin:/bin", LANG="C.UTF-8")
+                   XDG_CURRENT_DESKTOP="FlameWM", PATH=f"{bindir}:/usr/bin:/bin", LANG="C.UTF-8",
+                   FAKE_AUDIO_LOG=audio_log)
         env.pop("WAYLAND_DISPLAY", None)
         session = subprocess.Popen(["dbus-run-session", "--", os.path.join(bindir, "flamewm-session")],
                                    env=env, start_new_session=True,
@@ -245,6 +276,57 @@ def run(bin_dir, out):
         case("start: Escape clears the query, then retyped proof launches once", ["Super_L"],
              ["Escape", "p", "r", "o", "o", "f"], "proof-alpha")
         check("every launch wrote exactly one marker line", len(launched()) == 9, f"launched={launched()}")
+
+        # Audio popup (tray speaker): Tab focuses row 0, arrows and paging step the focused slider,
+        # and each press sends exactly one volume request from the last keyed target.
+        def requested():
+            if not os.path.exists(audio_log):
+                return []
+            return [int(line.split()[2]) for line in open(audio_log, encoding="utf-8")]
+
+        def audio_keys(label, moves, expected):
+            before = len(requested())
+            for move in moves:
+                key(move)
+            time.sleep(1.5)
+            new = requested()[before:]
+            check(label, new == expected, f"new={new}")
+
+        click(*TRAY_VOLUME_CELL)
+        audio_keys("volume popup: Tab focuses row 0 without a request", ["Tab"], [])
+        audio_keys("volume: Right x3 steps one per press", ["Right", "Right", "Right"], [51, 52, 53])
+        audio_keys("volume: Left steps down one", ["Left"], [52])
+        audio_keys("volume: Page_Up steps ten", ["Page_Up"], [62])
+        audio_keys("volume: Home goes to 0, End to the 100 cap", ["Home", "End"], [0, 100])
+        audio_keys("volume: five back-to-back Rights step 1..5 from 0",
+                   ["Home", "Right", "Right", "Right", "Right", "Right"], [0, 1, 2, 3, 4, 5])
+        key("Escape")
+        time.sleep(0.8)
+        audio_keys("volume: Escape closes; a later Right sends nothing", ["Right"], [])
+
+        def diff_count(a, b):
+            return sum(1 for x in range(0, 1280, 4) for y in range(0, 800, 4) if a.getpixel((x, y)) != b.getpixel((x, y)))
+
+        # Clock popup: Escape closes the calendar, so the root pixels return to the closed frame.
+        # The pointer parks off the taskbar before each frame so the clock cell's hover tint is not
+        # part of the diff.
+        def park():
+            root.warp_pointer(640, 300)
+            d.sync()
+            time.sleep(0.5)
+
+        park()
+        clock_closed = shot(out, "calendar-closed.png")
+        click(*CLOCK_CELL)
+        park()
+        clock_open = shot(out, "calendar-open.png")
+        check("clock opens the calendar popup", diff_count(clock_closed, clock_open) > 500,
+              f"changed={diff_count(clock_closed, clock_open)}")
+        key("Escape")
+        park()
+        clock_after = shot(out, "calendar-after-Escape.png")
+        check("Escape closes the calendar popup", diff_count(clock_closed, clock_after) < 200,
+              f"changed={diff_count(clock_closed, clock_after)}")
 
         d.flush()
         return all(verdicts)

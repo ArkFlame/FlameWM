@@ -45,7 +45,10 @@ pub(crate) fn project_snapshot(
                     snapshot.audio_tab,
                     snapshot.audio_settings,
                     snapshot.audio_scroll_offset,
-                ),
+                )
+                .and_then(|()| {
+                    crate::projection::project_audio_focus(document, snapshot.audio_focus_slot)
+                }),
                 QuickControlKind::Network => {
                     let query = snapshot.network_query.clone();
                     crate::projection::project_network_full(

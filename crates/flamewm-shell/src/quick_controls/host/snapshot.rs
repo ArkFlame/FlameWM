@@ -14,6 +14,8 @@ pub struct QuickControlSnapshot {
     pub audio_scroll_offset: u32,
     /// Audio row holding keyboard focus (Tab/Shift+Tab, arrows); cleared when the audio popup closes.
     pub audio_focus_slot: Option<usize>,
+    /// Row id and percent of the last key-driven slider request; cleared with the focus.
+    pub audio_key_base: Option<(String, u8)>,
     pub network_query: NetworkQuery,
     pub network_scroll_offset: u32,
     pub network_secret_masked_len: usize,
@@ -49,6 +51,7 @@ impl QuickControlSnapshot {
             audio_drag_slot: None,
             audio_scroll_offset: 0,
             audio_focus_slot: None,
+            audio_key_base: None,
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
             calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),

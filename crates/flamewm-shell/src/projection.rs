@@ -40,7 +40,7 @@ mod start;
 mod task_menu;
 mod weather;
 
-pub use audio::{project_audio, project_audio_full};
+pub use audio::{project_audio, project_audio_focus, project_audio_full};
 pub use bluetooth::project_bluetooth;
 pub use calendar::project_calendar;
 use clock::month_name;

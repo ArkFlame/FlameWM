@@ -100,6 +100,22 @@ pub fn project_audio_full(
     Ok(())
 }
 
+/// Keyboard focus ring: the focused slider row gets the live accent outline; the others clear it.
+pub fn project_audio_focus(
+    document: &mut impl UiDocumentAccess,
+    focus: Option<usize>,
+) -> Result<(), String> {
+    for slot in 0..crate::taskbar::status::audio::AUDIO_POPUP_ROWS {
+        let row = format!("audio-slot-{}", slot + 1);
+        if focus == Some(slot) {
+            document.border(&row, crate::projection::task_accent())?;
+        } else {
+            document.border_clear(&row)?;
+        }
+    }
+    Ok(())
+}
+
 /// Lane x of the track's left edge (the `.audio-lane` starts 6px left of the track in audio.html).
 const AUDIO_LANE_TRACK_OFFSET: f32 = 6.0;
 

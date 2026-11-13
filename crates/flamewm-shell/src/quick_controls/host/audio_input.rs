@@ -77,14 +77,31 @@ pub(crate) fn audio_key_request(
         return None;
     };
     let row = rows.into_iter().nth(slot)?;
-    let spec = snapshot.audio_settings.slider_spec(row.volume_percent);
-    let value = slider_key_value(key, spec)?;
-    crate::taskbar::status::audio::system_action_for_row(
+    let base = key_base(
+        snapshot.audio_key_base.as_ref(),
+        &row.id,
+        row.volume_percent,
+    );
+    let spec = snapshot.audio_settings.slider_spec(base);
+    let percent = slider_key_value(key, spec)?.round() as u8;
+    let request = crate::taskbar::status::audio::system_action_for_row(
         &snapshot.system,
         &row.id,
-        Some(value.round() as u8),
+        Some(percent),
         None,
-    )
+    )?;
+    // The projected row lags the request by one helper round trip; the next key steps from here.
+    snapshot.audio_key_base = Some((row.id, percent));
+    Some(request)
+}
+
+/// Value a key press steps from: the last keyed target for the same row, else the projected
+/// volume. Repeats before the helper publishes the new level must not re-apply the same step.
+pub(crate) fn key_base(last: Option<&(String, u8)>, row_id: &str, projected: u8) -> u8 {
+    match last {
+        Some((id, percent)) if id == row_id => *percent,
+        _ => projected,
+    }
 }
 
 /// Pointer x on the slider track -> snapped percent under the current cap.
@@ -257,6 +274,16 @@ mod slider_key_tests {
     fn other_keys_do_not_move_a_slider() {
         assert_eq!(slider_key_value("Return", spec(50.0, 100.0)), None);
         assert_eq!(slider_key_value("a", spec(50.0, 100.0)), None);
+    }
+
+    #[test]
+    fn repeats_step_from_the_last_keyed_target_until_the_row_publishes() {
+        // Stale projection (50) with a pending keyed target (52) on the same row: step from 52.
+        let last = ("endpoint:sink:1".to_owned(), 52);
+        assert_eq!(key_base(Some(&last), "endpoint:sink:1", 50), 52);
+        // Another row, or no pending target, falls back to the projected volume.
+        assert_eq!(key_base(Some(&last), "endpoint:sink:2", 30), 30);
+        assert_eq!(key_base(None, "endpoint:sink:1", 50), 50);
     }
 
     #[test]
