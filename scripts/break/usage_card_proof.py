@@ -211,7 +211,7 @@ def run(bin_dir, out):
             except OSError:
                 pass
         xvfb.terminate()
-    return all(verdicts) and len(verdicts) == 6
+    return all(verdicts) and len(verdicts) == 7
 
 
 if __name__ == "__main__":
