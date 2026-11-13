@@ -7,8 +7,15 @@
 //!
 //! The ramp maths is `flamewm_api::blue_light`; this module only decides *when* and *where* to
 //! upload it.
+//!
+//! This module is the only owner of the crtc gamma. The colour filter `invert` and the blue light
+//! warmth are combined into one ramp per upload, never written as two competing ramps. Of the
+//! compositor filters, only `invert` has a gamma form: grayscale and colour-blind matrices mix
+//! channels, which a per-channel ramp cannot express, and X11 has no colour pass in `render-x11`.
+//! Precedent: the Wayland `colour_pass.rs` applies the same filter names as a matrix.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Duration;
 
 use flamewm_api::blue_light::{BlueLightConfig, resolve_at};
@@ -16,16 +23,24 @@ use x11rb::protocol::randr::ConnectionExt as RandrConnectionExt;
 use x11rb::protocol::xproto::Window;
 use x11rb::rust_connection::RustConnection;
 
-/// What the last uploaded ramp covered, so an unchanged intensity never round-trips.
-#[derive(Clone, PartialEq, Eq)]
+/// What the last uploaded ramp covered, so an unchanged state never round-trips.
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Applied {
     intensity: u8,
+    invert: bool,
 }
 
 thread_local! {
     static APPLIED: RefCell<Option<Applied>> = const { RefCell::new(None) };
     /// Committed configuration, refreshed at the single settings sync point.
     static CONFIG: Cell<BlueLightConfig> = const { Cell::new(DEFAULTS) };
+    /// Committed `colourFilter` is `invert`; refreshed at the same sync point.
+    static INVERT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Records whether the committed colour filter inverts (called from the settings sync point).
+pub(crate) fn set_invert(invert: bool) {
+    INVERT.with(|slot| slot.set(invert));
 }
 
 /// The product defaults, restated as a `const` so the thread-local starts without a call.
@@ -73,13 +88,22 @@ pub(crate) fn apply_at(
     config: BlueLightConfig,
     now: u32,
 ) -> Result<bool, x11rb::errors::ReplyError> {
-    let intensity = resolve_at(config, now).intensity;
-    if APPLIED.with_borrow(|slot| slot.as_ref().is_some_and(|a| a.intensity == intensity)) {
+    let next = Applied {
+        intensity: resolve_at(config, now).intensity,
+        invert: INVERT.with(Cell::get),
+    };
+    if APPLIED.with_borrow(|slot| *slot == Some(next)) {
         return Ok(false);
     }
     let crtcs = crtcs_for_root(conn, root)?;
-    APPLIED.with_borrow_mut(|slot| *slot = Some(Applied { intensity }));
-    for crtc in crtcs {
+    APPLIED.with_borrow_mut(|slot| *slot = Some(next));
+    upload(conn, &crtcs, next);
+    Ok(true)
+}
+
+/// Uploads one combined ramp to every crtc: invert and warmth are a single per-channel function.
+fn upload(conn: &RustConnection, crtcs: &[u32], state: Applied) {
+    for &crtc in crtcs {
         let Ok(size) = gamma_size(conn, crtc) else {
             continue;
         };
@@ -87,7 +111,8 @@ pub(crate) fn apply_at(
             // A virtual or nested server may report no ramp; the filter simply cannot apply there.
             continue;
         }
-        let (red, green, blue) = flamewm_api::blue_light::gamma_ramp(size, intensity);
+        let (red, green, blue) =
+            flamewm_api::blue_light::gamma_ramp(size, state.intensity, state.invert);
         let uploaded = conn
             .randr_set_crtc_gamma(crtc, &red, &green, &blue)
             .map_err(x11rb::errors::ReplyError::ConnectionError);
@@ -97,7 +122,6 @@ pub(crate) fn apply_at(
             eprintln!("flamewm: blue light filter not applied to crtc {crtc}: {error}");
         }
     }
-    Ok(true)
 }
 
 /// Forgets the last upload so the next apply walks the crtcs again and re-uploads the same ramp.
@@ -107,6 +131,39 @@ pub(crate) fn apply_at(
 /// forget is also what keeps a hotplug from leaving an unwarmed output.
 pub(crate) fn invalidate() {
     APPLIED.with_borrow_mut(|slot| *slot = None);
+}
+
+/// Restores the identity ramp when dropped, but only if this process applied a non-identity ramp.
+///
+/// A session that never used the filter leaves any ramp another tool set alone. Held for the whole
+/// X11 loop in `wm/event_loop.rs`, next to `zoom_transform::ResetOnExit`. A WM crash skips the drop,
+/// so the last ramp stays until the next WM turn or the X server restarts.
+pub(crate) struct GammaResetOnExit {
+    conn: Rc<RustConnection>,
+    root: Window,
+}
+
+impl GammaResetOnExit {
+    pub(crate) fn new(conn: Rc<RustConnection>, root: Window) -> Self {
+        Self { conn, root }
+    }
+}
+
+impl Drop for GammaResetOnExit {
+    fn drop(&mut self) {
+        let applied = APPLIED.with_borrow(Clone::clone);
+        if applied.is_none_or(|state| state.intensity == 0 && !state.invert) {
+            return;
+        }
+        invalidate();
+        let identity = Applied {
+            intensity: 0,
+            invert: false,
+        };
+        if let Ok(crtcs) = crtcs_for_root(&self.conn, self.root) {
+            upload(&self.conn, &crtcs, identity);
+        }
+    }
 }
 
 /// Entries in one crtc's gamma ramp, or 0 when the crtc has none.
@@ -241,6 +298,49 @@ mod tests {
             assert!(delay >= Duration::from_secs(1));
             assert!(delay <= Duration::from_secs(3_600));
         }
+    }
+
+    /// Production path on a live `RandR` server: `apply_at` uploads, the server's ramp is read back,
+    /// and the guard restores identity. Opt-in, because it needs a `DISPLAY` with an active crtc
+    /// (a private Xvfb with `xrandr --auto`): `cargo test -p flamewm-wm-x11 -- --ignored`.
+    #[test]
+    #[ignore = "needs DISPLAY with an active RandR crtc"]
+    fn live_ramp_is_inverted_then_restored() {
+        let (conn, screen) = x11rb::connect(None).expect("DISPLAY");
+        let root = x11rb::connection::Connection::setup(&conn).roots[screen].root;
+        let conn = Rc::new(conn);
+        let crtc = crtcs_for_root(&conn, root)
+            .expect("screen resources")
+            .first()
+            .copied()
+            .expect("an active crtc");
+        let size = gamma_size(&conn, crtc).expect("gamma size");
+        let read_back = || {
+            let reply = conn
+                .randr_get_crtc_gamma(crtc)
+                .expect("request")
+                .reply()
+                .expect("reply");
+            (reply.red, reply.blue)
+        };
+        let warm = BlueLightConfig {
+            intensity: 100,
+            night_shift: true,
+            ..BlueLightConfig::default()
+        };
+
+        set_invert(true);
+        assert!(apply_at(&conn, root, warm, 12 * 60).expect("apply"));
+        let (red, blue) = read_back();
+        let expected = flamewm_api::blue_light::gamma_ramp(size, 100, true);
+        assert_eq!((red, blue), (expected.0, expected.2));
+
+        let guard = GammaResetOnExit::new(Rc::clone(&conn), root);
+        drop(guard);
+        let (red, blue) = read_back();
+        let identity = flamewm_api::blue_light::gamma_ramp(size, 0, false);
+        assert_eq!((red, blue), (identity.0, identity.2));
+        set_invert(false);
     }
 
     #[test]

@@ -179,12 +179,30 @@ pub fn channel_permille(intensity: u8) -> (u32, u32, u32) {
     (red, green, blue)
 }
 
+/// Settings key of the compositor colour filter, shared with the Wayland session.
+pub const COLOUR_FILTER_KEY: &str = "colourFilter";
+
+/// Whether the committed `colourFilter` is `invert`.
+///
+/// Only invert has a gamma form: a per-channel ramp maps each channel independently, so it can
+/// invert but cannot express grayscale or colour-blind matrices, which mix channels. X11 leaves
+/// those unapplied.
+#[must_use]
+pub fn gamma_inverts(snapshot: &SettingsSnapshot) -> bool {
+    matches!(
+        snapshot.values.get(COLOUR_FILTER_KEY),
+        Some(SettingValue::Text(value)) if value == "invert"
+    )
+}
+
 /// A gamma ramp of `size` entries per channel, scaled by [`channel_permille`].
 ///
-/// The linear ramp is deliberate: it matches what `xrandr --gamma` and most night-light tools
-/// upload, so the visual result is the familiar one. Returns empty vectors for a zero size.
+/// `invert` flips each input level before the warmth scales it, so the result is
+/// `warmth(1 - input)`. The linear ramp is deliberate: it matches what `xrandr --gamma` and most
+/// night-light tools upload, so the visual result is the familiar one. Returns empty vectors for a
+/// zero size.
 #[must_use]
-pub fn gamma_ramp(size: usize, intensity: u8) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
+pub fn gamma_ramp(size: usize, intensity: u8, invert: bool) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
     if size == 0 {
         return (Vec::new(), Vec::new(), Vec::new());
     }
@@ -192,8 +210,13 @@ pub fn gamma_ramp(size: usize, intensity: u8) -> (Vec<u16>, Vec<u16>, Vec<u16>) 
     let scale = |permille: u32| -> Vec<u16> {
         (0..size)
             .map(|index| {
-                let full = u64::from(u16::MAX) * index as u64 / (size as u64 - 1).max(1);
-                u16::try_from(full * u64::from(permille) / 1000).unwrap_or(u16::MAX)
+                let level = u64::from(u16::MAX) * index as u64 / (size as u64 - 1).max(1);
+                let level = if invert {
+                    u64::from(u16::MAX) - level
+                } else {
+                    level
+                };
+                u16::try_from(level * u64::from(permille) / 1000).unwrap_or(u16::MAX)
             })
             .collect()
     };
@@ -227,10 +250,45 @@ mod tests {
     #[test]
     fn zero_intensity_is_exactly_neutral() {
         assert_eq!(channel_permille(0), (1000, 1000, 1000));
-        let (red, green, blue) = gamma_ramp(4, 0);
+        let (red, green, blue) = gamma_ramp(4, 0, false);
         assert_eq!(red, green);
         assert_eq!(green, blue);
         assert_eq!(red, vec![0, 21_845, 43_690, u16::MAX]);
+    }
+
+    /// Invert flips each level; warmth then scales the flipped level, so blue stays the lowest.
+    #[test]
+    fn invert_composes_with_the_warmth_after_flipping() {
+        let (red, green, blue) = gamma_ramp(3, 100, true);
+        // Full warmth at 100: red unscaled, green x0.82, blue x0.55. The middle level is 32767,
+        // flipped to 32768 by the integer ramp step.
+        assert_eq!(red, vec![u16::MAX, 32_768, 0]);
+        assert_eq!(green, vec![53_738, 26_869, 0]);
+        assert_eq!(blue, vec![36_044, 18_022, 0]);
+        // Invert with no warmth is the exact mirror of the linear ramp.
+        let (mirror, _, _) = gamma_ramp(3, 0, true);
+        assert_eq!(mirror, vec![u16::MAX, 32_768, 0]);
+    }
+
+    #[test]
+    fn colour_filter_setting_selects_only_invert_for_gamma() {
+        let with = |value: &str| SettingsSnapshot {
+            revision: 0,
+            values: [(
+                COLOUR_FILTER_KEY.to_owned(),
+                SettingValue::Text(value.to_owned()),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let empty = SettingsSnapshot {
+            revision: 0,
+            values: Default::default(),
+        };
+        assert!(gamma_inverts(&with("invert")));
+        assert!(!gamma_inverts(&with("grayscale")));
+        assert!(!gamma_inverts(&with("none")));
+        assert!(!gamma_inverts(&empty));
     }
 
     #[test]

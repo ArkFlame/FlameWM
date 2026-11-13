@@ -58,6 +58,10 @@ where
         Rc::clone(&conn),
         conn.setup().roots[screen_num].root,
     );
+    let _gamma_reset = crate::blue_light::GammaResetOnExit::new(
+        Rc::clone(&conn),
+        conn.setup().roots[screen_num].root,
+    );
     let screen = &conn.setup().roots[screen_num];
     become_wm(conn.as_ref(), screen)?;
     if let Err(error) = flamewm_clipboard::spawn_keeper(None) {
