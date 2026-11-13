@@ -150,6 +150,21 @@ fn history_path() -> Option<PathBuf> {
 }
 
 impl NotificationProvider {
+    /// Test seam: serves a private bus at `address` and never reads or writes the XDG history.
+    #[cfg(test)]
+    pub(crate) fn connect_address(address: &str) -> FlameResult<Self> {
+        Ok(Self {
+            pump: BusPump::connect_address(address)?,
+            state: ProviderState::Stopped,
+            notifications: BTreeMap::new(),
+            updates: VecDeque::new(),
+            next_id: 1,
+            history: NotificationHistory::new(HISTORY_CAPACITY),
+            history_path: None,
+            persisted_revision: 0,
+        })
+    }
+
     pub fn connect() -> FlameResult<Self> {
         let history_path = history_path();
         let history = history_path.as_deref().map_or_else(
@@ -676,5 +691,7 @@ fn error_reply(message: &Message, name: &str, text: &str) -> MessageDisposition 
     MessageDisposition::Reply(message.error(&name, &text))
 }
 
+#[cfg(test)]
+mod e2e_tests;
 #[cfg(test)]
 mod tests;
