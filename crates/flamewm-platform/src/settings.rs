@@ -267,6 +267,8 @@ mod switch_group_tests;
 #[cfg(test)]
 mod switch_migration_tests;
 #[cfg(test)]
+mod usage_settings_tests;
+#[cfg(test)]
 mod weather_tint_settings_tests;
 #[cfg(test)]
 mod workspace_osd_settings_tests;

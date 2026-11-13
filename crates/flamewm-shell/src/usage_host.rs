@@ -29,6 +29,7 @@ type UsageResult = Vec<ProviderSnapshot>;
 #[derive(Debug)]
 pub struct UsageHost {
     pub enabled: Vec<UsageProvider>,
+    interval: Duration,
     pub snapshots: UsageResult,
     last_started: Option<Instant>,
     inflight: Option<mpsc::Receiver<UsageResult>>,
@@ -38,6 +39,7 @@ impl Default for UsageHost {
     fn default() -> Self {
         Self {
             enabled: DEFAULT_PROVIDERS.to_vec(),
+            interval: USAGE_REFRESH_INTERVAL,
             snapshots: Vec::new(),
             last_started: None,
             inflight: None,
@@ -52,7 +54,22 @@ impl UsageHost {
         self.inflight.is_none()
             && self
                 .last_started
-                .is_none_or(|t| now.duration_since(t) >= USAGE_REFRESH_INTERVAL)
+                .is_none_or(|t| now.duration_since(t) >= self.interval)
+    }
+
+    /// Applies the saved provider list and refresh interval; takes effect on the next due check.
+    pub fn configure(&mut self, enabled: Vec<UsageProvider>, interval: Duration) {
+        self.enabled = enabled;
+        self.interval = interval;
+    }
+
+    /// Instant the next refresh becomes due, for the reactor wake; `None` while a fetch runs.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Instant> {
+        if self.inflight.is_some() {
+            return None;
+        }
+        self.last_started.map(|started| started + self.interval)
     }
 
     /// Polls a finished fetch, then starts a new one when due. Returns `true` when snapshots changed.

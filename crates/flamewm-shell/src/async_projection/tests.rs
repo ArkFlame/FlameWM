@@ -102,7 +102,11 @@ pub(super) fn tray_visibility(document: &FakeDoc) -> HashMap<String, bool> {
     document
         .visible
         .iter()
-        .filter(|(id, _)| id.starts_with("tray-") || id.as_str() == "clock-button")
+        // tray-usage is width-gated by the full projection only; the scoped tray update leaves it.
+        .filter(|(id, _)| {
+            (id.starts_with("tray-") && id.as_str() != "tray-usage")
+                || id.as_str() == "clock-button"
+        })
         .map(|(id, &visible)| (id.clone(), visible))
         .collect()
 }

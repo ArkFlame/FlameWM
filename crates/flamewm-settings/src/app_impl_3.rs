@@ -590,7 +590,32 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     /// Highlights the saved units and shows the saved weather city (or the unset hint).
+    /// Highlights the saved AI usage refresh interval.
+    pub(crate) fn sync_usage(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let accent = self.accent()?;
+        let seconds = self
+            .client
+            .settings()
+            .and_then(|snapshot| {
+                flamewm_api::settings::integer_value(snapshot, "usage.refresh_seconds")
+            })
+            .unwrap_or(300)
+            .to_string();
+        highlight_options(
+            document,
+            Some(&seconds),
+            &[
+                ("60", "usage-refresh-60"),
+                ("300", "usage-refresh-300"),
+                ("900", "usage-refresh-900"),
+                ("1800", "usage-refresh-1800"),
+            ],
+            accent,
+        )
+    }
+
     pub(crate) fn sync_weather(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        self.sync_usage(document)?;
         let units = self
             .text_setting("weatherUnits")
             .unwrap_or_else(|_| "celsius".to_owned());

@@ -51,6 +51,7 @@ pub use surfaces::*;
 mod start;
 pub use start::*;
 mod taskbar;
+pub mod usage;
 pub use taskbar::*;
 mod settings;
 pub use settings::*;

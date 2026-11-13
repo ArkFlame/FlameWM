@@ -126,6 +126,12 @@ pub struct ProductSettings {
     pub weather_location: String,
     /// `celsius` or `fahrenheit`.
     pub weather_units: String,
+    /// `usage.claude`: fetch Claude usage on the AI usage card (default on).
+    pub usage_claude: bool,
+    /// `usage.commandCode`: fetch Command Code usage on the AI usage card (default on).
+    pub usage_command_code: bool,
+    /// `usage.refresh_seconds`: usage refresh period in seconds (default 300).
+    pub usage_refresh_seconds: u16,
     /// Sets `weatherLocation` from the IP-geolocated position.
     pub auto_location_enabled: bool,
     /// Applies the IP-geolocated IANA time zone to the shell and lock clocks.
@@ -355,6 +361,9 @@ impl Default for ProductSettings {
             workspace_osd: false,
             weather_location: String::new(),
             weather_units: "celsius".to_owned(),
+            usage_claude: true,
+            usage_command_code: true,
+            usage_refresh_seconds: 300,
             auto_location_enabled: true,
             auto_time_zone_enabled: true,
             auto_time_zone: String::new(),

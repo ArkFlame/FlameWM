@@ -702,6 +702,7 @@ pub fn project_panel(
     icon_resolver: &mut IconResolver,
 ) -> Result<(), String> {
     let snapshot = view.snapshot;
+    let usage_fits = panel_usage_fits(&view);
     project_taskbar_height(document, view)?;
     let states = task_visual_states_on_output_and_workspace(
         &snapshot.panels,
@@ -789,7 +790,7 @@ pub fn project_panel(
     )?;
 
     project_clock(document)?;
-    project_status_tray(document, &snapshot.system, view.items)?;
+    project_status_tray(document, &snapshot.system, view.items, Some(usage_fits))?;
     project_element_backgrounds(
         document,
         view.items,
@@ -988,13 +989,41 @@ pub(crate) fn project_task_progress(
     Ok(())
 }
 
+/// Shortest panel bar, in CSS px, that keeps the AI usage tray cell beside the clock. Below it the
+/// cell is hidden, so the clock never clips (1080 px clips it; 1120 px fits).
+pub(crate) const USAGE_TRAY_MIN_WIDTH: f32 = 1120.0;
+
+#[must_use]
+pub(crate) fn usage_tray_fits(bar_css_length: f32) -> bool {
+    bar_css_length >= USAGE_TRAY_MIN_WIDTH
+}
+
+/// Whether this panel's bar is long enough for the usage cell (the length along the edge).
+fn panel_usage_fits(view: &PanelView<'_>) -> bool {
+    let Some(panel) = view.panel else {
+        return false;
+    };
+    let scale = view.output.map_or(100, |output| output.shell_scale_percent);
+    let length = if panel.edge.is_horizontal() {
+        taskbar_css_width(panel.geometry.width, scale)
+    } else {
+        taskbar_css_width(panel.geometry.height, scale)
+    };
+    usage_tray_fits(length)
+}
+
 /// Projects only the status tray and clock button. The async partial update
 /// path shares this routine without touching task or pager nodes.
 pub(crate) fn project_status_tray(
     document: &mut impl UiDocumentAccess,
     system: &flamewm_api::system::SystemSnapshot,
     items: TaskbarItems,
+    usage_fits: Option<bool>,
 ) -> Result<(), String> {
+    if let Some(fits) = usage_fits {
+        document.visible("tray-usage", fits)?;
+        project_tray_button(document, "tray-usage", fits)?;
+    }
     let status = crate::taskbar::status::project(system).views;
     let media = status.media.visible
         && matches!(

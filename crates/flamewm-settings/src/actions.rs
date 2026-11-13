@@ -295,7 +295,7 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 69] = [
+pub(crate) const TOGGLE_KEYS: [&str; 71] = [
     "taskbar.enabled",
     "dock.enabled",
     "dock.reserveSpace",
@@ -338,6 +338,8 @@ pub(crate) const TOGGLE_KEYS: [&str; 69] = [
     "customWindowOutline",
     "weatherEnabled",
     "weatherTint",
+    "usage.claude",
+    "usage.commandCode",
     "autoLocationEnabled",
     "autoTimeZoneEnabled",
     "snapPreviewEnabled",
@@ -759,6 +761,12 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.assistant.key.focus" => Ok(SettingsAction::ApiKeyFocus),
         "settings.assistant.key.reset" => Ok(SettingsAction::ApiKeyReset),
         "settings.assistant.open" => Ok(SettingsAction::AssistantOpen),
+        value if value.starts_with("settings.usage.refresh.") => integer_choice_action(
+            "usage.refresh_seconds",
+            &[60, 300, 900, 1800],
+            &value["settings.usage.refresh.".len()..],
+            "usage refresh interval",
+        ),
         "settings.weather.location.clear" => Ok(SettingsAction::TextSelect {
             key: "weatherLocation",
             value: "",

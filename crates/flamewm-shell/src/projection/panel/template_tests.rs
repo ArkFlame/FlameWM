@@ -286,8 +286,10 @@ fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
     ] {
         document.visible(id, true).expect("tray visible projects");
     }
-    // Width 1120: the AI usage tray button adds one ~40 px cell to the tray, so the
-    // 1080 px sample no longer fits the clock; the tray still lays out inside the bar.
+    // The usage cell is hidden below the threshold, as the projection does at this width.
+    document
+        .visible("tray-usage", super::usage_tray_fits(1080.0))
+        .expect("usage cell projects");
     let mut checked = Vec::new();
     for id in [
         "clock-time",
@@ -304,15 +306,15 @@ fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
         "tray-wifi",
     ] {
         let (x, y, width, height) = document
-            .layout_box_by_id(id, (1120.0, 72.0))
+            .layout_box_by_id(id, (1080.0, 72.0))
             .unwrap_or_else(|| panic!("panel node '{id}' missing from artifact"));
         assert!(
             width > 0.0 && height > 0.0,
             "panel node '{id}' is zero-size: ({x}, {y}, {width}, {height})"
         );
         assert!(
-            x >= 0.0 && y >= 0.0 && x + width <= 1120.5 && y + height <= 72.5,
-            "panel node '{id}' lies outside the 1120x72 viewport: ({x}, {y}, {width}, {height})"
+            x >= 0.0 && y >= 0.0 && x + width <= 1080.5 && y + height <= 72.5,
+            "panel node '{id}' lies outside the 1080x72 viewport: ({x}, {y}, {width}, {height})"
         );
         checked.push(id);
     }
@@ -809,4 +811,10 @@ fn vertical_taskbar_stacks_task_slots_on_the_vertical_axis() {
         slots_w <= width && slots_h > slots_w,
         "vertical task-slots must run down the bar: {slots_w}x{slots_h} in {width}x{height}"
     );
+}
+
+#[test]
+fn usage_tray_cell_hides_below_the_clock_fit_threshold() {
+    assert!(!super::usage_tray_fits(1080.0), "1080 px clips the clock");
+    assert!(super::usage_tray_fits(1120.0));
 }

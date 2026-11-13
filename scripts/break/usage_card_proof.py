@@ -60,11 +60,25 @@ def accent_colour(im, box):
     return max(seen, key=seen.get) if seen else None
 
 
+def region_changed(a, b, box):
+    """Changed pixels between two captures inside one rectangle."""
+    diff = ImageChops.difference(a.crop(box), b.crop(box))
+    return sum(diff.convert("L").histogram()[17:])
+
+
+def caption_band(im, card, row):
+    """Reset caption strip of provider row `row`: rows are 52 px apart, 41 px below the card top."""
+    x0, y0, x1, _ = card
+    top = y0 + 41 + 52 * row
+    return im.crop((x0 + 12, top + 24, x1 - 12, top + 36))
+
+
 def fixture(path):
     now = int(time.time())
     body = [
         {"provider": "claude", "state": "ready", "windows": [
             {"used_percent": 40, "window_seconds": 18000, "resets_at": now + 5400}]},
+        {"provider": "codex", "state": "failed"},
         {"provider": "command_code", "state": "ready", "windows": [
             {"used_percent": 80, "window_seconds": 604800, "resets_at": now + 172800}]},
     ]
@@ -152,6 +166,22 @@ def run(bin_dir, out):
         else:
             check("provider fills match fixture percentages", False, "no card region")
 
+        card = changed_box(closed, opened)
+        failed_band = caption_band(opened, card, 0)  # codex: state failed
+        idle_band = caption_band(opened, card, 2)  # opencode_go: not configured
+        text_px = failed_band.getcolors(4096)
+        check("failed row shows its reason and differs from the not-configured caption",
+              ImageChops.difference(failed_band, idle_band).getbbox() is not None
+              and text_px is not None and len(text_px) > 8,
+              f"distinct_colours={len(text_px) if text_px else 'many'}")
+
+        before_tab = shot(out, "card-before-tab.png", display)
+        key("Tab")
+        after_tab = shot(out, "card-after-tab.png", display)
+        close_region = (card[2] - 62, card[3] - 34, card[2] - 6, card[3] - 6)
+        focus_px = region_changed(before_tab, after_tab, close_region)
+        check("Tab moves focus to the Close button", focus_px > 30, f"focus_px={focus_px}")
+
         key("Escape")
         after_escape = shot(out, "card-escape.png", display)
         check("Escape closes the card", changed_count(opened, after_escape) >= CARD_MIN_DIFF_PX
@@ -172,7 +202,7 @@ def run(bin_dir, out):
             except OSError:
                 pass
         xvfb.terminate()
-    return all(verdicts) and len(verdicts) == 4
+    return all(verdicts) and len(verdicts) == 6
 
 
 if __name__ == "__main__":

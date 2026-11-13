@@ -195,6 +195,10 @@ impl ShellLoop {
             self.bluetooth_agent
                 .as_ref()
                 .and_then(|agent| agent.borrow().next_deadline()),
+            self.usage.next_deadline(),
+            self.usage_projected_at
+                .filter(|_| self.surfaces.is_usage_open())
+                .map(|at| at + super::usage::USAGE_REPROJECT_INTERVAL),
         ]));
     }
 

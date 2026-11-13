@@ -104,7 +104,7 @@ pub fn project_status_tray_async(
     snapshot: &ShellSnapshot,
     items: TaskbarItems,
 ) -> Result<(), String> {
-    crate::projection::project_status_tray(document, &snapshot.system, items)
+    crate::projection::project_status_tray(document, &snapshot.system, items, None)
 }
 
 /// `PanelsChanged` -> geometry/layout ownership counts only (slot/pager

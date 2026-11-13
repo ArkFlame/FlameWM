@@ -15,6 +15,8 @@ pub(crate) const DEFAULT_ACCENT: &str = flamewm_api::settings::DEFAULT_ACCENT;
 pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "nav-selection-accent",
     "weather-tint-on",
+    "usage-claude-on",
+    "usage-command-code-on",
     "workspace-osd-on",
     "reduce-transparency-on",
     "anim-global-on",
@@ -223,6 +225,13 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         true,
     ),
     ("weatherTint", "weather-tint-on", "weather-tint-off", true),
+    ("usage.claude", "usage-claude-on", "usage-claude-off", true),
+    (
+        "usage.commandCode",
+        "usage-command-code-on",
+        "usage-command-code-off",
+        true,
+    ),
     (
         "workspaceOsd",
         "workspace-osd-on",
