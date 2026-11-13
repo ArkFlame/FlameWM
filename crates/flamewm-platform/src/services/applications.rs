@@ -61,11 +61,44 @@ impl ApplicationService {
         id: &DesktopAppId,
         options: &ApplicationLaunchOptions,
     ) -> FlameResult<()> {
-        self.find_by_id(id)?;
+        // The port resolves `id` against the live catalog with refresh-on-miss. This snapshot can
+        // lag an app installed since the last push, so it must not reject the launch before the port.
         port.launch(id, options)
     }
 }
 
 fn contains(text: &str, needle: &str) -> bool {
     text.to_lowercase().contains(needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingPort {
+        launched: Vec<String>,
+    }
+
+    impl ApplicationPort for RecordingPort {
+        fn launch(&mut self, app: &DesktopAppId, _: &ApplicationLaunchOptions) -> FlameResult<()> {
+            self.launched.push(app.as_str().to_owned());
+            Ok(())
+        }
+        fn launch_uri(&mut self, _: &str) -> FlameResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn launch_reaches_port_for_app_missing_from_snapshot() {
+        // An app installed after the snapshot was pushed must still reach the port, which refreshes.
+        let service = ApplicationService::default();
+        let mut port = RecordingPort::default();
+        let id = DesktopAppId::new("zorblax-probe.desktop");
+        service
+            .launch(&mut port, &id, &ApplicationLaunchOptions::default())
+            .expect("port decides resolution");
+        assert_eq!(port.launched, ["zorblax-probe.desktop"]);
+    }
 }
