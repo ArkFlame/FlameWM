@@ -221,11 +221,12 @@ fn execute() -> Result<(), String> {
     combine_activation_restore_result(session_result, activation_restore_result)
 }
 
-/// A two-connector preference belongs to `FlameWM`, not Plasma/KScreen.
-/// Restore only when BOTH connector names are currently active. A stale
-/// hotplug preference does not cause a mode-set or block login.
+/// The saved left-to-right order belongs to `FlameWM`, not Plasma/KScreen.
+/// Restore only when EVERY connector in it is currently active. A stale
+/// hotplug preference does not cause a mode-set or block login. One xrandr
+/// call places each output right of its predecessor.
 fn restore_saved_display_order() {
-    let Some((left, right)) = flamewm_session_core::display_order::load_order() else {
+    let Some(order) = flamewm_session_core::display_order::load_order() else {
         return;
     };
     let Ok(snapshot) = Command::new("xrandr").arg("--query").output() else {
@@ -245,13 +246,14 @@ fn restore_saved_display_order() {
             })
         })
     };
-    if !connected(&left) || !connected(&right) {
+    if !order.iter().all(|connector| connected(connector)) {
         return;
     }
-    match Command::new("xrandr")
-        .args(["--output", &right, "--right-of", &left])
-        .status()
-    {
+    let args: Vec<&str> = order
+        .windows(2)
+        .flat_map(|pair| ["--output", pair[1].as_str(), "--right-of", pair[0].as_str()])
+        .collect();
+    match Command::new("xrandr").args(&args).status() {
         Ok(status) if status.success() => (),
         Ok(status) => eprintln!("{SESSION_LOG_PREFIX}: monitor order restore rejected: {status}"),
         Err(error) => eprintln!("{SESSION_LOG_PREFIX}: monitor order restore unavailable: {error}"),

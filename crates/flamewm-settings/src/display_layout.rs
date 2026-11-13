@@ -167,18 +167,14 @@ pub fn placements(plan: &Arrangement) -> Vec<OutputPlacement> {
         .collect()
 }
 
-/// Only the pre-existing two-output session persistence format can be written
-/// here. Multi-output persistence requires the session owner's typed schema.
-/// Call only after the WM reports a kept transaction.
+/// Saves the kept left-to-right order. Call only after the WM reports a kept transaction.
 pub fn persist_kept(plan: &Arrangement) -> Result<(), String> {
-    if plan.outputs.len() != 2 {
-        return Err(
-            "multi-output layout persistence requires the session owner's updated schema".into(),
-        );
-    }
-    let left = &plan.outputs[0].connector;
-    let right = &plan.outputs[1].connector;
-    flamewm_session_core::display_order::save_order(left, right)
+    let order: Vec<String> = plan
+        .outputs
+        .iter()
+        .map(|output| output.connector.clone())
+        .collect();
+    flamewm_session_core::display_order::save_order(&order)
 }
 
 #[cfg(test)]
