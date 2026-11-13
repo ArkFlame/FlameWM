@@ -502,16 +502,13 @@ impl Dispatch<ExtSessionLockSurfaceV1, ()> for LockClient {
 ///
 /// # Errors
 /// Returns [`LockError`] when the connection, the global, the handshake or a paint fails.
-pub fn run<F>(
-    settings: &crate::settings::LockSettings,
-    username: &str,
-    frame: F,
-) -> Result<(), LockError>
+pub fn run<L, F>(load_settings: L, username: &str, frame: F) -> Result<(), LockError>
 where
+    L: FnOnce() -> crate::settings::LockSettings + 'static,
     F: FnMut(&crate::view::LockView, u32, u32) -> Result<Frame, String> + 'static,
 {
     run_with(
-        settings,
+        load_settings,
         username,
         Box::new(crate::pam::authenticate),
         frame,
@@ -523,13 +520,14 @@ where
 pub type Authenticator = Box<dyn Fn(&str, &str) -> crate::pam::Outcome + Send + Sync + 'static>;
 
 /// Runs the presenter with an injected authenticator.
-pub fn run_with<F>(
-    settings: &crate::settings::LockSettings,
+pub fn run_with<L, F>(
+    load_settings: L,
     username: &str,
     authenticate: Authenticator,
     frame: F,
 ) -> Result<(), LockError>
 where
+    L: FnOnce() -> crate::settings::LockSettings + 'static,
     F: FnMut(&crate::view::LockView, u32, u32) -> Result<Frame, String> + 'static,
 {
     let connection =
@@ -537,7 +535,14 @@ where
     let mut client = LockClient::new(Box::new(frame));
     client.username = username.to_string();
     client.authenticate = std::sync::Arc::new(authenticate);
-    client.settings = settings.clone();
+    // The lock is requested before any settings work: the session is covered only once the
+    // compositor confirms the lock, so a slow settings service must never delay this request.
+    // The keyboard is already created inside `lock()`, so input is captured before the settings wait.
+    let (mut queue, _qh) = client.lock(&connection)?;
+    connection
+        .flush()
+        .map_err(|error| LockError::Protocol(error.to_string()))?;
+    client.settings = load_settings();
     client.view = crate::view::LockView::project(
         &client.settings,
         None,
@@ -546,10 +551,6 @@ where
         client.state.status(),
         false,
     );
-    let (mut queue, _qh) = client.lock(&connection)?;
-    connection
-        .flush()
-        .map_err(|error| LockError::Protocol(error.to_string()))?;
 
     // Dispatch until the session is unlocked or the compositor ends the lock. Configures arrive
     // here (each paints its surface) and so does keyboard input, which is what makes the lock

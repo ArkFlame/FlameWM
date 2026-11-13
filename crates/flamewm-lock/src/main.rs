@@ -70,21 +70,17 @@ fn main() -> ExitCode {
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         return present_x11(&username);
     }
-    let settings = session::load_settings();
-    present_wayland_session(&settings, &username)
+    present_wayland_session(&username)
 }
 
 /// Locks a Wayland session through the lock protocol. It has no X server to paint through, so it
 /// paints the same document with the software renderer.
-fn present_wayland_session(
-    settings: &flamewm_lock::settings::LockSettings,
-    username: &str,
-) -> ExitCode {
+fn present_wayland_session(username: &str) -> ExitCode {
     #[cfg(feature = "wayland")]
-    return present_wayland(settings, username);
+    return present_wayland(username);
     #[cfg(not(feature = "wayland"))]
     {
-        let _ = (settings, username);
+        let _ = username;
         eprintln!("flamewm-lock: a Wayland session needs the `wayland` feature; not locking");
         ExitCode::FAILURE
     }
@@ -119,17 +115,26 @@ fn present_x11(_username: &str) -> ExitCode {
 
 /// Paints the lock for each configured surface: the same document the X11 path shows.
 #[cfg(feature = "wayland")]
-fn present_wayland(settings: &flamewm_lock::settings::LockSettings, username: &str) -> ExitCode {
+fn present_wayland(username: &str) -> ExitCode {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use flamewm_lock::document;
     use flamewm_lock::present::paint_document;
     use flamewm_lock::wayland;
     use flamewm_ui_document::UiDocumentView;
 
-    let owned_settings = settings.clone();
-    let owned_username = username.to_string();
-    match wayland::run(settings, username, move |view, width, height| {
-        let settings = &owned_settings;
-        let _ = &owned_username;
+    // Settings load after the lock request (see `wayland::run_with`) and feed the frame closure.
+    let shared = Rc::new(RefCell::new(flamewm_lock::settings::LockSettings::default()));
+    let painted = Rc::clone(&shared);
+    let load = move || {
+        let loaded = session::load_settings();
+        *shared.borrow_mut() = loaded.clone();
+        loaded
+    };
+    match wayland::run(load, username, move |view, width, height| {
+        let current = painted.borrow();
+        let settings = &*current;
         let template = document::template()?;
         let mut runtime = template.into_runtime_document();
         let background = document::background_image(settings, width, height);

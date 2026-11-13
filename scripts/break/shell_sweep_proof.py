@@ -369,13 +369,27 @@ def run_lock(bin_dir, out):
         lock = subprocess.Popen([os.path.join(bin_dir, "flamewm-lock")], env=env, start_new_session=True,
                                 stdout=open(os.path.join(out, "lock.out"), "w"), stderr=subprocess.STDOUT)
         d = xdisplay.Display(display_name)
-        # The lock maps its surfaces only after its settings and display requests give up (about
-        # 15 s without a settings service), so wait for a viewable window instead of a fixed sleep.
-        ready_deadline = time.time() + 60
-        while time.time() < ready_deadline and lock.poll() is None:
+        probe = xdisplay.Display(display_name)  # a second client: must never win the keyboard grab
+        grab_samples = []
+
+        def sample_second_grab():
+            status = probe.screen().root.grab_keyboard(True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
+            if status == X.GrabSuccess:
+                probe.ungrab_keyboard(X.CurrentTime)
+            probe.flush()
+            grab_samples.append(status)
+
+        # The lock must show within 2 s with no settings service: its settings and display queries are
+        # bounded at 500 ms each, and the keyboard grab is taken before either.
+        launched = time.time()
+        viewable_after = None
+        while time.time() - launched < 10 and lock.poll() is None:
             if any(k.get_attributes().map_state == X.IsViewable for k in d.screen().root.query_tree().children):
+                viewable_after = time.time() - launched
                 break
-            time.sleep(0.5)
+            time.sleep(0.05)
+        if viewable_after is not None:
+            sample_second_grab()
         time.sleep(1)
 
         def tap(name):
@@ -392,10 +406,15 @@ def run_lock(bin_dir, out):
 
         alive = lock.poll() is None
         check("lock process stays up on its private display", alive, f"pid={lock.pid}")
+        tree = [(hex(k.id), k.get_attributes().map_state, k.get_attributes().override_redirect) for k in d.screen().root.query_tree().children]
+        check("lock window viewable within 2 s with no settings service", viewable_after is not None and viewable_after <= 2.0,
+              f"viewable_after={viewable_after} root_children={tree}")
         for name in ("a", "b", "BackSpace", "c"):
             tap(name)
+        sample_second_grab()
         check("no attempt before Return", attempts() == [], f"attempts={attempts()}")
         tap("Return")
+        sample_second_grab()
         time.sleep(3)
         check("typed chars once, Backspace once: Return sends the password 'ac' exactly once",
               attempts() == ["auth ac"], f"attempts={attempts()}")
@@ -404,6 +423,9 @@ def run_lock(bin_dir, out):
         time.sleep(2)
         check("empty password: Return sends nothing", attempts() == ["auth ac"], f"attempts={attempts()}")
         check("lock still running after failed auth", lock.poll() is None, "lock stays locked")
+        sample_second_grab()
+        check("second client keyboard grab is AlreadyGrabbed at every sample", bool(grab_samples)
+              and all(status == X.AlreadyGrabbed for status in grab_samples), f"samples={grab_samples}")
         d.flush()
         return all(verdicts)
     finally:

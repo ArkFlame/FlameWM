@@ -13,6 +13,12 @@ const CURRENT_TIME: c_ulong = 0;
 const GRAB_MODE_ASYNC: c_int = 1;
 const GRAB_SUCCESS: c_int = 0;
 const KEY_PRESS: c_int = 2;
+const FOCUS_OUT: c_int = 10;
+const KEYMAP_NOTIFY: c_int = 11;
+const MAPPING_NOTIFY: c_int = 34;
+const NOTIFY_NORMAL: c_int = 0;
+const FOCUS_CHANGE_MASK: c_long = 1 << 21;
+const KEYMAP_STATE_MASK: c_long = 1 << 14;
 const SHIFT_MASK: c_uint = 1 << 0;
 const CONTROL_MASK: c_uint = 1 << 2;
 const MOD1_MASK: c_uint = 1 << 3;
@@ -36,6 +42,9 @@ const KEYSYM_UNICODE_BASE: c_ulong = 0x0100_0000;
 const GRAB_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 /// How long the lock keeps retrying the keyboard grab before it refuses to lock.
 const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
+/// Smallest gap between event-driven re-grabs, so an event storm cannot spin the reactor. The
+/// per-tick retry still runs every turn, so a suppressed re-grab lands within one tick.
+const REGRAB_SPACING: Duration = Duration::from_millis(50);
 
 /// Opaque Xlib `Display`.
 #[repr(C)]
@@ -63,6 +72,18 @@ struct XKeyEvent {
     same_screen: c_int,
 }
 
+/// Layout of Xlib's `XFocusChangeEvent` on LP64 Linux (`mode` is the grab mode).
+#[repr(C)]
+struct XFocusEvent {
+    kind: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: *mut Display,
+    window: c_ulong,
+    mode: c_int,
+    detail: c_int,
+}
+
 /// Raw storage for Xlib's `XEvent` union (192 bytes on LP64).
 #[repr(C)]
 struct XEventBuffer([c_long; 24]);
@@ -86,6 +107,8 @@ unsafe extern "C" {
     ) -> c_int;
     fn XUngrabKeyboard(display: *mut Display, time: c_ulong) -> c_int;
     fn XFlush(display: *mut Display) -> c_int;
+    fn XSelectInput(display: *mut Display, window: c_ulong, event_mask: c_long) -> c_int;
+    fn XRefreshKeyboardMapping(event: *mut XEventBuffer) -> c_int;
     fn XQueryKeymap(display: *mut Display, keys_return: *mut c_char) -> c_int;
     fn XQueryPointer(
         display: *mut Display,
@@ -213,6 +236,8 @@ pub struct Session {
     root: c_ulong,
     grabbed: bool,
     dpms: Option<Dpms>,
+    /// When the last event-driven re-grab ran; see [`REGRAB_SPACING`].
+    last_regrab: Option<Instant>,
 }
 
 impl Session {
@@ -236,11 +261,15 @@ impl Session {
         }
         // SAFETY: `display` is a live connection checked non-null above.
         let root = unsafe { XDefaultRootWindow(display) };
+        // SAFETY: display and root are live. Focus and keymap changes on the root tell the lock
+        // that the server may have dropped its grab; see `read_keys`.
+        unsafe { XSelectInput(display, root, FOCUS_CHANGE_MASK | KEYMAP_STATE_MASK) };
         Ok(Self {
             display,
             root,
             grabbed: false,
             dpms: Dpms::load(),
+            last_regrab: None,
         })
     }
 
@@ -272,19 +301,40 @@ impl Session {
     }
 
     /// Drains pending events: the decoded key presses and the count of all key presses.
+    /// A focus change, keymap change or keyboard-mapping change re-asserts the grab at once,
+    /// rate-limited by [`REGRAB_SPACING`]; the per-tick retry covers any suppressed one.
     pub fn read_keys(&mut self) -> KeyBatch {
         let mut batch = KeyBatch::default();
+        let mut reassert = false;
         // SAFETY: display is live; XNextEvent only runs while XPending reports events.
         unsafe {
             while XPending(self.display) > 0 {
                 let mut event = XEventBuffer([0; 24]);
                 XNextEvent(self.display, &raw mut event);
-                if event.0[0] as c_int == KEY_PRESS {
-                    batch.presses += 1;
-                    let key = &*(event.0.as_ptr().cast::<XKeyEvent>());
-                    batch.keys.extend(decode_key(self.display, key));
+                match event.0[0] as c_int {
+                    KEY_PRESS => {
+                        batch.presses += 1;
+                        let key = &*(event.0.as_ptr().cast::<XKeyEvent>());
+                        batch.keys.extend(decode_key(self.display, key));
+                    }
+                    MAPPING_NOTIFY => {
+                        // Xlib requires the keyboard map refreshed before keycodes decode again.
+                        XRefreshKeyboardMapping(&raw mut event);
+                        reassert = true;
+                    }
+                    FOCUS_OUT => {
+                        let focus = &*(event.0.as_ptr().cast::<XFocusEvent>());
+                        reassert |= focus_out_reasserts(focus.mode);
+                    }
+                    KEYMAP_NOTIFY => reassert = true,
+                    _ => {}
                 }
             }
+        }
+        let now = Instant::now();
+        if reassert && regrab_due(self.last_regrab, now) {
+            self.last_regrab = Some(now);
+            self.try_grab();
         }
         batch
     }
@@ -359,6 +409,20 @@ impl Drop for Session {
             XCloseDisplay(self.display);
         }
     }
+}
+
+/// A `FocusOut` re-asserts the grab only for an ordinary focus change. `NotifyGrab` and
+/// `NotifyUngrab` are side effects of grabbing, so acting on them would loop on our own grab.
+/// Precedent: `.vendor/xfwm4-master/src/events.c` (`handleFocusOut`) treats `FocusOut` as a focus event.
+#[must_use]
+pub fn focus_out_reasserts(mode: c_int) -> bool {
+    mode == NOTIFY_NORMAL
+}
+
+/// Whether an event-driven re-grab may run now: at most one per [`REGRAB_SPACING`].
+#[must_use]
+pub fn regrab_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.saturating_duration_since(last) >= REGRAB_SPACING)
 }
 
 /// Retries [`Session::try_grab`] until it succeeds or `timeout` elapses.
@@ -453,6 +517,21 @@ mod tests {
         let mut calls = Recorder::default();
         assert!(!set_power(&mut calls, false));
         assert_eq!(calls.calls, vec!["enable", "force(3)"]);
+    }
+
+    #[test]
+    fn focus_out_reasserts_only_for_ordinary_focus_changes() {
+        assert!(focus_out_reasserts(NOTIFY_NORMAL));
+        assert!(!focus_out_reasserts(1), "NotifyGrab must not re-grab");
+        assert!(!focus_out_reasserts(2), "NotifyUngrab must not re-grab");
+    }
+
+    #[test]
+    fn event_regrabs_are_spaced_so_a_storm_cannot_spin() {
+        let now = Instant::now();
+        assert!(regrab_due(None, now));
+        assert!(!regrab_due(Some(now), now + Duration::from_millis(49)));
+        assert!(regrab_due(Some(now), now + REGRAB_SPACING));
     }
 
     #[test]

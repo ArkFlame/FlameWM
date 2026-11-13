@@ -1,5 +1,7 @@
 //! Typed settings snapshot and user identity for the lock screen.
 use std::collections::HashMap;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use flamewm_api::settings::SettingValue;
@@ -11,11 +13,31 @@ use flamewm_dbus_reactor::BusKind;
 use crate::settings::LockSettings;
 
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(2);
+/// Longest the lock waits for one optional service (settings, displays) before it shows with
+/// defaults. The keyboard grab is already held, so this delays decoration, never input.
+pub const SERVICE_BUDGET: Duration = Duration::from_millis(500);
 
-/// Loads lock settings from the control plane. Any failure yields defaults so
-/// the lock screen still works without the settings service.
+/// Runs `query` on its own thread and returns its answer within `budget`, or `None`. A D-Bus
+/// connect can block far longer than the call timeout when no service owns the name, so the
+/// bound lives here rather than in the bus client.
+fn within<T: Send + 'static>(
+    budget: Duration,
+    query: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Option<T> {
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("flamewm-lock-query".to_string())
+        .spawn(move || {
+            let _ = sender.send(query());
+        })
+        .ok()?;
+    receiver.recv_timeout(budget).ok().flatten()
+}
+
+/// Loads lock settings from the control plane, waiting at most [`SERVICE_BUDGET`]. Any failure
+/// or timeout yields defaults so the lock screen still works without the settings service.
 pub fn load_settings() -> LockSettings {
-    fetch_snapshot()
+    within(SERVICE_BUDGET, fetch_snapshot)
         .as_ref()
         .map(lock_settings_from_snapshot)
         .unwrap_or_default()
@@ -57,7 +79,7 @@ fn fetch_snapshot() -> Option<flamewm_api::settings::SettingsSnapshot> {
 /// lock coverage when the display service is unavailable or has no usable outputs.
 #[must_use]
 pub fn lock_output_rects(root: Rect) -> Vec<Rect> {
-    output_rects_from_snapshot(fetch_displays().as_ref(), root)
+    output_rects_from_snapshot(within(SERVICE_BUDGET, fetch_displays).as_ref(), root)
 }
 
 fn output_rects_from_snapshot(snapshot: Option<&DisplaySnapshot>, root: Rect) -> Vec<Rect> {
