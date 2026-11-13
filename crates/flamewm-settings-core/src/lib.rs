@@ -3,7 +3,7 @@
 //! The GUI process is intentionally separate from the WM process. It owns only transient UI state
 //! and cached immutable snapshots; all authoritative mutations cross Flame Control.
 
-use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputPlacement};
+use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputPlacement, Rotation};
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::ShortcutSnapshot;
@@ -536,15 +536,53 @@ impl<T: ControlTransport> SettingsClient<T> {
         placements: Vec<OutputPlacement>,
         now_ms: u64,
     ) -> Result<TransactionId, ControlError> {
-        let snapshot = self
+        self.begin_display_topology(
+            |expected_generation| ControlRequest::SetDisplayArrangement {
+                placements,
+                expected_generation,
+                now_ms,
+            },
+        )
+    }
+
+    /// Makes `output` the primary display, as a revertible WM transaction.
+    pub fn set_primary_display(
+        &mut self,
+        output: OutputId,
+        now_ms: u64,
+    ) -> Result<TransactionId, ControlError> {
+        self.begin_display_topology(|expected_generation| ControlRequest::SetPrimaryDisplay {
+            output,
+            expected_generation,
+            now_ms,
+        })
+    }
+
+    /// Rotates `output`, as a revertible WM transaction.
+    pub fn set_display_rotation(
+        &mut self,
+        output: OutputId,
+        rotation: Rotation,
+        now_ms: u64,
+    ) -> Result<TransactionId, ControlError> {
+        self.begin_display_topology(|expected_generation| ControlRequest::SetDisplayRotation {
+            output,
+            rotation,
+            expected_generation,
+            now_ms,
+        })
+    }
+
+    fn begin_display_topology(
+        &mut self,
+        request: impl FnOnce(u64) -> ControlRequest,
+    ) -> Result<TransactionId, ControlError> {
+        let generation = self
             .displays
             .as_ref()
-            .ok_or_else(|| missing_snapshot("display"))?;
-        let response = self.transport.call(ControlRequest::SetDisplayArrangement {
-            placements,
-            expected_generation: snapshot.generation,
-            now_ms,
-        })?;
+            .ok_or_else(|| missing_snapshot("display"))?
+            .generation;
+        let response = self.transport.call(request(generation))?;
         let ControlResponse::Transaction(transaction) = response else {
             return Err(unexpected_response("display transaction"));
         };

@@ -102,6 +102,58 @@ pub fn plan(
     Ok(Some(Arrangement { outputs: planned }))
 }
 
+/// Free-position drop of `size` at `wanted`, against the other outputs' rectangles.
+/// Mirrors COSMIC `update_dragged_region` (`.vendor/cosmic-epoch/cosmic-settings/
+/// cosmic-settings/src/pages/display/arrangement.rs`): attach to an edge of a neighbour,
+/// align edges within 8 px, reject overlap. The snap zone is kscreen's 80 px
+/// `s_snapArea` (`.vendor/LingmoOS-main/shell32/kscreen/kcm/output_model.cpp`).
+/// Only edge-adjacent candidates qualify, so the layout stays one connected group.
+/// `None` means no legal drop was near `wanted`; the caller keeps the old position.
+// shortcut: not wired into the release path yet (drag still swaps neighbours); revisit when
+// the drag preview lands and passes pointer deltas here.
+#[cfg_attr(not(test), allow(dead_code))]
+#[must_use]
+pub fn snap_drop(others: &[Rect], size: (i32, i32), wanted: (i32, i32)) -> Option<Rect> {
+    const SNAP_AREA: i32 = 80;
+    const ALIGN: i32 = 8;
+    let (w, h) = size;
+    // Align the free axis to the neighbour's top/middle/bottom edges within ALIGN px.
+    let align = |v: i32, start: i32, span: i32, len: i32| {
+        [start, start + span - len, start + (span - len) / 2]
+            .into_iter()
+            .find(|anchor| (v - anchor).abs() <= ALIGN)
+            .unwrap_or(v)
+    };
+    let mut best: Option<(i32, Rect)> = None;
+    for other in others {
+        let (ox, oy, ow, oh) = (other.x, other.y, other.width, other.height);
+        let y = align(wanted.1, oy, oh, h);
+        let x = align(wanted.0, ox, ow, w);
+        let candidates = [
+            Rect::new(ox + ow, y, w, h), // east of neighbour
+            Rect::new(ox - w, y, w, h),  // west
+            Rect::new(x, oy + oh, w, h), // south
+            Rect::new(x, oy - h, w, h),  // north
+        ];
+        for rect in candidates {
+            let distance = (rect.x - wanted.0).abs().max((rect.y - wanted.1).abs());
+            if distance >= SNAP_AREA
+                || others.iter().any(|o| rects_overlap(*o, rect))
+                || best.is_some_and(|(d, _)| d <= distance)
+            {
+                continue;
+            }
+            best = Some((distance, rect));
+        }
+    }
+    best.map(|(_, rect)| rect)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn rects_overlap(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
 /// Typed `SetDisplayArrangement` payload for the WM transaction.
 #[must_use]
 pub fn placements(plan: &Arrangement) -> Vec<OutputPlacement> {
@@ -156,6 +208,27 @@ mod tests {
                 output("DP-1", 0, 0, 1920, 1080),
             ],
         }
+    }
+    #[test]
+    fn snap_drop_attaches_to_edge_and_aligns_within_eight_px() {
+        let other = [Rect::new(0, 0, 1920, 1080)];
+        // East edge, top aligned (5 px off the anchor).
+        assert_eq!(
+            snap_drop(&other, (1280, 720), (1925, 5)),
+            Some(Rect::new(1920, 0, 1280, 720))
+        );
+        // East edge, middle aligned.
+        assert_eq!(
+            snap_drop(&other, (1280, 720), (1925, 185)),
+            Some(Rect::new(1920, 180, 1280, 720))
+        );
+    }
+    #[test]
+    fn snap_drop_refuses_overlap_and_far_drops() {
+        let pair = [Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 1280, 720)];
+        // Dropping onto the middle of the pair: every legal edge is far or overlaps.
+        assert_eq!(snap_drop(&pair, (1280, 720), (1000, 0)), None);
+        assert_eq!(snap_drop(&pair[..1], (1280, 720), (500, 300)), None);
     }
     #[test]
     fn swapped_unequal_resolutions_form_gap_free_strip() {

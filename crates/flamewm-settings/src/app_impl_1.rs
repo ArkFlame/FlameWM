@@ -844,9 +844,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.client
                     .keep_display_mode(monotonic_now_ms())
                     .map_err(control_error)?;
-                if let Some(layout) = self.pending_arrangement.take() {
-                    display_layout::persist_kept(&layout)
-                        .map_err(|error| format!("monitor layout kept but not saved: {error}"))?;
+                // The WM already committed the kept layout; a save failure is a
+                // warning, never a reported failure of the kept transaction.
+                if let Some(Err(error)) = self
+                    .pending_arrangement
+                    .take()
+                    .map(|layout| display_layout::persist_kept(&layout))
+                {
+                    self.error = Some(format!("monitor layout kept, not saved: {error}"));
                 }
             }
             SettingsAction::DisplayRevert => {
