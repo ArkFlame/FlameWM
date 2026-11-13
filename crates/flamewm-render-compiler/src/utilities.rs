@@ -685,12 +685,14 @@ mod tests {
     /// Golden recorded from the pre-migration dock (dock slot classes reverted after 2e41bbe4 regressed compile
     /// time). Re-pinned from 284001 bytes once the shared shell styles (a0a0034b) changed the compiled output.
     /// Update only for an intended dock change.
+    /// Re-pinned 284_218 -> 284_243 for intended shell changes since a0a0034b (64a2c909 urgency tokens,
+    /// d162695b media focus ring, b6e0b87b notification centre, 13a66467, 3966bd23, a8c1e394, d42da107).
     #[test]
     fn dock_document_is_unchanged_by_utility_migration() {
         let page = ui_dir().join("shell/dock.html");
         assert_eq!(
             compiled_page_digest(&page, false),
-            (284_218, 0xc81f_3439_2812_9276)
+            (284_243, 0x1c8b_8b26_2599_4905)
         );
     }
 
@@ -706,12 +708,14 @@ mod tests {
     /// Re-pinned 828_456 -> 838_838 for the settings usage rows added by d98649e5 (settings.html).
     /// Re-pinned 838_838 -> 845_055 for the settings primary and rotation rows added by 00c067b1 (settings.html).
     /// intended sidebar nav-row focus ring (`.settings-nav .nav-row:focus-visible` in ui/base/base.css).
+    /// Re-pinned 845_055 -> 850_429 for the intended Displays canvas changes (1858d480, 62bdee42, 915b9343; fee4cc54
+    /// settings.css changes the hash at the same byte count).
     #[test]
     fn settings_hotkeys_document_is_unchanged_by_utility_migration() {
         let page = ui_dir().join("settings.html");
         assert_eq!(
             compiled_page_digest(&page, true),
-            (845_055, 0x81e8_93fd_cc87_db4b)
+            (850_429, 0xa2da_92b1_4518_c52e)
         );
     }
 

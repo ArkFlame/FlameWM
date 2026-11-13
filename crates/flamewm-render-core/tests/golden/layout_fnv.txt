@@ -37,9 +37,9 @@ shell/dock-menu.html 320x240 nodes=14 fnv=3109968416b99e7f
 shell/dock.html 1280x800 nodes=78 fnv=abd6ae4f37fee4fc
 shell/dock.html 701x438 nodes=78 fnv=decbfc19ed3e624c
 shell/dock.html 320x240 nodes=78 fnv=a76ed11b6ba9ee09
-shell/notification-center.html 1280x800 nodes=246 fnv=4eee886a3ff1cfee
-shell/notification-center.html 701x438 nodes=246 fnv=2288493c3ee0862a
-shell/notification-center.html 320x240 nodes=246 fnv=7dac0fd30797a78f
+shell/notification-center.html 1280x800 nodes=321 fnv=76c49ded8a45e880
+shell/notification-center.html 701x438 nodes=321 fnv=a4e0985e2e53fcac
+shell/notification-center.html 320x240 nodes=321 fnv=8267f82c46237b97
 shell/polkit.html 1280x800 nodes=23 fnv=eb055e33f2deacc3
 shell/polkit.html 701x438 nodes=23 fnv=b41d2fac2df60687
 shell/polkit.html 320x240 nodes=23 fnv=f5c8d42e0115e903
