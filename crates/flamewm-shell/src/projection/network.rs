@@ -29,6 +29,22 @@ pub fn connection_sentence(system: &flamewm_api::system::SystemSnapshot) -> Stri
     }
 }
 
+/// Keyboard focus ring: the focused network row gets the live accent outline; the others clear it.
+pub fn project_network_focus(
+    document: &mut impl UiDocumentAccess,
+    focus: Option<usize>,
+) -> Result<(), String> {
+    for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
+        let row = format!("network-slot-{}", slot + 1);
+        if focus == Some(slot) {
+            document.border(&row, crate::projection::task_accent())?;
+        } else {
+            document.border_clear(&row)?;
+        }
+    }
+    Ok(())
+}
+
 /// Shows a failed or pending popup network action as one status line. `None` clears it.
 pub fn project_network_status(
     document: &mut impl UiDocumentAccess,

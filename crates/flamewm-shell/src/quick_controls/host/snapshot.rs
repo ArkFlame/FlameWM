@@ -16,6 +16,8 @@ pub struct QuickControlSnapshot {
     pub audio_focus_slot: Option<usize>,
     /// Power-card stop holding keyboard focus (Tab/Shift+Tab); cleared when the battery card closes.
     pub power_focus: Option<usize>,
+    /// Wi-Fi row holding keyboard focus (Tab, Up/Down); cleared when the network card closes.
+    pub network_focus: Option<usize>,
     /// Row id and percent of the last key-driven slider request; cleared with the focus.
     pub audio_key_base: Option<(String, u8)>,
     pub network_query: NetworkQuery,
@@ -54,6 +56,7 @@ impl QuickControlSnapshot {
             audio_scroll_offset: 0,
             audio_focus_slot: None,
             power_focus: None,
+            network_focus: None,
             audio_key_base: None,
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,

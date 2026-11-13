@@ -42,7 +42,9 @@ mod popup;
 
 mod consts;
 use consts::*;
+mod network_keys;
 mod power_keys;
+use network_keys::*;
 mod titles;
 use power_keys::*;
 pub use titles::*;

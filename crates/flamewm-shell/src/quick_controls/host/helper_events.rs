@@ -41,6 +41,9 @@ pub fn route_helper_event(
     if surfaces.open != Some(QuickControlKind::Battery) {
         snapshot.power_focus = None;
     }
+    if surfaces.open != Some(QuickControlKind::Network) {
+        snapshot.network_focus = None;
+    }
     let action = event.action.action.as_str();
     if action == "network.secret.focus" {
         snapshot.network_secret_focused = true;
@@ -73,6 +76,25 @@ pub fn route_helper_event(
                 toggle_audio_raise(snapshot, dispatcher);
                 *reprojection = true;
                 return true;
+            }
+            let network_typing = snapshot.network_secret_focused || snapshot.network_filter_focused;
+            if surfaces.open == Some(QuickControlKind::Network) && !network_typing {
+                let rows = network_row_count(snapshot);
+                if let Some(index) =
+                    network_row_activation(Some(text), snapshot.network_focus, rows)
+                {
+                    let action = network_row_action(index);
+                    if let Some(request) = helper_control_request(&action, snapshot) {
+                        crate::control_actions::enqueue_network_action(
+                            dispatcher, "Connect", request,
+                        );
+                    } else {
+                        snapshot.network_action_error =
+                            Some("Connect unavailable: network is not ready".to_owned());
+                    }
+                    *reprojection = true;
+                    return true;
+                }
             }
             if surfaces.open == Some(QuickControlKind::Battery) {
                 if let Some(power_action) = power_activation(Some(text), snapshot.power_focus) {
@@ -167,6 +189,22 @@ pub fn route_helper_event(
             }
         }
         return true;
+    }
+    // Wi-Fi card: Tab, Shift+Tab, Up and Down walk the rows unless the filter or secret field has focus.
+    if action == "__flamewm.ui.key"
+        && event.action.phase == ActionPhase::Press
+        && surfaces.open == Some(QuickControlKind::Network)
+        && !snapshot.network_secret_focused
+        && !snapshot.network_filter_focused
+    {
+        if let Some(payload) = event.action.text.as_deref() {
+            let rows = network_row_count(snapshot);
+            if let Some(next) = network_focus_after_key(payload, snapshot.network_focus, rows) {
+                snapshot.network_focus = Some(next);
+                *reprojection = true;
+                return true;
+            }
+        }
     }
     if action == "__flamewm.ui.key"
         && event.action.phase == ActionPhase::Press

@@ -50,8 +50,8 @@ pub use context_menu::project_context_menu;
 pub use media::{project_media, project_media_focus, MEDIA_STOP_IDS};
 pub use network::{
     bluetooth_row_status, bluetooth_trust_action, project_bluetooth_row, project_network,
-    project_network_details, project_network_full, project_network_secret, project_network_status,
-    project_vpn_rows, vpn_toggle_action,
+    project_network_details, project_network_focus, project_network_full, project_network_secret,
+    project_network_status, project_vpn_rows, vpn_toggle_action,
 };
 #[cfg(test)]
 pub(crate) use panel::pager_active_fill;

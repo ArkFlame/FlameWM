@@ -68,6 +68,7 @@ pub(crate) fn project_snapshot(
                         snapshot.network_scroll_offset,
                         snapshot.network_details_path.as_deref(),
                     )?;
+                    crate::projection::project_network_focus(document, snapshot.network_focus)?;
                     crate::projection::project_bluetooth_row(document, &snapshot.system.bluetooth)?;
                     crate::projection::project_vpn_rows(document, &snapshot.system.network)?;
                     crate::projection::project_network_status(
