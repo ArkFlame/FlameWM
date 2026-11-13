@@ -163,7 +163,8 @@ impl ShellLoop {
             if self.surfaces.is_bluetooth_open() {
                 return self.route_bluetooth_text(runtime, input);
             }
-            if input == "\u{1b}" {
+            // Start with a query: the Start branch below clears it; the generic close must not run first.
+            if input == "\u{1b}" && !escape_clears_start_query(self.start_open, &self.start_query) {
                 if let Some(request) = self.network_secret_request(false) {
                     self.submit(request);
                 }
@@ -621,4 +622,10 @@ impl ShellLoop {
         }
         Ok(())
     }
+}
+
+/// Escape with a non-empty Start query clears the query and keeps Start open (Start branch below);
+/// with an empty query it closes. Precedent: WAI-ARIA APG combobox (Escape clears the edit first).
+pub(super) fn escape_clears_start_query(start_open: bool, query: &str) -> bool {
+    start_open && !query.is_empty()
 }

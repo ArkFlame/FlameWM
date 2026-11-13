@@ -215,11 +215,11 @@ def run(bin_dir, out):
         def launched():
             return open(marker, encoding="utf-8").read().split() if os.path.exists(marker) else []
 
-        def case(label, opener, moves, expected):
+        def case(label, opener, moves, expected, typed="proof"):
             before = len(launched())
             key(*opener)
             time.sleep(0.8)
-            for ch in "proof":
+            for ch in typed:
                 key(ch)
             for move in moves:
                 key(move)
@@ -238,7 +238,13 @@ def run(bin_dir, out):
         case("launcher: Home, Return launches row 0", ["Super_L", "space"], ["End", "Home"], "proof-alpha")
         case("launcher: Page_Down x2 clamps to the last row", ["Super_L", "space"], ["Page_Down", "Page_Down"], "proof-gamma")
         case("launcher: Page_Up clamps to row 0", ["Super_L", "space"], ["End", "Page_Up"], "proof-alpha")
-        check("every launch wrote exactly one marker line", len(launched()) == 7, f"launched={launched()}")
+        # Start search text: one key press adds one character (a doubled text/typed route would make
+        # "proofff" or "prooff" match nothing). BackSpace deletes one character; Escape clears the query.
+        case("start: BackSpace deletes one char, then f restores proof", ["Super_L"], ["BackSpace", "f"],
+             "proof-alpha")
+        case("start: Escape clears the query, then retyped proof launches once", ["Super_L"],
+             ["Escape", "p", "r", "o", "o", "f"], "proof-alpha")
+        check("every launch wrote exactly one marker line", len(launched()) == 9, f"launched={launched()}")
 
         d.flush()
         return all(verdicts)

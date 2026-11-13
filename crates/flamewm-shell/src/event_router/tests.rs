@@ -411,3 +411,11 @@ fn press_classification_treats_only_quick_popup_titles_as_inside() {
         "prefix is not a match"
     );
 }
+
+#[test]
+fn escape_clears_a_nonempty_start_query_before_closing() {
+    use super::route::escape_clears_start_query;
+    assert!(escape_clears_start_query(true, "proof"));
+    assert!(!escape_clears_start_query(true, ""));
+    assert!(!escape_clears_start_query(false, "proof"));
+}
