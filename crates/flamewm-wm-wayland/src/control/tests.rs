@@ -211,7 +211,6 @@ fn shortcut_staging_requires_a_commit() {
             mirror: Rc::new(RefCell::new(Mirror::default())),
             commands: Rc::new(RefCell::new(Vec::new())),
             staged_shortcuts: RefCell::new(None),
-            shell_scales: BTreeMap::new(),
         }
     }
 
@@ -276,7 +275,6 @@ fn saved_hotkeys_reach_the_compositor_at_startup() {
         mirror: Rc::new(RefCell::new(Mirror::default())),
         commands: Rc::new(RefCell::new(Vec::new())),
         staged_shortcuts: RefCell::new(None),
-        shell_scales: BTreeMap::new(),
     };
     ShortcutService::default()
         .commit_startup(&mut desktop, registry.clone())
@@ -396,7 +394,6 @@ fn carrying_a_window_switches_to_the_target_workspace() {
             mirror: Rc::new(RefCell::new(Mirror::default())),
             commands: Rc::new(RefCell::new(Vec::new())),
             staged_shortcuts: RefCell::new(None),
-            shell_scales: BTreeMap::new(),
         }
     }
 

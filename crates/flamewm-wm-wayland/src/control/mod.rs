@@ -137,12 +137,6 @@ pub struct WaylandDesktop {
     commands: Rc<RefCell<Vec<Command>>>,
     /// Bindings prepared but not yet committed: the shell stages one edit set, then commits it.
     staged_shortcuts: RefCell<Option<BTreeMap<String, KeyBinding>>>,
-    /// Per-output shell scale saved by Settings, keyed by this compositor's output id.
-    ///
-    /// The compositor has no runtime scale hook yet, so this is what `display_snapshot` reports
-    /// rather than a hardcoded 100: a scale picked in Settings survives a restart instead of being
-    /// erased on the next start.
-    shell_scales: BTreeMap<String, u16>,
 }
 
 /// Owns the bus connection and the host for the compositor's lifetime.
@@ -174,6 +168,9 @@ pub struct Service {
     /// Last override-redirect popup given keyboard focus, so focus is taken once per popup.
     popup_focus: RefCell<Option<u32>>,
     switcher: RefCell<Option<Switcher>>,
+    /// Settings file mtime last read for the output scale; Settings writes the scale without a
+    /// revision bump, so this stamp is what tells the compositor a scale was saved.
+    scale_stamp: std::cell::Cell<Option<std::time::SystemTime>>,
     started: Instant,
     /// Set whenever the mirror changed, cleared by the publish in `after_dispatch`. A change seen by
     /// `turn` (which builds the mirror too) must still be announced, so the flag outlives `turn`.

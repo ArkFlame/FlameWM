@@ -149,7 +149,7 @@ impl DisplayPort for WaylandDesktop {
                     refresh_millihz: 60_000,
                     preferred: true,
                 }],
-                shell_scale_percent: self.shell_scales.get(OUTPUT_NAME).copied().unwrap_or(100),
+                shell_scale_percent: nested_output_scale_percent(),
             }],
             pending: None,
         })

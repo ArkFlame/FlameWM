@@ -19,7 +19,6 @@ impl Service {
             mirror: Rc::clone(&mirror),
             commands: Rc::clone(&commands),
             staged_shortcuts: RefCell::new(None),
-            shell_scales: saved_shell_scales(),
         };
         // Read the panel backlight before the host starts so the shell bootstrap already carries
         // the current level: its first OSD observation is a baseline, not a card.
@@ -159,10 +158,44 @@ impl Service {
             workspace_revision: std::cell::Cell::new(1),
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
+            scale_stamp: std::cell::Cell::new(None),
             started: Instant::now(),
             publish_pending: std::cell::Cell::new(false),
             write_watch: std::cell::Cell::new(None),
         })
+    }
+
+    /// Applies an output scale Settings saved since the last look. A scale write leaves the
+    /// settings revision alone, so the settings file's mtime is the change signal; an unchanged
+    /// file costs one stat. Only the nested output is driven here (the DRM path sets scale at
+    /// build time).
+    pub(super) fn sync_output_scale(&self, state: &mut State) {
+        let stamp = std::fs::metadata(settings_path())
+            .and_then(|meta| meta.modified())
+            .ok();
+        if stamp == self.scale_stamp.get() {
+            return;
+        }
+        self.scale_stamp.set(stamp);
+        let percent = nested_output_scale_percent();
+        if (state.output_scale() * 100.0).round() as u16 == percent {
+            return;
+        }
+        let Some(mode) = state.output.current_mode() else {
+            return;
+        };
+        let before = crate::presentation_scale::scale_snapshot(state);
+        state.output.change_current_state(
+            None,
+            None,
+            Some(crate::presentation_scale::output_scale(percent)),
+            None,
+        );
+        let (w, h) =
+            crate::presentation_scale::logical_output_size((mode.size.w, mode.size.h), percent);
+        state.output_size = (w, h).into();
+        crate::presentation_scale::notify_scale_change(state, &before);
+        state.request_redraw();
     }
 
     pub(super) fn now_ms(&self) -> u64 {
@@ -200,6 +233,7 @@ impl Service {
         // this is the Wayland equivalent of the X11 settings sync point. It costs one map lookup on
         // an unchanged snapshot.
         self.sync_chrome_settings(state);
+        self.sync_output_scale(state);
         // Helper snapshots normally arrive through their own wake source; draining here too means a
         // missed or unavailable wake source only delays audio by one bus turn.
         self.drain_audio();
