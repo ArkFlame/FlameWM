@@ -2,11 +2,15 @@
 //! WAI-ARIA menu-button pattern: Down/Up/Home/End move the highlighted row, Enter or Space activates
 //! it through the same action id a mouse release uses. Escape closes through the shared route arm.
 //! Precedent: WAI-ARIA APG menu button; KDE Plasma context menus (plasma-desktop, .vendor) also let
-//! the arrows and Return drive the popup. Menus without a request mapping (taskbar background,
-//! start app, tray) have no keyboard rows yet.
+//! the arrows and Return drive the popup. Up and Down wrap at the ends (APG menu; KDE Plasma menus
+//! wrap too). Every open row menu (task, workspace, overflow, taskbar, start app, tray) has rows.
 
+use super::START_MENU_FAVORITE_ACTION;
 use crate::runtime::{ContextMenuKind, ContextMenuState, ShellSnapshot};
-use crate::taskbar::context_menu::{task_menu_for_entry, workspace_menu, TASK_OVERFLOW_MENU_ROWS};
+use crate::taskbar::context_menu::{
+    task_menu_for_entry, taskbar_menu, workspace_menu, TASK_OVERFLOW_MENU_ROWS,
+};
+use crate::tray_host::{TRAY_MENU_ACTION_PREFIX, TRAY_MENU_ROWS};
 
 /// Action ids of the open menu's keyboard rows, in visual order. Each id is dispatched the same way
 /// a mouse release on that row is (`context_menu_request_for_action`). Empty when no keyboard path.
@@ -37,10 +41,26 @@ pub(crate) fn menu_row_actions(
                 )
             })
         }
-        ContextMenuKind::Taskbar
-        | ContextMenuKind::StartApp(_)
-        | ContextMenuKind::TrayItem { .. } => Vec::new(),
+        ContextMenuKind::Taskbar => taskbar_menu()
+            .iter()
+            .map(|row| taskbar_row_action(row.id))
+            .collect(),
+        // One row, shown as "Add" or "Remove" for the current favorite state.
+        ContextMenuKind::StartApp(_) => vec![START_MENU_FAVORITE_ACTION.to_owned()],
+        ContextMenuKind::TrayItem { rows, .. } => tray_row_actions(rows.len()),
     }
+}
+
+/// Taskbar row id (`taskbar-settings`) to its dispatched action (`taskbar.menu.settings`).
+fn taskbar_row_action(id: &str) -> String {
+    format!("taskbar.menu.{}", id.strip_prefix("taskbar-").unwrap_or(id))
+}
+
+/// Dbusmenu row actions (`tray.menu.<n>`) for the rows the tray projection shows.
+fn tray_row_actions(rows: usize) -> Vec<String> {
+    (0..rows.min(TRAY_MENU_ROWS))
+        .map(|index| format!("{TRAY_MENU_ACTION_PREFIX}{index}"))
+        .collect()
 }
 
 /// `prefix` + id for every action entry; separators are not keyboard rows.
@@ -64,9 +84,10 @@ pub(crate) fn overflow_menu_step(payload: &str, rows: usize, highlight: usize) -
         return None;
     }
     let (_, key) = flamewm_shell::launcher::parse_typed_key(payload)?;
+    let current = highlight.min(rows - 1);
     match key {
-        "Down" => Some((highlight + 1).min(rows - 1)),
-        "Up" => Some(highlight.saturating_sub(1)),
+        "Down" => Some((current + 1) % rows),
+        "Up" => Some((current + rows - 1) % rows),
         "Home" => Some(0),
         "End" => Some(rows - 1),
         _ => None,
@@ -154,13 +175,39 @@ mod tests {
     }
 
     #[test]
-    fn arrows_move_and_clamp_within_rows() {
+    fn arrows_move_and_wrap_at_the_ends() {
         assert_eq!(overflow_menu_step(&key("Down"), 3, 0), Some(1));
-        assert_eq!(overflow_menu_step(&key("Down"), 3, 2), Some(2));
-        assert_eq!(overflow_menu_step(&key("Up"), 3, 0), Some(0));
+        assert_eq!(overflow_menu_step(&key("Down"), 3, 2), Some(0));
+        assert_eq!(overflow_menu_step(&key("Up"), 3, 0), Some(2));
         assert_eq!(overflow_menu_step(&key("Up"), 3, 2), Some(1));
         assert_eq!(overflow_menu_step(&key("End"), 3, 0), Some(2));
         assert_eq!(overflow_menu_step(&key("Home"), 3, 2), Some(0));
+        // A single row wraps onto itself; a stale highlight past the end is clamped first.
+        assert_eq!(overflow_menu_step(&key("Down"), 1, 0), Some(0));
+        assert_eq!(overflow_menu_step(&key("Up"), 3, 9), Some(1));
+    }
+
+    #[test]
+    fn taskbar_rows_dispatch_the_settings_launch_actions() {
+        use super::super::helpers::general_settings_launch;
+        let actions: Vec<String> = taskbar_menu()
+            .iter()
+            .map(|row| taskbar_row_action(row.id))
+            .collect();
+        assert_eq!(
+            actions,
+            ["taskbar.menu.settings", "taskbar.menu.task-manager"]
+        );
+        for action in &actions {
+            assert!(general_settings_launch(action).is_some(), "{action}");
+        }
+    }
+
+    #[test]
+    fn tray_rows_follow_the_projected_row_count() {
+        assert_eq!(tray_row_actions(2), ["tray.menu.0", "tray.menu.1"]);
+        assert_eq!(tray_row_actions(0), Vec::<String>::new());
+        assert_eq!(tray_row_actions(TRAY_MENU_ROWS + 5).len(), TRAY_MENU_ROWS);
     }
 
     #[test]

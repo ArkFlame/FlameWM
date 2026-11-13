@@ -64,8 +64,13 @@ pub fn project_context_menu(
             }
         }
         crate::ContextMenuKind::Taskbar => {
-            for row in crate::taskbar::context_menu::taskbar_menu() {
-                document.visible(&format!("context-{}", row.id), true)?;
+            for (row, menu_row) in crate::taskbar::context_menu::taskbar_menu()
+                .iter()
+                .enumerate()
+            {
+                let element = format!("context-{}", menu_row.id);
+                document.visible(&element, true)?;
+                mark_menu_row(document, &element, row == overflow_highlight)?;
             }
         }
         crate::ContextMenuKind::TaskOverflow { entries } => {
@@ -85,14 +90,24 @@ pub fn project_context_menu(
                 .enumerate()
             {
                 document.text(&format!("context-tray-{index}-label"), row.label.clone())?;
-                document.visible(&format!("context-tray-{index}"), true)?;
+                let element = format!("context-tray-{index}");
+                document.visible(&element, true)?;
+                mark_menu_row(document, &element, index == overflow_highlight)?;
             }
         }
         crate::ContextMenuKind::StartApp(app) => {
-            // One row shown for the current state, like the pin/unpin pair.
+            // One row shown for the current state, like the pin/unpin pair; the shown row is the
+            // highlighted one, so the hidden pair member is cleared.
             let favorite = start_favorites.iter().any(|id| id == app.as_str());
-            document.visible("context-start-add", !favorite)?;
-            document.visible("context-start-remove", favorite)?;
+            let (shown, hidden) = if favorite {
+                ("context-start-remove", "context-start-add")
+            } else {
+                ("context-start-add", "context-start-remove")
+            };
+            document.visible(shown, true)?;
+            document.visible(hidden, false)?;
+            mark_menu_row(document, shown, true)?;
+            mark_menu_row(document, hidden, false)?;
         }
     }
     Ok(())

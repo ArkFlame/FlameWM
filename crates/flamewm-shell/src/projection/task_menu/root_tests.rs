@@ -51,6 +51,9 @@ impl UiDocumentAccess for Recorder {
     fn background_clear(&mut self, id: &str) -> Result<(), String> {
         self.hit("background_clear", id)
     }
+    fn attribute(&mut self, id: &str, _: &str, _: &str) -> Result<(), String> {
+        self.hit("attribute", id)
+    }
     fn border_clear(&mut self, id: &str) -> Result<(), String> {
         self.hit("border_clear", id)
     }

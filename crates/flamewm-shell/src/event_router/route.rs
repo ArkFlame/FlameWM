@@ -258,13 +258,7 @@ impl ShellLoop {
             }
         }
         if let Some(index) = overflow_activation_index(typed, overflow_rows, self.overflow_row) {
-            if let Some(request) = self
-                .shell
-                .context_menu_request_for_action(&menu_rows[index], self.context_menu.as_ref())
-            {
-                self.submit(request);
-                self.shell.dispatch("popover.close");
-            }
+            self.activate_menu_row(runtime, &menu_rows[index])?;
             return self.apply_controls(runtime);
         }
         let decision = outside_release_decision(
@@ -314,13 +308,6 @@ impl ShellLoop {
                 }
                 return self.apply_controls(runtime);
             }
-            if let Some(program) = general_settings_launch(action) {
-                if let Err(error) = std::process::Command::new(program).spawn() {
-                    eprintln!("flamewm-shell: spawn {program}: {error}");
-                }
-                self.shell.dispatch("popover.close");
-                return self.apply_controls(runtime);
-            }
             if let Some(request) = self.context_system_request(action) {
                 self.submit(request);
                 if action == "network.secret.submit" || action == "network.secret.cancel" {
@@ -328,32 +315,7 @@ impl ShellLoop {
                 }
                 return Ok(());
             }
-            if action == START_MENU_FAVORITE_ACTION {
-                if let Some(flamewm_shell::ContextMenuKind::StartApp(app)) =
-                    self.context_menu.as_ref().map(|menu| menu.kind.clone())
-                {
-                    self.toggle_start_favorite(runtime, &app)?;
-                }
-                self.shell.dispatch("context.menu.close");
-                return self.apply_controls(runtime);
-            }
-            if action.starts_with(flamewm_shell::tray_host::TRAY_MENU_ACTION_PREFIX) {
-                let target = self
-                    .context_menu
-                    .as_ref()
-                    .and_then(|menu| flamewm_shell::tray_host::menu_row_target(&menu.kind, action));
-                if let (Some((key, menu_path, id)), Some(tray)) = (target, self.tray.as_ref()) {
-                    tray.borrow().send_menu_event(&key, &menu_path, id);
-                    self.shell.dispatch("context.menu.close");
-                    return self.apply_controls(runtime);
-                }
-            }
-            if let Some(request) = self
-                .shell
-                .context_menu_request_for_action(action, self.context_menu.as_ref())
-            {
-                self.submit(request);
-                self.shell.dispatch("popover.close");
+            if self.activate_menu_row(runtime, action)? {
                 return self.apply_controls(runtime);
             }
         }
@@ -577,6 +539,52 @@ impl ShellLoop {
             self.apply_controls(runtime)?;
         }
         Ok(())
+    }
+
+    /// Runs one open-menu row action the way a mouse release on that row does: launcher rows,
+    /// the start favorite toggle, tray dbusmenu rows, then the row's typed control. `false` when
+    /// no branch owns the action (the caller keeps its own fall-through).
+    pub(super) fn activate_menu_row(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        action: &str,
+    ) -> Result<bool, UiBackendError> {
+        if let Some(program) = general_settings_launch(action) {
+            if let Err(error) = std::process::Command::new(program).spawn() {
+                eprintln!("flamewm-shell: spawn {program}: {error}");
+            }
+            self.shell.dispatch("popover.close");
+            return Ok(true);
+        }
+        if action == START_MENU_FAVORITE_ACTION {
+            if let Some(flamewm_shell::ContextMenuKind::StartApp(app)) =
+                self.context_menu.as_ref().map(|menu| menu.kind.clone())
+            {
+                self.toggle_start_favorite(runtime, &app)?;
+            }
+            self.shell.dispatch("context.menu.close");
+            return Ok(true);
+        }
+        if action.starts_with(flamewm_shell::tray_host::TRAY_MENU_ACTION_PREFIX) {
+            let target = self
+                .context_menu
+                .as_ref()
+                .and_then(|menu| flamewm_shell::tray_host::menu_row_target(&menu.kind, action));
+            if let (Some((key, menu_path, id)), Some(tray)) = (target, self.tray.as_ref()) {
+                tray.borrow().send_menu_event(&key, &menu_path, id);
+                self.shell.dispatch("context.menu.close");
+                return Ok(true);
+            }
+        }
+        if let Some(request) = self
+            .shell
+            .context_menu_request_for_action(action, self.context_menu.as_ref())
+        {
+            self.submit(request);
+            self.shell.dispatch("popover.close");
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     pub(super) fn route_secondary(

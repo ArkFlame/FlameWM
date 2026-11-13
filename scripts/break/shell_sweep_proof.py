@@ -274,6 +274,52 @@ def run(bin_dir, out):
         check("Escape returns focus to the window active before the menu", active_name() == active_before,
               f"active={active_name()!r} before={active_before!r}")
 
+        # Up wraps: from the first row of a running task menu, Up lands on Pin (the last row), so focus
+        # stays where it was; a clamped Up would fire Activate and move focus to the task's window.
+        reset()
+        active_before = active_name()
+        rclick(*TASK_BUTTON[2])
+        tap("Up")
+        tap("Return")
+        time.sleep(1.2)
+        check("Up from the first task row wraps to Pin (focus does not move to the task)",
+              active_name() == active_before, f"active={active_name()!r} before={active_before!r}")
+
+        # Taskbar background menu has keyboard rows: Down, Down, Return fires Task Manager (row 2) and
+        # closes the menu; Down, Escape closes it without firing. Closure is a pixel check on the bar.
+        reset()
+        before = names()
+        park()
+        bar_closed = shot("taskbar-bg-closed.png")
+        rclick(640, 777)
+        park()
+        bar_open = shot("taskbar-bg-open.png")
+        check("right-click on the taskbar background opens its menu", diff_count(bar_closed, bar_open) > 300,
+              f"changed={diff_count(bar_closed, bar_open)}")
+        tap("Down")
+        tap("Down")
+        tap("Return")
+        time.sleep(1.2)
+        park()
+        bar_after = shot("taskbar-bg-after-return.png")
+        check("Down, Down, Return on the taskbar menu fires one row and closes it",
+              diff_count(bar_closed, bar_after) < 300 and names() == before,
+              f"changed={diff_count(bar_closed, bar_after)} names_same={names() == before}")
+
+        reset()
+        before = names()
+        park()
+        rclick(640, 777)
+        park()
+        tap("Down")
+        tap("Escape")
+        time.sleep(0.8)
+        park()
+        bar_escaped = shot("taskbar-bg-escaped.png")
+        check("Escape closes the taskbar menu without firing a row",
+              diff_count(bar_closed, bar_escaped) < 300 and names() == before,
+              f"changed={diff_count(bar_closed, bar_escaped)}")
+
         d.flush()
         return all(verdicts)
     finally:
