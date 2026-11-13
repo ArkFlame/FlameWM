@@ -258,7 +258,9 @@ impl ExplorerApp {
         let ctrl=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("ctrl")||m.eq_ignore_ascii_case("control"));
         let alt=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("alt"));
         let shift=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("shift"));
-        if let Some(edit)=self.edit.filter(|_|self.dialog.is_none()) {
+        // The permissions field lives inside the Properties dialog (Enter on it), so it is the one edit that takes keys
+        // while a dialog is open. Every other edit yields to the modal dialog.
+        if let Some(edit)=self.edit.filter(|_|self.dialog.is_none()||matches!(self.edit,Some(EditMode::Mode))) {
             // Escape closes an open menu first and keeps the edit focused; a second Escape ends the edit.
             if name=="escape" && self.context.is_some() {self.context=None;self.menu_overflow=false;self.context_place=None;return;}
             if name=="escape" {self.edit=None;self.rename_target=None;self.context_place=None;return;}
@@ -279,17 +281,18 @@ impl ExplorerApp {
             }
             return;
         }
-        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && !alt && t.chars().count()==1 && !t.chars().any(char::is_control)) {
-            self.typeahead(text);
-            return;
-        }
-        // Dialogs swallow keys; Enter confirms the primary button and Escape cancels.
+        // Dialogs swallow keys; Enter confirms the primary button and Escape cancels. Checked before type-ahead so a
+        // typed letter under a modal confirmation cannot move the selection behind it.
         if self.dialog.is_some() {
             match name.as_str() {
                 "escape"=>self.dialog_action("cancel"),
                 "return"|"enter"=>self.dialog_action("primary"),
                 _=>{},
             }
+            return;
+        }
+        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && !alt && t.chars().count()==1 && !t.chars().any(char::is_control)) {
+            self.typeahead(text);
             return;
         }
         match name.as_str() {

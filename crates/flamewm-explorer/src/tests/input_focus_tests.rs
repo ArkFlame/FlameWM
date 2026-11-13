@@ -53,3 +53,31 @@ fn press_inside_either_field_keeps_its_focus() {
         assert!(app.edit.is_some(), "{action} must keep focus");
     }
 }
+
+fn key_press(key: &str, text: Option<&str>) -> UiKeyEvent {
+    UiKeyEvent { phase: UiKeyPhase::Press, modifiers: Vec::new(), key: key.into(), text: text.map(str::to_owned) }
+}
+
+#[test]
+fn modal_confirm_swallows_typed_letters_before_type_ahead() {
+    let (mut app, _rx, _scan_rx, _chooser_rx) = app();
+    app.dialog = Some(Dialog::Confirm { title: "Move to trash?".into(), lines: Vec::new(), pending: Pending::Trash(Vec::new()) });
+    app.key_inner(&key_press("a", Some("a")));
+    assert!(app.typed.is_empty(), "a letter under a modal dialog must not start type-ahead");
+    assert!(app.dialog.is_some(), "the dialog stays open for Enter or Escape");
+}
+
+#[test]
+fn permissions_field_takes_keys_while_properties_is_open_and_escape_only_ends_the_edit() {
+    let (mut app, _rx, _scan_rx, _chooser_rx) = app();
+    app.open_properties(PathBuf::from("/tmp"));
+    assert!(app.dialog.is_some());
+    app.dialog_action("primary");
+    assert!(matches!(app.edit, Some(EditMode::Mode)));
+    let before = app.field.text.clone();
+    app.key_inner(&key_press("backspace", None));
+    assert_eq!(app.field.text, before[..before.len() - 1].to_string(), "Backspace edits the permissions field");
+    app.key_inner(&key_press("escape", None));
+    assert!(app.edit.is_none(), "Escape ends the permissions edit");
+    assert!(app.dialog.is_some(), "Escape must not close the Properties dialog it sits in");
+}
