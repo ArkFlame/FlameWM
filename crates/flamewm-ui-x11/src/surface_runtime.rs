@@ -841,56 +841,6 @@ fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResu
     )
 }
 
-/// Scrolls each scrolling ancestor of `index` just far enough that its box is inside the viewport,
-/// so a keyboard focus stop below the fold paints its ring. Layout boxes are unscrolled, so each
-/// ancestor's retained offset is compared with the box position relative to its viewport.
-pub(crate) fn reveal_focus(document: &mut RuntimeDocument, index: u32) {
-    let layout = default_layout(document);
-    let Some(target) = layout.boxes.get(index as usize).map(|entry| entry.rect) else {
-        return;
-    };
-    let mut ancestor = document.document.nodes[index as usize].parent;
-    while let Some(scroller) = ancestor {
-        let viewport = layout.boxes[scroller as usize].rect;
-        let content = layout.contents[scroller as usize];
-        let max = (
-            (content.width - viewport.width).max(0.0),
-            (content.height - viewport.height).max(0.0),
-        );
-        let offset = document.scroll_offset(scroller);
-        let next = flamewm_render_core::ScrollState {
-            offset_x: fit_span(
-                offset.offset_x,
-                target.x - viewport.x,
-                target.width,
-                viewport.width,
-            ),
-            offset_y: fit_span(
-                offset.offset_y,
-                target.y - viewport.y,
-                target.height,
-                viewport.height,
-            ),
-        };
-        if next != offset {
-            document.set_scroll_offset(scroller, next, max);
-        }
-        ancestor = document.document.nodes[scroller as usize].parent;
-    }
-}
-
-/// Offset that brings the span `[start, start + len)` inside the window `[offset, offset + view)`,
-/// keeping the leading edge when the span is longer than the window.
-pub(crate) fn fit_span(offset: f32, start: f32, len: f32, view: f32) -> f32 {
-    if start < offset {
-        start
-    } else if start + len > offset + view {
-        (start + len - view).min(start)
-    } else {
-        offset
-    }
-}
-
 fn effective_output_scale(scale: f32) -> f32 {
     if scale.is_finite() && (0.5..=4.0).contains(&scale) {
         scale

@@ -454,9 +454,6 @@ fn route_focus(
     match owner.handle_key_where(&document.document, &key.key, shift, visible) {
         FocusKey::Moved => {
             document.set_focus(owner.focus());
-            if let Some(index) = owner.focus() {
-                surface_runtime::reveal_focus(document, index);
-            }
             None
         }
         FocusKey::Ignored if traversal => None,
@@ -635,34 +632,6 @@ mod tests {
             y: 0.0,
             text: None,
         })
-    }
-
-    /// Regression: Tab onto a control below a scrolling box's fold scrolls the box so its focus ring
-    /// paints (`settings_keys_proof`, Displays stop 19). The arithmetic is checked here; the proof
-    /// covers the layout path.
-    #[test]
-    fn focus_reveal_offset_brings_the_clipped_span_into_the_viewport() {
-        use crate::surface_runtime::fit_span;
-        assert_eq!(
-            fit_span(0.0, 80.0, 80.0, 100.0),
-            60.0,
-            "bottom edge meets the window"
-        );
-        assert_eq!(
-            fit_span(60.0, 0.0, 80.0, 100.0),
-            0.0,
-            "above the window: leading edge"
-        );
-        assert_eq!(
-            fit_span(60.0, 80.0, 20.0, 100.0),
-            60.0,
-            "already visible: unchanged"
-        );
-        assert_eq!(
-            fit_span(0.0, 10.0, 300.0, 100.0),
-            10.0,
-            "taller than the window: leading edge"
-        );
     }
 
     #[test]
