@@ -369,7 +369,14 @@ def run_lock(bin_dir, out):
         lock = subprocess.Popen([os.path.join(bin_dir, "flamewm-lock")], env=env, start_new_session=True,
                                 stdout=open(os.path.join(out, "lock.out"), "w"), stderr=subprocess.STDOUT)
         d = xdisplay.Display(display_name)
-        time.sleep(4)
+        # The lock maps its surfaces only after its settings and display requests give up (about
+        # 15 s without a settings service), so wait for a viewable window instead of a fixed sleep.
+        ready_deadline = time.time() + 60
+        while time.time() < ready_deadline and lock.poll() is None:
+            if any(k.get_attributes().map_state == X.IsViewable for k in d.screen().root.query_tree().children):
+                break
+            time.sleep(0.5)
+        time.sleep(1)
 
         def tap(name):
             code = d.keysym_to_keycode(XK.string_to_keysym(name))

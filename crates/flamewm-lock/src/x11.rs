@@ -34,6 +34,8 @@ const KEYSYM_UNICODE_BASE: c_ulong = 0x0100_0000;
 
 /// Interval between grab attempts while waiting for another client to let go.
 const GRAB_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+/// How long the lock keeps retrying the keyboard grab before it refuses to lock.
+const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Opaque Xlib `Display`.
 #[repr(C)]
@@ -214,6 +216,17 @@ pub struct Session {
 }
 
 impl Session {
+    /// Opens the display and takes the keyboard grab, retrying for [`GRAB_TIMEOUT`].
+    /// Callers do the slow lock setup only after this returns, so no key typed while the
+    /// lock is starting reaches another client (xsecurelock and xscreensaver grab first too).
+    pub fn open_grabbed() -> Result<Self, String> {
+        let mut session = Self::open()?;
+        if !grab_with_retry(&mut session, GRAB_TIMEOUT) {
+            return Err("cannot grab keyboard; not locking".to_string());
+        }
+        Ok(session)
+    }
+
     /// Opens the default display. Grabs are not taken yet.
     pub fn open() -> Result<Self, String> {
         // SAFETY: a null name selects $DISPLAY; the result is checked below.
@@ -350,9 +363,15 @@ impl Drop for Session {
 
 /// Retries [`Session::try_grab`] until it succeeds or `timeout` elapses.
 pub fn grab_with_retry(session: &mut Session, timeout: Duration) -> bool {
+    retry_until(timeout, || session.try_grab())
+}
+
+/// Calls `attempt` every [`GRAB_RETRY_INTERVAL`] until it returns true or `timeout` elapses.
+/// The first attempt always runs, so a zero timeout still tries once.
+pub fn retry_until(timeout: Duration, mut attempt: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if session.try_grab() {
+        if attempt() {
             return true;
         }
         if Instant::now() >= deadline {
@@ -434,5 +453,25 @@ mod tests {
         let mut calls = Recorder::default();
         assert!(!set_power(&mut calls, false));
         assert_eq!(calls.calls, vec!["enable", "force(3)"]);
+    }
+
+    #[test]
+    fn retry_stops_at_first_success() {
+        let mut calls = 0;
+        assert!(retry_until(Duration::from_secs(5), || {
+            calls += 1;
+            calls == 3
+        }));
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn retry_gives_up_after_timeout_with_one_attempt() {
+        let mut calls = 0;
+        assert!(!retry_until(Duration::ZERO, || {
+            calls += 1;
+            false
+        }));
+        assert_eq!(calls, 1);
     }
 }

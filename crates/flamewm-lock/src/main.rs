@@ -65,41 +65,56 @@ fn main() -> ExitCode {
         eprintln!("flamewm-lock: cannot determine the session user; not locking");
         return ExitCode::FAILURE;
     };
+    // X11 takes the keyboard grab before loading settings: the settings D-Bus call can take
+    // seconds to time out, and keys typed meanwhile must never reach another client.
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return present_x11(&username);
+    }
     let settings = session::load_settings();
-    present(&settings, &username)
+    present_wayland_session(&settings, &username)
 }
 
-/// Locks the session on whichever display server is in use.
-///
-/// A Wayland session has no X server to paint through, so it takes the lock protocol instead and
+/// Locks a Wayland session through the lock protocol. It has no X server to paint through, so it
 /// paints the same document with the software renderer.
-fn present(settings: &flamewm_lock::settings::LockSettings, username: &str) -> ExitCode {
-    let wants_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    if wants_wayland {
-        #[cfg(feature = "wayland")]
-        return present_wayland(settings, username);
-        #[cfg(not(feature = "wayland"))]
+fn present_wayland_session(
+    settings: &flamewm_lock::settings::LockSettings,
+    username: &str,
+) -> ExitCode {
+    #[cfg(feature = "wayland")]
+    return present_wayland(settings, username);
+    #[cfg(not(feature = "wayland"))]
+    {
+        let _ = (settings, username);
         eprintln!("flamewm-lock: a Wayland session needs the `wayland` feature; not locking");
-        #[cfg(not(feature = "wayland"))]
-        return ExitCode::FAILURE;
+        ExitCode::FAILURE
     }
-    #[cfg(feature = "x11")]
-    return present_x11(settings, username);
-    #[cfg(not(feature = "x11"))]
-    eprintln!("flamewm-lock: an X11 session needs the `x11` feature; not locking");
-    #[cfg(not(feature = "x11"))]
-    ExitCode::FAILURE
 }
 
 #[cfg(feature = "x11")]
-fn present_x11(settings: &flamewm_lock::settings::LockSettings, username: &str) -> ExitCode {
-    match flamewm_lock::run::run(settings, username) {
+fn present_x11(username: &str) -> ExitCode {
+    use flamewm_lock::x11::Session;
+
+    let session = match Session::open_grabbed() {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("flamewm-lock: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let settings = session::load_settings();
+    match flamewm_lock::run::run(session, &settings, username) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("flamewm-lock: {error}");
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(not(feature = "x11"))]
+fn present_x11(_username: &str) -> ExitCode {
+    eprintln!("flamewm-lock: an X11 session needs the `x11` feature; not locking");
+    ExitCode::FAILURE
 }
 
 /// Paints the lock for each configured surface: the same document the X11 path shows.

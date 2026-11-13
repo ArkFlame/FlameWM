@@ -57,9 +57,8 @@ use crate::settings::LockSettings;
 use crate::signals;
 use crate::state::{Effect, Key, LockState, Status};
 use crate::view::LockView;
-use crate::x11::{KeyBatch, PointerState, Session, grab_with_retry};
+use crate::x11::{KeyBatch, PointerState, Session};
 
-const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
 /// Handles root `ConfigureNotify` promptly while still keeping activity sampling bounded.
 const TICK: Duration = Duration::from_millis(50);
 /// Poll interval of the preview: pointer and keyboard are read by polling.
@@ -67,16 +66,17 @@ const PREVIEW_POLL: Duration = Duration::from_millis(50);
 /// Primary mouse button in X core numbering.
 const BUTTON_PRIMARY: u32 = 1;
 
-/// Shows the lock screen until an authentication succeeds. Returns `Err`
-/// before anything is visible when the grabs cannot be taken.
-pub fn run(settings: &LockSettings, username: &str) -> Result<(), String> {
+/// Shows the lock screen until an authentication succeeds. The caller already holds the
+/// keyboard grab in `session` (see [`Session::open_grabbed`]), so no key is lost while
+/// the settings load and the surfaces are built.
+pub fn run(session: Session, settings: &LockSettings, username: &str) -> Result<(), String> {
     let mut runtime =
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
     runtime.watch_root_changes();
     let (width, height) = runtime.root_geometry();
     let root = Rect::new(0, 0, width as i32, height as i32);
     let outputs = crate::session::lock_output_rects(root);
-    lock_on(&mut runtime, settings, username, root, outputs)
+    lock_on(&mut runtime, settings, username, root, outputs, session)
 }
 
 /// Shows the lock UI as a settings preview: no keyboard or pointer grab, no PAM,
@@ -106,6 +106,7 @@ fn lock_on(
     username: &str,
     root: Rect,
     outputs: Vec<Rect>,
+    session: Session,
 ) -> Result<(), String> {
     let outputs = if outputs.is_empty() {
         vec![root]
@@ -148,10 +149,6 @@ fn lock_on(
         )?);
     }
 
-    let mut session = Session::open()?;
-    if !grab_with_retry(&mut session, GRAB_TIMEOUT) {
-        return Err("cannot grab keyboard; not locking".to_string());
-    }
     let session = Rc::new(RefCell::new(session));
     let keys = Rc::new(RefCell::new(KeyBatch::default()));
     let clicks = Rc::new(RefCell::new(Vec::<String>::new()));
