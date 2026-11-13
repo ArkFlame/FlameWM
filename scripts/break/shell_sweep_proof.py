@@ -29,6 +29,33 @@ START = "Fake 0"
 # Task button centres on the 1280x800 sandbox taskbar (calibrated from taskbar-calibration.png).
 TASK_BUTTON = {0: (71, 777), 1: (113, 777), 2: (155, 777), 3: (197, 777)}  # 1280x800 sandbox taskbar, 4 tasks
 
+# Stands in for libpam.so.0 (loaded through LD_LIBRARY_PATH). pam_authenticate asks for the password
+# through the conversation, as PAM does, logs it once per call, and always refuses, so the lock stays.
+FAKE_PAM_C = r"""
+#include <stdio.h>
+#include <stdlib.h>
+struct pam_message { int msg_style; const char *msg; };
+struct pam_response { char *resp; int resp_retcode; };
+struct pam_conv { int (*conv)(int, const struct pam_message **, struct pam_response **, void *); void *appdata_ptr; };
+static struct pam_conv saved;
+int pam_start(const char *service, const char *user, const struct pam_conv *conv, void **pamh) {
+    (void)service; (void)user; saved = *conv; *pamh = &saved; return 0;
+}
+int pam_authenticate(void *pamh, int flags) {
+    struct pam_message msg = {1, "Password: "};
+    const struct pam_message *msgs = &msg;
+    struct pam_response *resp = NULL;
+    (void)pamh; (void)flags;
+    if (saved.conv(1, &msgs, &resp, saved.appdata_ptr) != 0 || !resp) return 7;
+    FILE *log = fopen(getenv("FAKE_PAM_LOG"), "a");
+    if (log) { fprintf(log, "auth %s\n", resp->resp ? resp->resp : ""); fclose(log); }
+    free(resp->resp); free(resp);
+    return 7; /* PAM_AUTH_ERR: the lock stays locked */
+}
+int pam_acct_mgmt(void *pamh, int flags) { (void)pamh; (void)flags; return 7; }
+int pam_end(void *pamh, int status) { (void)pamh; (void)status; return 0; }
+"""
+
 
 def free_display():
     """First display number in :200-:249 with no socket, so a stale server cannot be reused."""
@@ -260,8 +287,80 @@ def run(bin_dir, out):
         xvfb.wait(timeout=10)
 
 
+def run_lock(bin_dir, out):
+    """flamewm-lock on a private Xvfb with no WM: password entry through XTest keys. The fake PAM
+    logs each password it is asked to check, so one line per Enter proves one submit."""
+    verdicts = []
+
+    def check(label, ok, detail):
+        verdicts.append(bool(ok))
+        print("PASS" if ok else "FAIL", label, detail, flush=True)
+
+    display_name = next(f":{n}" for n in range(250, 300)
+                        if not os.path.exists(f"/tmp/.X11-unix/X{n}") and not os.path.exists(f"/tmp/.X{n}-lock"))
+    fake_dir = os.path.join(out, "fakepam")
+    os.makedirs(fake_dir, exist_ok=True)
+    source = os.path.join(fake_dir, "pam_fake.c")
+    with open(source, "w", encoding="utf-8") as handle:
+        handle.write(FAKE_PAM_C)
+    subprocess.run(["cc", "-shared", "-fPIC", "-o", os.path.join(fake_dir, "libpam.so.0"), source], check=True)
+    run_dir = os.path.join(out, "lock-run")
+    os.makedirs(run_dir, exist_ok=True)
+    pam_log = os.path.join(out, "pam-attempts.log")
+    xvfb = subprocess.Popen(["Xvfb", display_name, "-screen", "0", "1280x800x24", "-nolisten", "tcp", "-noreset"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    lock = None
+    try:
+        for _ in range(50):
+            if os.path.exists(f"/tmp/.X11-unix/X{display_name[1:]}"):
+                break
+            time.sleep(0.2)
+        env = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=run_dir, HOME=run_dir, USER="proofuser",
+                   LD_LIBRARY_PATH=fake_dir, FAKE_PAM_LOG=pam_log, LANG="C.UTF-8")
+        env.pop("WAYLAND_DISPLAY", None)
+        lock = subprocess.Popen([os.path.join(bin_dir, "flamewm-lock")], env=env, start_new_session=True,
+                                stdout=open(os.path.join(out, "lock.out"), "w"), stderr=subprocess.STDOUT)
+        d = xdisplay.Display(display_name)
+        time.sleep(4)
+
+        def tap(name):
+            code = d.keysym_to_keycode(XK.string_to_keysym(name))
+            xtest.fake_input(d, X.KeyPress, code)
+            d.sync()
+            time.sleep(0.15)
+            xtest.fake_input(d, X.KeyRelease, code)
+            d.sync()
+            time.sleep(0.5)
+
+        def attempts():
+            return open(pam_log, encoding="utf-8").read().splitlines() if os.path.exists(pam_log) else []
+
+        alive = lock.poll() is None
+        check("lock process stays up on its private display", alive, f"pid={lock.pid}")
+        for name in ("a", "b", "BackSpace", "c"):
+            tap(name)
+        check("no attempt before Return", attempts() == [], f"attempts={attempts()}")
+        tap("Return")
+        time.sleep(3)
+        check("typed chars once, Backspace once: Return sends the password 'ac' exactly once",
+              attempts() == ["auth ac"], f"attempts={attempts()}")
+        tap("Escape")
+        tap("Return")
+        time.sleep(2)
+        check("empty password: Return sends nothing", attempts() == ["auth ac"], f"attempts={attempts()}")
+        check("lock still running after failed auth", lock.poll() is None, "lock stays locked")
+        d.flush()
+        return all(verdicts)
+    finally:
+        if lock is not None and lock.poll() is None:
+            lock.kill()  # our own PID: the lock ignores SIGTERM by design
+            lock.wait(timeout=10)
+        xvfb.terminate()
+        xvfb.wait(timeout=10)
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    sys.exit(0 if run(sys.argv[1], sys.argv[2]) else 1)
+    sys.exit(0 if run(sys.argv[1], sys.argv[2]) and run_lock(sys.argv[1], sys.argv[2]) else 1)
