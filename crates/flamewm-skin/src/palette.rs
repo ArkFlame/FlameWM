@@ -51,6 +51,43 @@ impl Palette {
     };
 }
 
+impl Palette {
+    /// `highContrast` Dark: pure black surfaces and white text (WCAG 1.4.6, 7:1 AAA). Muted ink
+    /// stays above 7:1 on the same surfaces.
+    pub const HIGH_CONTRAST: Self = Self {
+        accent: ACCENT,
+        desktop: DESKTOP,
+        panel: Rgb(0x0000_0000),
+        surface: Rgb(0x0000_0000),
+        sidebar: Rgb(0x0000_0000),
+        text: Rgb(0x00ff_ffff),
+        muted: Rgb(0x00e6_e6e6),
+        sticky_background: STICKY_BACKGROUND,
+        sticky_text: STICKY_TEXT,
+    };
+    /// `highContrast` Light: pure white surfaces and black text (WCAG 1.4.6, 7:1 AAA).
+    pub const LIGHT_HIGH_CONTRAST: Self = Self {
+        accent: ACCENT,
+        desktop: DESKTOP,
+        panel: Rgb(0x00ff_ffff),
+        surface: Rgb(0x00ff_ffff),
+        sidebar: Rgb(0x00ff_ffff),
+        text: Rgb(0x0000_0000),
+        muted: Rgb(0x0010_1010),
+        sticky_background: STICKY_BACKGROUND,
+        sticky_text: STICKY_TEXT,
+    };
+    /// Palette for `highContrast` on the given appearance.
+    #[must_use]
+    pub const fn high_contrast(light: bool) -> Self {
+        if light {
+            Self::LIGHT_HIGH_CONTRAST
+        } else {
+            Self::HIGH_CONTRAST
+        }
+    }
+}
+
 impl Default for Palette {
     fn default() -> Self {
         Self::RWR_0_0_9
@@ -133,11 +170,53 @@ impl Overlays {
         },
     };
 
+    /// `highContrast` Dark: opaque white rim (WCAG 1.4.11, 3:1 against the panel) and stronger
+    /// hover and pressed fills.
+    pub const HIGH_CONTRAST: Self = Self {
+        rim: AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0xff,
+        },
+        hover: AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0x59,
+        },
+        pressed: AlphaColor {
+            color: Rgb(0x00ff_ffff),
+            alpha: 0x80,
+        },
+    };
+    /// `highContrast` Light: opaque black rim and stronger hover and pressed fills.
+    pub const LIGHT_HIGH_CONTRAST: Self = Self {
+        rim: AlphaColor {
+            color: Rgb(0),
+            alpha: 0xff,
+        },
+        hover: AlphaColor {
+            color: Rgb(0),
+            alpha: 0x40,
+        },
+        pressed: AlphaColor {
+            color: Rgb(0),
+            alpha: 0x66,
+        },
+    };
+
     #[must_use]
     pub const fn for_appearance(appearance: Appearance) -> Self {
         match appearance {
             Appearance::Dark => Self::DARK,
             Appearance::Light => Self::LIGHT,
+        }
+    }
+
+    /// Overlays for `highContrast` on the given appearance.
+    #[must_use]
+    pub const fn high_contrast(light: bool) -> Self {
+        if light {
+            Self::LIGHT_HIGH_CONTRAST
+        } else {
+            Self::HIGH_CONTRAST
         }
     }
 }
@@ -326,6 +405,54 @@ pub fn glass_ink(tint: Rgb, alpha: u8, backdrop: Rgb, target: f64) -> GlassInk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `highContrast` (WCAG 1.4.6): text and muted ink reach 7:1 on every surface they sit on.
+    #[test]
+    fn high_contrast_text_reaches_aaa_on_every_surface() {
+        for light in [false, true] {
+            let p = Palette::high_contrast(light);
+            for surface in [p.panel, p.surface, p.sidebar] {
+                assert!(contrast_ratio(p.text, surface) >= 7.0, "text light={light}");
+                assert!(
+                    contrast_ratio(p.muted, surface) >= 7.0,
+                    "muted light={light}"
+                );
+            }
+        }
+    }
+
+    /// `highContrast` (WCAG 1.4.11): the rim and the accent focus ring reach 3:1 on the panel.
+    #[test]
+    fn high_contrast_ui_edges_reach_3_to_1() {
+        for light in [false, true] {
+            let p = Palette::high_contrast(light);
+            let rim = composite(Overlays::high_contrast(light).rim, p.panel);
+            assert!(contrast_ratio(rim, p.panel) >= 3.0, "rim light={light}");
+            assert!(
+                contrast_ratio(p.accent, p.panel) >= 3.0,
+                "accent light={light}"
+            );
+        }
+    }
+
+    /// High-contrast overlays keep hover and pressed distinct from each other and from the panel.
+    #[test]
+    fn high_contrast_overlay_states_stay_distinct() {
+        for light in [false, true] {
+            let p = Palette::high_contrast(light);
+            let o = Overlays::high_contrast(light);
+            let hover = composite(o.hover, p.panel);
+            let pressed = composite(o.pressed, p.panel);
+            assert!(
+                contrast_ratio(hover, p.panel) >= HOVER_MIN_CONTRAST,
+                "hover light={light}"
+            );
+            assert!(
+                contrast_ratio(hover, pressed) >= PRESSED_VS_HOVER_MIN_CONTRAST,
+                "pressed light={light}"
+            );
+        }
+    }
 
     /// WCAG AA for normal text.
     const AA_TEXT: f64 = 4.5;

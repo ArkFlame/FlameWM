@@ -532,11 +532,24 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
 /// Shares the selector with `palette_from_settings` so both follow one `appearance` value.
 #[must_use]
 pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
-    if appearance_from_settings(snapshot).light {
+    let light = appearance_from_settings(snapshot).light;
+    if high_contrast_from_settings(snapshot) {
+        return Overlays::high_contrast(light);
+    }
+    if light {
         Overlays::LIGHT
     } else {
         Overlays::DARK
     }
+}
+
+/// `highContrast` toggle (WCAG 1.4.6 and 1.4.11 palette). Default off.
+#[must_use]
+pub fn high_contrast_from_settings(snapshot: &SettingsSnapshot) -> bool {
+    matches!(
+        snapshot.values.get("highContrast"),
+        Some(SettingValue::Boolean(true))
+    )
 }
 
 /// Neutral text and surface tokens for the snapshot's appearance. Dark returns the shipped
@@ -545,6 +558,9 @@ pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
 #[must_use]
 pub fn palette_from_settings(snapshot: &SettingsSnapshot) -> Palette {
     let appearance = appearance_from_settings(snapshot);
+    if high_contrast_from_settings(snapshot) {
+        return Palette::high_contrast(appearance.light);
+    }
     if !appearance.reduce_transparency
         && let Some(palette) = ink_for(appearance)
     {

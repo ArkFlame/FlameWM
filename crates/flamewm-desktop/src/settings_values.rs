@@ -39,6 +39,7 @@ pub(crate) const DESKTOP_CONSUMED_KEYS: &[&str] = &[
     "accentOpacity",
     "appearance",
     "backdropBlur",
+    "highContrast",
     "backgroundOpacity",
     "cpuColor",
     "dateSize",
