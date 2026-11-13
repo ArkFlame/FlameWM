@@ -26,6 +26,7 @@ mod route;
 mod taskdrag;
 #[cfg(test)]
 mod tests;
+mod usage_keys;
 
 pub(crate) use dismiss::*;
 pub(crate) use drag::*;

@@ -597,7 +597,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .client
             .settings()
             .and_then(|snapshot| {
-                flamewm_api::settings::integer_value(snapshot, "usage.refresh_seconds")
+                flamewm_api::settings::integer_value(snapshot, "usage.refreshSeconds")
             })
             .unwrap_or(300)
             .to_string();

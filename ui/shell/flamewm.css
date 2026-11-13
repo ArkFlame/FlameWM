@@ -358,3 +358,4 @@ input { cursor:text; }
 .usage-footer { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-3); font-size:var(--fs-xs); color:var(--muted); }
 .usage-close { padding:var(--sp-1) var(--sp-3); background:transparent; color:var(--text); border:1px solid var(--rim); border-radius:var(--radius-sm); }
 .usage-close:hover { border-color:var(--accent); }
+.usage-close:focus-visible { border-color:var(--focus-ring); }

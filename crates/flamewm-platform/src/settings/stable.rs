@@ -154,7 +154,7 @@ stable_settings! {
     (false, weather, "weatherUnits", weather_units),
     (false, usage, "usage.claude", usage_claude),
     (false, usage, "usage.commandCode", usage_command_code),
-    (false, usage, "usage.refresh_seconds", usage_refresh_seconds),
+    (false, usage, "usage.refreshSeconds", usage_refresh_seconds),
     (false, weather, "autoLocationEnabled", auto_location_enabled),
     (false, time, "autoTimeZoneEnabled", auto_time_zone_enabled),
     (false, time, "autoTimeZone", auto_time_zone),

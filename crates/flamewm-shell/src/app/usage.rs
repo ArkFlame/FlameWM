@@ -21,6 +21,7 @@ impl ShellLoop {
         });
         if !self.surfaces.is_usage_open() {
             self.usage_projected_at = None;
+            self.usage_focus = None;
             return;
         }
         let minute_due = self
@@ -34,14 +35,16 @@ impl ShellLoop {
     }
 
     /// Projects the current snapshots into the usage popup and redraws it.
-    pub(super) fn project_usage_card(
+    pub(crate) fn project_usage_card(
         &mut self,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
         let now = chrono::Utc::now().timestamp();
         let snapshots = &self.usage.snapshots;
+        let focused = self.usage_focus.is_some();
         runtime.with_document(self.surfaces.usage, |document| {
-            projection::project_usage(document, snapshots, now)
+            projection::project_usage(document, snapshots, now)?;
+            projection::project_usage_focus(document, focused)
         })?;
         runtime.redraw(self.surfaces.usage)?;
         self.usage_projected_at = Some(Instant::now());

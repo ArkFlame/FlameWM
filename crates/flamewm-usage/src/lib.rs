@@ -9,7 +9,7 @@ use std::path::Path;
 use serde_json::Value;
 
 mod fetch;
-pub use fetch::{CLAUDE_BASE, COMMANDCODE_BASE, TIMEOUT_SECS, fetch_snapshot};
+pub use fetch::{CLAUDE_BASE, CODEX_BASE, COMMANDCODE_BASE, TIMEOUT_SECS, fetch_snapshot};
 
 /// What the card shows for one provider. `Failed` carries a fixed, secret-free reason.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,7 +47,35 @@ pub fn commandcode_token(api_key: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Providers the usage card can show. Only `Codex` has a parser so far.
+/// Codex OAuth credentials from `$CODEX_HOME/auth.json`, else `<home>/.codex/auth.json`, as
+/// `CodexBar` reads them: `tokens.access_token` plus the optional `tokens.account_id`. Reads only
+/// that file; `None` when it is missing, unreadable or has no access token.
+#[must_use]
+pub fn codex_credentials(
+    home: &Path,
+    codex_home: Option<&str>,
+) -> Option<(String, Option<String>)> {
+    let dir = codex_home
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| home.join(".codex"), Into::into);
+    let root: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("auth.json")).ok()?).ok()?;
+    let tokens = root.get("tokens")?;
+    let token = tokens.get("access_token")?.as_str()?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let account = tokens
+        .get("account_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_owned);
+    Some((token.to_owned(), account))
+}
+
+/// Providers the usage card can show. `Codex`, `Claude` and `CommandCode` have fetch sources;
+/// `OpenCodeGo` and `OpenDesign` have none and stay "not configured".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsageProvider {
     Codex,
@@ -336,6 +364,42 @@ mod tests {
             parse_claude_usage(r#"{"extra_usage":null}"#),
             Err(UsageParseError::NoWindows)
         );
+    }
+
+    #[test]
+    fn codex_credentials_read_codex_home_or_dot_codex_only() {
+        let root = std::env::temp_dir().join(format!("flamewm-codex-test-{}", std::process::id()));
+        let home = root.join("home");
+        let custom = root.join("custom");
+        for dir in [home.join(".codex"), custom.clone()] {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        std::fs::write(
+            home.join(".codex/auth.json"),
+            r#"{"tokens":{"access_token":"home-token","account_id":"acct-1"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            custom.join("auth.json"),
+            r#"{"tokens":{"access_token":"custom-token"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            codex_credentials(&home, None),
+            Some(("home-token".to_owned(), Some("acct-1".to_owned())))
+        );
+        assert_eq!(
+            codex_credentials(&home, custom.to_str()),
+            Some(("custom-token".to_owned(), None))
+        );
+        assert_eq!(codex_credentials(&root.join("empty"), None), None);
+        std::fs::write(
+            home.join(".codex/auth.json"),
+            r#"{"tokens":{"access_token":" "}}"#,
+        )
+        .unwrap();
+        assert_eq!(codex_credentials(&home, None), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

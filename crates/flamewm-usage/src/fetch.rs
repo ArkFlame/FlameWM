@@ -7,11 +7,13 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::{
-    ProviderSnapshot, ProviderState, UsageProvider, parse_claude_usage, parse_commandcode_usage,
+    ProviderSnapshot, ProviderState, UsageProvider, parse_claude_usage, parse_codex_usage,
+    parse_commandcode_usage,
 };
 
 /// Production endpoints. Tests pass a loopback base URL instead.
 pub const CLAUDE_BASE: &str = "https://api.anthropic.com";
+pub const CODEX_BASE: &str = "https://chatgpt.com/backend-api";
 pub const COMMANDCODE_BASE: &str = "https://api.commandcode.ai";
 
 /// Hard upper bound for one request, so a stalled provider never wedges its worker.
@@ -21,15 +23,28 @@ pub const TIMEOUT_SECS: u32 = 10;
 const MAX_BODY_BYTES: u32 = 1_048_576;
 
 /// Fetches one provider's usage. `token` is `None` when the provider is not configured.
+/// `account_id` is the Codex account sent as `ChatGPT-Account-Id` when present.
 /// Errors are fixed strings: neither the token nor the raw body is ever stored or returned.
 #[must_use]
 pub fn fetch_snapshot(
     provider: UsageProvider,
     token: Option<&str>,
+    account_id: Option<&str>,
     base: &str,
     now: i64,
 ) -> ProviderSnapshot {
     let state = match (provider, token) {
+        (UsageProvider::Codex, Some(token)) => {
+            let mut headers = vec![("Authorization", format!("Bearer {token}"))];
+            if let Some(account) = account_id {
+                headers.push(("ChatGPT-Account-Id", account.to_owned()));
+            }
+            request(&format!("{base}/wham/usage"), &headers)
+                .and_then(|body| {
+                    parse_codex_usage(&body).map_err(|_| "unexpected Codex usage response")
+                })
+                .map_or_else(ProviderState::Failed, ProviderState::Ready)
+        }
         (UsageProvider::Claude, Some(token)) => {
             let headers = [
                 ("Authorization", format!("Bearer {token}")),
@@ -142,7 +157,13 @@ mod tests {
     #[test]
     fn claude_snapshot_sends_bearer_and_beta_header_to_base() {
         let (base, seen) = serve("200 OK", CLAUDE_BODY, 0);
-        let snap = fetch_snapshot(UsageProvider::Claude, Some("fixture-token"), &base, 42);
+        let snap = fetch_snapshot(
+            UsageProvider::Claude,
+            Some("fixture-token"),
+            None,
+            &base,
+            42,
+        );
         let head = seen.recv().unwrap().to_ascii_lowercase();
         assert!(head.starts_with("get /api/oauth/usage"), "{head}");
         assert!(
@@ -158,15 +179,45 @@ mod tests {
     }
 
     #[test]
+    fn codex_snapshot_sends_bearer_and_account_header_to_base() {
+        const CODEX_BODY: &str = r#"{"rate_limit":{"primary_window":{"used_percent":37.5,"limit_window_seconds":18000,"reset_at":1000}}}"#;
+        let (base, seen) = serve("200 OK", CODEX_BODY, 0);
+        let snap = fetch_snapshot(
+            UsageProvider::Codex,
+            Some("codex-fixture"),
+            Some("acct-1"),
+            &base,
+            7,
+        );
+        let head = seen.recv().unwrap().to_ascii_lowercase();
+        assert!(head.starts_with("get /wham/usage"), "{head}");
+        assert!(
+            head.contains("authorization: bearer codex-fixture"),
+            "{head}"
+        );
+        assert!(head.contains("chatgpt-account-id: acct-1"), "{head}");
+        let ProviderState::Ready(windows) = snap.state else {
+            panic!("expected Ready")
+        };
+        assert_eq!(windows[0].used_percent, 37.5);
+    }
+
+    #[test]
     fn missing_token_is_not_configured_without_network() {
-        let snap = fetch_snapshot(UsageProvider::CommandCode, None, "http://127.0.0.1:9", 1);
+        let snap = fetch_snapshot(
+            UsageProvider::CommandCode,
+            None,
+            None,
+            "http://127.0.0.1:9",
+            1,
+        );
         assert_eq!(snap.state, ProviderState::NotConfigured);
     }
 
     #[test]
     fn http_error_becomes_failed_without_leaking_token() {
         let (base, _seen) = serve("401 Unauthorized", r#"{"error":"echo"}"#, 0);
-        let snap = fetch_snapshot(UsageProvider::Claude, Some("fixture-token"), &base, 1);
+        let snap = fetch_snapshot(UsageProvider::Claude, Some("fixture-token"), None, &base, 1);
         let ProviderState::Failed(message) = snap.state else {
             panic!("expected Failed")
         };

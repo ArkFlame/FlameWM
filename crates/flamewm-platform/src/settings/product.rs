@@ -130,7 +130,7 @@ pub struct ProductSettings {
     pub usage_claude: bool,
     /// `usage.commandCode`: fetch Command Code usage on the AI usage card (default on).
     pub usage_command_code: bool,
-    /// `usage.refresh_seconds`: usage refresh period in seconds (default 300).
+    /// `usage.refreshSeconds`: usage refresh period in seconds (default 300).
     pub usage_refresh_seconds: u16,
     /// Sets `weatherLocation` from the IP-geolocated position.
     pub auto_location_enabled: bool,

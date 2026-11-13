@@ -22,13 +22,12 @@ fn usage_defaults_are_both_providers_and_five_minutes_and_not_written() {
 // MUTATION: dropping either key from the stable table makes the parse or the written text miss it.
 #[test]
 fn usage_keys_round_trip_off_and_interval() {
-    let parsed =
-        load("revision=2\nusage.claude=false\nusage.refresh_seconds=900\n").expect("parse");
+    let parsed = load("revision=2\nusage.claude=false\nusage.refreshSeconds=900\n").expect("parse");
     assert!(!parsed.usage_claude);
     assert!(parsed.usage_command_code);
     assert_eq!(parsed.usage_refresh_seconds, 900);
     let text = ConfigStore::serialize(&parsed);
     assert!(text.contains("usage.claude=false\n"), "{text}");
-    assert!(text.contains("usage.refresh_seconds=900\n"), "{text}");
+    assert!(text.contains("usage.refreshSeconds=900\n"), "{text}");
     assert_eq!(load(&text).expect("round trip"), parsed);
 }

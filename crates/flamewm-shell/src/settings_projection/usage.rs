@@ -9,14 +9,15 @@ pub const USAGE_REFRESH_MIN_SECONDS: i64 = 60;
 pub const USAGE_REFRESH_MAX_SECONDS: i64 = 3600;
 pub const USAGE_REFRESH_DEFAULT_SECONDS: i64 = 300;
 
-/// Providers to fetch and the refresh period, clamped to the supported range.
+/// Providers to fetch and the refresh period, clamped to the supported range. Codex has no
+/// toggle: its auth file is the gate, so it is always listed.
 #[must_use]
 pub fn usage_settings_from(
     claude: bool,
     command_code: bool,
     refresh_seconds: i64,
 ) -> (Vec<UsageProvider>, Duration) {
-    let mut providers = Vec::new();
+    let mut providers = vec![UsageProvider::Codex];
     if claude {
         providers.push(UsageProvider::Claude);
     }
@@ -37,7 +38,7 @@ pub fn usage_settings(snapshot: Option<&SettingsSnapshot>) -> (Vec<UsageProvider
     usage_settings_from(
         boolean_value(snapshot, "usage.claude").unwrap_or(true),
         boolean_value(snapshot, "usage.commandCode").unwrap_or(true),
-        integer_value(snapshot, "usage.refresh_seconds").unwrap_or(USAGE_REFRESH_DEFAULT_SECONDS),
+        integer_value(snapshot, "usage.refreshSeconds").unwrap_or(USAGE_REFRESH_DEFAULT_SECONDS),
     )
 }
 
@@ -50,12 +51,19 @@ mod tests {
     #[test]
     fn disabled_providers_drop_and_interval_clamps() {
         let (providers, interval) = usage_settings_from(false, true, 10);
-        assert_eq!(providers, vec![UsageProvider::CommandCode]);
+        assert_eq!(
+            providers,
+            vec![UsageProvider::Codex, UsageProvider::CommandCode]
+        );
         assert_eq!(interval, Duration::from_secs(60));
         let (providers, interval) = usage_settings_from(true, true, 99_999);
         assert_eq!(
             providers,
-            vec![UsageProvider::Claude, UsageProvider::CommandCode]
+            vec![
+                UsageProvider::Codex,
+                UsageProvider::Claude,
+                UsageProvider::CommandCode
+            ]
         );
         assert_eq!(interval, Duration::from_secs(3600));
     }
@@ -63,7 +71,7 @@ mod tests {
     #[test]
     fn missing_snapshot_keeps_defaults() {
         let (providers, interval) = usage_settings(None);
-        assert_eq!(providers.len(), 2);
+        assert_eq!(providers.len(), 3);
         assert_eq!(interval, Duration::from_secs(300));
     }
 }

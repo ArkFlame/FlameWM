@@ -182,6 +182,15 @@ def run(bin_dir, out):
         focus_px = region_changed(before_tab, after_tab, close_region)
         check("Tab moves focus to the Close button", focus_px > 30, f"focus_px={focus_px}")
 
+        key("Return")
+        after_return = shot(out, "card-after-return.png", display)
+        check("Enter on the focused Close button closes the card",
+              changed_count(opened, after_return) >= CARD_MIN_DIFF_PX
+              and changed_count(closed, after_return) < CARD_MIN_DIFF_PX,
+              f"closed-diff_px={changed_count(closed, after_return)}")
+        click(*TRAY_USAGE_CELL)
+        shot(out, "card-reopen-after-return.png", display)
+
         key("Escape")
         after_escape = shot(out, "card-escape.png", display)
         check("Escape closes the card", changed_count(opened, after_escape) >= CARD_MIN_DIFF_PX

@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flamewm_usage::{
-    claude_token, commandcode_token, fetch_snapshot, ProviderSnapshot, UsageProvider, CLAUDE_BASE,
-    COMMANDCODE_BASE,
+    claude_token, codex_credentials, commandcode_token, fetch_snapshot, ProviderSnapshot,
+    UsageProvider, CLAUDE_BASE, CODEX_BASE, COMMANDCODE_BASE,
 };
 
 use crate::weather_host::spawn_worker;
@@ -21,8 +21,11 @@ pub const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Providers fetched by default. `OpenCodeGo` (cookie-only) and `OpenDesign` (no usage source)
 /// are not in this list; they stay "not configured".
-pub const DEFAULT_PROVIDERS: [UsageProvider; 2] =
-    [UsageProvider::Claude, UsageProvider::CommandCode];
+pub const DEFAULT_PROVIDERS: [UsageProvider; 3] = [
+    UsageProvider::Codex,
+    UsageProvider::Claude,
+    UsageProvider::CommandCode,
+];
 
 type UsageResult = Vec<ProviderSnapshot>;
 
@@ -99,7 +102,8 @@ impl UsageHost {
 }
 
 /// Production fetch on a worker thread: one request per enabled provider, bounded by the
-/// fetch timeout. Tokens come from `$CLAUDE_CONFIG_DIR` or `$HOME` and `COMMAND_CODE_API_KEY`.
+/// fetch timeout. Tokens come from `$CODEX_HOME`, `$CLAUDE_CONFIG_DIR` or `$HOME`, and
+/// `COMMAND_CODE_API_KEY`.
 #[must_use]
 pub fn spawn_usage_fetch(
     providers: Vec<UsageProvider>,
@@ -116,21 +120,30 @@ pub fn spawn_usage_fetch(
         }
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         let config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        let codex_home = std::env::var("CODEX_HOME").ok();
         let now = chrono::Utc::now().timestamp();
         providers
             .into_iter()
             .map(|provider| {
-                let (token, base) = match provider {
-                    UsageProvider::Claude => {
-                        (claude_token(&home, config_dir.as_deref()), CLAUDE_BASE)
+                let (token, account, base) = match provider {
+                    UsageProvider::Codex => {
+                        let (token, account) = codex_credentials(&home, codex_home.as_deref())
+                            .map_or((None, None), |(token, account)| (Some(token), account));
+                        (token, account, CODEX_BASE)
                     }
+                    UsageProvider::Claude => (
+                        claude_token(&home, config_dir.as_deref()),
+                        None,
+                        CLAUDE_BASE,
+                    ),
                     UsageProvider::CommandCode => (
                         commandcode_token(std::env::var("COMMAND_CODE_API_KEY").ok().as_deref()),
+                        None,
                         COMMANDCODE_BASE,
                     ),
-                    _ => (None, ""),
+                    _ => (None, None, ""),
                 };
-                fetch_snapshot(provider, token.as_deref(), base, now)
+                fetch_snapshot(provider, token.as_deref(), account.as_deref(), base, now)
             })
             .collect()
     })

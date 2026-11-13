@@ -79,6 +79,19 @@ pub fn project_usage(
     document.text("usage-updated", line)
 }
 
+/// Keyboard focus ring on the Close button: the live accent outline while focused, cleared
+/// otherwise. Precedent: `projection::audio::project_audio_focus`, the audio popup's focus ring.
+pub fn project_usage_focus(
+    document: &mut impl UiDocumentAccess,
+    focused: bool,
+) -> Result<(), String> {
+    if focused {
+        document.border("usage-close", crate::projection::task_accent())
+    } else {
+        document.border_clear("usage-close")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

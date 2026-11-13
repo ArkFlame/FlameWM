@@ -762,7 +762,7 @@ pub(crate) fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.assistant.key.reset" => Ok(SettingsAction::ApiKeyReset),
         "settings.assistant.open" => Ok(SettingsAction::AssistantOpen),
         value if value.starts_with("settings.usage.refresh.") => integer_choice_action(
-            "usage.refresh_seconds",
+            "usage.refreshSeconds",
             &[60, 300, 900, 1800],
             &value["settings.usage.refresh.".len()..],
             "usage refresh interval",

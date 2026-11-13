@@ -179,6 +179,8 @@ pub(crate) struct ShellLoop {
     pub(crate) usage: flamewm_shell::usage_host::UsageHost,
     /// When the open usage card was last projected; drives the one-minute countdown refresh.
     pub(crate) usage_projected_at: Option<std::time::Instant>,
+    /// Focused stop of the open usage card (`None` when unfocused); cleared when the card closes.
+    pub(crate) usage_focus: Option<usize>,
     /// Automatic location lookup cadence (opt-in via `autoLocationEnabled`).
     pub(crate) auto_lookup: flamewm_shell::weather_auto::AutoLookup,
     /// Completion wake shared by the weather and IP-lookup workers; the reactor watches its reader.
@@ -280,6 +282,7 @@ impl ShellLoop {
             weather_feed_pending: true,
             usage: flamewm_shell::usage_host::UsageHost::default(),
             usage_projected_at: None,
+            usage_focus: None,
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
             result_wake: flamewm_shell::weather_host::ResultWake::new().expect("result wake pair"),
             wake: None,

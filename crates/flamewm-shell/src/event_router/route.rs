@@ -213,6 +213,24 @@ impl ShellLoop {
                 return self.project_overflow_menu(runtime);
             }
         }
+        if self.surfaces.is_usage_open() {
+            // Usage card focus: Tab walks its stops; Enter or Space on a focused stop closes it.
+            if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
+                let payload = event.action.text.as_deref().unwrap_or_default();
+                if let Some(next) = super::usage_keys::usage_focus_after_tab(
+                    payload,
+                    self.usage_focus,
+                    super::usage_keys::USAGE_FOCUS_STOPS,
+                ) {
+                    self.usage_focus = Some(next);
+                    return self.project_usage_card(runtime);
+                }
+            }
+            if super::usage_keys::usage_activates(typed, self.usage_focus) {
+                self.usage_focus = None;
+                return self.close_transients(runtime);
+            }
+        }
         if let Some(row) = overflow_activation_row(typed, overflow_rows, self.overflow_row) {
             if let Some(request) = self
                 .shell
