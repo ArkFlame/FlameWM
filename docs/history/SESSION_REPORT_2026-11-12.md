@@ -182,3 +182,43 @@ Process notes:
 - `b8e76656` carries an extra Haiku trailer line in addition to the Sonnet line.
 - The `0a95a8f4` commit message contains the wrong phrase "scripts/break-free docs slice".
 - `07c311d4` and a few other commits were pushed before a post-rebase re-gate. The post-push gate for `07c311d4` passed.
+
+## 9. Addendum: reconcile 6c45665d..a5c2ef8d
+
+Landed on origin/main after the 6c45665d reconcile (`14e5d3c9` is the docs-only reconcile; 18 commits, oldest first). Claims follow the commit bodies and the executed runs they name; nothing here was re-run in this reconcile.
+
+- `13e9813e` Bluetooth card shows the Device1 name and the 30 s expiry (executed on private Xvfb; real BlueZ unverified).
+- `c6adefe7` layer surfaces and window moves drive per-output scale (unit only).
+- `25ddb667` launcher listbox with aria-selected (unit only).
+- `dcea2229` wl-portal-frames PipeWire feasibility; blocked on an architecture exception, owner request in the doc (no code).
+- `0a435a15` X11 Alt+Tab refresh on repaint and minimised last-frame cache (executed ignored Xvfb tests for damage; minimised cache not executed).
+- `ceab2b25` task overflow menu follows the WAI-ARIA menu-button keyboard pattern (unit; keys proven on private Xvfb in `5bec483d`).
+- `c666b8ad` layer surfaces map on their output; enter and leave per output (unit only).
+- `89959c83` unit coverage for layer output choice, removal and leave (unit only).
+- `f952e95d` wlr-layer-shell test client for the nested placement proof.
+- `32cd579d` `layer_place.sh` single-output layer placement proof (PASS 25600/25600 band).
+- `fbfc4645` Settings output scale applied live on the nested output (`scale_live.sh` PASS, ratio 1.4988).
+- `860deeed` saved output scale applied on loop turns, proven live (`scale_live.sh`).
+- `d9db1ecd` Caps Lock hint on the Wayland lock presenter (unit only).
+- `5bec483d` Start Return launches once; keyboard runtime proof (`shell_keys_proof.py` 23 PASS on private Xvfb). This is the real cause of issue #24; the earlier "not reproduced" claim is corrected and an issue comment was posted.
+- `51d474d7` Escape clears the Start query before closing Start (same proof run).
+- `20b96d63` quick-controls audio slider keyboard model (unit only).
+- `2f28b3bd` notification daemon spec e2e on a private dbus (no gap found).
+- `a5c2ef8d` X11 invert colour filter via the RandR gamma ramp (executed gamma round trip on private Xvfb; WM session not run; grayscale and colour-blind are Not applicable on X11 gamma).
+
+Unverified claims, stated as such in BACKLOG.md:
+
+- Real BlueZ pairing (`13e9813e`, `e6b84921`): not verified (`bt-proof`).
+- Multi-output placement, scale, lock covers and popups: unit only; the nested backend has one output (`multi-output-runtime`, `popups-on-removed-output`, `work-area-per-output`).
+- Launcher and overflow aria values (`25ddb667`, `ceab2b25`, `c894b3ba`): no accessibility-tree run (`launcher-aria`, `overflow-aria`).
+- Quick-controls slider keys (`20b96d63`): unit only (`slider-keys-proof`).
+- Minimised Alt+Tab cache (`0a435a15`): no executed run recorded (`alttab-min`).
+- X11 magnifier (`6c45665d`, `4be2a408`, `9b5c18fa`): unit only; Xvfb rejects RRSetCrtcTransform (`x11-zoom-proof`).
+- DRM magnifier and colour filter: not applied (`drm-zoom-filter`).
+
+Process notes:
+
+- `860deeed` carries a `Claude Haiku 5.5` trailer instead of `Claude Sonnet 5.5`. Not rewritten; main is shared.
+- A worker report that `zoomfollow.sh` was absent was wrong. The script exists (`scripts/break/zoomfollow.sh`) and ran PASS 18/18 in `8df097ac`.
+- Commits pushed before a final rebase re-gate: `4be2a408`, `f44e83b6`, `79c2505b`, `25ddb667`, `9b5c18fa`, `ceab2b25`, `89959c83`, `860deeed`, `5bec483d`. Their gate closure is unchanged by inspection; they were not re-gated after the final rebase. `07c311d4` was re-gated after its push.
+- The earlier launch-once "not reproduced" claim was wrong; corrected in `5bec483d` and in BACKLOG.md.
