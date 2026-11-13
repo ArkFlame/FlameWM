@@ -13,6 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use flamewm_api::motion::motion_scale;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_reactor::{Easing, Start, Timeline, TransitionId};
 
@@ -208,11 +209,13 @@ pub fn settings_from_snapshot(snapshot: &SettingsSnapshot) -> Settings {
         Some(SettingValue::Boolean(value)) => *value,
         _ => Settings::DEFAULT.enabled,
     };
-    let speed = match snapshot.values.get("animationSpeed") {
-        Some(SettingValue::Integer(value)) => {
-            u16::try_from(*value).unwrap_or(Settings::DEFAULT.speed)
-        }
-        _ => Settings::DEFAULT.speed,
+    // `motion_scale` is the one motion policy; 0 is reduced motion (instant end states).
+    let scale = motion_scale(snapshot);
+    let enabled = enabled && scale != 0;
+    let speed = if scale == 0 {
+        Settings::DEFAULT.speed
+    } else {
+        scale
     };
     let group = |enabled_key: &str, style_key: &str, default: Style, allowed: &[(&str, Style)]| {
         style_from_snapshot(snapshot, enabled_key, style_key, default, allowed)

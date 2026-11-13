@@ -1,6 +1,7 @@
 //! Start menu icon and slide projection.
 
 use super::*;
+use flamewm_api::motion::motion_scale;
 
 /// Configured Start icon path (`customStartIcon`). `None` keeps the default `FlameWM` glyph.
 #[must_use]
@@ -59,13 +60,13 @@ pub fn start_slide(
     edge: PanelEdge,
     start_button: Option<(i32, i32, u32, u32)>,
 ) -> Option<SlideConfig> {
-    if !bool_setting(snapshot, "animationsEnabled", true)
+    let speed = motion_scale(snapshot);
+    if speed == 0
+        || !bool_setting(snapshot, "animationsEnabled", true)
         || !bool_setting(snapshot, "startAnimationEnabled", true)
     {
         return None;
     }
-    let speed =
-        integer_setting(snapshot, "animationSpeed", DEFAULT_ANIMATION_SPEED).clamp(25, 200) as u16;
     let edge = match edge {
         PanelEdge::Bottom => SlideEdge::Bottom,
         PanelEdge::Top => SlideEdge::Top,

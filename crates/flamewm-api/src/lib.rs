@@ -18,6 +18,7 @@ pub mod geometry;
 pub mod graphics;
 pub mod ids;
 pub mod input;
+pub mod motion;
 pub mod panels;
 pub mod paths;
 pub mod ports;

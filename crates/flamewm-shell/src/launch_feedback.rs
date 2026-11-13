@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use flamewm_api::display::{DisplaySnapshot, OutputSnapshot};
+use flamewm_api::motion::motion_scale;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_applications::launch_feedback::{Counters, Fragments, Sequences};
 use flamewm_shell::icon_loader::{IconLoader, IconTarget};
@@ -325,7 +326,7 @@ impl LaunchFeedback {
         let (x, y) = badge_position(px, py, side as i32, scale, output);
         let animate_indicator = settings.is_none_or(|s| {
             s.values.get("animationsEnabled") != Some(&SettingValue::Boolean(false))
-                && s.values.get("reducedMotion") != Some(&SettingValue::Boolean(true))
+                && motion_scale(s) != 0
         });
         if self.painted.is_none() {
             let frame = if animate_indicator {

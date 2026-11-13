@@ -22,7 +22,6 @@ const START_ICON_SIZE: u32 = 25;
 /// Largest custom Start icon file read, so a bad path cannot stall the panel.
 const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
-const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "none";
 const DEFAULT_SURFACE_OPACITY: u8 = flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY;
 const DEFAULT_SURFACE_BLUR_PERCENT: u8 = flamewm_ui_core::glass::DARK.blur_percent;
