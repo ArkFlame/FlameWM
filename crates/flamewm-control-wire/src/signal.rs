@@ -48,6 +48,8 @@ pub enum ControlSignal {
     },
     StartMenuToggleRequested,
     LauncherToggleRequested,
+    /// Super+Shift+V: the shell opens (or closes) the clipboard history popup.
+    ClipboardHistoryRequested,
     /// Alt+Tab switcher state, pushed by the WM on open, selection change and close. `entries`
     /// are in MRU order; `selected` indexes them. `immediate` asks for the overlay to show
     /// without the hold delay (a second Tab press arrived). The shell only renders this.
@@ -150,6 +152,11 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
         ControlSignal::LauncherToggleRequested => WireSignal {
             interface: IFACE_ROOT.to_owned(),
             member: "LauncherToggleRequested".to_owned(),
+            args: Vec::new(),
+        },
+        ControlSignal::ClipboardHistoryRequested => WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "ClipboardHistoryRequested".to_owned(),
             args: Vec::new(),
         },
         ControlSignal::WindowSwitcherChanged {
@@ -263,6 +270,10 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
         (IFACE_ROOT, "LauncherToggleRequested") => {
             expect_arity(&call, 0)?;
             Ok(ControlSignal::LauncherToggleRequested)
+        }
+        (IFACE_ROOT, "ClipboardHistoryRequested") => {
+            expect_arity(&call, 0)?;
+            Ok(ControlSignal::ClipboardHistoryRequested)
         }
         (IFACE_ROOT, "WindowSwitcherChanged") => {
             expect_arity(&call, 4)?;

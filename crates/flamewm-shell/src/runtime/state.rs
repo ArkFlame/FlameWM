@@ -83,6 +83,12 @@ impl ShellRuntime {
                 });
             }
             // Same shape as the Start toggle: one queued control per request.
+            ControlSignal::ClipboardHistoryRequested => {
+                self.controls.push_back(ShellControl::ToggleClipboard {
+                    output: None,
+                    interaction: None,
+                });
+            }
             ControlSignal::LauncherToggleRequested => {
                 self.controls.push_back(ShellControl::ToggleLauncher {
                     output: None,

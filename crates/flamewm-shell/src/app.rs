@@ -39,6 +39,7 @@ macro_rules! shell_stage {
 }
 
 mod bluetooth_session;
+mod clipboard_session;
 mod control;
 mod dock;
 mod helpers;
@@ -87,6 +88,7 @@ pub(crate) struct ShellLoop {
     pub(crate) start_scroll: usize,
     pub(crate) desktop_hidden: Vec<flamewm_api::WindowRef>,
     pub(crate) launcher: flamewm_shell::launcher::LauncherState,
+    pub(crate) clipboard: flamewm_shell::clipboard_list::ClipboardList,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
     pub(crate) task_press_target: Option<(usize, flamewm_shell::runtime::TaskSlotTarget)>,
     pub(crate) start_drag: Option<crate::entry::event_router::StartAppDrag>,
@@ -224,6 +226,7 @@ impl ShellLoop {
             start_scroll: 0,
             desktop_hidden: Vec::new(),
             launcher: Default::default(),
+            clipboard: Default::default(),
             task_drag: None,
             task_press_target: None,
             start_drag: None,

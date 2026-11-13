@@ -38,6 +38,8 @@ pub enum PopupRole {
     /// Top-center application launcher. Never anchored to a panel node: `source_node_id`
     /// is inert for it and placement comes from `runtime::launcher_surface`.
     Launcher,
+    /// Clipboard history list, top-centre like the Launcher. Entries come from the control bus.
+    Clipboard,
 }
 
 impl PopupRole {
@@ -55,6 +57,7 @@ impl PopupRole {
             Self::Weather => "weather-popup",
             Self::Usage => "usage-popup",
             Self::Launcher => "launcher-popup",
+            Self::Clipboard => "clipboard-popup",
         }
     }
 
@@ -70,7 +73,7 @@ impl PopupRole {
             Self::Battery => "tray-battery",
             Self::Weather => "tray-weather",
             Self::Usage => "tray-usage",
-            Self::Launcher => "task-start",
+            Self::Launcher | Self::Clipboard => "task-start",
         }
     }
 
@@ -90,6 +93,7 @@ impl PopupRole {
             Self::Weather => "weather",
             Self::Usage => "usage",
             Self::Launcher => "launcher",
+            Self::Clipboard => "clipboard",
         }
     }
 
@@ -99,7 +103,7 @@ impl PopupRole {
     #[must_use]
     pub const fn quick_control_kind(self) -> Option<QuickControlKind> {
         match self {
-            Self::Start | Self::Media | Self::Usage | Self::Launcher => None,
+            Self::Start | Self::Media | Self::Usage | Self::Launcher | Self::Clipboard => None,
             Self::Audio => Some(QuickControlKind::Audio),
             Self::Network => Some(QuickControlKind::Network),
             Self::Calendar => Some(QuickControlKind::Calendar),
@@ -135,6 +139,9 @@ mod popup_contract_tests {
             PopupRole::Launcher => {
                 include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"))
             }
+            PopupRole::Clipboard => {
+                include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-clipboard.rwr"))
+            }
         }
     }
 
@@ -152,7 +159,7 @@ mod popup_contract_tests {
             PopupRole::Battery => flamewm_shell_core::BATTERY_POPOVER_SIZE,
             PopupRole::Weather => flamewm_shell_core::WEATHER_POPOVER_SIZE,
             PopupRole::Usage => flamewm_shell_core::USAGE_POPOVER_SIZE,
-            PopupRole::Launcher => Size::new(600, 360),
+            PopupRole::Launcher | PopupRole::Clipboard => Size::new(600, 360),
         }
     }
 
@@ -175,6 +182,7 @@ mod popup_contract_tests {
             PopupRole::Weather,
             PopupRole::Usage,
             PopupRole::Launcher,
+            PopupRole::Clipboard,
         ] {
             let mut document = flamewm_ui_x11::decode_document(artifact_bytes(role))
                 .unwrap_or_else(|error| panic!("{role:?} artifact must decode: {error}"));

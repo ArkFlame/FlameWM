@@ -4,6 +4,7 @@ pub mod assistant_popover;
 pub mod async_projection;
 pub mod bus_offline;
 pub mod calendar;
+pub mod clipboard_list;
 pub mod control_actions;
 pub mod cursor_theme;
 pub mod dock;

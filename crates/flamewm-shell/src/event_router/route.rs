@@ -377,7 +377,9 @@ impl ShellLoop {
         }
         if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
             let payload = event.action.text.as_deref().unwrap_or_default();
-            if self.route_launcher_key(runtime, payload)? {
+            if self.route_clipboard_key(runtime, payload)?
+                || self.route_launcher_key(runtime, payload)?
+            {
                 return Ok(());
             }
         }

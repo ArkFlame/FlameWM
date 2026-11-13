@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 pub const ACTION_TOGGLE_START_MENU: &str = "ToggleStartMenu";
 pub const ACTION_LAUNCHER: &str = "Launcher";
+/// Clipboard history popup, `Super+Shift+V`. The ring lives in the compositor; the shell lists it.
+pub const ACTION_CLIPBOARD_HISTORY: &str = "ClipboardHistory";
 pub const ACTION_WORKSPACE_LEFT: &str = "WorkspaceLeft";
 pub const ACTION_WORKSPACE_RIGHT: &str = "WorkspaceRight";
 pub const ACTION_WORKSPACE_UP: &str = "WorkspaceUp";

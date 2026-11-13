@@ -6,7 +6,7 @@
 //! owns only the placement and the map/grab transaction.
 
 use flamewm_api::{OutputId, Rect, Size};
-use flamewm_ui_x11::SurfaceRuntime;
+use flamewm_ui_x11::{SurfaceHandle, SurfaceRuntime};
 
 use super::{panel_ui_scale, ui_error, ShellSurfaces};
 use crate::popup_controller;
@@ -35,22 +35,30 @@ impl ShellSurfaces {
         runtime: &mut SurfaceRuntime,
         output: &OutputId,
     ) -> Result<Rect, String> {
+        let rect = self.open_top_centre(runtime, self.launcher, PopupRole::Launcher, output)?;
+        self.launcher_output = Some(output.clone());
+        Ok(rect)
+    }
+
+    /// Measures, places, maps and grabs the top-centre popup `surface` (role `role`) on `output`.
+    pub fn open_top_centre(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        launcher: SurfaceHandle,
+        role: PopupRole,
+        output: &OutputId,
+    ) -> Result<Rect, String> {
         let panel = self
             .for_output(output)
             .ok_or_else(|| format!("launcher output {output} is unavailable"))?;
         let work_area = panel.placement.work_area;
         let scale = panel_ui_scale(panel.placement.output.shell_scale_percent);
-        let launcher = self.launcher;
         runtime
             .apply_output_scale(launcher, scale)
             .map_err(ui_error)?;
-        let size = popup_controller::measure_node(
-            runtime,
-            launcher,
-            PopupRole::Launcher.intrinsic_node_id(),
-            work_area,
-        )
-        .map_err(|error| error.to_string())?;
+        let size =
+            popup_controller::measure_node(runtime, launcher, role.intrinsic_node_id(), work_area)
+                .map_err(|error| error.to_string())?;
         let rect = launcher_rect(work_area, size);
         let width = u32::try_from(rect.width).map_err(|_| "launcher width".to_owned())?;
         let height = u32::try_from(rect.height).map_err(|_| "launcher height".to_owned())?;
@@ -61,7 +69,6 @@ impl ShellSurfaces {
         runtime
             .grab_pointer(launcher)
             .map_err(|_| "launcher pointer grab refused".to_owned())?;
-        self.launcher_output = Some(output.clone());
         Ok(rect)
     }
 

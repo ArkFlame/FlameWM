@@ -75,6 +75,15 @@ impl ShellSurfaces {
                 flamewm_api::Rect::new(output.geometry.x, output.geometry.y, 600, 360),
             ),
         )?;
+        let clipboard = create_surface(
+            runtime,
+            CLIPBOARD_ARTIFACT,
+            popup_config(
+                "FlameWM clipboard history",
+                SurfaceRole::PopupMenu,
+                flamewm_api::Rect::new(output.geometry.x, output.geometry.y, 600, 360),
+            ),
+        )?;
         let polkit = create_surface(
             runtime,
             POLKIT_ARTIFACT,
@@ -116,6 +125,8 @@ impl ShellSurfaces {
             usage,
             launcher,
             launcher_output: None,
+            clipboard,
+            clipboard_output: None,
             polkit,
             polkit_open: false,
             polkit_output: None,

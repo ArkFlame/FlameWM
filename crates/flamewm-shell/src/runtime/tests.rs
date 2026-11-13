@@ -1282,3 +1282,18 @@ fn panel_reconciliation_plans_updates_creates_and_removals_before_mutation() {
         "disconnect retires only its output record"
     );
 }
+
+// OBSERVABLE: Super+Shift+V reaches the shell as one ToggleClipboard control on the panel output.
+#[test]
+fn clipboard_history_signal_queues_one_toggle_clipboard_control() {
+    let mut runtime = ShellRuntime::default();
+    runtime.mark_signal(&ControlSignal::ClipboardHistoryRequested);
+    let controls: Vec<_> = runtime.drain_controls().collect();
+    assert_eq!(
+        controls,
+        vec![ShellControl::ToggleClipboard {
+            output: None,
+            interaction: None,
+        }]
+    );
+}

@@ -24,6 +24,23 @@ pub fn tab_focus_after(payload: &str, focus: Option<usize>, stops: usize) -> Opt
     })
 }
 
+/// Focus after a typed Up or Down over a vertical list of `count` rows. Clamped at the ends, as a
+/// WAI-ARIA listbox does (no wrap). `None` for other keys or an empty list. Precedent: APG listbox.
+#[must_use]
+pub fn list_focus_after(payload: &str, focus: Option<usize>, count: usize) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    let (_, key) = crate::launcher::parse_typed_key(payload)?;
+    let last = count - 1;
+    Some(match (key, focus) {
+        ("Up", Some(index)) => index.saturating_sub(1),
+        ("Down", Some(index)) => (index + 1).min(last),
+        ("Up" | "Down", None) => 0,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +63,17 @@ mod tests {
         );
         assert_eq!(tab_focus_after(&key("", "ISO_Left_Tab"), None, 3), Some(2));
         assert_eq!(tab_focus_after(&key("Shift", "Down"), None, 3), None);
+    }
+
+    // OBSERVABLE: Up and Down step one row and clamp at both ends; Tab is not a list key.
+    #[test]
+    fn up_and_down_walk_a_list_and_clamp_without_wrapping() {
+        assert_eq!(list_focus_after(&key("", "Down"), None, 3), Some(0));
+        assert_eq!(list_focus_after(&key("", "Down"), Some(1), 3), Some(2));
+        assert_eq!(list_focus_after(&key("", "Down"), Some(2), 3), Some(2));
+        assert_eq!(list_focus_after(&key("", "Up"), Some(0), 3), Some(0));
+        assert_eq!(list_focus_after(&key("", "Up"), Some(2), 3), Some(1));
+        assert_eq!(list_focus_after(&key("", "Tab"), Some(0), 3), None);
+        assert_eq!(list_focus_after(&key("", "Down"), None, 0), None);
     }
 }

@@ -71,6 +71,9 @@ impl ShellLoop {
         self.surfaces
             .close_launcher(runtime)
             .map_err(UiBackendError::Renderer)?;
+        self.surfaces
+            .close_clipboard(runtime)
+            .map_err(UiBackendError::Renderer)?;
         if let Some(lease) = self.popup_session.active().cloned() {
             if !is_quick_popup_kind(&lease.kind) {
                 let transition = self.popup_session.close(lease.sequence);
@@ -244,6 +247,12 @@ impl ShellLoop {
                     interaction,
                 } => {
                     self.toggle_launcher(runtime, output, interaction.as_ref())?;
+                }
+                ShellControl::ToggleClipboard {
+                    output,
+                    interaction,
+                } => {
+                    self.toggle_clipboard(runtime, output, interaction.as_ref())?;
                 }
                 ShellControl::CloseStart | ShellControl::ClosePopovers => {
                     self.close_transients(runtime)?;

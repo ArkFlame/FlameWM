@@ -63,16 +63,21 @@ impl ShellLoop {
         self.surfaces
             .close_launcher(runtime)
             .map_err(UiBackendError::Renderer)?;
+        self.release_popup_lease(PopupKind::Launcher);
+        Ok(())
+    }
+
+    /// Ends the popup lease of `kind` when it is the active one; a no-op otherwise.
+    pub(super) fn release_popup_lease(&mut self, kind: PopupKind) {
         if let Some(lease) = self
             .popup_session
             .active()
-            .filter(|lease| lease.kind == PopupKind::Launcher)
+            .filter(|lease| lease.kind == kind)
             .cloned()
         {
             let transition = self.popup_session.close(lease.sequence);
             self.popup_session.commit(&transition);
         }
-        Ok(())
     }
 
     /// Text input while the launcher is open. Returns false when the launcher is closed,

@@ -172,6 +172,9 @@ impl State {
             // The shell owns the launcher and start menu; it listens for the same control signals
             // the X11 WM emits.
             ACTION_LAUNCHER => self.emit_control_signal("LauncherToggleRequested"),
+            ACTION_CLIPBOARD_HISTORY => {
+                self.emit_control_signal("ClipboardHistoryRequested");
+            }
             ACTION_TOGGLE_START_MENU => self.emit_control_signal("StartMenuToggleRequested"),
             ACTION_SESSION_LOCK => eprintln!("flamewm-wayland: session lock is a later phase"),
             ACTION_DOCK_AUTO_HIDE_TOGGLE => match self.control.clone() {

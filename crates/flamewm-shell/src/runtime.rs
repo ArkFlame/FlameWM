@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 pub mod bluetooth_surface;
 mod card_surface;
+pub mod clipboard_surface;
 pub mod launcher_surface;
 pub mod polkit_surface;
 pub mod start_surface;
@@ -49,6 +50,8 @@ const USAGE_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-
 /// Title of the AI usage card popup surface.
 pub const USAGE_POPUP_TITLE: &str = "FlameWM usage";
 const LAUNCHER_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launcher.rwr"));
+const CLIPBOARD_ARTIFACT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-clipboard.rwr"));
 const POLKIT_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-polkit.rwr"));
 const BLUETOOTH_ARTIFACT: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-bluetooth.rwr"));
@@ -139,6 +142,11 @@ pub enum ShellControl {
     },
     /// Top-center Launcher; `output: None` targets the panel output the same way `ToggleStart` does.
     ToggleLauncher {
+        output: Option<flamewm_api::OutputId>,
+        interaction: Option<InteractionContext>,
+    },
+    /// Super+Shift+V clipboard history; `output: None` targets the panel output like `ToggleLauncher`.
+    ToggleClipboard {
         output: Option<flamewm_api::OutputId>,
         interaction: Option<InteractionContext>,
     },
@@ -572,6 +580,9 @@ pub struct ShellSurfaces {
     /// Top-center Launcher popup; `launcher_output` is `Some` while it is open.
     pub launcher: SurfaceHandle,
     launcher_output: Option<flamewm_api::OutputId>,
+    /// Clipboard history popup, top-centre like the Launcher; `clipboard_output` is `Some` while open.
+    pub clipboard: SurfaceHandle,
+    clipboard_output: Option<flamewm_api::OutputId>,
     /// Polkit authentication card; open while the dialog has an active prompt.
     pub polkit: SurfaceHandle,
     polkit_open: bool,

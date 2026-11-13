@@ -6,6 +6,7 @@ use flamewm_api::OutputId;
 pub enum PopupKind {
     Start,
     Launcher,
+    Clipboard,
     TaskContext,
     Media,
     Usage,

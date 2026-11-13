@@ -764,6 +764,11 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_history_requested_round_trips_through_dbus() {
+        assert_bus_round_trip(ControlSignal::ClipboardHistoryRequested);
+    }
+
+    #[test]
     fn window_switcher_changed_round_trips_through_dbus() {
         assert_bus_round_trip(ControlSignal::WindowSwitcherChanged {
             open: true,

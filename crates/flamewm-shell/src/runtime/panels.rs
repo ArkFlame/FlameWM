@@ -174,6 +174,11 @@ impl ShellSurfaces {
                     .flatten()
             })
             .or_else(|| {
+                (surface == self.clipboard)
+                    .then(|| self.clipboard_output.clone())
+                    .flatten()
+            })
+            .or_else(|| {
                 // Card keys are dropped as Ignore without this, so typed input never reaches it.
                 (surface == self.polkit)
                     .then(|| self.polkit_output.clone())
