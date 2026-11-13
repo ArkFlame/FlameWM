@@ -61,6 +61,8 @@ struct NotificationHost {
     center_revision: Option<u64>,
     /// Active notification ids the center was last projected with; toast expiry changes them.
     center_active: Vec<u32>,
+    /// Tab-order row with keyboard focus; `None` when no row is focused.
+    center_focus: Option<usize>,
     /// Set when an outside press closed the centre; consumes the same click's opener release.
     closed_by_press: Option<Instant>,
     /// Loads toast icons by theme name; spawned on the first named icon.
@@ -155,6 +157,7 @@ impl NotificationHost {
             center_view: notification_center::CenterView::default(),
             center_revision: None,
             center_active: Vec::new(),
+            center_focus: None,
             closed_by_press: None,
             icons: None,
             icon_root,
@@ -186,6 +189,14 @@ impl NotificationHost {
             self.closed_by_press = Some(Instant::now());
             self.toggle_center(runtime);
             return true;
+        }
+        if self.center_open
+            && event.surface == self.center
+            && event.action.phase == flamewm_ui_x11::ActionPhase::Press
+            && event.action.action == "__flamewm.ui.key"
+        {
+            let payload = event.action.text.clone().unwrap_or_default();
+            return self.center_key(&payload, runtime);
         }
         if event.action.phase != flamewm_ui_x11::ActionPhase::Release || !event.action.inside {
             return false;
@@ -256,6 +267,7 @@ impl NotificationHost {
 
     fn toggle_center(&mut self, runtime: &mut SurfaceRuntime) {
         self.center_open = !self.center_open;
+        self.center_focus = None;
         self.center_revision = None;
         let shown = if self.center_open {
             let shown = runtime.show(self.center);
@@ -328,24 +340,19 @@ impl NotificationHost {
                             .map(|action| (item.seq, item.notification_id, action.key.clone()))
                     });
                 if let Some((seq, id, key)) = target {
-                    match self.provider.invoke_action(id, &key) {
-                        // The invoke emits ActionInvoked and closes the toast; the row closes too.
-                        Ok(true) => {
-                            self.provider.remove_history_entry(seq);
-                            if let Err(error) = self.tick(runtime, None) {
-                                eprintln!("flamewm-shell: notification update failed: {error}");
-                            }
-                        }
-                        Ok(false) => {
-                            eprintln!("flamewm-shell: notification {id} is no longer active");
-                        }
-                        Err(error) => {
-                            eprintln!(
-                                "flamewm-shell: notification action failed: {}",
-                                error.message
-                            );
-                        }
-                    }
+                    self.invoke_center_item(seq, id, &key, runtime);
+                }
+            }
+            Command::InvokeItemDefault { group, item } => {
+                let target = self
+                    .center_view
+                    .groups
+                    .get(group)
+                    .and_then(|group| group.items.get(item))
+                    .filter(|item| item.default_action)
+                    .map(|item| (item.seq, item.notification_id));
+                if let Some((seq, id)) = target {
+                    self.invoke_center_item(seq, id, notifications::DEFAULT_ACTION_KEY, runtime);
                 }
             }
         }
@@ -353,6 +360,54 @@ impl NotificationHost {
         if let Err(error) = self.refresh_center(runtime) {
             eprintln!("flamewm-shell: notification center update failed: {error}");
         }
+    }
+
+    /// Invokes a centre row's action. The invoke emits `ActionInvoked` and closes the toast; the row
+    /// closes too.
+    fn invoke_center_item(&mut self, seq: u64, id: u32, key: &str, runtime: &mut SurfaceRuntime) {
+        match self.provider.invoke_action(id, key) {
+            Ok(true) => {
+                self.provider.remove_history_entry(seq);
+                if let Err(error) = self.tick(runtime, None) {
+                    eprintln!("flamewm-shell: notification update failed: {error}");
+                }
+            }
+            Ok(false) => eprintln!("flamewm-shell: notification {id} is no longer active"),
+            Err(error) => eprintln!(
+                "flamewm-shell: notification action failed: {}",
+                error.message
+            ),
+        }
+    }
+
+    /// Keyboard on the open centre: Tab walks rows, Delete dismisses the focused row, Enter invokes
+    /// its default action. Returns whether the key was used.
+    fn center_key(&mut self, payload: &str, runtime: &mut SurfaceRuntime) -> bool {
+        let Some(action) =
+            notification_center::key_action(payload, self.center_focus, &self.center_view)
+        else {
+            return false;
+        };
+        match action {
+            notification_center::KeyAction::Focus(index) => {
+                self.center_focus = Some(index);
+                self.center_revision = None;
+                if let Err(error) = self.refresh_center(runtime) {
+                    eprintln!("flamewm-shell: notification center update failed: {error}");
+                }
+            }
+            notification_center::KeyAction::Dismiss { group, item } => {
+                self.center_focus = None;
+                let command = notification_center::Command::DismissItem { group, item };
+                self.apply_center_command(command, runtime);
+            }
+            notification_center::KeyAction::InvokeDefault { group, item } => {
+                self.center_focus = None;
+                let command = notification_center::Command::InvokeItemDefault { group, item };
+                self.apply_center_command(command, runtime);
+            }
+        }
+        true
     }
 
     /// Re-projects the center only when it is open and history changed since the last projection.
@@ -372,7 +427,7 @@ impl NotificationHost {
         }
         let mut view = notification_center::view(self.provider.history());
         notification_center::hide_inactive_actions(&mut view, |id| active.contains(&id));
-        let nodes = notification_center::nodes(&view);
+        let nodes = notification_center::nodes_with_focus(&view, self.center_focus);
         runtime
             .with_document(self.center, |document| {
                 for node in &nodes {
@@ -382,6 +437,16 @@ impl NotificationHost {
                         }
                         notification_center::Node::Visible { id, shown } => {
                             document.visible(id, *shown)?;
+                        }
+                        notification_center::Node::Meter { id, value } => {
+                            document.visible(id, value.is_some())?;
+                            if let Some(value) = value {
+                                let width = notification_center::CENTER_METER_WIDTH
+                                    * f32::from(*value)
+                                    / 100.0;
+                                document.size(&format!("{id}-fill"), width, 4.0)?;
+                                document.attribute(id, "aria-valuenow", &value.to_string())?;
+                            }
                         }
                     }
                 }
@@ -536,6 +601,14 @@ impl NotificationHost {
                         }
                     }
                     document.visible("notification-progress", notification.progress.is_some())?;
+                    document.visible(
+                        "notification-urgency-critical",
+                        notification.urgency == notifications::NotificationUrgency::Critical,
+                    )?;
+                    document.visible(
+                        "notification-urgency-low",
+                        notification.urgency == notifications::NotificationUrgency::Low,
+                    )?;
                     if let Some(progress) = notification.progress {
                         document.size(
                             "notification-progress-fill",

@@ -7,6 +7,7 @@ pub mod calendar;
 pub mod control_actions;
 pub mod cursor_theme;
 pub mod dock;
+pub mod focus_keys;
 pub mod icon_loader;
 pub mod launcher;
 #[cfg(test)]

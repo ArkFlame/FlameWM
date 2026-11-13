@@ -6,7 +6,10 @@
 use std::time::{Duration, Instant};
 
 use flamewm_integrations_linux::notification_history::NotificationHistory;
-use flamewm_integrations_linux::notifications::NotificationAction;
+use flamewm_integrations_linux::notifications::{NotificationAction, NotificationUrgency};
+
+/// Width of a row's progress track in px: the row content width at the 380 px centre.
+pub const CENTER_METER_WIDTH: f32 = 296.0;
 
 /// Action the panel status cluster dispatches to toggle the center.
 pub const OPEN_ACTION: &str = "notification.center.open";
@@ -73,6 +76,11 @@ pub enum Command {
         item: usize,
         action: usize,
     },
+    /// Keyboard Enter on a row: invokes the row's `default` action when it has one.
+    InvokeItemDefault {
+        group: usize,
+        item: usize,
+    },
 }
 
 impl Command {
@@ -116,6 +124,11 @@ pub struct CenterItem {
     pub body: String,
     /// Client actions, at most [`MAX_ITEM_ACTION_SLOTS`]. Empty once the toast is gone.
     pub actions: Vec<NotificationAction>,
+    /// `value` hint, 0..=100, when the client sent one.
+    pub progress: Option<u8>,
+    pub urgency: NotificationUrgency,
+    /// The client sent a `default` action; Enter on the focused row invokes it.
+    pub default_action: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +175,9 @@ pub fn view(history: &NotificationHistory) -> CenterView {
                                 .take(MAX_ITEM_ACTION_SLOTS)
                                 .cloned()
                                 .collect(),
+                            progress: entry.view.progress,
+                            urgency: entry.view.urgency,
+                            default_action: entry.view.default_action,
                         })
                 })
                 .collect();
@@ -196,8 +212,19 @@ pub fn hide_inactive_actions(view: &mut CenterView, is_active: impl Fn(u32) -> b
 /// One template write. Ids are the slot ids in `notification-center.html`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
-    Text { id: String, value: String },
-    Visible { id: String, shown: bool },
+    Text {
+        id: String,
+        value: String,
+    },
+    Visible {
+        id: String,
+        shown: bool,
+    },
+    /// A progress track: hidden without a value, else its fill width and `aria-valuenow`.
+    Meter {
+        id: String,
+        value: Option<u8>,
+    },
 }
 
 fn text(id: impl Into<String>, value: impl Into<String>) -> Node {
@@ -214,13 +241,22 @@ fn visible(id: impl Into<String>, shown: bool) -> Node {
     }
 }
 
-/// Every template write needed to show `view`. Unused slots are hidden.
+/// Every template write needed to show `view`, with no focused row.
 #[must_use]
 pub fn nodes(view: &CenterView) -> Vec<Node> {
+    nodes_with_focus(view, None)
+}
+
+/// Every template write needed to show `view`; `focus` indexes rows in Tab order (see
+/// [`item_at`]). Unused slots are hidden.
+#[must_use]
+pub fn nodes_with_focus(view: &CenterView, focus: Option<usize>) -> Vec<Node> {
     let mut out = vec![
         text("nc-dnd-state", if view.dnd { "On" } else { "Off" }),
         visible("nc-empty", view.groups.is_empty()),
     ];
+    // Tab-order index of the first row of the current group.
+    let mut base = 0;
     for group_slot in 1..=MAX_GROUP_SLOTS {
         let group = view.groups.get(group_slot - 1);
         let g = format!("nc-group-{group_slot}");
@@ -242,6 +278,22 @@ pub fn nodes(view: &CenterView) -> Vec<Node> {
             let item = group.items.get(item_slot - 1);
             let i = format!("nc-item-{group_slot}-{item_slot}");
             out.push(visible(&i, item.is_some()));
+            out.push(visible(
+                format!("{i}-urgent-critical"),
+                item.is_some_and(|item| item.urgency == NotificationUrgency::Critical),
+            ));
+            out.push(visible(
+                format!("{i}-urgent-low"),
+                item.is_some_and(|item| item.urgency == NotificationUrgency::Low),
+            ));
+            out.push(Node::Meter {
+                id: format!("{i}-progress"),
+                value: item.and_then(|item| item.progress),
+            });
+            out.push(visible(
+                format!("{i}-focus"),
+                item.is_some() && focus == Some(base + item_slot - 1),
+            ));
             if let Some(item) = item {
                 out.push(text(format!("{i}-summary"), item.summary.clone()));
                 out.push(text(format!("{i}-body"), item.body.clone()));
@@ -262,8 +314,55 @@ pub fn nodes(view: &CenterView) -> Vec<Node> {
         let hidden = group.count.saturating_sub(group.items.len());
         out.push(visible(format!("{g}-more"), hidden > 0));
         out.push(text(format!("{g}-more"), format!("+{hidden} more")));
+        base += group.items.len();
     }
     out
+}
+
+/// Rows across all shown groups, in Tab order.
+#[must_use]
+pub fn item_count(view: &CenterView) -> usize {
+    view.groups.iter().map(|group| group.items.len()).sum()
+}
+
+/// `(group, item)` slots of the row at Tab-order `index`.
+#[must_use]
+pub fn item_at(view: &CenterView, index: usize) -> Option<(usize, usize)> {
+    let mut rest = index;
+    for (group_index, group) in view.groups.iter().enumerate() {
+        if rest < group.items.len() {
+            return Some((group_index, rest));
+        }
+        rest -= group.items.len();
+    }
+    None
+}
+
+/// What a key does on the centre. `Focus` moves the Tab stop; the others act on a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAction {
+    Focus(usize),
+    Dismiss { group: usize, item: usize },
+    InvokeDefault { group: usize, item: usize },
+}
+
+/// Maps a `__flamewm.ui.key` payload to a centre action. Tab and Shift+Tab walk the rows; Delete
+/// dismisses the focused row; Enter invokes its `default` action, and does nothing without one.
+#[must_use]
+pub fn key_action(payload: &str, focus: Option<usize>, view: &CenterView) -> Option<KeyAction> {
+    if let Some(next) = crate::focus_keys::tab_focus_after(payload, focus, item_count(view)) {
+        return Some(KeyAction::Focus(next));
+    }
+    let (_, key) = crate::launcher::parse_typed_key(payload)?;
+    let index = focus.filter(|index| *index < item_count(view))?;
+    let (group, item) = item_at(view, index)?;
+    match key {
+        "Delete" => Some(KeyAction::Dismiss { group, item }),
+        "Return" | "Enter" => view.groups[group].items[item]
+            .default_action
+            .then_some(KeyAction::InvokeDefault { group, item }),
+        _ => None,
+    }
 }
 
 fn clip(value: &str) -> String {
@@ -484,7 +583,7 @@ mod tests {
         let mut ids: Vec<String> = nodes(&view(&history))
             .into_iter()
             .map(|node| match node {
-                Node::Text { id, .. } | Node::Visible { id, .. } => id,
+                Node::Text { id, .. } | Node::Visible { id, .. } | Node::Meter { id, .. } => id,
             })
             .collect();
         ids.sort();
@@ -560,6 +659,120 @@ mod tests {
         let long: String = "🙂".repeat(MAX_TEXT_CHARS + 1);
         assert_eq!(clip(&long).chars().count(), MAX_TEXT_CHARS + 1);
         assert!(clip(&long).ends_with('…'));
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+
+    fn item(
+        summary: &str,
+        urgency: NotificationUrgency,
+        progress: Option<u8>,
+        default: bool,
+    ) -> CenterItem {
+        CenterItem {
+            seq: 0,
+            notification_id: 1,
+            summary: summary.to_owned(),
+            body: String::new(),
+            actions: Vec::new(),
+            progress,
+            urgency,
+            default_action: default,
+        }
+    }
+
+    /// Group 1 holds rows 0 (default action) and 1 (critical, progress 40); group 2 holds row 2.
+    fn two_groups() -> CenterView {
+        let group = |app: &str, items| CenterGroup {
+            app_name: app.to_owned(),
+            muted: false,
+            count: 1,
+            items,
+        };
+        CenterView {
+            dnd: false,
+            groups: vec![
+                group(
+                    "a",
+                    vec![
+                        item("a1", NotificationUrgency::Normal, None, true),
+                        item("a2", NotificationUrgency::Critical, Some(40), false),
+                    ],
+                ),
+                group("b", vec![item("b1", NotificationUrgency::Low, None, false)]),
+            ],
+        }
+    }
+
+    fn key(name: &str) -> String {
+        format!("\u{1f}{name}\u{1f}")
+    }
+
+    // OBSERVABLE: Tab walks every row across groups and wraps. MUTATION: a per-group walk stops at 2.
+    #[test]
+    fn tab_walks_rows_across_groups() {
+        let view = two_groups();
+        assert_eq!(
+            key_action(&key("Tab"), None, &view),
+            Some(KeyAction::Focus(0))
+        );
+        assert_eq!(
+            key_action(&key("Tab"), Some(1), &view),
+            Some(KeyAction::Focus(2))
+        );
+        assert_eq!(
+            key_action(&key("Tab"), Some(2), &view),
+            Some(KeyAction::Focus(0))
+        );
+    }
+
+    // OBSERVABLE: Delete dismisses the focused row; Enter invokes only a row with a default action.
+    #[test]
+    fn delete_dismisses_and_enter_needs_a_default_action() {
+        let view = two_groups();
+        assert_eq!(
+            key_action(&key("Delete"), Some(2), &view),
+            Some(KeyAction::Dismiss { group: 1, item: 0 })
+        );
+        assert_eq!(
+            key_action(&key("Return"), Some(0), &view),
+            Some(KeyAction::InvokeDefault { group: 0, item: 0 })
+        );
+        assert_eq!(key_action(&key("Return"), Some(1), &view), None);
+        assert_eq!(key_action(&key("Delete"), None, &view), None);
+        assert_eq!(key_action(&key("Delete"), Some(9), &view), None);
+    }
+
+    // OBSERVABLE: urgency markers, the progress track and the focus ring project onto the row ids
+    // the template defines.
+    #[test]
+    fn urgency_progress_and_focus_project_to_row_nodes() {
+        let nodes = nodes_with_focus(&two_groups(), Some(1));
+        assert!(nodes.contains(&visible("nc-item-1-2-urgent-critical", true)));
+        assert!(nodes.contains(&visible("nc-item-1-1-urgent-critical", false)));
+        assert!(nodes.contains(&visible("nc-item-2-1-urgent-low", true)));
+        assert!(nodes.contains(&Node::Meter {
+            id: "nc-item-1-2-progress".to_owned(),
+            value: Some(40),
+        }));
+        assert!(nodes.contains(&Node::Meter {
+            id: "nc-item-1-1-progress".to_owned(),
+            value: None,
+        }));
+        assert!(nodes.contains(&visible("nc-item-1-2-focus", true)));
+        assert!(nodes.contains(&visible("nc-item-1-1-focus", false)));
+        assert!(nodes.contains(&visible("nc-item-2-1-focus", false)));
+    }
+
+    // OBSERVABLE: the template exposes the progress track as a progressbar.
+    #[test]
+    fn centre_progress_track_is_a_progressbar() {
+        let template = include_str!("../../../ui/shell/notification-center.html");
+        assert!(template
+            .contains(r#"id="nc-item-1-2-progress" class="nc-progress" role="progressbar""#));
     }
 }
 

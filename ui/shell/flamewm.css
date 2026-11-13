@@ -268,6 +268,9 @@ input { cursor:text; }
 .notification-icon { position:absolute; right:0px; top:0px; width:40px; height:40px; }
 .notification-progress { position:absolute; left:14px; right:14px; bottom:10px; height:4px; display:flex; background:var(--c-44494e); border-radius:2px; }
 .notification-progress-fill { height:4px; background:var(--c-df703e); border-radius:2px; }
+.notification-urgency { position:absolute; left:0px; top:14px; bottom:14px; width:3px; border-radius:2px; }
+.notification-urgency-low { background:#ffffff40; }
+.notification-urgency-critical { background:#da4453; }
 
 
 /* 0.0.8 parity: native context surfaces and task-entry state. */
