@@ -14,6 +14,7 @@ use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flamewm_api::clipboard::ClipboardHistoryEntry;
 use smithay::input::Seat;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -48,7 +49,6 @@ pub fn is_sensitive(offered: &[String]) -> bool {
 
 /// Single-line preview of a history entry: the first non-empty line, trimmed, at most
 /// `PREVIEW_CHARS` characters (ellipsis when cut).
-#[cfg_attr(not(test), allow(dead_code))] // shown by the control wire in the next slice
 pub fn preview(text: &str) -> String {
     let line = text
         .lines()
@@ -68,7 +68,14 @@ pub fn preview(text: &str) -> String {
 #[derive(Default)]
 pub struct TextHistory {
     next_id: u64,
-    items: VecDeque<(u64, String)>,
+    items: VecDeque<HistoryItem>,
+}
+
+/// One kept entry. The preview is computed once at push, so listing never rescans the text.
+struct HistoryItem {
+    id: u64,
+    text: String,
+    preview: String,
 }
 
 impl TextHistory {
@@ -78,30 +85,39 @@ impl TextHistory {
         if text.is_empty() || text.len() > MAX_TEXT_BYTES {
             return false;
         }
-        if let Some(pos) = self.items.iter().position(|(_, item)| *item == text) {
+        if let Some(pos) = self.items.iter().position(|item| item.text == text) {
             self.items.remove(pos);
         }
         self.next_id += 1;
-        self.items.push_front((self.next_id, text));
+        let preview = preview(&text);
+        self.items.push_front(HistoryItem {
+            id: self.next_id,
+            text,
+            preview,
+        });
         self.items.truncate(HISTORY_LEN);
         true
     }
 
-    /// Entries newest first, as (id, text).
-    #[cfg_attr(not(test), allow(dead_code))] // listed by the control wire in the next slice
-    pub fn entries(&self) -> impl Iterator<Item = (u64, &str)> {
-        self.items.iter().map(|(id, text)| (*id, text.as_str()))
+    /// Listed entries newest first: id, preview and byte length. Never the full text.
+    pub fn summaries(&self) -> Vec<ClipboardHistoryEntry> {
+        self.items
+            .iter()
+            .map(|item| ClipboardHistoryEntry {
+                id: item.id,
+                preview: item.preview.clone(),
+                len: item.text.len(),
+            })
+            .collect()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // used by select
     pub fn get(&self, id: u64) -> Option<&str> {
         self.items
             .iter()
-            .find(|(item_id, _)| *item_id == id)
-            .map(|(_, text)| text.as_str())
+            .find(|item| item.id == id)
+            .map(|item| item.text.as_str())
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // used by clear
     pub fn clear(&mut self) {
         self.items.clear();
     }
@@ -172,7 +188,6 @@ pub struct TextPersistence {
     clipboard: TextSlot,
     primary: TextSlot,
     /// Clipboard text history (PRIMARY is not recorded).
-    #[cfg_attr(not(test), allow(dead_code))] // read by the control wire in the next slice
     pub history: TextHistory,
 }
 
@@ -330,9 +345,13 @@ impl State {
 }
 
 impl State {
+    /// Clipboard history as the control surface lists it (ids and previews).
+    pub(crate) fn clipboard_history(&self) -> Vec<ClipboardHistoryEntry> {
+        self.compat.clipboard.history.summaries()
+    }
+
     /// Makes history entry `id` the CLIPBOARD selection, served like a kept owner's text. False when
     /// the id is unknown.
-    #[allow(dead_code)] // called by the control wire in the next slice
     pub(crate) fn select_clipboard_history(&mut self, id: u64) -> bool {
         let Some(text) = self.compat.clipboard.history.get(id).map(str::to_owned) else {
             return false;
@@ -346,7 +365,6 @@ impl State {
     }
 
     /// Empties the clipboard history. The current selection is left as it is.
-    #[allow(dead_code)] // called by the control wire in the next slice
     pub(crate) fn clear_clipboard_history(&mut self) {
         self.compat.clipboard.history.clear();
     }
@@ -455,8 +473,12 @@ mod tests {
         assert_eq!(slot.text("text/plain"), Some(&b"new"[..]));
     }
 
-    fn text_entry(history: &TextHistory) -> Vec<&str> {
-        history.entries().map(|(_, text)| text).collect()
+    fn text_entry(history: &TextHistory) -> Vec<String> {
+        history
+            .summaries()
+            .into_iter()
+            .map(|entry| entry.preview)
+            .collect()
     }
 
     #[test]
@@ -468,7 +490,7 @@ mod tests {
         assert_eq!(text_entry(&history), ["three", "two", "one"]);
         assert!(history.push("one".into()));
         assert_eq!(text_entry(&history), ["one", "three", "two"]);
-        let ids: Vec<u64> = history.entries().map(|(id, _)| id).collect();
+        let ids: Vec<u64> = history.summaries().iter().map(|entry| entry.id).collect();
         assert_eq!(ids.len(), 3);
         assert_eq!(
             ids.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -482,9 +504,12 @@ mod tests {
         for tag in 0..=HISTORY_LEN {
             assert!(history.push(format!("item {tag}")));
         }
-        assert_eq!(history.entries().count(), HISTORY_LEN);
-        assert_eq!(history.entries().next().map(|(_, t)| t), Some("item 20"));
-        assert!(history.entries().all(|(_, text)| text != "item 0"));
+        assert_eq!(history.summaries().len(), HISTORY_LEN);
+        assert_eq!(
+            history.summaries().first().map(|e| e.preview.as_str()),
+            Some("item 20")
+        );
+        assert!(history.summaries().iter().all(|e| e.preview != "item 0"));
     }
 
     #[test]
@@ -493,9 +518,9 @@ mod tests {
         assert!(!history.push(String::new()));
         assert!(!history.push("x".repeat(MAX_TEXT_BYTES + 1)));
         assert!(history.push("x".repeat(MAX_TEXT_BYTES)));
-        assert_eq!(history.entries().count(), 1);
+        assert_eq!(history.summaries().len(), 1);
         history.clear();
-        assert_eq!(history.entries().count(), 0);
+        assert_eq!(history.summaries().len(), 0);
     }
 
     #[test]
@@ -503,7 +528,7 @@ mod tests {
         let mut history = TextHistory::default();
         history.push("first".into());
         history.push("second".into());
-        let (first_id, _) = history.entries().last().unwrap();
+        let first_id = history.summaries().last().unwrap().id;
         assert_eq!(history.get(first_id), Some("first"));
         assert_eq!(history.get(u64::MAX), None);
     }

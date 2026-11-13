@@ -187,6 +187,14 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
                 }
             })
         }
+        (IFACE_CLIPBOARD, "List") => nullary(call, ControlRequest::ListClipboardHistory),
+        (IFACE_CLIPBOARD, "Select") => {
+            expect_arity(call, 1)?;
+            Ok(ControlRequest::SelectClipboardHistory {
+                id: required_u64(&call.args[0], "id")?,
+            })
+        }
+        (IFACE_CLIPBOARD, "Clear") => nullary(call, ControlRequest::ClearClipboardHistory),
         (IFACE_PANELS, "GetSnapshot") => nullary(call, ControlRequest::GetPanels),
         (IFACE_WEATHER, "GetSnapshot") => nullary(call, ControlRequest::GetWeatherFeed),
         (IFACE_WEATHER, "Publish") => {
@@ -424,6 +432,11 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             action,
             expected_revision,
         } => named_call(IFACE_SHORTCUTS, "ResetBinding", action, *expected_revision),
+        ControlRequest::ListClipboardHistory => nullary_call(IFACE_CLIPBOARD, "List"),
+        ControlRequest::SelectClipboardHistory { id } => {
+            WireCall::new(IFACE_CLIPBOARD, "Select", vec![WireValue::U64(*id)])
+        }
+        ControlRequest::ClearClipboardHistory => nullary_call(IFACE_CLIPBOARD, "Clear"),
         ControlRequest::GetPanels => nullary_call(IFACE_PANELS, "GetSnapshot"),
         ControlRequest::GetWeatherFeed => nullary_call(IFACE_WEATHER, "GetSnapshot"),
         ControlRequest::PublishWeatherFeed { payload } => WireCall::new(

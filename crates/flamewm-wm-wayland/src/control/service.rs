@@ -2,6 +2,7 @@
 
 use super::settings::{output_scale_to_apply, saved_shell_scales};
 use super::*;
+use flamewm_api::clipboard::ClipboardRequest;
 
 impl Service {
     /// Connects to the session bus, owns `com.arkflame.FlameWM1` and starts the platform host.
@@ -211,6 +212,9 @@ impl Service {
     pub fn turn(&self, state: &mut State) -> bool {
         self.sync(state);
         let mut busy = false;
+        self.host
+            .borrow_mut()
+            .set_clipboard_history(state.clipboard_history());
         loop {
             let visited = {
                 let mut host = self.host.borrow_mut();
@@ -226,6 +230,17 @@ impl Service {
                 break;
             }
             busy = true;
+        }
+        // Clipboard requests from this turn's bus traffic; applied on the compositor, never on the bus.
+        let clipboard = self.host.borrow_mut().take_clipboard_request();
+        if let Some(request) = clipboard {
+            busy = true;
+            match request {
+                ClipboardRequest::Select(id) => {
+                    state.select_clipboard_history(id);
+                }
+                ClipboardRequest::Clear => state.clear_clipboard_history(),
+            }
         }
         let queued: Vec<Command> = self.commands.borrow_mut().drain(..).collect();
         busy |= !queued.is_empty();

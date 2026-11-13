@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::capabilities::Capabilities;
+use flamewm_api::clipboard::{ClipboardHistoryEntry, ClipboardRequest};
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::ports::EnginePorts;
@@ -53,6 +54,8 @@ pub struct PlatformHost<E: EnginePorts> {
     background: BackgroundService,
     system: SystemService,
     weather: WeatherFeedService,
+    clipboard_entries: Vec<ClipboardHistoryEntry>,
+    clipboard_request: Option<ClipboardRequest>,
 }
 
 impl<E: EnginePorts> PlatformHost<E> {
@@ -73,6 +76,8 @@ impl<E: EnginePorts> PlatformHost<E> {
             background: BackgroundService::default(),
             system: SystemService::default(),
             weather: WeatherFeedService::default(),
+            clipboard_entries: Vec::new(),
+            clipboard_request: None,
         }
     }
 
@@ -491,6 +496,40 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     pub fn session_action(&mut self, action: SessionAction) -> FlameResult<()> {
         self.session.perform(&mut self.engine, action)
+    }
+
+    /// History the compositor last published (newest first). Empty for engines without clipboard history.
+    #[must_use]
+    pub fn clipboard_history_snapshot(&self) -> Vec<ClipboardHistoryEntry> {
+        self.clipboard_entries.clone()
+    }
+
+    /// The compositor republishes its clipboard history at the start of every control turn.
+    pub fn set_clipboard_history(&mut self, entries: Vec<ClipboardHistoryEntry>) {
+        self.clipboard_entries = entries;
+    }
+
+    /// Queues selection of a listed entry; the compositor applies it after the turn. Unknown ids are refused.
+    pub fn request_clipboard_select(&mut self, id: u64) -> FlameResult<()> {
+        if !self.clipboard_entries.iter().any(|entry| entry.id == id) {
+            return Err(FlameError::new(
+                ErrorCode::NotFound,
+                "clipboard history entry is not listed",
+            ));
+        }
+        self.clipboard_request = Some(ClipboardRequest::Select(id));
+        Ok(())
+    }
+
+    /// Queues clearing the clipboard history; the listed entries are dropped at once.
+    pub fn request_clipboard_clear(&mut self) {
+        self.clipboard_entries.clear();
+        self.clipboard_request = Some(ClipboardRequest::Clear);
+    }
+
+    /// Takes the request queued by the control surface, for the compositor to apply.
+    pub fn take_clipboard_request(&mut self) -> Option<ClipboardRequest> {
+        self.clipboard_request.take()
     }
 
     /// Latest weather payload published by the shell (revision 0 when none was published).

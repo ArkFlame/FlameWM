@@ -40,6 +40,7 @@ pub const IFACE_WINDOWS: &str = "com.arkflame.FlameWM1.Windows";
 pub const IFACE_APPLICATIONS: &str = "com.arkflame.FlameWM1.Applications";
 pub const IFACE_SYSTEM: &str = "com.arkflame.FlameWM1.System";
 pub const IFACE_WEATHER: &str = "com.arkflame.FlameWM1.Weather";
+pub const IFACE_CLIPBOARD: &str = "com.arkflame.FlameWM1.Clipboard";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
@@ -215,6 +216,14 @@ pub enum ControlRequest {
     PublishWeatherFeed {
         payload: String,
     },
+    /// Clipboard history (ids and previews only), newest first.
+    ListClipboardHistory,
+    /// Makes listed entry `id` the CLIPBOARD selection (applied after the control turn).
+    SelectClipboardHistory {
+        id: u64,
+    },
+    /// Empties the clipboard history.
+    ClearClipboardHistory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +245,7 @@ pub enum ControlResponse {
     Changed(bool),
     System(SystemSnapshot),
     WeatherFeed(flamewm_api::weather::WeatherFeedSnapshot),
+    ClipboardHistory(Vec<flamewm_api::clipboard::ClipboardHistoryEntry>),
     Unit,
 }
 
@@ -487,6 +497,16 @@ impl Dispatcher {
                 host.publish_weather_feed(payload)
                     .map_err(ControlError::from)?,
             ),
+            ControlRequest::ListClipboardHistory => {
+                ControlResponse::ClipboardHistory(host.clipboard_history_snapshot())
+            }
+            ControlRequest::SelectClipboardHistory { id } => {
+                unit(host.request_clipboard_select(id))?
+            }
+            ControlRequest::ClearClipboardHistory => {
+                host.request_clipboard_clear();
+                ControlResponse::Unit
+            }
         };
         Ok(response)
     }

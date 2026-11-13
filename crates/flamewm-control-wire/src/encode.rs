@@ -1,4 +1,5 @@
 use super::*;
+use flamewm_api::clipboard::ClipboardHistoryEntry;
 
 #[must_use]
 pub fn settings_dict(snapshot: &SettingsSnapshot) -> WireDict {
@@ -679,4 +680,15 @@ pub(crate) fn setting_value_for_key(
         }
         _ => setting_value(value),
     }
+}
+
+pub(crate) fn clipboard_entry_value(entry: &ClipboardHistoryEntry) -> WireValue {
+    WireValue::Dict(dict_of([
+        ("id", WireValue::U64(entry.id)),
+        ("preview", WireValue::String(entry.preview.clone())),
+        (
+            "len",
+            WireValue::U64(u64::try_from(entry.len).unwrap_or(u64::MAX)),
+        ),
+    ]))
 }

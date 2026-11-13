@@ -1,4 +1,5 @@
 use super::*;
+use flamewm_api::clipboard::ClipboardHistoryEntry;
 
 pub(crate) fn settings_snapshot(dict: &WireDict) -> Result<SettingsSnapshot, ControlError> {
     let revision = dict_u64(dict, "revision")?;
@@ -384,4 +385,16 @@ pub(crate) fn dict_string_array<'a>(
     key: &str,
 ) -> Result<&'a [String], ControlError> {
     required_string_array(dict_value(dict, key)?, key)
+}
+
+pub(crate) fn clipboard_entry(value: &WireValue) -> Result<ClipboardHistoryEntry, ControlError> {
+    let dict = value
+        .as_dict()
+        .ok_or_else(|| invalid("clipboard entry must be dict"))?;
+    Ok(ClipboardHistoryEntry {
+        id: dict_u64(dict, "id")?,
+        preview: dict_string(dict, "preview")?.to_owned(),
+        len: usize::try_from(dict_u64(dict, "len")?)
+            .map_err(|_| invalid("clipboard len out of range"))?,
+    })
 }

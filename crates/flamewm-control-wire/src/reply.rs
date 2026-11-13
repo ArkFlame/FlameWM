@@ -15,6 +15,11 @@ pub fn encode_reply(
         (IFACE_ROOT, "GetShellBootstrap", ControlResponse::ShellBootstrap(snapshot)) => {
             vec![WireValue::Dict(shell_bootstrap_dict(snapshot))]
         }
+        (IFACE_CLIPBOARD, "List", ControlResponse::ClipboardHistory(entries)) => {
+            vec![WireValue::Array(
+                entries.iter().map(clipboard_entry_value).collect(),
+            )]
+        }
         (IFACE_WINDOWS, "GetWindows", ControlResponse::Windows(windows)) => {
             vec![WireValue::Array(
                 windows.iter().map(window_wire_value).collect(),
@@ -123,6 +128,16 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
             single_reply(reply)?,
             "lease",
         )?)),
+        (IFACE_CLIPBOARD, "Select" | "Clear") => {
+            expect_reply_arity(reply, 0)?;
+            Ok(ControlResponse::Unit)
+        }
+        (IFACE_CLIPBOARD, "List") => Ok(ControlResponse::ClipboardHistory(
+            required_array(single_reply(reply)?, "entries")?
+                .iter()
+                .map(clipboard_entry)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
         (IFACE_SHORTCUTS, "GetSnapshot") => Ok(ControlResponse::Shortcuts(shortcut_snapshot(
             required_dict(single_reply(reply)?, "snapshot")?,
         )?)),

@@ -1541,3 +1541,22 @@ fn output_rotation_round_trips_and_defaults_to_normal_when_absent() {
     let legacy = output_snapshot(&WireValue::Dict(dict)).expect("legacy decode");
     assert_eq!(legacy.rotation, Rotation::Normal);
 }
+
+#[test]
+fn clipboard_history_requests_and_reply_round_trip_through_wire() {
+    let list = assert_request_round_trip(&ControlRequest::ListClipboardHistory);
+    assert_eq!(
+        (list.interface.as_str(), list.member.as_str()),
+        (IFACE_CLIPBOARD, "List")
+    );
+    let select = assert_request_round_trip(&ControlRequest::SelectClipboardHistory { id: 7 });
+    assert_eq!(select.member, "Select");
+    assert_request_round_trip(&ControlRequest::ClearClipboardHistory);
+    let entries = vec![flamewm_api::clipboard::ClipboardHistoryEntry {
+        id: 3,
+        preview: "two words".to_owned(),
+        len: 9,
+    }];
+    assert_reply_round_trip(&list, &ControlResponse::ClipboardHistory(entries));
+    assert_reply_round_trip(&list, &ControlResponse::ClipboardHistory(Vec::new()));
+}
