@@ -46,16 +46,14 @@ impl LockLoop {
         if self.shown.is_some() && self.painted_key == Some(key) {
             return;
         }
-        let mut view = LockView::project(
+        let view = LockView::project(
             &self.settings,
             key.time,
             &self.username,
             self.state.password(),
             self.state.status(),
+            self.caps_lock,
         );
-        if view.status.is_empty() && self.caps_lock {
-            view.status = CAPS_LOCK_HINT;
-        }
         let power = self.power.view();
         let view_changed = self.shown.as_ref() != Some(&view);
         let power_changed = self.shown_power.as_ref() != Some(&power);

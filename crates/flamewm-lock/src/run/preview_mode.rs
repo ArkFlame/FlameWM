@@ -43,6 +43,7 @@ pub(super) fn preview_loop(
                 username,
                 &PasswordBuffer::default(),
                 Status::default(),
+                false,
             ),
             PowerUi::new(SessionCapabilities::default()).view(),
         )

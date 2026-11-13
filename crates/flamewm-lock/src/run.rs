@@ -64,8 +64,6 @@ const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(50);
 /// Poll interval of the preview: pointer and keyboard are read by polling.
 const PREVIEW_POLL: Duration = Duration::from_millis(50);
-/// Shown in the status line while Caps Lock is on and no other status applies.
-const CAPS_LOCK_HINT: &str = "Caps Lock is on";
 /// Primary mouse button in X core numbering.
 const BUTTON_PRIMARY: u32 = 1;
 

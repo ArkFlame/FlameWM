@@ -55,6 +55,15 @@ impl SeatInput {
     /// Records the modifier mask the compositor reported.
     pub fn set_mods(&mut self, depressed: u32, latched: u32, locked: u32) {
         self.mods = (depressed, latched, locked);
+        if let Some(mapper) = self.mapper.as_mut() {
+            mapper.update_mods(depressed, latched, locked);
+        }
+    }
+
+    /// Caps Lock state of the keymap, as last reported by the compositor.
+    #[must_use]
+    pub fn caps_lock(&self) -> bool {
+        self.mapper.as_ref().is_some_and(KeyMapper::caps_lock)
     }
 
     /// Feeds a `wl_keyboard` event to `on_key` for every key the lock understands.
@@ -120,7 +129,7 @@ mod tests {
     const KEYMAP: &str = r#"xkb_keymap {
         xkb_keycodes "minimal+aliases(qwerty)" {
             minimum = 8; maximum = 255;
-            <AC01> = 38; <RTRN> = 36; <BKSP> = 22;
+            <AC01> = 38; <RTRN> = 36; <BKSP> = 22; <CAPS> = 66;
         };
         xkb_types "minimal" {
             type "ALPHABETIC" {
@@ -134,6 +143,8 @@ mod tests {
             key <AC01> { [ a, A ] };
             key <RTRN> { [ Return ] };
             key <BKSP> { [ BackSpace ] };
+            key <CAPS> { [ Caps_Lock ] };
+            modifier_map Lock { <CAPS> };
         };
     };"#;
 
@@ -167,6 +178,15 @@ mod tests {
             input.key(22 - EVDEV_TO_XKB, KeyState::Pressed),
             Some(Key::Backspace)
         );
+    }
+
+    #[test]
+    fn caps_lock_is_reported_from_the_modifier_mask() {
+        let mut input = SeatInput::default();
+        input.set_keymap(KEYMAP);
+        assert!(!input.caps_lock());
+        input.set_mods(0, 0, 2);
+        assert!(input.caps_lock());
     }
 
     #[test]

@@ -5,6 +5,9 @@ use crate::secret::PasswordBuffer;
 use crate::settings::LockSettings;
 use crate::state::Status;
 
+/// Status line while Caps Lock is on and no attempt status applies.
+const CAPS_LOCK_HINT: &str = "Caps Lock is on";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockView {
     pub clock: String,
@@ -27,6 +30,7 @@ impl LockView {
         username: &str,
         password: &PasswordBuffer,
         status: Status,
+        caps_lock: bool,
     ) -> Self {
         let (clock, date) = match now {
             Some(time) => (
@@ -43,7 +47,11 @@ impl LockView {
             show_username: settings.show_username,
             initial: initial_of(username),
             mask: password.masked(),
-            status: status.text(),
+            status: if status.text().is_empty() && caps_lock {
+                CAPS_LOCK_HINT
+            } else {
+                status.text()
+            },
             failed: status == Status::Failed,
         }
     }
@@ -86,6 +94,7 @@ mod tests {
             "alice",
             &password,
             Status::Failed,
+            false,
         );
         assert_eq!(view.clock, "13:07");
         assert_eq!(view.date, "Monday, 12 October 2026");
@@ -109,6 +118,7 @@ mod tests {
             "bob",
             &PasswordBuffer::default(),
             Status::Idle,
+            false,
         );
         assert_eq!(view.clock, "1:07 PM");
         assert!(!view.show_date && !view.show_username);
@@ -124,10 +134,30 @@ mod tests {
             "carol",
             &PasswordBuffer::default(),
             Status::Authenticating,
+            false,
         );
         assert_eq!(view.clock, "--:--");
         assert_eq!(view.date, "");
         assert_eq!(view.status, "Authenticating\u{2026}");
+    }
+
+    #[test]
+    fn caps_lock_hint_fills_only_an_empty_status() {
+        let project = |status, caps_lock| {
+            LockView::project(
+                &LockSettings::default(),
+                None,
+                "dave",
+                &PasswordBuffer::default(),
+                status,
+                caps_lock,
+            )
+            .status
+        };
+        assert_eq!(project(Status::Idle, true), "Caps Lock is on");
+        assert_eq!(project(Status::Idle, false), "");
+        // An attempt status outranks the hint.
+        assert_eq!(project(Status::Failed, true), "Authentication failed");
     }
 
     #[test]

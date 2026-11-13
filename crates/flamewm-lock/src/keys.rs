@@ -52,6 +52,13 @@ impl KeyMapper {
         Some(first)
     }
 
+    /// Whether Caps Lock (the `Lock` modifier) is on for the state last applied.
+    #[must_use]
+    pub fn caps_lock(&self) -> bool {
+        self.state
+            .mod_name_is_active(xkb::MOD_NAME_CAPS, xkb::STATE_MODS_EFFECTIVE)
+    }
+
     /// The keysym for `keycode` under the current modifiers.
     #[must_use]
     pub fn keysym(&self, keycode: u32) -> Keysym {
@@ -93,6 +100,7 @@ mod tests {
             <AC01> = 38;
             <SPCE> = 65;
             <FK01> = 67;
+            <CAPS> = 66;
         };
         xkb_types "minimal" {
             type "ONE_LEVEL" { modifiers = None; map[None] = Level1; };
@@ -111,6 +119,8 @@ mod tests {
             key <AC01> { [ a, A ] };
             key <SPCE> { [ space ] };
             key <FK01> { [ F1 ] };
+            key <CAPS> { [ Caps_Lock ] };
+            modifier_map Lock { <CAPS> };
         };
     };"#;
 
@@ -147,6 +157,17 @@ mod tests {
         assert_eq!(to_key(&mapper, 65), Some(Key::Char(' ')));
         // An unmapped keycode must not panic or invent a character.
         assert_eq!(to_key(&mapper, 200), None);
+    }
+
+    #[test]
+    fn caps_lock_follows_the_lock_modifier() {
+        let mut mapper = mapper();
+        assert!(!mapper.caps_lock());
+        // The Lock modifier is bit 1 in the standard xkb modifier order.
+        mapper.update_mods(0, 0, 2);
+        assert!(mapper.caps_lock());
+        mapper.update_mods(0, 0, 0);
+        assert!(!mapper.caps_lock());
     }
 
     #[test]

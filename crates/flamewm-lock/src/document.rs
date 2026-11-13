@@ -84,6 +84,7 @@ pub fn self_test() -> Result<(), String> {
         "self-test",
         &crate::secret::PasswordBuffer::default(),
         crate::state::Status::Idle,
+        false,
     );
     if view.clock != "--:--" {
         return Err("lock view projection changed unexpectedly".to_string());
@@ -792,7 +793,14 @@ mod tests {
 
     fn project(settings: &LockSettings, password: &PasswordBuffer, status: Status) -> Recorder {
         let mut recorder = Recorder::default();
-        let view = LockView::project(settings, Some(sample_time()), "alice", password, status);
+        let view = LockView::project(
+            settings,
+            Some(sample_time()),
+            "alice",
+            password,
+            status,
+            false,
+        );
         apply_view(&mut recorder, &view).expect("apply view");
         recorder
     }

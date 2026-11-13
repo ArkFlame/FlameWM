@@ -16,7 +16,7 @@ use flamewm_ui_document::UiDocumentView;
 fn painted_lock(width: u32, height: u32) -> Frame {
     let settings = LockSettings::default();
     let password = PasswordBuffer::default();
-    let view = LockView::project(&settings, None, "self-test", &password, Status::Idle);
+    let view = LockView::project(&settings, None, "self-test", &password, Status::Idle, false);
 
     let template = document::template().expect("compiled lock template decodes");
     let mut runtime = template.into_runtime_document();

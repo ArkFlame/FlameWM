@@ -135,6 +135,7 @@ impl LockClient {
                 "",
                 &crate::secret::PasswordBuffer::default(),
                 crate::state::Status::Idle,
+                false,
             ),
             unlock: false,
             dirty: false,
@@ -543,6 +544,7 @@ where
         username,
         client.state.password(),
         client.state.status(),
+        false,
     );
     let (mut queue, _qh) = client.lock(&connection)?;
     connection
@@ -630,7 +632,10 @@ impl Dispatch<WlKeyboard, ()> for LockClient {
     ) {
         // Collect the keys first: the handler needs `&mut self` for repaint and submit.
         let mut keys = Vec::new();
+        let caps_before = state.input.caps_lock();
         state.input.handle(event, |key| keys.push(key));
+        // A Caps Lock toggle changes the status hint, so the next turn must repaint.
+        state.dirty |= state.input.caps_lock() != caps_before;
         if keys.is_empty() {
             return;
         }
@@ -719,6 +724,7 @@ impl LockClient {
             &self.username,
             self.state.password(),
             self.state.status(),
+            self.input.caps_lock(),
         );
         let surfaces = std::mem::take(&mut self.configured);
         for surface in &surfaces {
@@ -838,6 +844,7 @@ mod tests {
             "tester",
             client.state.password(),
             client.state.status(),
+            false,
         );
         // The projection carries the username so the lock names who it will authenticate.
         assert_eq!(client.view.username, "tester");
