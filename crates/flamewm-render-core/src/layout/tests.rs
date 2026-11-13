@@ -592,3 +592,108 @@ fn scroll_container_shrinks_to_the_bounded_column() {
     assert!((layout.boxes[1].rect.height - 540.0).abs() < 0.01);
     assert!((layout.boxes[2].rect.height - 618.0).abs() < 0.01);
 }
+
+/// Settings Displays canvas shape: a page card (flex column) holding a 220px canvas with one
+/// absolutely placed node, below a 618px sibling that forces the page column to shrink.
+fn canvas_page(canvas_overflow: Overflow, card_overflow: Overflow) -> (CompiledDocument, Vec<u32>) {
+    let column = Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        height: Length::Px(540.0),
+        overflow_y: Overflow::Auto,
+        ..Style::default()
+    };
+    let card = Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        overflow_y: card_overflow,
+        ..Style::default()
+    };
+    let canvas = Style {
+        display: Display::Flex,
+        height: Length::Px(220.0),
+        overflow_y: canvas_overflow,
+        ..Style::default()
+    };
+    let node = Style {
+        position: Position::Absolute,
+        left: Length::Px(20.0),
+        top: Length::Px(30.0),
+        width: Length::Px(120.0),
+        height: Length::Px(60.0),
+        ..Style::default()
+    };
+    let tall = Style {
+        height: Length::Px(618.0),
+        ..Style::default()
+    };
+    let element = |parent, first_child, next_sibling, style: Style| CompiledNode {
+        kind: NodeKind::Element,
+        parent,
+        first_child,
+        next_sibling,
+        id: std::borrow::Cow::Borrowed(""),
+        action: std::borrow::Cow::Borrowed(""),
+        text: std::borrow::Cow::Borrowed(""),
+        image: None,
+        style: style.into(),
+        hover_style: None,
+        active_style: None,
+        focus_style: None,
+    };
+    let document = CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets: Vec::new(),
+        nodes: vec![
+            element(None, Some(1), None, column),
+            element(Some(0), Some(2), Some(4), card),
+            element(Some(1), Some(3), None, canvas),
+            element(Some(2), None, None, node),
+            element(Some(0), None, None, tall),
+        ],
+    };
+    (document, vec![1, 2, 3])
+}
+
+/// The Displays canvas must keep its 220px height and hold its node inside it when the page column
+/// is squeezed. A clipping (overflow hidden) canvas loses its height to the flex shrink rule.
+#[test]
+fn displays_canvas_keeps_height_and_node_inside_it_when_the_page_column_is_squeezed() {
+    let (document, ids) = canvas_page(Overflow::Visible, Overflow::Visible);
+    let runtime = RuntimeDocument::new(document).unwrap();
+    let layout = LayoutEngine::compute(&runtime, 300.0, 540.0, InteractionState::default());
+    let card = layout.boxes[ids[0] as usize].rect;
+    let canvas = layout.boxes[ids[1] as usize].rect;
+    let node = layout.boxes[ids[2] as usize].rect;
+    assert!(
+        (canvas.height - 220.0).abs() < 0.01,
+        "canvas height {}",
+        canvas.height
+    );
+    assert!(
+        card.height >= 220.0 - 0.01,
+        "card {} shrank the canvas",
+        card.height
+    );
+    assert!(
+        node.width > 0.0 && node.height > 0.0,
+        "node {node:?} has no size"
+    );
+    assert!(
+        node.x >= canvas.x
+            && node.y >= canvas.y
+            && node.x + node.width <= canvas.x + canvas.width
+            && node.y + node.height <= canvas.y + canvas.height,
+        "node {node:?} outside canvas {canvas:?}"
+    );
+}
+
+#[test]
+fn clipping_canvas_in_a_squeezed_column_loses_its_height() {
+    let (document, ids) = canvas_page(Overflow::Hidden, Overflow::Hidden);
+    let runtime = RuntimeDocument::new(document).unwrap();
+    let layout = LayoutEngine::compute(&runtime, 300.0, 540.0, InteractionState::default());
+    assert!(layout.boxes[ids[1] as usize].rect.height < 220.0 - 0.01);
+}

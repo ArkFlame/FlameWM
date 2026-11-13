@@ -291,3 +291,38 @@ fn escape_during_pointer_drag_restores_the_node_and_sends_nothing() {
         "a cancelled drag never reaches the WM"
     );
 }
+
+#[test]
+fn return_key_keeps_a_nudged_layout_as_one_arrangement_request() {
+    let (requests, mut transport) = recording_transport();
+    // Page load, canvas start, keep-time refresh, then the arrangement transaction.
+    transport.responses.extend([
+        Ok(ControlResponse::Displays(two_output_snapshot())),
+        Ok(ControlResponse::Displays(two_output_snapshot())),
+        Ok(ControlResponse::Displays(two_output_snapshot())),
+        Ok(ControlResponse::Transaction(flamewm_api::TransactionId(41))),
+    ]);
+    let mut application = displays_application(transport);
+    application
+        .client_mut()
+        .set_page(flamewm_settings_core::SettingsPage::Displays);
+    let mut document = ProbeDocument::default();
+    let release = |key: &str| flamewm_ui_x11::UiKeyEvent {
+        phase: flamewm_ui_x11::UiKeyPhase::Release,
+        key: key.to_owned(),
+        modifiers: Vec::new(),
+        text: None,
+    };
+    application
+        .handle_key_event(&release("Down"), &mut document)
+        .expect("nudge");
+    application
+        .handle_key_event(&release("Return"), &mut document)
+        .expect("return commits");
+    let arrangements = requests
+        .borrow()
+        .iter()
+        .filter(|r| matches!(r, ControlRequest::SetDisplayArrangement { .. }))
+        .count();
+    assert_eq!(arrangements, 1, "Return keeps the nudged layout once");
+}

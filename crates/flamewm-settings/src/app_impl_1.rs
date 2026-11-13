@@ -531,7 +531,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 canvas.nudge(dir)?;
                 Ok(true)
             }
-            "Enter" if dirty => {
+            // X11 names the Return key "Return" (ui-x11 key events); keypad Enter is "KP_Enter".
+            "Return" | "KP_Enter" if dirty => {
                 self.commit_display_canvas()?;
                 Ok(true)
             }

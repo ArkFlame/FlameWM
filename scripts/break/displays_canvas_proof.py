@@ -33,6 +33,10 @@ from Xlib.ext import xtest
 
 WINDOW_TITLE = "System Settings"
 PAGE_X = 190
+# Canvas panel in window-local coordinates of the 960x640 Settings window (fixed layout).
+CANVAS = (215, 334, 932, 558)
+# HDMI-1 node in canvas-local coordinates before any nudge (from the two-output layout).
+HDMI_NODE = (313, 14, 509, 125)
 FIXTURE_OUTPUTS = [
     {"connector": "DP-1", "x": 0, "y": 0, "width": 1920, "height": 1080, "primary": True},
     {"connector": "HDMI-1", "x": 1920, "y": 0, "width": 1280, "height": 720},
@@ -72,6 +76,39 @@ def clusters(mask_image, cell=16, min_cells=4):
         if size >= min_cells:
             count += 1
     return count
+
+
+def canvas(img):
+    return img.crop(CANVAS)
+
+
+def components(mask, cell=8, min_cells=2):
+    """Bounding boxes (x0, y0, x1, y1) of 4-connected blobs of set pixels on a coarse grid."""
+    w, h = mask.size
+    px = mask.load()
+    grid = {}
+    for gy in range(0, h, cell):
+        for gx in range(0, w, cell):
+            if any(px[x, y] for x in range(gx, min(gx + cell, w)) for y in range(gy, min(gy + cell, h))):
+                grid[(gx // cell, gy // cell)] = True
+    seen, boxes = set(), []
+    for start in grid:
+        if start in seen:
+            continue
+        stack, cells = [start], []
+        seen.add(start)
+        while stack:
+            cx, cy = stack.pop()
+            cells.append((cx, cy))
+            for nxt in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                if nxt in grid and nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        if len(cells) >= min_cells:
+            xs = [c[0] for c in cells]
+            ys = [c[1] for c in cells]
+            boxes.append((min(xs) * cell, min(ys) * cell, (max(xs) + 1) * cell - 1, (max(ys) + 1) * cell - 1))
+    return boxes
 
 
 def run(bin_dir, out):
@@ -199,7 +236,7 @@ def run(bin_dir, out):
             d.sync()
             time.sleep(0.8)
 
-        # Stage 1: one output versus two outputs on the same page; the canvas adds node clusters.
+        # Stage 1: one output versus two outputs; the second output adds a node inside the canvas panel.
         one_out = os.path.join(out, "one-output.json")
         with open(one_out, "w", encoding="utf-8") as handle:
             json.dump({"outputs": FIXTURE_OUTPUTS[:1]}, handle)
@@ -207,7 +244,7 @@ def run(bin_dir, out):
         if box is None:
             check("settings window opens with the one-output fixture", False, "no window")
             return all(verdicts)
-        one_shot = shot("canvas-one-output", box)
+        one_canvas = canvas(shot("canvas-one-output", box))
         close(proc)
         time.sleep(2)
 
@@ -217,15 +254,19 @@ def run(bin_dir, out):
               f"title={WINDOW_TITLE!r}")
         if box is None:
             return all(verdicts)
-        two_shot = shot("canvas-two-outputs", box)
-        blobs = clusters(ImageChops.difference(one_shot, two_shot).convert("L").point(lambda v: 255 if v else 0))
-        check("canvas renders two or more node clusters", blobs >= 2, f"clusters={blobs}")
+        two_canvas = canvas(shot("canvas-two-outputs", box))
+        # The second output node is drawn inside the canvas panel (the diff must not be empty).
+        node_mask = ImageChops.difference(one_canvas, two_canvas).convert("L").point(lambda v: 255 if v > 20 else 0)
+        blobs = components(node_mask)
+        check("canvas panel renders the second output node", len(blobs) >= 1, f"blobs={len(blobs)}")
+        if not blobs:
+            return all(verdicts)
 
         start_records = len(records())
         # Stage 2: keyboard. Down nudges the selected primary output; Enter keeps it through the WM.
-        base = shot("kb-base", box)
+        base = canvas(shot("kb-base", box))
         key("Down", wait=1.5)
-        nudged = shot("kb-down", box)
+        nudged = canvas(shot("kb-down", box))
         check("Down nudges the selected output (canvas pixels change)",
               ImageChops.difference(base, nudged).getbbox() is not None, "kb-base vs kb-down")
         key("Return", wait=2.0)
@@ -240,85 +281,53 @@ def run(bin_dir, out):
                   f"placements={placed}")
 
         # Stage 3: Down then Escape discards the nudge and sends nothing.
-        restored_base = shot("esc-base", box)
+        restored_base = canvas(shot("esc-base", box))
         key("Down", wait=1.5)
         key("Escape", wait=1.5)
-        esc_after = shot("esc-after", box)
+        esc_after = canvas(shot("esc-after", box))
         sent = len(records()) - len(after_enter)
         check("Escape discards a keyboard nudge without a request", sent == 0 and
               ImageChops.difference(restored_base, esc_after).getbbox() is None,
               f"new_requests={sent}")
 
-        # Stage 4: pointer drag. Tab selects HDMI-1; its accent outline is found by diffing selection.
-        def accent_box(img, region=None):
-            px = img.load()
-            w, h = img.size
-            counts = {}
-            for y in range(0, h, 2):
-                for x in range(PAGE_X, w, 2):
-                    r, g, b = px[x, y]
-                    if max(r, g, b) - min(r, g, b) > 60:
-                        counts[(r // 8, g // 8, b // 8)] = counts.get((r // 8, g // 8, b // 8), 0) + 1
-            if not counts:
-                return None
-            accent = max(counts, key=counts.get)
-            xs, ys = [], []
-            for y in range(0, h):
-                for x in range(PAGE_X, w):
-                    if region and not (region[0] <= x <= region[2] and region[1] <= y <= region[3]):
-                        continue
-                    r, g, b = px[x, y]
-                    if (r // 8, g // 8, b // 8) == accent:
-                        xs.append(x)
-                        ys.append(y)
-            return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+        # Stage 4: pointer. A click selects HDMI-1 at its located node; a press, move and Escape while held
+        # sends nothing and restores the node. The node is unmoved afterwards, so Stage 5 presses the same point.
+        def root_point(local_box):
+            cx = (local_box[0] + local_box[2]) // 2 + CANVAS[0]
+            cy = (local_box[1] + local_box[3]) // 2 + CANVAS[1]
+            return box[0] + cx, box[1] + cy
 
-        pre_tab = shot("drag-pre-tab", box)
-        key("Tab", wait=1.5)
-        post_tab = shot("drag-post-tab", box)
-        before_box = accent_box(pre_tab)
-        after_box = accent_box(post_tab)
-        if before_box is None or after_box is None or before_box == after_box:
-            check("selected node outline can be located for the drag", False, f"before={before_box} after={after_box}")
-            return all(verdicts)
-        cx = (after_box[0] + after_box[2]) // 2
-        cy = (after_box[1] + after_box[3]) // 2
-        hdmi_box = after_box
-        # Press HDMI-1, move 48 px down (past the snap threshold), release: one commit.
+        hx, hy = root_point(HDMI_NODE)
+        move(hx, hy)
+        button(True)
+        button(False)
+        time.sleep(1.0)
+        selected = canvas(shot("select-hdmi", box))
+        pre_cancel = len(records())
+        move(hx, hy)
+        button(True)
+        for step in range(1, 6):
+            move(hx, hy + step * 10)
+        key("Escape", wait=1.0)
+        button(False)
+        time.sleep(1.5)
+        cancelled = canvas(shot("cancel-after", box))
+        sent = [r for r in records()[pre_cancel:] if r.get("op") == "set_display_arrangement"]
+        check("Escape during a pointer drag sends no request", len(sent) == 0, f"requests={len(sent)}")
+        check("Escape during a pointer drag restores the node pixels",
+              ImageChops.difference(selected, cancelled).getbbox() is None, "select-hdmi vs cancel-after")
+
+        # Stage 5: pointer drag. Press HDMI-1, move 48 px down (past the snap threshold), release: one commit.
         pre_records = len(records())
-        move(box[0] + cx, box[1] + cy)
+        move(hx, hy)
         button(True)
         for step in range(1, 7):
-            move(box[0] + cx, box[1] + cy + step * 8)
+            move(hx, hy + step * 8)
         button(False)
         time.sleep(1.5)
         drag_commits = [r for r in records()[pre_records:] if r.get("op") == "set_display_arrangement"]
         check("pointer drag commits exactly once on release", len(drag_commits) == 1,
               f"commits={len(drag_commits)}")
-
-        # Stage 5: cancelled drag. Press, move, Escape while held, release: no request, pixels restored.
-        time.sleep(1.0)
-        settled = shot("cancel-settled", box)
-        located = accent_box(settled, region=(hdmi_box[0] - 200, hdmi_box[1] - 200,
-                                               hdmi_box[2] + 200, hdmi_box[3] + 200))
-        if located is None:
-            check("node outline located for the cancelled drag", False, "no accent outline")
-            return all(verdicts)
-        cx2 = (located[0] + located[2]) // 2
-        cy2 = (located[1] + located[3]) // 2
-        pre_cancel = len(records())
-        move(box[0] + cx2, box[1] + cy2)
-        button(True)
-        for step in range(1, 6):
-            move(box[0] + cx2, box[1] + cy2 + step * 10)
-        key("Escape", wait=1.0)
-        button(False)
-        time.sleep(1.5)
-        cancelled = shot("cancel-after", box)
-        sent = [r for r in records()[pre_cancel:] if r.get("op") == "set_display_arrangement"]
-        check("Escape during a pointer drag sends no request", len(sent) == 0, f"requests={len(sent)}")
-        check("Escape during a pointer drag restores the node pixels",
-              ImageChops.difference(settled, cancelled).getbbox() is None, "cancel-settled vs cancel-after")
         return all(verdicts)
     finally:
         close(settings)
