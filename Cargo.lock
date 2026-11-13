@@ -1109,6 +1109,7 @@ dependencies = [
  "flamewm-ui-core",
  "flamewm-ui-document",
  "flamewm-ui-x11",
+ "flamewm-usage",
  "flamewm-weather",
  "rustix 1.1.4",
 ]

@@ -11,6 +11,7 @@ repository.workspace = true
 chrono.workspace = true
 flamewm-api = { path = "../flamewm-api" }
 flamewm-weather = { path = "../flamewm-weather" }
+flamewm-usage = { path = "../flamewm-usage" }
 flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }

@@ -545,3 +545,10 @@ capability = "j11-g01-move-resize-commits-geometry"
 reason = "The window-outline ring is an override-redirect ARGB child that must track its frame's rect and is not a presenter surface, so it repositions itself instead of going through the J11 move_resize owner that keeps presenter geometry and its commit in step."
 canonical_target = "crates/flamewm-render-x11/src/surface_controller.rs"
 remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-shell/src/usage_host.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The AI usage worker reads the provider-documented `CLAUDE_CONFIG_DIR` (Claude CLI config root) and `COMMAND_CODE_API_KEY` (Command Code API key) to locate the user's own credentials; they are third-party variables, not FlameWM settings, and are never logged or rendered."
+canonical_target = "crates/flamewm-shell/src/usage_host.rs"
+remove_by = "0.2.0"
