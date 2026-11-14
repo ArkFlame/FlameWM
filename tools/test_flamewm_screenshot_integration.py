@@ -30,15 +30,13 @@ class ScreenshotMergeChecks(unittest.TestCase):
         self.assertIn("png", screenshot[0]["dependencies"])
 
     def test_concrete_x11_clipboard_request_limit_trait_is_imported(self):
-        # RustConnection's maximum_request_bytes() is supplied by this trait.
-        # The generic Connection bound in ui.rs does not establish scope here.
-        clipboard = read("crates/flamewm-screenshot/src/clipboard.rs")
+        # The request-limit call moved from clipboard.rs into ui.rs (put_image). ui.rs is generic over
+        # `C: Connection`, whose bound brings RequestConnection::maximum_request_bytes into scope.
+        ui = read("crates/flamewm-screenshot/src/ui.rs")
         # The call may be split across lines (`let chunk = conn\n    .maximum_request_bytes()`).
-        self.assertRegex(clipboard, r"\bconn\s*\.\s*maximum_request_bytes\s*\(\s*\)")
-        self.assertRegex(
-            clipboard,
-            r"use\s+x11rb::connection::\{[^}]*\bRequestConnection\b[^}]*\};",
-        )
+        self.assertRegex(ui, r"\bconn\s*\.\s*maximum_request_bytes\s*\(\s*\)")
+        self.assertRegex(ui, r"fn put_image<C: Connection>\(")
+        self.assertRegex(ui, r"use\s+x11rb::connection::Connection;")
 
     def test_all_screenshot_sources_present(self):
         for path in ("main.rs", "capture.rs", "ui.rs", "clipboard.rs"):
