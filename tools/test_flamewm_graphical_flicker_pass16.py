@@ -44,7 +44,7 @@ class GraphicalFlickerSourceContracts(unittest.TestCase):
         wm=src('crates/flamewm-wm-x11/src/wm/overlay.rs')
         self.assertRegex(wm,r'Effect::Open, animation::Style::Scale')
         self.assertIn('TransitionStyle::Stretch',wm)
-        settings=src('crates/flamewm-platform/src/settings.rs')
+        settings=src('crates/flamewm-platform/src/settings/product.rs')+src('crates/flamewm-platform/src/settings/types.rs')
         self.assertIn('maximize_animation: AnimationStyle::None',settings)
         self.assertIn('maximize_animation_enabled: false',settings)
         self.assertIn('"maximizeAnimation" => &[Self::None, Self::Fade, Self::Scale]',settings)

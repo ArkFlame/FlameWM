@@ -53,7 +53,7 @@ class DesktopPass17Contract(unittest.TestCase):
     def test_minimize_restores_existing_window_placement(self):
         wm = src("crates/flamewm-wm-x11/src/wm/events.rs")
         self.assertRegex(wm, re.compile(r"\.is_some_and\(\|state\| state\.minimized\)\s*\{\s*[^}]*self\.restore_minimized\(event\.window\)", re.M))
-        prefs = src("crates/flamewm-platform/src/settings.rs")
+        prefs = src("crates/flamewm-platform/src/settings/product.rs")
         self.assertIn('window_open_animation: AnimationStyle::None', prefs)
         self.assertIn('window_open_animation_enabled: false', prefs)
 
