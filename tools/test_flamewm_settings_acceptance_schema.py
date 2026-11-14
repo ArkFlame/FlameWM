@@ -292,7 +292,8 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
         self.assertTrue(acc.settings_signal_observations(fixture)["settings_changed"])
         self.assertTrue(acc.settings_signal_observations(fixture)["snapshot_changed"])
         self.assertEqual(acc.ss14_accent_screen_point({"x": 0, "y": 31}, (100, 92)), (100, 123))
-        self.assertEqual(acc.expected_selected_row_pixel("#2878D7"), (30, 50, 72))
+        # The selected row is the solid accent (app_impl_2 paints nav-selection with solid_color(accent)), not a tint.
+        self.assertEqual(acc.expected_selected_row_pixel("#2878D7"), (40, 120, 215))
         self.assertFalse(acc.ss03_selected_row_matches((34, 61, 76), "#2878D7"))
 
     def test_ss15_escape_requires_named_client_and_snapshot_clear_restore_not_active_title(self) -> None:
@@ -868,13 +869,17 @@ class FakeNativeRunnerTests(unittest.TestCase):
     def _args(self, *extra: str):
         return acc.parse_args(["--run-dir", str(self.tmp / "run"), *extra])
 
+    def _restart_names(self) -> list[str]:
+        # SS10 restarts the owned WM twice: once to verify persistence, once to restore the run config afterwards.
+        return [call.args[2] for call in self.restart.call_args_list]
+
     def test_ss10_passes_only_with_click_snapshot_change_and_restart_persistence(self) -> None:
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
                     side_effect=[(self.BEFORE_DISPLAYS, "q"), (self.CHANGED_DISPLAYS, "q"), (self.CHANGED_DISPLAYS, "q")])
         self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
         entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
         self.assertEqual(entry["status"], "PASS", entry["reason"])
-        self.restart.assert_called_once()
+        self.assertEqual(self._restart_names(), ["wm-ss10-restart", "wm-ss10-reset"])
         # Geometry is faked at origin (0,0), so the client-relative click maps to the same screen point.
         self.assertEqual(self.send_input.call_args.args[1], "600,300")
 
@@ -910,7 +915,7 @@ class FakeNativeRunnerTests(unittest.TestCase):
         self.assertEqual(click.args[1], "600,300")
         self.assertEqual(entry["details"]["scroll"], {"direction": "down", "steps": 3, "pointer": "480,320", "exit_code": 0})
         self.assertEqual(entry["details"]["after"]["click"], "600,300")
-        self.restart.assert_called_once()
+        self.assertEqual(self._restart_names(), ["wm-ss10-restart", "wm-ss10-reset"])
 
     def test_ss10_listed_modes_without_wheel_steps_is_not_run_and_never_scrolls_or_clicks(self) -> None:
         self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
@@ -957,7 +962,8 @@ class FakeNativeRunnerTests(unittest.TestCase):
         self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
         entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
         self.assertEqual(entry["status"], "FAIL", entry["reason"])
-        self.restart.assert_not_called()
+        # No verification restart; only the baseline restore after the run runs.
+        self.assertNotIn("wm-ss10-restart", self._restart_names())
 
     def test_ss10_wrong_scale_after_restart_fails(self) -> None:
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
