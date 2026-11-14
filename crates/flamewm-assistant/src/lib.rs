@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_assistant_core::{
@@ -56,6 +56,8 @@ const WIDTH: u32 = 460;
 const HEIGHT: u32 = 780;
 /// Wheel notches move the viewport by this many messages.
 const WHEEL_STEP: isize = 3;
+/// A UI-thread step at or above this length is logged to stderr.
+const SEND_STALL_LOG: Duration = Duration::from_millis(50);
 /// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
 const ACCENT_RGB: u32 = flamewm_api::settings::DEFAULT_ACCENT_RGB;
 const KEY_TINT: u32 = 0x00ff_ffff;
@@ -254,7 +256,16 @@ impl Assistant {
         if text.is_empty() {
             return;
         }
-        if !self.save(Role::User, &text, MsgState::Complete) {
+        // The store fsyncs twice on this UI thread; a slow disk shows up here as a stall.
+        let started = Instant::now();
+        let saved = self.save(Role::User, &text, MsgState::Complete);
+        let stalled = started.elapsed();
+        if stalled >= SEND_STALL_LOG {
+            eprintln!(
+                "flamewm-assistant: saving the message blocked the UI thread for {stalled:?}"
+            );
+        }
+        if !saved {
             return;
         }
         // The new message is already in the window's history, so it is the last turn sent.
