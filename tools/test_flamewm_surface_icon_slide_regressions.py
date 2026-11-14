@@ -56,7 +56,8 @@ class OnlyTwoIconThemes(unittest.TestCase):
 
 class ReverseSlideReliability(unittest.TestCase):
     def test_full_and_clipped_paths_share_shape(self):
-        code = src('crates/flamewm-render-x11/src/app/render.rs')
+        # base_shape_spans moved from app/render.rs into app/render/shape.rs (the shape owner).
+        code = src('crates/flamewm-render-x11/src/app/render.rs') + src('crates/flamewm-render-x11/src/app/render/shape.rs')
         self.assertIn('fn base_shape_spans(', code)
         self.assertIn('self.base_shape_spans(commands, scale, backdrop_radius)', code)
         self.assertIn('self.base_shape_spans(&cached.commands, 1.0, backdrop_radius)', code)
