@@ -9,14 +9,21 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "crates/flamewm-render-x11/src/backdrop.rs"
+CORE_DIR = ROOT / "crates/flamewm-render-x11/src/backdrop"
 WINDOW = ROOT / "crates/flamewm-render-x11/src/app/window_backdrop.rs"
 POPUP = ROOT / "crates/flamewm-render-x11/src/surface_controller/backdrop_shape.rs"
+
+
+def core_src() -> str:
+    # The backdrop provider was split from backdrop.rs into backdrop/*.rs; the owner is their union.
+    return CORE.read_text(encoding="utf-8") + "".join(
+        path.read_text(encoding="utf-8") for path in sorted(CORE_DIR.glob("*.rs")))
 
 
 class BackdropApiConsistency(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.core = CORE.read_text(encoding="utf-8")
+        cls.core = core_src()
         cls.window = WINDOW.read_text(encoding="utf-8")
         cls.popup = POPUP.read_text(encoding="utf-8")
 
@@ -43,7 +50,7 @@ class BackdropApiConsistency(unittest.TestCase):
         self.assertRegex(self.core, r"pub fn crop\s*\(\s*&mut self,\s*root: \(u32, u32\),\s*outputs: &\[\(i32, i32, u32, u32\)\]")
 
     def test_shared_owner_not_duplicated(self):
-        self.assertEqual(len(re.findall(r'^type CanvasLayout\s*=', self.core, re.M)), 1)
+        self.assertEqual(len(re.findall(r'^(?:pub(?:\([^)]*\))?\s+)?type CanvasLayout\s*=', self.core, re.M)), 1)
         self.assertEqual(self.core.count('pub(crate) unsafe fn published_wallpaper_outputs'), 1)
         self.assertEqual(self.core.count('pub fn recrop('), 1)
 
