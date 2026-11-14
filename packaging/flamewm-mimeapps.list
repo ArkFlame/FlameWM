@@ -11,3 +11,5 @@ application/x-compressed-tar=flamewm-archiver.desktop;
 application/x-xz-compressed-tar=flamewm-archiver.desktop;
 application/x-bzip2-compressed-tar=flamewm-archiver.desktop;
 application/x-bzip1-compressed-tar=flamewm-archiver.desktop;
+application/x-zstd-compressed-tar=flamewm-archiver.desktop;
+application/x-7z-compressed=flamewm-archiver.desktop;

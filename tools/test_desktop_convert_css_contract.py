@@ -36,7 +36,7 @@ class ConvertWheelCssContract(unittest.TestCase):
         self.assertEqual(declarations.get("align-items"), "center")
 
     def test_compiler_exposes_native_flex_alignment_properties(self):
-        source = (ROOT / "crates/flamewm-render-compiler/src/compile.rs").read_text(encoding="utf-8")
+        source = (ROOT / "crates/flamewm-render-compiler/src/compile/declarations.rs").read_text(encoding="utf-8")
         self.assertIn('"justify-content" =>', source)
         self.assertIn('"align-items" =>', source)
         self.assertIn('"flex" => Display::Flex', source)
