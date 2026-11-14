@@ -24,7 +24,7 @@ class KServiceMenuContract(unittest.TestCase):
         self.assertIn('"menus/flamewm-applications.menu"',source)
         self.assertLess(source.index('install_applications_menu(&config_dir)?;'),source.index('for plan in processes {'))
         self.assertIn('XDG_MENU_PREFIX', (ROOT/'crates/flamewm-session-core/src/lib.rs').read_text())
-        self.assertIn('"XDG_MENU_PREFIX",', (ROOT/'crates/flamewm-wm/src/bin/flamewm-session.rs').read_text())
+        self.assertIn('"XDG_MENU_PREFIX",', (ROOT/'crates/flamewm-wm/src/bin/flamewm-session/session_env.rs').read_text())
     def test_package_installs_menu_for_native_sessions(self):
         script=(ROOT/'scripts/package').read_text()
         self.assertIn('"$STAGE/etc/xdg/menus/flamewm-applications.menu"',script)

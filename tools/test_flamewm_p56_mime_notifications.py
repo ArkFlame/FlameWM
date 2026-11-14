@@ -23,6 +23,7 @@ class MimeAndNotifications(unittest.TestCase):
         compat = (ROOT / 'crates/flamewm-wm/src/session_app_compat.rs').read_text()
         script = (ROOT / 'scripts/package').read_text()
         self.assertIn('"XDG_MENU_PREFIX".to_owned(), "flamewm-".to_owned()', core)
+        session += (ROOT / 'crates/flamewm-wm/src/bin/flamewm-session/session_env.rs').read_text()
         self.assertIn('"XDG_MENU_PREFIX",', session)
         self.assertIn('install_applications_menu(&config_dir)?;', compat)
         self.assertIn('include_str!("../../../packaging/menus/flamewm-applications.menu")', compat)
