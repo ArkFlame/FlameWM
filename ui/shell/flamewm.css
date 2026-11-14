@@ -290,7 +290,7 @@ input { cursor:text; }
 /* Glyph (14px, centred) above, pill (11px) anchored to the entry bottom with a 1px margin: the
    entry is 38px so pill top (26) == glyph bottom (26) and nothing overlaps. */
 .tray-weather-overlay { align-items:flex-end; padding-bottom:1px; box-sizing:border-box; }
-.tray-weather-temp { height:11px; padding:0px 5px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:var(--r-md); background:var(--weather-pill); font-size:9px; color:var(--text); }
+.tray-weather-temp { height:11px; padding:0px 3px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; border-radius:var(--r-md); background:var(--weather-pill); font-size:9px; color:var(--text); }
 .tray-weather img { width:14px; height:14px; }
 
 /* Top-center application launcher: Start's search field, rows and surface tokens only. */
