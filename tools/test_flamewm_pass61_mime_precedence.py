@@ -8,7 +8,17 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MIME = ROOT / 'crates/flamewm-explorer/src/mime.rs'
-CATALOG = ROOT / 'crates/flamewm-applications/src/lib.rs'
+CATALOG_FILES = (
+    # Discovery moved from lib.rs into app_catalog.rs/desktop_entry.rs; the tests
+    # module holds the named behavioral anchor. Their union is the owner.
+    ROOT / 'crates/flamewm-applications/src/app_catalog.rs',
+    ROOT / 'crates/flamewm-applications/src/desktop_entry.rs',
+    ROOT / 'crates/flamewm-applications/src/tests.rs',
+)
+
+
+def catalog_src() -> str:
+    return ''.join(path.read_text() for path in CATALOG_FILES)
 
 
 class MimePrecedence(unittest.TestCase):
@@ -34,7 +44,7 @@ class MimePrecedence(unittest.TestCase):
         self.assertNotIn('Command::new("xdg-mime")', main)
 
     def test_handler_visibility_is_distinct_from_start_menu(self):
-        src = CATALOG.read_text()
+        src = catalog_src()
         self.assertIn('pub fn discover_file_handlers()', src)
         self.assertIn('Self::from_dirs_with_visibility(&xdg_application_dirs(), true)', src)
         self.assertIn('Self::from_dirs_with_visibility(dirs, false)', src)
@@ -43,7 +53,7 @@ class MimePrecedence(unittest.TestCase):
         self.assertIn('mime_handler_catalog_includes_nodisplay_and_ignores_one_bad_launcher', src)
 
     def test_one_broken_launcher_cannot_abort_discovery(self):
-        src = CATALOG.read_text()
+        src = catalog_src()
         self.assertIn('match parse_desktop_entry(&path, id, handlers)', src)
         self.assertIn('Err(error) => eprintln!', src)
         self.assertIn('item.file_type()', src)
