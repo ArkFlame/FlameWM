@@ -34,11 +34,11 @@ class DebianReleasePipelineTests(unittest.TestCase):
         for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
                      "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop",
                      "packaging/flamewm-explorer.desktop", "packaging/flamewm-terminal.desktop", "packaging/flamewm-task-manager.desktop",
-                     "packaging/flamewm-finder.desktop", "packaging/flamewm-archiver.desktop", "packaging/flamewm-imageviewer.desktop", "packaging/flamewm-mimeapps.list", "packaging/icons/flamewm-archiver.svg", "packaging/icons/flamewm-imageviewer.svg", "packaging/flamewm-assistant.desktop", "packaging/icons/flamewm-finder.svg",
+                     "packaging/flamewm-finder.desktop", "packaging/flamewm-archiver.desktop", "packaging/flamewm-imageviewer.desktop", "packaging/flamewm-mimeapps.list", "packaging/icons/flamewm-archiver.svg", "packaging/icons/flamewm-imageviewer.svg", "packaging/ark-ai.desktop", "packaging/icons/flamewm-finder.svg",
                      "packaging/pam.d/flamewm-lock",
                      "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
                      "packaging/install-manifest.txt", "packaging/debian/control.in", "packaging/target-baseline.toml",
-                     "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package", "scripts/dist-checksums",
+                     "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "packaging/xdg-desktop-portal/flamewm.portal", "packaging/dbus-1/org.freedesktop.impl.portal.desktop.flamewm.service", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package", "scripts/dist-checksums",
                      "scripts/package-source-archive", "scripts/flamewm-session-wrapper",
                      "scripts/flamewm-wayland-session", "packaging/flamewm-wayland.desktop",
                      "tools/flamewm_desktop_services.py", "tools/flamewm_glibc_baseline.py"):
