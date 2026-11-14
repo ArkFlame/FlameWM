@@ -1846,7 +1846,10 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
     details["commands"].append(reset_query)
     reset_binding = gvariant_field_string(reset_text or "", "ToggleStartMenu")
     escape_geometry = window_geometry(ctx, ctx.run / "logs" / "ss15-after-escape-window-tree.txt")
-    survives = ss15_escape_state_ok(hotkeys.proc.poll() is None, escape_geometry,
+    details["escape_state"] = {"initial": initial_binding, "cleared": cleared_binding, "restored": reset_binding,
+                               "input_exits": [key_code, escape_code, reset_code],
+                               "geometry": escape_geometry}
+    survives =ss15_escape_state_ok(hotkeys.proc.poll() is None, escape_geometry,
                                     (key_code, escape_code, reset_code), initial_binding,
                                     cleared_binding, reset_binding)
     observations["settings_survived_keyboard_escape"] = survives if clear_text is not None and reset_text is not None else None
