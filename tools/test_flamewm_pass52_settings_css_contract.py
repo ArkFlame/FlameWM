@@ -7,6 +7,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def compile_src() -> str:
+    # apply_declaration/unsupported moved from compile.rs into compile/*.rs.
+    base = ROOT / "crates/flamewm-render-compiler/src"
+    return (base / "compile.rs").read_text() + "".join(
+        path.read_text() for path in sorted((base / "compile").glob("*.rs")))
+
+
 def declarations(css: str, selector: str) -> dict[str, str]:
     match = re.search(r"(?:^|})\s*" + re.escape(selector) + r"\s*\{([^{}]*)\}", css)
     if match is None:
@@ -18,7 +25,7 @@ class SettingsScaleValueCSS(unittest.TestCase):
     def test_scale_label_uses_supported_centering(self):
         css = (ROOT / "ui/settings.css").read_text()
         html = (ROOT / "ui/settings.html").read_text()
-        compiler = (ROOT / "crates/flamewm-render-compiler/src/compile.rs").read_text()
+        compiler = compile_src()
         label = declarations(css, "#display-scale-value")
         pill = declarations(css, ".value-pill")
         self.assertNotIn("text-align", css)
@@ -30,7 +37,7 @@ class SettingsScaleValueCSS(unittest.TestCase):
 
     def test_all_settings_stylesheet_properties_are_compiler_supported(self):
         css = (ROOT / "ui/settings.css").read_text()
-        compiler = (ROOT / "crates/flamewm-render-compiler/src/compile.rs").read_text()
+        compiler = compile_src()
         start = compiler.index("fn apply_declaration(")
         end = compiler.index("fn unsupported(", start)
         known = set(re.findall(r'"([a-z-]+)"', compiler[start:end]))
