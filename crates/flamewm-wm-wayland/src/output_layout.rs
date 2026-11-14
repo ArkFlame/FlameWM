@@ -5,7 +5,6 @@
 //! Only the mode policy is called from the live DRM path today. Scale, row layout and crossing
 //! wait for per-output rendering and window ownership; they are kept here so that work reuses the
 //! tested rules instead of re-deriving them.
-#![allow(dead_code)]
 
 use crate::model::Rect;
 use std::collections::{BTreeMap, HashMap};
