@@ -24,12 +24,13 @@ class ProductionContracts(unittest.TestCase):
         self.assertNotIn('runtime.with_document(self.surfaces.panel(),',block)
         self.assertIn('runtime.redraw(panel)',block)
     def test_randr_two_providers_bind_physical_primary(self):
-        for rel in ['crates/flamewm-wm-x11/src/lib.rs','crates/flamewm-x11-desktop/src/lib.rs']:
+        # RandR topology ownership moved from x11-desktop/src/lib.rs into ports.rs and topology.rs.
+        for rel in ['crates/flamewm-wm-x11/src/lib.rs','crates/flamewm-x11-desktop/src/ports.rs']:
             s=src(rel); self.assertIn('randr_get_output_primary(self.root)',s)
             self.assertIn('primary: output == primary_output',s)
             self.assertIn('outputs.sort_by(|a, b| a.connector.cmp(&b.connector))',s)
     def test_desktop_name_from_metadata_even_without_exec(self):
-        s=src('crates/flamewm-applications/src/lib.rs')
+        s=src('crates/flamewm-applications/src/desktop_entry.rs')
         self.assertIn('pub fn desktop_file_display_name(',s)
         d=src('crates/flamewm-desktop/src/refresh.rs')+src('crates/flamewm-desktop/src/slots.rs')
         self.assertIn('desktop_item_label(state, item)',d)
