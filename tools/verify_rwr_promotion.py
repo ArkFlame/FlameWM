@@ -31,34 +31,34 @@ ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
         "reason": "re-accepted 2026-11-05 after reviewing diff 678ec1e3..HEAD: 727dae43 (dead SurfaceRim removal), 4ec49af3 (backend-neutral rasterizer), ef81ce72 (text without Xft), 0ecc86ec (Wayland corners); surface_material removal is intended dead-code cleanup; previously re-accepted after merged PR #15 (2026-10-30)",
     },
     "crates/flamewm-render-core/src/codec.rs": {
-        "sha256": "4a197baf032b3de42c1a935dc3b2f5d82a5db6af3ff59433c9ffd23e3af1628f",
-        "delta": "shares identical node styles when decoding compiled documents; clippy cleanups",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+        "sha256": "6b1ecf0a7f9a72d0b4c2ed61d94d70ab10f09f70bee2c0a9c4738801c2fb02ef",
+        "delta": "shares identical node styles when decoding compiled documents; clippy cleanups; split into reader/writer/wire/tests submodules; focus_style and codec format v9; text-overflow ellipsis with format v10 (v9 still decodes)",
+        "reason": "re-accepted 2026-11-14 after reviewing diff 082b2a73..HEAD: 2c7a33d8 (submodule split; every pinned item still present in render-core HEAD), f84b0197 (:focus-visible focus_style, codec v9), b8814053 (text-overflow, format v10); previously re-accepted 2026-10-28",
     },
     "crates/flamewm-render-compiler/src/compile.rs": {
-        "sha256": "5ebf2fc51df996dc688539f4116064762e807d8fd23df2d851003c94175b3e3a",
-        "delta": "shares identical node styles on lowering; rustfmt after upstream merge; shared text-shadow root token (default inherited by all text, opt-out via text-shadow: none); built-in accent token defaults seeded from flamewm_api::settings::DEFAULT_ACCENT_RGB (new flamewm-api path dependency)",
-        "reason": "re-accepted 2026-11-05 after reviewing diff 4a60472d..HEAD: ba51c1af (text shadow default token, Settings > Font toggle), f914d07a (built-in accent tokens; guard owner moved to flamewm-api); architecture_guard passes (render-compiler is not a forbidden dependency); previously re-accepted 2026-10-28",
+        "sha256": "0b52dd67e4f99662068efa8d34a8dce74dd07691a8609820ce30578ff498bebb",
+        "delta": "shares identical node styles on lowering; rustfmt after upstream merge; shared text-shadow root token (default inherited by all text, opt-out via text-shadow: none); built-in accent token defaults seeded from flamewm_api::settings::DEFAULT_ACCENT_RGB (new flamewm-api path dependency); selector matching, test and build-tree split into submodules; used-only Tailwind utilities; hostile-nesting rejection; bigram-prefiltered utility lookup",
+        "reason": "re-accepted 2026-11-14 after reviewing diff f914d07a..HEAD: 485c55dd and 443bb5e8 (module split, per-element selector matching), 347a4ec3 (reject hostile CSS/HTML nesting), 9a08f45e (used-only utility classes), f1140a53 (bigram prefilter, key cache), 4be194c8 (build-tree helpers); pinned items all present in render-compiler HEAD; previously re-accepted 2026-11-05 (4a60472d..HEAD) and 2026-10-28",
     },
     "crates/flamewm-render-x11/src/xlib.rs": {
-        "sha256": "5f111d308cf57bf2c9b38df8bfcea94e60f694706e57e21d6bba8a2858ceccad",
+        "sha256": "89493024cb616075ac9b531c86097b9fecb6c2c5408dfa0d519dc5764b495f00",
         "delta": "adds CW_BORDER_PIXEL, XVisibilityEvent/XCrossingEvent and visibility/crossing constants; removes unused FFI decls (XBlackPixel, XWhitePixel, XLoadFont, XUnloadFont, XTextWidth) and blanket allow(dead_code), gating test-only items with cfg(test); return_large_frees_to_system also sets a single malloc arena",
-        "reason": "re-accepted 2026-11-05 after reviewing diff 09b1f337..HEAD: f5eeb330 (dead-code removal, test-only gating), d03292b3 (VisibilityNotify events for obscured desktop), ba51c1af (XCrossingEvent, X11 client typing, idle wakeups); previously re-accepted 2026-10-29. Build not run in this review (see report)",
+        "reason": "re-accepted 2026-11-05 after reviewing diff 09b1f337..HEAD: f5eeb330 (dead-code removal, test-only gating), d03292b3 (VisibilityNotify events for obscured desktop), ba51c1af (XCrossingEvent, X11 client typing, idle wakeups); re-accepted 2026-11-14 after reviewing diff ba51c1af..HEAD: 07c311d4 (additive XK_PAGE_UP/PAGE_DOWN/HOME/END/ISO_LEFT_TAB keysyms, 5 lines); previously re-accepted 2026-10-29. Build not run in this review (see report)",
     },
     "crates/flamewm-render-x11/src/xft.rs": {
-        "sha256": "b3400831194ded90156bba584c494ef25dc478c5597926cbab32eed4a6958841",
-        "delta": "text_alpha_mask plus clip, scroll and backdrop support added since 0.0.9; scoped_text_measure (Xft-backed layout measurement) and an ignored per-call bench test",
-        "reason": "re-accepted 2026-11-05 after reviewing diff 270405f9..HEAD: 9667a7aa (layout and paint measure text with surface Xft extents; additive only). Doc comment of xft_measure_estimate moved back onto its fn (doc-only, 2026-11-05); previously re-accepted 2026-10-28",
+        "sha256": "2c399e75804ab0340d4e18c7fb5fabaa327b1469368d7976fceb7c66d19c88af",
+        "delta": "text_alpha_mask plus clip, scroll and backdrop support added since 0.0.9; scoped_text_measure (Xft-backed layout measurement) and an ignored per-call bench test; split into xft/surface_controller/app-event modules; libXft kept mapped through XCloseDisplay; process-wide Xft default layout measure; batched text-shadow masks",
+        "reason": "re-accepted 2026-11-14 after reviewing diff d2907568..HEAD: ef16d30a (module split; all pinned items present in render-x11 HEAD), c15b2835 (keep libXft/libXrender mapped), b9acdbfb and ba30f33b (Xft default layout measure), 460f1ba9 (batched text-shadow masks), 9e0a075b (caret probe test); previously re-accepted 2026-11-05 (270405f9..HEAD) and 2026-10-28",
     },
     "crates/flamewm-render-x11/src/xrender.rs": {
-        "sha256": "7399150d9a44138f6ae0d88d659cf3583f0a5085b17665c95c9cd5972518cebb",
-        "delta": "clippy cleanups and memory-footprint changes since 0.0.9",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+        "sha256": "ae390023f2c006c441d1ddb83638642a6211f5f05b2e8b42a1d6d1dd51a393ff",
+        "delta": "clippy cleanups and memory-footprint changes since 0.0.9; freed-pixmap XRender test runs in a fresh process",
+        "reason": "re-accepted 2026-11-14 after reviewing diff a0b8586f..HEAD: 6d0caa60 (test-only: isolated child process for the freed-pixmap check; no production code change); previously re-accepted 2026-10-28",
     },
     "crates/flamewm-render-compiler/src/css.rs": {
-        "sha256": "04092a882c05e37af5d03dd4eecf482585887f9e05fdbea69ae32dba45c9745e",
-        "delta": "clippy and debloat rewrites (iterator chains, is_some_and) since 0.0.9",
-        "reason": "re-accepted after reviewed post-baseline changes (2026-10-28)",
+        "sha256": "3a1bb6c1c74043e1e619ba44542721290ecda180c8ca7e265b4468cf5b40a318",
+        "delta": "clippy and debloat rewrites (iterator chains, is_some_and) since 0.0.9; selector logic split into css/selector.rs and tests into css/tests; :focus-visible pseudo-state; calc/@import/tokens engine; hostile-nesting rejection",
+        "reason": "re-accepted 2026-11-14 after reviewing diff a0b8586f..HEAD: 25de98ae (CSS engine: calc/@import/cache/tokens), 443bb5e8 and 485c55dd (selector indexing and module split; skip_ascii_ws and parse helpers relocated, pinned names present in render-compiler HEAD), 347a4ec3 (reject hostile at-rule/nesting input; at-rule error text retained), 9a08f45e (used-only utilities), f84b0197 (:focus-visible); previously re-accepted 2026-10-28",
     },
     "crates/flamewm-render-compiler/src/html.rs": {
         "sha256": "0066cbd5597997934025a20a9ccf94904958ead7127b667595587be1fcd06b4d",
@@ -212,6 +212,16 @@ XLIB_EXTENSIONS = (
 )
 
 
+COMPILER_LIB_EXTENSIONS = (
+    r"mod build_tree;\nmod cache;\nmod calc;\n",
+    r"mod imports;\nmod rule_index;\nmod utilities;\n",
+    r"pub use build_tree::\{rerun_tree, stage_tree\};\n",
+)
+BIN_X11_EXTENSIONS = (
+    r"\s*/// One line the Settings Check button parses:.*?\n\}\n",
+    r"\s*if env::args\(\)\.nth\(1\)\.as_deref\(\) == Some\(\"--gpu-probe\"\) \{.*?\n    \}",
+    r"\s*#\[cfg\(test\)\]\s*mod probe_line_tests \{.*?\n\}",
+)
 def exact(
     ref: str,
     active: str,
@@ -324,6 +334,7 @@ for rel in ["compile.rs", "css.rs", "html.rs", "lib.rs"]:
         f"crates/rustwebrender-compiler/src/{rel}",
         f"crates/flamewm-render-compiler/src/{rel}",
         tuple(NAMESPACE_TRANSLATIONS.items()) + (("RustWebRender", "FlameWM Render"),),
+        active_extensions=COMPILER_LIB_EXTENSIONS if rel == "lib.rs" else (),
     )
 exact(
     "crates/rustwebrender-compiler/src/bin/rwr-inspect.rs",
@@ -404,6 +415,7 @@ exact(
     "crates/flamewm-render-x11/src/bin/flamewm-render-x11.rs",
     tuple(NAMESPACE_TRANSLATIONS.items())
     + (("rwr-x11:", "flamewm-render-x11:"), ("usage: rwr-x11", "usage: flamewm-render-x11")),
+    active_extensions=BIN_X11_EXTENSIONS,
 )
 
 # Deliberately extended owners must retain exact 0.0.9 mechanics and audited
