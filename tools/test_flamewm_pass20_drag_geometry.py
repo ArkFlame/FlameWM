@@ -30,7 +30,8 @@ class DragGeometryContract(unittest.TestCase):
         self.assertRegex(part, r'self\.touch_geometry\(index\);\s*Ok\(\(\)\)')
 
     def test_drag_remains_captured_and_projected_at_pointer_motion(self):
-        self.assertIn('self.interaction.active', EVENTS.read_text())
+        # Pointer interaction state moved from events.rs into events/event_loop.rs.
+        self.assertIn('self.interaction.active', (ROOT / 'crates/flamewm-render-x11/src/app/events/event_loop.rs').read_text())
         source = (DESKTOP.parent / 'events.rs').read_text()  # desktop action dispatch moved to events.rs
         self.assertIn('UiActionPhase::Motion => {', source)
         self.assertIn('show_drag_ghost(document, state, action.x, action.y)?;', source)

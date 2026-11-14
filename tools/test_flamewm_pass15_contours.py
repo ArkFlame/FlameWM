@@ -39,7 +39,7 @@ class SourceContracts(unittest.TestCase):
         self.assertIn('border:1px solid',style)
     def test_clipped_ring_keeps_arc(self):
         painter=read('crates/flamewm-render-x11/src/xrender_aa.rs')
-        caller=read('crates/flamewm-render-x11/src/app/render.rs')
+        caller=read('crates/flamewm-render-x11/src/app/render/paint.rs')
         self.assertIn('stroke_rounded_rect_clipped(',painter)
         self.assertIn('stroke_rounded_rect_clipped(',caller)
         self.assertIn('stroke_row_runs(',painter)

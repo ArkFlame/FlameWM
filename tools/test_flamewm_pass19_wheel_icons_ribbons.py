@@ -38,7 +38,7 @@ class ConvertWheelSourceTests(unittest.TestCase):
         self.assertRegex(css, r"\.context-menu \.convert-wheel-option[^}]+background:transparent")
 
     def test_x11_hover_not_just_node_transition(self):
-        events = source("crates/flamewm-render-x11/src/app/events.rs")
+        events = source("crates/flamewm-render-x11/src/app/events/event_loop.rs")
         after = events[events.index("// Hover is a *pointer-position* event") :]
         self.assertIn("ActionPhase::Hover", after)
         self.assertIn("if changed {", after)

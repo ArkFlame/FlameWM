@@ -62,7 +62,7 @@ class Pass50Integration(unittest.TestCase):
         self.assertIn('scaled_corner_radius(', frame)
 
     def test_shadow_blur_is_native_renderer_feature(self):
-        compiler = source('crates/flamewm-render-compiler/src/compile.rs')
+        compiler = source('crates/flamewm-render-compiler/src/compile/vars.rs')
         painter = source('crates/flamewm-render-core/src/paint.rs')
         desktop_css = source('ui/desktop/desktop.css')
         self.assertIn('blur_radius', compiler)

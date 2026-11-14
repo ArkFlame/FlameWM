@@ -49,7 +49,7 @@ class DesktopPass18(unittest.TestCase):
         self.assertFalse((ROOT/'ui/desktop/convert-wheel.svg').exists())
         self.assertNotIn('text-align:',source('ui/desktop/desktop.css'))
     def test_desktop_click_claims_keyboard_focus_without_touching_other_roles(self):
-        events=source('crates/flamewm-render-x11/src/app/events.rs')
+        events=source('crates/flamewm-render-x11/src/app/events/event_loop.rs')
         app=source('crates/flamewm-render-x11/src/app/mod.rs')
         self.assertIn('desktop_takes_focus_on_press(self.role, button.button)',events)
         self.assertIn('XSetInputFocus(',events)

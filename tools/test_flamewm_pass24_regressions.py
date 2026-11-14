@@ -34,14 +34,14 @@ class Pass24Contracts(unittest.TestCase):
 
     def test_file_opening_uses_shared_mime_provider(self):
         # open_target and its spawn path moved from lib.rs into opener.rs.
-        apps = self.read('crates/flamewm-applications/src/lib.rs') + self.read('crates/flamewm-applications/src/opener.rs')
+        apps = self.read('crates/flamewm-applications/src/lib.rs') + self.read('crates/flamewm-applications/src/opener.rs') + self.read('crates/flamewm-applications/src/launch.rs')
         self.assertIn('pub fn open_target', apps)
         self.assertIn('"kioclient6", &["exec"]', apps)
         # File opening shares the canonical startup-notified, child-reaping launcher.
         self.assertIn('spawn_with_startup(&mut command, &name, &icon, &wm_class, true)', apps)
         self.assertIn('spawn_reaped_with_id(command, if sent { id.clone() } else { None })', apps)
         self.assertIn('open_target(path.as_os_str())', self.read('crates/flamewm-desktop/src/events.rs'))
-        self.assertIn('open_target(std::ffi::OsStr::new(uri))', self.read('crates/flamewm-x11-desktop/src/lib.rs'))
+        self.assertIn('open_target(std::ffi::OsStr::new(uri))', self.read('crates/flamewm-x11-desktop/src/ports.rs'))
 
     def test_no_automatic_password_migration_or_wallet_wipe(self):
         changed_files = ['crates/flamewm-applications/src/lib.rs', 'crates/flamewm-desktop/src/main.rs']

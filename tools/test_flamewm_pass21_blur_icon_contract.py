@@ -20,7 +20,7 @@ class BlurIconPass21Contracts(unittest.TestCase):
         self.assertNotIn("std::mem::size_of::<(usize, usize, f32)>())))", method)
         self.assertIn("while retained > max_bytes", method)
         self.assertIn("let Some((index, &bytes))", method)
-        self.assertIn("fn release_if_over_budget_keeps_useful_small_scratch()", blur)
+        self.assertIn("fn release_if_over_budget_keeps_useful_small_scratch()", source("crates/flamewm-image-core/src/blur/tests.rs"))
 
     def test_shell_cache_retains_original_entry_count_and_32mib_payload(self):
         source_text = source("crates/flamewm-shell/src/async_projection/icon_cache.rs")

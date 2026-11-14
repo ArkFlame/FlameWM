@@ -57,7 +57,9 @@ class MemoryContract(unittest.TestCase):
         # Output-aware grid lookup now lives in events.rs (main.rs only imports it).
         self.assertIn('grid_for_output(state, &output)', src('crates/flamewm-desktop/src/events.rs'))
         clipboard = src('crates/flamewm-screenshot/src/clipboard.rs')
-        self.assertIn('use x11rb::connection::{Connection, RequestConnection};', clipboard)
+        # Clipboard ownership moved to flamewm-clipboard; the screenshot hand-off delegates to it.
+        self.assertIn('flamewm_clipboard::serve_png(None, &bytes)', clipboard)
+        self.assertIn('use x11rb::connection::Connection;', clipboard)
 
     def test_installer_and_shortcuts_still_include_screenshot(self):
         self.assertIn('flamewm-screenshot', src('packaging/install-manifest.txt'))
