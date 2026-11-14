@@ -1,0 +1,31 @@
+# Reconcile: local main vs origin/main (2026-11-14)
+
+## What broke
+
+Local `main` was 4 commits ahead and 527 behind `origin/main`, so `git push` was rejected. `git pull --rebase`
+conflicted in 24 files.
+
+## Why
+
+- Local commits `2c40c344`, `05a92e17` and `0b66b508` (architecture docs, `scripts/lint`, zstd/7z MIME gate fix)
+  were already on origin under different hashes (`478cc386`, `ab576fa6`, `45f0186c`; `git cherry` marks them `-`).
+- `5e6a7e9f` bundled the README badges with 77 files of stale WIP written against the 2026-11-08 base. Origin
+  had since delivered the same intent in every code and UI file.
+- Eleven zero-byte scratch files sat in the repo root (`claude_*`, `coder_*`, `dock-*`, `perf_*`, `tm-*`,
+  `weather-tint-vars`, `widget-surface-default`). They are task markers, not assets, and nothing references them.
+
+## Original intent and resolution
+
+| Area | Local intent | Origin | Resolution |
+| --- | --- | --- | --- |
+| Weather tint (`flamewm-weather`, shell projection, `panel.html`, `flamewm.css`) | Tint vars, widget surface default | CSS `--weather-*` vars, overlay pill | Origin. Precedent: `weather_tint.rs`. The 14px `var(--surface)` pill is not carried over. |
+| Settings and platform (`actions`, `consts`, `settings.rs`, `shortcuts`, `settings.html/css`, acceptance py) | weatherTint setting, dock auto-hide shortcut, Dock section | Already present, newer (71 toggles, 78 actions, `.nav-scroll`, aria) | Origin |
+| Dock and autohide | Hover-label dedupe, instant show/hide | `label_shown`, `SLIDE_ENABLED = false` | Origin |
+| Assistant | Log UI stall on save | `SEND_STALL_LOG` | Origin |
+| wm-wayland / wm-x11 | Poison-safe role lock, keyboard move/resize imports | Superset | Origin. Unused `SESSION_LOCK_INTERFACE` dropped. |
+| `flamewm-settings/src/nav.rs` | Rust sidebar scroll helpers | Scrolling done in CSS | Dropped (dead code) |
+| Lint-allow removals across 6 crates | Cleanup | Allows still needed | Origin |
+| Docs (`ICON_CURSOR_THEMES_SPEC`, `GAP_PLAN`) | Older recommendations | Newer lead decisions | Origin |
+| README | "Featured on" badges (OSTechNix, LinuxLinks) | Not present | Kept |
+
+Backup of the pre-reconcile state: branch `backup/pre-reconcile` (local only).

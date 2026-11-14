@@ -11,6 +11,11 @@ Extremely efficient. Two sessions: X11 and Wayland.
 ![X11](https://img.shields.io/badge/session-X11-4b8bbe)
 ![Wayland](https://img.shields.io/badge/session-Wayland-f5a623)
 
+<sub>✨ **Featured on** &nbsp;
+[![OSTechNix](https://img.shields.io/badge/OSTechNix-FlameWM%20review-e44d26?style=flat-square&logo=linux&logoColor=white)](https://ostechnix.com/flamewm-rust-linux-desktop-environment/)
+[![LinuxLinks](https://img.shields.io/badge/LinuxLinks-FlameWM%20spotlight-2c7be5?style=flat-square&logo=linux&logoColor=white)](https://www.linuxlinks.com/flamewm-lightweight-window-manager-desktop-shell/)
+</sub>
+
 [Screenshots](#screenshots) · [Features](#features) · [Status](#status) · [Install](#install) · [Build](#build-from-source) · [Architecture](docs/ARCHITECTURE.md) · [Contributing](#contributing)
 
 <img src="assets/screenshots/overview.webp" alt="FlameWM desktop with a Terminal running flamefetch, an Explorer window, desktop widgets (clock, CPU, memory, media) and the taskbar" width="100%">
