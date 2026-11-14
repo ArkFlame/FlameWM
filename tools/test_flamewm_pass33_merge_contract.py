@@ -11,10 +11,15 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def read_dir(relative: str) -> str:
+    # Module split: the owner is the union of the directory's Rust sources.
+    return "".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / relative).rglob("*.rs")))
+
+
 class Pass33MergeContract(unittest.TestCase):
     def test_agent01_cursor_placement_reaches_wm_map(self):
         manager = read("crates/flamewm-wm-x11/src/wm/manage.rs")
-        layout = read("crates/flamewm-wm-x11/src/frame/geometry.rs")
+        layout = read_dir("crates/flamewm-wm-x11/src/frame/geometry")
         self.assertIn("can_place_near_pointer", manager)
         self.assertIn("query_pointer(screen.root)", manager)
         self.assertIn("plan_initial_map_near_pointer", manager)
@@ -47,7 +52,8 @@ class Pass33MergeContract(unittest.TestCase):
         self.assertIn("output.connected && output.geometry.is_valid()", service)
         self.assertIn("fn attached_but_disabled_crtc_cannot_create_phantom_panel()", service)
         self.assertIn("fn legacy_xephyr_root_without_randr_mode_still_has_a_panel()", service)
-        self.assertIn("rollback_if_safe", layout)
+        # Keep/revert moved to the WM-side display transaction (commit 1ab970ec).
+        self.assertIn("pub fn revert<P: DisplayPort>(", read("crates/flamewm-platform/src/services/display/transaction.rs"))
         self.assertIn("settings.display.arrange.left", read("ui/settings.html"))
         self.assertIn("monitor_drag: Option<", read("crates/flamewm-settings/src/lib.rs"))
 
