@@ -26,6 +26,7 @@ depends=(
   'python'
   'shared-mime-info'
   'systemd-libs'
+  'wayland'
   'xdg-utils'
   'xorg-xwayland'
 )

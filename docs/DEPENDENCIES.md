@@ -38,6 +38,7 @@ Table of record for what FlameWM needs at runtime and how each need is packaged.
 | libx11-6 | libx11 | Depends | flamewm-apps, flamewm-lock, flamewm-render-x11 (NEEDED) | Binaries do not start |
 | libxi6 | libxi | Depends | flamewm-apps, flamewm-lock, flamewm-render-x11 (NEEDED, XInput2) | Binaries do not start |
 | libxkbcommon0 | libxkbcommon | Depends | flamewm-wayland (NEEDED) | Wayland binary does not start |
+| libwayland-server0 | wayland | Depends | flamewm-wayland (NEEDED; wayland-server via smithay use_system_lib for EGL/dmabuf) | Wayland binary does not start |
 | libdbus-1-3 | dbus | Depends | flamewm-apps, flamewm-session, flamewm-lock, flamewm-wayland (NEEDED); control bus | Binaries do not start |
 | libpulse0 | libpulse | Depends | flamewm-audio-helper (NEEDED) | Audio helper does not start |
 | libpam0g | pam | Depends | flamewm-lock loads libpam.so.0 | Lock screen cannot authenticate |

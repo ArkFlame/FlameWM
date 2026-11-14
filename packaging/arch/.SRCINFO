@@ -30,6 +30,7 @@ pkgbase = flamewm-git
 	depends = python
 	depends = shared-mime-info
 	depends = systemd-libs
+	depends = wayland
 	depends = xdg-utils
 	depends = xorg-xwayland
 	optdepends = breeze-icons: default icon theme (Breeze, LGPL-3.0+)
