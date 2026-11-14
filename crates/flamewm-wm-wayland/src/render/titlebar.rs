@@ -1054,6 +1054,9 @@ mod translucent_backdrop_tests {
     /// as (4, 0, 60). Restores the default fill afterwards, as the other glass tests do.
     #[test]
     fn translucent_bar_composites_known_wallpaper_in_rgb_order() {
+        let _guard = crate::render::GLASS_STATICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let width = 400usize;
         let h = TITLEBAR_HEIGHT as usize;
         let backdrop: Vec<u8> = (0..width * h).flat_map(|_| [240u8, 0, 15, 255]).collect();
