@@ -465,6 +465,8 @@ mod panel_tray_tests {
         viewport: (f32, f32),
         panel: &str,
     ) {
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let cases = [
             (
                 WeatherState::Unconfigured,
@@ -531,6 +533,8 @@ mod panel_tray_tests {
     // weather entry projected. Set FLAMEWM_WEATHER_SHOT_DIR to dump `<panel>.rgba` for inspection.
     #[test]
     fn tray_weather_entry_paints_in_horizontal_and_vertical_panels() {
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let dump_dir = std::env::var("FLAMEWM_WEATHER_SHOT_DIR").ok();
         for (panel, artifact, viewport) in [
             ("horizontal", PANEL_ARTIFACT, (1080.0_f32, 72.0_f32)),
@@ -600,6 +604,8 @@ mod panel_tray_tests {
     // MUTATION: restoring the stacked column, or dropping the offset, fails here.
     #[test]
     fn tray_glyph_and_temperature_share_the_entry_vertical_centre() {
+        let _scale = crate::taskbar_scale::test_lock();
+        crate::taskbar_scale::set_factor(1.0);
         let mut doc = flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel decodes");
         project_weather_tray(&mut doc, &ready_21c(), TemperatureUnit::Celsius, true, true)
             .expect("tray projection");
