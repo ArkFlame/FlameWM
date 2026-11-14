@@ -92,7 +92,8 @@ class FinderUX(unittest.TestCase):
 
     def test_css_properties_known_to_compiler(self):
         import re
-        compiler=get('crates/flamewm-render-compiler/src/compile.rs')
+        # Property names moved from compile.rs into compile/declarations.rs.
+        compiler=get('crates/flamewm-render-compiler/src/compile.rs')+get('crates/flamewm-render-compiler/src/compile/declarations.rs')
         for body in re.findall(r'\{([^{}]*)\}',self.css):
             for declaration in body.split(';'):
                 if ':' not in declaration:continue
