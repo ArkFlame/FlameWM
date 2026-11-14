@@ -345,7 +345,6 @@ for identity, active in [
     ("pub fn run_with_handler", "crates/flamewm-render-x11/src/runtime.rs"),
     ("pub fn run_with_controller<F>", "crates/flamewm-render-x11/src/runtime.rs"),
     ("struct CachedImage", "crates/flamewm-render-x11/src/app/mod.rs"),
-    ("fn scale_rect", "crates/flamewm-render-x11/src/app/primitives.rs"),
     ("fn keyboard_text", "crates/flamewm-render-x11/src/app/events.rs"),
     ("fn cursor_shape", "crates/flamewm-render-x11/src/app/cursor.rs"),
     # fn root_background / fn blend_over_black removed by f5eeb330 (dead code: transparent
@@ -362,6 +361,15 @@ for identity, active in [
             CONFIG_X11_DEFAULT if identity == "impl Default for X11Config" else ()
         ),
     )
+# scale_rect moved to the shared render-core lower module (app/primitives.rs re-exports
+# it); the only mechanical change is the promoted `pub` visibility.
+exact_split_owner(
+    "crates/rustwebrender-x11/src/lib.rs",
+    "crates/flamewm-render-core/src/lower.rs",
+    "fn scale_rect",
+    translations=X11_TRANSLATIONS,
+    active_extensions=(r"\bpub (?=fn scale_rect)",),
+)
 exact_split_owner(
     "crates/rustwebrender-x11/src/lib.rs",
     "crates/flamewm-render-x11/src/app/mod.rs",
@@ -402,16 +410,16 @@ exact(
 # FlameWM seams at their current split owners.
 for path, anchor, description in [
     ("crates/flamewm-render-x11/src/app/events.rs", "XEventsQueued(self.display, QUEUED_AFTER_READING)", "motion coalescing"),
-    ("crates/flamewm-render-x11/src/app/events.rs", "XPeekEvent(self.display", "motion coalescing"),
-    ("crates/flamewm-render-x11/src/app/events.rs", "ActionPhase::Motion", "motion dispatch"),
-    ("crates/flamewm-render-x11/src/app/events.rs", "hover == Some(index),", "motion dispatch"),
+    ("crates/flamewm-render-x11/src/app/events/event_loop.rs", "XPeekEvent(self.display", "motion coalescing"),
+    ("crates/flamewm-render-x11/src/app/events/event_loop.rs", "ActionPhase::Motion", "motion dispatch"),
+    ("crates/flamewm-render-x11/src/app/events/event_loop.rs", "hover == Some(index),", "motion dispatch"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "XSetGraphicsExposures(display, gc, 0)", "image copy"),
     ("crates/flamewm-render-x11/src/app/render/present.rs", "XCopyArea(\n                    self.display,\n                    self.backbuffer,", "present copy"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "_NET_WM_WINDOW_TYPE", "EWMH role"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "attributes.override_redirect = 1;", "popup override redirect"),
     ("crates/flamewm-render-x11/src/app/images.rs", "revision: u64", "image revision cache"),
     ("crates/flamewm-render-x11/src/app/events.rs", "self.single_event", "single-event lifecycle"),
-    ("crates/flamewm-render-x11/src/app/events.rs", "self.close_requested", "close lifecycle"),
+    ("crates/flamewm-render-x11/src/app/events/event_loop.rs", "self.close_requested", "close lifecycle"),
     ("crates/flamewm-render-x11/src/runtime.rs", "run_with_controller_events_with_reactor", "reactor event seam"),
     ("crates/flamewm-render-x11/src/runtime.rs", "pub fn root_geometry", "root geometry"),
     ("crates/flamewm-render-x11/src/config.rs", "pub enum X11WindowRole", "role enum"),
