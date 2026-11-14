@@ -19,7 +19,8 @@ def src(path): return (ROOT/path).read_text()
 class PointerSelectionContracts(unittest.TestCase):
     def test_core_event_carries_raw_state_without_new_allocation(self):
         core=src('crates/flamewm-render-core/src/lib.rs')
-        backend=src('crates/flamewm-render-x11/src/app/events.rs')
+        # Native event field reads moved from app/events.rs into app/events/event_loop.rs.
+        backend=src('crates/flamewm-render-x11/src/app/events.rs')+src('crates/flamewm-render-x11/src/app/events/event_loop.rs')
         self.assertRegex(core,r'pub modifiers: u32,')
         self.assertIn('modifiers: u32,\n) -> ActionEvent',backend)
         for native in ('button','motion','key'):
