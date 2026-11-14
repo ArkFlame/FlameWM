@@ -54,7 +54,7 @@ class Pass30CargoLayout(unittest.TestCase):
             (package / 'src/main.rs').write_text('fn main() {}\n')
             for name in (
                 'flamewm-api', 'flamewm-control-core', 'flamewm-control-dbus',
-                'flamewm-dbus-reactor', 'flamewm-session-core', 'flamewm-wm-x11',
+                'flamewm-dbus-reactor', 'flamewm-integrations-linux', 'flamewm-session-core', 'flamewm-wm-x11',
                 'flamewm-xsettings',
             ):
                 dependency = dst / 'crates' / name
