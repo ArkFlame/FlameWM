@@ -22,9 +22,12 @@ class Pass26Tests(unittest.TestCase):
         code = read('crates/flamewm-shell/src/runtime.rs') + read('crates/flamewm-shell/src/runtime/panels.rs')
         self.assertIn('let logical_radius = radius as f32 / panel_ui_scale(', code)
         self.assertIn('document.corner_radius("taskbar", logical_radius)', code)
-        self.assertIn('set_dock_frame(record.panel, edge, radius)', code)
+        self.assertIn('set_dock_frame(record.panel, edge, radius, None)', code)
         self.assertIn('if entry.border_radius != Some(radius)', read('crates/flamewm-render-core/src/model/style/runtime.rs'))
-        renderer = read('crates/flamewm-render-x11/src/app/render.rs')
+        # Dock paint moved from app/render.rs into app/render/paint.rs; the rounded mask into render/shape.rs.
+        renderer = (read('crates/flamewm-render-x11/src/app/render.rs')
+                    + read('crates/flamewm-render-x11/src/app/render/paint.rs')
+                    + read('crates/flamewm-render-x11/src/app/render/shape.rs'))
         self.assertIn('crate::xrender_aa::fill_rounded_rect(', renderer)
         self.assertIn('crate::xrender_aa::stroke_rounded_rect(', renderer)
         self.assertIn('crate::xshape::rounded_mask_spans(self.width, self.height, self.dock_corner_radius)', renderer)
@@ -32,13 +35,17 @@ class Pass26Tests(unittest.TestCase):
     def test_shadow_has_shared_compiler_codec_and_paint_owners(self):
         css = read('ui/desktop/desktop.css')
         # Desktop-label shadow became the shared --text-shadow token (commit ba51c1af).
-        compiler = read('crates/flamewm-render-compiler/src/compile.rs')
+        # Compiler split: compile.rs (root lookup), compile/vars.rs (default token), compile/declarations.rs (property).
+        compiler = (read('crates/flamewm-render-compiler/src/compile.rs')
+                    + read('crates/flamewm-render-compiler/src/compile/vars.rs')
+                    + read('crates/flamewm-render-compiler/src/compile/declarations.rs'))
         self.assertIn('DEFAULT_TEXT_SHADOW: &str = "0px 1px 2px #00000059"', compiler)
         self.assertIn('"text-shadow" =>', compiler)
         core = read('crates/flamewm-render-core/src/paint.rs')
         self.assertIn('let shadow = style.text_shadow.filter(|_| document.ui_text_shadow());', core)
         self.assertLess(core.index('x: rect.x + shadow.offset_x'), core.index('text: Arc::clone(&text)'))
-        codec = read('crates/flamewm-render-core/src/codec.rs')
+        # Codec split: codec.rs root keeps the module; reader.rs decodes styles and tests.rs holds round-trips.
+        codec = read('crates/flamewm-render-core/src/codec/reader.rs') + read('crates/flamewm-render-core/src/codec/tests.rs')
         self.assertIn('text_shadow: if version >= FORMAT_VERSION_SHADOW_LEGACY', codec)
         self.assertIn('v5_style_decodes_without_text_shadow', codec)
         self.assertIn('v6_shadow_roundtrip_preserves_offset_and_color', codec)
