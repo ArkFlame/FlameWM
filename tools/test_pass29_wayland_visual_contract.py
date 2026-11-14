@@ -50,9 +50,10 @@ class WaylandVisualContract(unittest.TestCase):
         render = wayland_render_source()
         code = '\n'.join(line for line in render.splitlines() if not line.lstrip().startswith('//'))
         self.assertEqual(code.count('backend.buffer_age()'), 1)
-        self.assertIn(re.sub(r'\s+', '', 'static BUFFER_AGE_REFUSED: AtomicBool'), re.sub(r'\s+', '', render))
+        self.assertIn(re.sub(r'\s+', '', 'static BUFFER_AGE_REFUSED: std::sync::atomic::AtomicBool'), re.sub(r'\s+', '', render))
         self.assertIn(re.sub(r'\s+', '', 'BUFFER_AGE_REFUSED.store(true'), re.sub(r'\s+', '', render))
-        self.assertIn(re.sub(r'\s+', '', 'if BUFFER_AGE_REFUSED.load'), re.sub(r'\s+', '', render))
+        self.assertIn(re.sub(r'\s+', '', 'buffer_age_probe_allowed('), re.sub(r'\s+', '', render))
+        self.assertIn(re.sub(r'\s+', '', 'BUFFER_AGE_REFUSED.load'), re.sub(r'\s+', '', render))
 
     def test_single_output_alias_never_guesses_on_multiple_outputs(self):
         host = source('crates/flamewm-platform/src/host.rs')

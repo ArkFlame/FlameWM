@@ -25,7 +25,7 @@ def build_tree(root, sheet_text=None, percent=25):
     base.write_text(":root { --rim:#ffffff3f; }\n")
     if sheet_text is not None:
         (root / guard.RIM_SHEETS[0]).write_text(sheet_text)
-    platform = root / "crates/flamewm-platform/src/settings.rs"
+    platform = root / "crates/flamewm-platform/src/settings/product.rs"
     platform.parent.mkdir(parents=True, exist_ok=True)
     platform.write_text(f"surface_outline_opacity: {percent},\n")
     glass = root / "crates/flamewm-ui-core/src/glass.rs"
@@ -68,7 +68,7 @@ class RimTokenGuardTests(unittest.TestCase):
     def test_platform_opacity_must_match_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
             build_tree(Path(tmp))
-            (Path(tmp) / "crates/flamewm-platform/src/settings.rs").write_text(
+            (Path(tmp) / "crates/flamewm-platform/src/settings/product.rs").write_text(
                 "surface_outline_opacity: 8,\n")
             errors = []
             guard.check_rim_tokens(Path(tmp), errors)
