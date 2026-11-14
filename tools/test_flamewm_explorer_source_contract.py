@@ -38,7 +38,7 @@ class ExplorerContract(unittest.TestCase):
 
     def test_strict_css_properties_have_known_compiler_owners(self):
         css = (ROOT / "ui/explorer/explorer.css").read_text()
-        source = (ROOT / "crates/flamewm-render-compiler/src/compile.rs").read_text()
+        source = (ROOT / "crates/flamewm-render-compiler/src/compile.rs").read_text() + (ROOT / "crates/flamewm-render-compiler/src/compile/declarations.rs").read_text()
         declarations = []
         for body in re.findall(r"\{([^{}]*)\}", css):
             for decl in body.split(";"):
