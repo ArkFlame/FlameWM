@@ -302,7 +302,7 @@ pub(super) fn build_output(
 }
 
 /// Drops every output surface and its compositor. The connectors go back to `State`, which keeps
-/// the primary `Output` global alive. Each output's wl_output goes with its global, so its lock
+/// the primary `Output` global alive. Each output's `wl_output` goes with its global, so its lock
 /// surface and cover entry are forgotten too (the same rule as a connector that disconnects).
 pub(super) fn drop_outputs(d: &mut Drm, state: &mut State) {
     for out in d.surfaces.drain(..) {

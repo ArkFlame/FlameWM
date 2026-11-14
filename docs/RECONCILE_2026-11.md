@@ -29,3 +29,16 @@ conflicted in 24 files.
 | README | "Featured on" badges (OSTechNix, LinuxLinks) | Not present | Kept |
 
 Backup of the pre-reconcile state: branch `backup/pre-reconcile` (local only).
+
+## Pre-existing breakage on origin, fixed here
+
+`scripts/lint` (toolchain 1.89 per `rust-toolchain.toml`) and `cargo test --workspace` were not green on `origin/main`:
+
+| Break | Root cause | Fix |
+| --- | --- | --- |
+| `layout_matches_golden_for_every_ui_page` failed | `83e7e241` added `ui/shell/clipboard.html` without pinning its layout hashes | Re-pinned goldens (precedent `edc1707e`) |
+| `wayland_unlock_probe` example and `tests/wayland_unlock.rs` did not compile with `--features wayland` | `13f04f0d` changed `run_with` to take a settings-loader closure (lock shows before settings load); callers still passed `&LockSettings` | Pass `LockSettings::default` |
+| clippy `doc_markdown` in `drm/outputs.rs` | unquoted `wl_output` in a doc comment | Added backticks |
+| dead code `physical_size` in `output_layout.rs` | `728a7f5f` dropped the blanket `dead_code` allow; only tests call it | `#[cfg(test)]` |
+
+Verified: `scripts/lint` exit 0; `cargo test --workspace --no-fail-fast` 6129 passed, 0 failed.

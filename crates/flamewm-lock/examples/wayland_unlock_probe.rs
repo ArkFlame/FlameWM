@@ -23,7 +23,7 @@ fn main() -> std::process::ExitCode {
         .unwrap_or_else(|| "letmein".to_string());
     let accepted = secret.clone();
     let result = flamewm_lock::wayland::run_with(
-        &LockSettings::default(),
+        LockSettings::default,
         "probe",
         Box::new(move |_user, password| {
             if password == accepted {

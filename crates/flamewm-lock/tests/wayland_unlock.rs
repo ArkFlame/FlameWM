@@ -19,7 +19,7 @@ fn run_accepting(timeout: Duration) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
         let result = flamewm_lock::wayland::run_with(
-            &LockSettings::default(),
+            LockSettings::default,
             "tester",
             Box::new(|_, _| Outcome::Unlocked),
             |_, width, height| {

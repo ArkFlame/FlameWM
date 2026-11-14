@@ -92,6 +92,7 @@ pub(crate) fn logical_size(physical: (i32, i32), percent: u16) -> (i32, i32) {
 /// Physical size of a logical size at `percent` scale, the inverse of [`logical_size`]: rounded to
 /// the nearest pixel like it, so `physical_size(logical_size(p))` returns `p` for every size the
 /// fractional scale can express exactly once rounded.
+#[cfg(test)]
 pub(crate) fn physical_size(logical: (i32, i32), percent: u16) -> (i32, i32) {
     let percent = i64::from(percent.max(1));
     let scale = |value: i32| {
