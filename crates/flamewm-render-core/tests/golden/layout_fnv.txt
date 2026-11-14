@@ -28,6 +28,9 @@ shell/bluetooth.html 320x240 nodes=19 fnv=0e9f3c0be485ef39
 shell/calendar.html 1280x800 nodes=225 fnv=c8c2cd3d8ddf98bc
 shell/calendar.html 701x438 nodes=225 fnv=479f195bf5dac0a8
 shell/calendar.html 320x240 nodes=225 fnv=44ffa34692249f5f
+shell/clipboard.html 1280x800 nodes=32 fnv=0d4364c859bed0da
+shell/clipboard.html 701x438 nodes=32 fnv=651e9f056abf00c6
+shell/clipboard.html 320x240 nodes=32 fnv=b93f2dd4863a5213
 shell/dock-label.html 1280x800 nodes=3 fnv=8e5dd8f136022ce5
 shell/dock-label.html 701x438 nodes=3 fnv=0435d6506011aca9
 shell/dock-label.html 320x240 nodes=3 fnv=06965682ca8bae85
