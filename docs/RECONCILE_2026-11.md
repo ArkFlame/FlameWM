@@ -42,3 +42,15 @@ Backup of the pre-reconcile state: branch `backup/pre-reconcile` (local only).
 | dead code `physical_size` in `output_layout.rs` | `728a7f5f` dropped the blanket `dead_code` allow; only tests call it | `#[cfg(test)]` |
 
 Verified: `scripts/lint` exit 0; `cargo test --workspace --no-fail-fast` 6129 passed, 0 failed.
+
+## User bug report triage (2026-11-16, Spanish report, 5 items)
+
+| # | Report | Status | Evidence / change |
+| --- | --- | --- | --- |
+| 1 | Tab not recognized in TUI apps | NOT REPRODUCED | Static review of `input/{keyboard,shortcuts}.rs`: only Alt+Tab bound, bare/Shift Tab forwarded. Guard test `plain_and_shift_tab_are_forwarded_to_clients`. No live repro (no input injection tool; `/dev/uinput` forbidden). |
+| 2 | Paste from browser into Alacritty | CONFIRMED, fixed | Kept clipboard text was re-offered under only the mime it was read as; now all text targets for valid UTF-8 (`protocols/clipboard.rs`). Precedent `.vendor/cosmic-epoch/cosmic-files/src/clipboard.rs`. Real browser/Alacritty not run. |
+| 3 | Dark bottom window border | CONFIRMED, fixed | Short client buffer exposed desktop inside the frame (measured under Xvfb). Frame body now painted in the titlebar material (`render/mod.rs`); outline strips rounded via `physical_point`. 1.25/1.5 scale not measured. |
+| 4 | No desktop/session switcher | OUT OF SCOPE | FlameWM is a desktop environment; sessions are chosen by the display manager. See `docs/SESSION_SCOPE.md`. |
+| 5 | "All programs" in start menu | IMPLEMENTED | `StartView` + All Programs list with letter headers, toggle button, `showAllProgramsByDefault` setting. Verified by screenshots (WM+shell under Xvfb, X11 path): many/few apps, dark/light. No transition/scrollbar-width support in the renderer (projected 3px thumb, no animation). |
+
+Limits: clippy is not installed on this host, so `-D warnings` lint was not run.
