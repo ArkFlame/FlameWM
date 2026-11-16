@@ -177,6 +177,26 @@ mod physical_point_guard {
 fn physical_radius(radius: u8, scale: f64) -> u8 {
     (f64::from(radius) * scale).round().min(f64::from(u8::MAX)) as u8
 }
+
+/// Physical rectangle of a decorated client's body: the logical client rect rounded like surfaces.
+fn client_backdrop_rect(rect: Rect, scale: f64) -> Rectangle<i32, Physical> {
+    let origin = physical_point(rect.x, rect.y, scale);
+    let end = physical_point(rect.x + rect.w, rect.y + rect.h, scale);
+    Rectangle::new(origin, (end.x - origin.x, end.y - origin.y).into())
+}
+
+/// Solid frame body in the window material, painted under a client that may not fill its rect.
+fn client_backdrop(rect: Rect, scale: f64) -> SolidColorRenderElement {
+    let rgb = current_titlebar_material() & 0x00ff_ffff;
+    let channel = |shift: u32| f32::from(((rgb >> shift) & 0xff) as u8) / 255.0;
+    SolidColorRenderElement::new(
+        Id::new(),
+        client_backdrop_rect(rect, scale),
+        CommitCounter::default(),
+        [channel(16), channel(8), channel(0), 1.0],
+        Kind::Unspecified,
+    )
+}
 fn surface_elements(
     renderer: &mut GlowRenderer,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -355,6 +375,11 @@ fn scene_elements(
                         }),
                 );
                 if managed.decorated() {
+                    // A cell-grid client may commit a buffer shorter than its configured size. Paint
+                    // the frame body behind the client over its full extent, so no desktop shows
+                    // through the gap (KWin and xfwm4 paint a decorated window's body the same way).
+                    // Pushed after the surface, so it sits below the client and the titlebar.
+                    out.push(Elem::Solid(client_backdrop(managed.rect, scale)));
                     let frame = managed.frame();
                     let focused = state.focused == Some(id);
                     let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
@@ -758,6 +783,19 @@ mod decoration_tests {
             ink_for_material(false),
             flamewm_skin::palette::Palette::RWR_0_0_9
         );
+    }
+
+    #[test]
+    fn decorated_body_backdrop_spans_the_configured_client_extent() {
+        // Configured 640x420 body under a titlebar: a shorter buffer must still sit on the full body.
+        let rect = Rect::new(100, 100 + TITLEBAR_HEIGHT, 640, 420);
+        let frame = Rect::new(100, 100, 640, 420 + TITLEBAR_HEIGHT);
+        let body = client_backdrop_rect(rect, 1.0);
+        assert_eq!((body.loc.x, body.loc.y), (100, 100 + TITLEBAR_HEIGHT));
+        assert_eq!((body.size.w, body.size.h), (640, 420));
+        assert_eq!(body.loc.y + body.size.h, frame.y + frame.h);
+        let scaled = client_backdrop_rect(rect, 1.25);
+        assert_eq!((scaled.size.w, scaled.size.h), (800, 525));
     }
 
     #[test]
