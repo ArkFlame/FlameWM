@@ -160,6 +160,19 @@ pub(crate) fn physical_point(x: i32, y: i32, scale: f64) -> Point<i32, Physical>
         .into()
 }
 
+#[cfg(test)]
+mod physical_point_guard {
+    use super::physical_point;
+
+    #[test]
+    fn outline_offsets_round_like_surfaces_at_fractional_scale() {
+        // 10 logical * 1.25 = 12.5 must round to 13 (surface rule), not stay fractional.
+        let p = physical_point(0, 10, 1.25);
+        assert_eq!((p.x, p.y), (0, 13));
+        assert_eq!(physical_point(-30, -50, 1.5).x, -45);
+    }
+}
+
 /// A logical corner radius in physical pixels at `scale`; identity at 1.0.
 fn physical_radius(radius: u8, scale: f64) -> u8 {
     (f64::from(radius) * scale).round().min(f64::from(u8::MAX)) as u8

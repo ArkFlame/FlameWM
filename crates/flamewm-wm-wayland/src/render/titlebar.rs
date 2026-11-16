@@ -580,10 +580,16 @@ impl Decorations {
             .filter_map(|strip| {
                 MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
-                    Point::from((
-                        f64::from(frame.x.saturating_add(strip.offset.0)) * scale,
-                        f64::from(frame.y.saturating_add(strip.offset.1)) * scale,
-                    )),
+                    {
+                        // Same physical rounding as surfaces (`physical_point`), so a strip
+                        // never lands 1px off its window at fractional scales.
+                        let at = super::physical_point(
+                            frame.x.saturating_add(strip.offset.0),
+                            frame.y.saturating_add(strip.offset.1),
+                            scale,
+                        );
+                        Point::from((f64::from(at.x), f64::from(at.y)))
+                    },
                     &strip.buffer,
                     None,
                     None,

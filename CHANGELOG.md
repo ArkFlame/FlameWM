@@ -5,6 +5,9 @@
 
 - Fix: text copied in a browser that offers only `text/plain` was kept by the compositor and re-published under that one mime, so a terminal asking for `text/plain;charset=utf-8` (Alacritty) saw "no text selection offered" after the browser closed. Valid UTF-8 text is now re-published with every text target (`text/plain;charset=utf-8`, `UTF8_STRING`, `text/plain`) and served for each. Non-UTF-8 text is still offered only under its own mime. Precedent: `.vendor/cosmic-epoch/cosmic-files/src/clipboard.rs` (offers `text/plain` and `text/plain;charset=utf-8`; skips non-UTF-8).
 - Repro evidence: `.agents/runtime/paste/` (owner offers `text/plain`, exits; reader requests UTF-8: before `run1` reader exit 1, after `fixed-textplain` exit 0).
+## Unreleased — window outline rounds like surfaces
+
+- Fix: Wayland window outline strips are placed at `physical_point` (rounded physical pixels, the surface rule) instead of unrounded `f64` scaling, so the 1px ring no longer lands off-by-one at fractional scales. Guard test: `render::mod::physical_point_guard`. The "dark border along the bottom" report is not yet reproduced: nested winit capture did not paint the compositor window, so the client-buffer-shorter-than-frame hypothesis remains unverified.
 
 ## Unreleased — Wayland session no longer labelled experimental
 
