@@ -700,6 +700,8 @@ fn execute() -> Result<(), String> {
         ShellSurfaces::create(&mut runtime, &snapshot)?
     };
     let mut start_model = start::state(snapshot.applications.clone());
+    start_model.show_all_by_default =
+        settings_projection::start_show_all_by_default(startup_settings.as_ref());
     start_model.set_favorites(settings_projection::start_favorites(
         startup_settings.as_ref(),
     ));

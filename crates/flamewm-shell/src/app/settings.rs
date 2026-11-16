@@ -34,6 +34,8 @@ impl ShellLoop {
         {
             self.audio_settings.raise_maximum = *raise;
         }
+        self.start_model.show_all_by_default =
+            crate::settings_projection::start_show_all_by_default(Some(&snapshot));
         // A hidden taskbar item closes its open quick-control popup.
         let items = crate::entry::settings_projection::taskbar_items(Some(&snapshot));
         if self

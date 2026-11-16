@@ -1107,6 +1107,17 @@ fn new_customization_keys_round_trip_when_set() {
 }
 
 #[test]
+fn show_all_programs_by_default_is_off_and_round_trips() {
+    let defaults = ProductSettings::default();
+    assert!(!defaults.show_all_programs_by_default);
+    assert!(!ConfigStore::serialize(&defaults).contains("showAllProgramsByDefault"));
+    let parsed = load("revision=2\nshowAllProgramsByDefault=true\n").expect("valid start setting");
+    assert!(parsed.show_all_programs_by_default);
+    let text = assert_round_trip(&parsed);
+    assert!(text.contains("showAllProgramsByDefault=true\n"));
+}
+
+#[test]
 fn shared_wallpaper_toggle_round_trips_and_reads_legacy_spelling() {
     let enabled = load("revision=2\nshareWallpaper=true\n").expect("canonical setting");
     assert!(enabled.share_wallpaper);

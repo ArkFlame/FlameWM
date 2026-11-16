@@ -34,6 +34,7 @@ Extremely efficient. Two sessions: X11 and Wayland.
 
 ## Screenshots
 
+| Start menu | Categories, search, and an All Programs list (optional default in Taskbar settings) |
 | Explorer, Terminal and widgets | Start menu and Dock |
 | --- | --- |
 | ![Explorer and Terminal over a blurred wallpaper, with the Dock enabled at the bottom](assets/screenshots/desktop.webp) | ![Start menu over translucent windows](assets/screenshots/start-menu.webp) |

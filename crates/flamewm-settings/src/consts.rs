@@ -40,6 +40,7 @@ pub(crate) const ACCENT_NODE_IDS: &[&str] = &[
     "show-content-on",
     "taskbar-seconds-on",
     "taskbar-date-on",
+    "start-all-programs-on",
     "taskbar-weather-on",
     "taskbar-volume-on",
     "taskbar-network-on",
@@ -217,6 +218,12 @@ pub(crate) const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
         "taskbar-desktop-button-on",
         "taskbar-desktop-button-off",
         true,
+    ),
+    (
+        "showAllProgramsByDefault",
+        "start-all-programs-on",
+        "start-all-programs-off",
+        false,
     ),
     (
         "weatherEnabled",

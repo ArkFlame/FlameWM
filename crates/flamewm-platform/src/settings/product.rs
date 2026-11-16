@@ -112,6 +112,8 @@ pub struct ProductSettings {
     pub taskbar_show_clock: bool,
     pub taskbar_show_workspaces: bool,
     pub taskbar_show_desktop_button: bool,
+    /// `showAllProgramsByDefault`: Start opens in the alphabetical All Programs list.
+    pub show_all_programs_by_default: bool,
     pub taskbar_battery_only_when_relevant: bool,
     /// `taskbarActivities`: show the running-window area; off also forbids minimizing.
     pub taskbar_activities: bool,
@@ -353,6 +355,7 @@ impl Default for ProductSettings {
             taskbar_show_clock: true,
             taskbar_show_workspaces: true,
             taskbar_show_desktop_button: true,
+            show_all_programs_by_default: false,
             taskbar_battery_only_when_relevant: false,
             taskbar_activities: true,
             taskbar_separate: false,

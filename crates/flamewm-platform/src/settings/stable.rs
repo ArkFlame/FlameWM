@@ -145,6 +145,7 @@ stable_settings! {
     (false, taskbar, "taskbarShowWorkspaces", taskbar_show_workspaces),
     (false, taskbar, "workspaceOsd", workspace_osd),
     (false, taskbar, "taskbarShowDesktopButton", taskbar_show_desktop_button),
+    (false, taskbar, "showAllProgramsByDefault", show_all_programs_by_default),
     (false, taskbar, "taskbarBatteryOnlyWhenRelevant", taskbar_battery_only_when_relevant),
     (false, taskbar, "taskbarActivities", taskbar_activities),
     (false, taskbar, "taskbarSeparate", taskbar_separate),

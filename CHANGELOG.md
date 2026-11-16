@@ -1,3 +1,9 @@
+## Unreleased — Start menu All Programs view
+
+- Feature: Start has an All Programs toggle above search. It switches the category rail to one alphabetical list with letter headers (Esc or Backspace on an empty query returns to Categories).
+- Setting: `showAllProgramsByDefault` (default off) opens Start in All Programs. It is in the Taskbar settings page.
+- Limits: the renderer accepts no at-rules, so the view change has no slide animation and no reduced-motion query. Header rows keep the slot styling, and the list scrollbar stays hidden.
+
 ## Unreleased — Tab reaches terminal TUI apps (guard)
 
 - Tests: a Wayland model test pins that bare Tab, Shift+Tab and Ctrl+Tab are not bound, so they are forwarded to focused clients such as Claude Code and opencode. Only Alt+Tab and Alt+Shift+Tab are compositor chords. Static review found no swallowing path. A live repro was not possible in this environment (no key-injection tool scoped to a nested session), so no behaviour change is claimed.

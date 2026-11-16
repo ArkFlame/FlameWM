@@ -419,3 +419,36 @@ mod start_scroll_tests {
         assert_eq!(doc.visible.get("start-category-favorites"), Some(&true));
     }
 }
+
+#[cfg(test)]
+mod markup_tests {
+    const START_HTML: &str = include_str!("../../../../ui/shell/start.html");
+
+    /// Every node the All Programs projection writes by name must exist in the markup, or the
+    /// projection fails at runtime with a missing-node error.
+    #[test]
+    fn start_markup_declares_all_programs_nodes_by_projected_name() {
+        let names = [
+            "start-view-toggle-label",
+            "start-view-chevron-left",
+            "start-view-chevron-right",
+            "start-view-toggle",
+            "start-categories",
+            "start-applications",
+            "start-list",
+        ];
+        for name in names {
+            assert!(
+                START_HTML.contains(&format!("id=\"{name}\"")),
+                "missing node {name}"
+            );
+        }
+        for slot in 1..=crate::async_projection::START_APP_SLOT_COUNT {
+            for suffix in ["", "-label", "-icon"] {
+                let id = format!("id=\"start-app-slot-{slot}{suffix}\"");
+                assert!(START_HTML.contains(&id), "missing {id}");
+            }
+        }
+        assert!(START_HTML.contains("data-action=\"start.view.toggle\""));
+    }
+}

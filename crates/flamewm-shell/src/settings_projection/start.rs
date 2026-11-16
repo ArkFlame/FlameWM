@@ -3,6 +3,12 @@
 use super::*;
 use flamewm_api::motion::motion_scale;
 
+/// `showAllProgramsByDefault`: whether Start opens in All Programs. Missing snapshot or key is off.
+#[must_use]
+pub fn start_show_all_by_default(snapshot: Option<&SettingsSnapshot>) -> bool {
+    snapshot.is_some_and(|snapshot| bool_setting(snapshot, "showAllProgramsByDefault", false))
+}
+
 /// Configured Start icon path (`customStartIcon`). `None` keeps the default `FlameWM` glyph.
 #[must_use]
 pub fn custom_start_icon(snapshot: &SettingsSnapshot) -> Option<String> {

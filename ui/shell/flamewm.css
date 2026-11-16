@@ -362,3 +362,11 @@ input { cursor:text; }
 .usage-close { padding:var(--sp-1) var(--sp-3); background:transparent; color:var(--text); border:1px solid var(--rim); border-radius:var(--radius-sm); }
 .usage-close:hover { border-color:var(--accent); }
 .usage-close:focus-visible { border-color:var(--focus-ring); }
+
+/* All Programs view: toggle and chevrons (renderer accepts no at-rules, so no keyframes or reduced-motion query). */
+.start-view-toggle { width:280px; height:36px; margin:0px 6px var(--space-sm) 6px; padding:0px 9px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border:0px solid transparent; border-radius:var(--radius-lg); cursor:default; }
+.start-view-toggle:hover { background:var(--accent-soft); }
+.start-view-toggle:active { background:var(--accent-soft); }
+.start-view-toggle:focus { border:1px solid var(--rim); }
+.start-view-toggle-label { flex-grow:1; }
+.start-view-chevron { font-size:var(--fs-lg); }
