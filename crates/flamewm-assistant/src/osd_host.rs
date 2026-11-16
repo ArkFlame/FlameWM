@@ -26,6 +26,8 @@ const OSD_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-assistan
 pub const HOST_ARG: &str = "--osd";
 const CLICK_ACTION: &str = "osd.click";
 const CLICK_LINE: &str = "click";
+/// Stdin line prefix carrying `motion_scale` (`motion 0` = reducedMotion) before a state word.
+const MOTION_PREFIX: &str = "motion ";
 /// Gap between the top edge of the work area and the OSD when it is docked at the top.
 const TOP_MARGIN: i32 = 24;
 
@@ -57,7 +59,8 @@ pub struct OsdProcess {
 impl OsdProcess {
     /// Make the screen match `state`. `click` runs on a reader thread when the user clicks the OSD.
     /// Hidden asks the child to exit; the child is spawned only for a visible state.
-    pub fn sync(&mut self, state: OsdState, click: impl Fn() + Send + 'static) {
+    /// `motion` is `motion_scale` of the parent's settings; it is sent before each state word.
+    pub fn sync(&mut self, state: OsdState, motion: u16, click: impl Fn() + Send + 'static) {
         let exited = match self.child.as_mut() {
             Some(child) => !matches!(child.try_wait(), Ok(None)),
             None => false,
@@ -98,7 +101,8 @@ impl OsdProcess {
             self.child = Some(child);
         }
         let failed = match self.stdin.as_mut() {
-            Some(stdin) => writeln!(stdin, "{}", state_word(state))
+            Some(stdin) => writeln!(stdin, "{MOTION_PREFIX}{motion}")
+                .and_then(|()| writeln!(stdin, "{}", state_word(state)))
                 .and_then(|()| stdin.flush())
                 .is_err(),
             None => false,
@@ -197,6 +201,11 @@ fn tick(
             host.osd.hide();
             host.done = true;
             return runtime.hide(host.surface);
+        }
+        if let Some(scale) = line.strip_prefix(MOTION_PREFIX) {
+            // Unparsable scale keeps the full-motion default.
+            host.osd.set_motion(scale.parse().unwrap_or(100));
+            continue;
         }
         let Some(state) = parse_state(&line) else {
             continue;

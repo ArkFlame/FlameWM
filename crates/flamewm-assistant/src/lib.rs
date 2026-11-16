@@ -585,8 +585,9 @@ impl Assistant {
 
     fn sync_osd(&mut self) {
         let bus = self.bus.clone();
+        let motion = flamewm_api::motion::motion_scale(&self.theme);
         self.osd_process
-            .sync(self.osd.state(), move || bus.send(Msg::OsdClick));
+            .sync(self.osd.state(), motion, move || bus.send(Msg::OsdClick));
     }
 
     fn fetched(&mut self, result: Result<PathBuf, AssistantError>) {

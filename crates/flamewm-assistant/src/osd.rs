@@ -50,6 +50,8 @@ pub enum OsdEvent {
 pub struct Osd {
     state: OsdState,
     frame: u32,
+    /// False under reducedMotion: the character holds its base size and the frame never advances.
+    breathing: bool,
 }
 
 impl Default for Osd {
@@ -64,12 +66,27 @@ impl Osd {
         Self {
             state: OsdState::Hidden,
             frame: 0,
+            breathing: true,
         }
     }
 
     #[must_use]
     pub const fn state(&self) -> OsdState {
         self.state
+    }
+
+    /// Applies `flamewm_api::motion::motion_scale` (hundredths; 0 = reducedMotion). Reduced motion
+    /// stops the breathing cycle and rests the frame at its base size; the state still changes.
+    pub fn set_motion(&mut self, scale: u16) {
+        self.breathing = scale != 0;
+        if !self.breathing {
+            self.frame = 0;
+        }
+    }
+
+    #[must_use]
+    pub const fn breathing(&self) -> bool {
+        self.breathing
     }
 
     /// Show `state`. `Hidden` is the same as [`Osd::hide`].
@@ -109,7 +126,7 @@ impl Osd {
 
     /// Advance one animation frame. Returns true when the surface needs a repaint.
     pub fn tick(&mut self) -> bool {
-        if !self.wants_timer() {
+        if !self.wants_timer() || !self.breathing {
             return false;
         }
         self.frame = self.frame.wrapping_add(1) % BREATH_FRAMES;
@@ -297,6 +314,40 @@ mod tests {
             osd.tick();
         }
         assert_eq!(osd.view().character.size, BASE_DIAMETER);
+    }
+
+    #[test]
+    fn reduced_motion_disables_breathing() {
+        use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("reducedMotion".into(), SettingValue::Boolean(true));
+        let mut osd = Osd::new();
+        osd.set_motion(flamewm_api::motion::motion_scale(&snapshot));
+        osd.show(OsdState::Listening);
+        assert!(!osd.breathing());
+        for _ in 0..BREATH_FRAMES * 2 {
+            assert!(!osd.tick());
+            assert_eq!(osd.view().character.size, BASE_DIAMETER);
+        }
+        assert_eq!(osd.state(), OsdState::Listening);
+    }
+
+    #[test]
+    fn breathing_resumes_when_motion_returns() {
+        let mut osd = Osd::new();
+        osd.show(OsdState::Working);
+        osd.set_motion(0);
+        osd.set_motion(100);
+        assert!(osd.breathing());
+        let sizes: Vec<u32> = (0..BREATH_FRAMES / 2)
+            .map(|_| {
+                osd.tick();
+                osd.view().character.size
+            })
+            .collect();
+        assert!(sizes.iter().any(|s| *s > BASE_DIAMETER));
     }
 
     #[test]
