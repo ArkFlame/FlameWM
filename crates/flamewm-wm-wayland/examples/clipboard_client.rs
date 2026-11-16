@@ -30,7 +30,10 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
-const MIME: &str = "text/plain;charset=utf-8";
+/// Offered and requested MIME; `FLAMEWM_CLIP_MIME` overrides it to model other sources (e.g. browsers offering `text/plain`).
+fn mime() -> String {
+    std::env::var("FLAMEWM_CLIP_MIME").unwrap_or_else(|_| "text/plain;charset=utf-8".to_owned())
+}
 
 #[derive(Default)]
 struct App {
@@ -171,7 +174,7 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for App {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_data_source::Event::Send { mime_type, fd } if mime_type == MIME => {
+            wl_data_source::Event::Send { mime_type, fd } if mime_type == mime() => {
                 let mut file = std::fs::File::from(fd);
                 let _ = file.write_all(state.text.as_bytes());
             }
@@ -229,7 +232,7 @@ impl Dispatch<psource::ZwpPrimarySelectionSourceV1, ()> for App {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            psource::Event::Send { mime_type, fd } if mime_type == MIME => {
+            psource::Event::Send { mime_type, fd } if mime_type == mime() => {
                 let mut file = std::fs::File::from(fd);
                 let _ = file.write_all(state.text.as_bytes());
             }
@@ -352,7 +355,7 @@ fn await_keyboard_serial(
     Ok(app.key_serial.unwrap_or_default())
 }
 
-/// Reads `MIME` from the offer that `selection` currently holds, failing after `timeout`.
+/// Reads `mime()` from the offer that `selection` currently holds, failing after `timeout`.
 fn read_offer(
     conn: &Connection,
     queue: &mut EventQueue<App>,
@@ -370,7 +373,7 @@ fn read_offer(
         let has_text = id.is_some_and(|id| {
             app.offer_mimes
                 .get(&id)
-                .is_some_and(|m| m.iter().any(|t| t == MIME))
+                .is_some_and(|m| m.iter().any(|t| *t == mime()))
         });
         if has_text {
             break;
@@ -390,10 +393,10 @@ fn read_offer(
             .primary_offer
             .clone()
             .ok_or("primary selection vanished")?;
-        offer.receive(MIME.into(), wr.as_fd());
+        offer.receive(mime().into(), wr.as_fd());
     } else {
         let offer = app.selection.clone().ok_or("selection vanished")?;
-        offer.receive(MIME.into(), wr.as_fd());
+        offer.receive(mime().into(), wr.as_fd());
     }
     conn.flush()?;
     drop(wr);
@@ -440,7 +443,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 queue.roundtrip(&mut app)?;
             }
             let source = ddm.create_data_source(&qh, ());
-            source.offer(MIME.into());
+            source.offer(mime().into());
             let ddev = app.ddev.clone().ok_or("no data device")?;
             ddev.set_selection(Some(&source), app.key_serial.unwrap_or_default());
             queue.roundtrip(&mut app)?;
@@ -461,7 +464,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let has_text = offer.as_ref().is_some_and(|o| {
                     app.offer_mimes
                         .get(&o.id().protocol_id())
-                        .is_some_and(|m| m.iter().any(|t| t == MIME))
+                        .is_some_and(|m| m.iter().any(|t| *t == mime()))
                 });
                 if has_text {
                     break;
@@ -478,7 +481,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (r, w) = std::io::pipe()?;
                 (r, w.into())
             };
-            offer.receive(MIME.into(), wr.as_fd());
+            offer.receive(mime().into(), wr.as_fd());
             conn.flush()?;
             drop(wr);
             let mut text = String::new();
@@ -492,7 +495,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let serial = await_keyboard_serial(&mut queue, &mut app)?;
             let pm = app.pm.clone().ok_or("no zwp_primary_selection_device_manager_v1")?;
             let source = pm.create_source(&qh, ());
-            source.offer(MIME.into());
+            source.offer(mime().into());
             let device = app.pdevice.clone().ok_or("no primary selection device")?;
             device.set_selection(Some(&source), serial);
             queue.roundtrip(&mut app)?;

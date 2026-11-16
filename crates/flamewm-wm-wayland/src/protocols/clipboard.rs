@@ -173,12 +173,31 @@ impl TextSlot {
         self.text.is_some()
     }
 
-    /// The kept bytes, only when `mime` is the mime type they were stored under.
+    /// The kept bytes, when `mime` is the stored mime or, for UTF-8 text, any other text target.
     pub fn text(&self, mime: &str) -> Option<&[u8]> {
         self.text
             .as_ref()
-            .filter(|(kept, _)| *kept == mime)
+            .filter(|(kept, bytes)| {
+                *kept == mime
+                    || (TEXT_MIMES.contains(kept)
+                        && TEXT_MIMES.contains(&mime)
+                        && std::str::from_utf8(bytes).is_ok())
+            })
             .map(|(_, bytes)| bytes.as_slice())
+    }
+
+    /// Mime types a re-published selection offers. UTF-8 text advertises every text target, so a
+    /// client that asks for `text/plain`, `UTF8_STRING` or `text/plain;charset=utf-8` finds it.
+    pub fn offers(&self) -> Vec<String> {
+        match &self.text {
+            Some((mime, bytes))
+                if TEXT_MIMES.contains(mime) && std::str::from_utf8(bytes).is_ok() =>
+            {
+                TEXT_MIMES.iter().map(|m| (*m).to_owned()).collect()
+            }
+            Some((mime, _)) => vec![(*mime).to_owned()],
+            None => Vec::new(),
+        }
     }
 }
 
@@ -334,7 +353,7 @@ impl State {
             self.compat.clipboard.history.push(text);
         }
         let seat = self.seat.clone();
-        let offers = vec![mime.to_owned()];
+        let offers = self.compat.clipboard.slot(ty).offers();
         match ty {
             SelectionTarget::Clipboard => {
                 set_data_device_selection(&self.display, &seat, offers, ());
@@ -551,11 +570,26 @@ mod tests {
     }
 
     #[test]
-    fn text_is_only_served_for_the_stored_mime() {
+    fn utf8_text_is_served_and_offered_for_every_text_target() {
+        // Browser-style owner offers only text/plain; the re-published selection must still satisfy
+        // a terminal that asks for text/plain;charset=utf-8 (repro: scripts in .agents/runtime/paste).
         let mut slot = TextSlot::default();
         let generation = slot.begin();
         slot.complete(generation, "text/plain", Some(b"x".to_vec()));
         assert_eq!(slot.text("text/plain"), Some(&b"x"[..]));
+        assert_eq!(slot.text("UTF8_STRING"), Some(&b"x"[..]));
+        assert_eq!(slot.text("text/plain;charset=utf-8"), Some(&b"x"[..]));
+        assert_eq!(slot.offers(), TEXT_MIMES.map(str::to_owned).to_vec());
+        assert!(slot.text("text/html").is_none());
+    }
+
+    #[test]
+    fn non_utf8_text_is_served_and_offered_only_as_its_own_mime() {
+        let mut slot = TextSlot::default();
+        let generation = slot.begin();
+        slot.complete(generation, "text/plain", Some(vec![0xff, b'a']));
+        assert_eq!(slot.offers(), vec!["text/plain".to_owned()]);
+        assert_eq!(slot.text("text/plain"), Some(&[0xff, b'a'][..]));
         assert!(slot.text("UTF8_STRING").is_none());
     }
 }

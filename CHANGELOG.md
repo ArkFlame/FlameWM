@@ -1,6 +1,10 @@
 ## Unreleased — Tab reaches terminal TUI apps (guard)
 
 - Tests: a Wayland model test pins that bare Tab, Shift+Tab and Ctrl+Tab are not bound, so they are forwarded to focused clients such as Claude Code and opencode. Only Alt+Tab and Alt+Shift+Tab are compositor chords. Static review found no swallowing path. A live repro was not possible in this environment (no key-injection tool scoped to a nested session), so no behaviour change is claimed.
+## Unreleased — browser-copied text pastes into Alacritty and other terminals
+
+- Fix: text copied in a browser that offers only `text/plain` was kept by the compositor and re-published under that one mime, so a terminal asking for `text/plain;charset=utf-8` (Alacritty) saw "no text selection offered" after the browser closed. Valid UTF-8 text is now re-published with every text target (`text/plain;charset=utf-8`, `UTF8_STRING`, `text/plain`) and served for each. Non-UTF-8 text is still offered only under its own mime. Precedent: `.vendor/cosmic-epoch/cosmic-files/src/clipboard.rs` (offers `text/plain` and `text/plain;charset=utf-8`; skips non-UTF-8).
+- Repro evidence: `.agents/runtime/paste/` (owner offers `text/plain`, exits; reader requests UTF-8: before `run1` reader exit 1, after `fixed-textplain` exit 0).
 
 ## Unreleased — Wayland session no longer labelled experimental
 
