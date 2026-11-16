@@ -1,3 +1,8 @@
+## Unreleased — Wayland session stops poisoning shared KDE/keyring environment
+
+- Fix: the Wayland wrapper pushed `KDE_FULL_SESSION=`, `KDE_SESSION_VERSION=` and `KDE_SESSION_UID=` (empty) into the shared D-Bus and systemd user environment, and on exit "restored" absent keys as empty. Present-but-empty KDE variables break presence checks (Chromium/Electron secret-storage selection, yt-dlp, KWallet/ksecretd discovery) in every other session sharing that manager. The wrapper now only drops them from its own environment and never writes them, or any empty value, to the shared managers, so an existing Plasma/ksecretd session keeps its own values. Reference: freedesktop `dbus-update-activation-environment` cannot unset, so the only safe write is a known value.
+- Scope: FlameWM only reads wallet state (`isOpen`); it never starts, resets or writes a wallet.
+
 ## Unreleased — Wayland session fails loudly without Xwayland
 
 - Fix: the native Wayland session used to continue as an empty black compositor when Xwayland was missing or failed to start, because the shell and desktop are X11 clients that only launch once XWayland is serving. The wrapper now stops the compositor, prints the missing package (Debian `xwayland`, Arch `xorg-xwayland`, Fedora `xorg-x11-server-Xwayland`) on the VT and in the durable failure report, and exits 3 (`reason=xwayland_unavailable`). Nested backends are unchanged.

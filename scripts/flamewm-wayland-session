@@ -667,10 +667,14 @@ fi
 # D-Bus activation environment, synced AFTER the Wayland socket and the XWayland DISPLAY exist so an
 # activated client never inherits a greeter's DISPLAY. Snapshot the systemd user-manager values first;
 # it can outlive this login, so restore only the keys this wrapper changes when it exits.
-activation_vars=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX
-    KDE_FULL_SESSION= KDE_SESSION_VERSION= KDE_SESSION_UID=)
-activation_keys=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX
-    KDE_FULL_SESSION KDE_SESSION_VERSION KDE_SESSION_UID)
+# KDE_FULL_SESSION / KDE_SESSION_VERSION / KDE_SESSION_UID are deliberately NOT part of the shared
+# activation environment. They are dropped from this session's own environment above, but the D-Bus
+# daemon and the systemd user manager are shared with other sessions (a Plasma login, ksecretd,
+# kwalletd): pushing them as empty strings made them "present but empty", which breaks the presence
+# checks of Chromium, Electron, yt-dlp and the KWallet/Secret Service discovery, and a later restore
+# could not unset them. Leaving them untouched lets other sessions keep their own values.
+activation_vars=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX)
+activation_keys=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX)
 [[ -n "${WAYLAND_DISPLAY:-}" ]] && activation_vars+=(WAYLAND_DISPLAY)
 [[ -n "${DISPLAY:-}" ]] && activation_vars+=(DISPLAY)
 [[ -n "${WAYLAND_DISPLAY:-}" ]] && activation_keys+=(WAYLAND_DISPLAY)
@@ -706,21 +710,14 @@ restore_activation_environment() {
     local -a dbus_restore_vars=() systemd_restore_args=()
     if (( ACTIVATION_SNAPSHOT_READY )); then
         ACTIVATION_SNAPSHOT_READY=0
-        # dbus-daemon cannot unset activation variables; restore known values
-        # first and set previously absent keys empty, then restore systemd exactly.
-        for key in "${ACTIVATION_SNAPSHOT_KEYS[@]}"; do
-            value=""
-            if (( ACTIVATION_SNAPSHOT_SET_COUNT > 0 )); then
-                for assignment in "${ACTIVATION_SNAPSHOT_SET[@]}"; do
-                    if [[ "${assignment%%=*}" == "$key" ]]; then
-                        value="${assignment#*=}"
-                        break
-                    fi
-                done
-            fi
-            dbus_restore_vars+=("$key=$value")
+        # dbus-daemon cannot unset activation variables: restore only keys that had a known value
+        # and never write an empty string for an absent key (present-but-empty poisons presence
+        # checks in other sessions). Then restore systemd exactly (it can unset).
+        for assignment in "${ACTIVATION_SNAPSHOT_SET[@]}"; do
+            dbus_restore_vars+=("$assignment")
         done
-        if ! run_bounded 5 dbus-update-activation-environment "${dbus_restore_vars[@]}" \
+        if (( ${#dbus_restore_vars[@]} > 0 )) \
+            && ! run_bounded 5 dbus-update-activation-environment "${dbus_restore_vars[@]}" \
             >/dev/null 2>&1; then
             dbus_restore_ok=0
             log "D-Bus activation environment restore failed"

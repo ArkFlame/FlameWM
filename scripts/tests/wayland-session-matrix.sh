@@ -259,11 +259,10 @@ check_activation_restore() { # prefix
     local prefix="$1" update_line dbus_restore_line systemd_restore_line
     check_file_has "${prefix}-snapshot" "$RECORD" "systemctl args=[--user show-environment]"
     check_file_has "${prefix}-dbus-restore" "$RECORD" \
-        "dbus-update args=[XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma- KDE_FULL_SESSION=true KDE_SESSION_VERSION=5 KDE_SESSION_UID=1000"
+        "dbus-update args=[XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma-"
     check_file_has "${prefix}-systemd-restore" "$RECORD" "UnsetAndSetEnvironment"
-    check_file_has "${prefix}-restore-full-session" "$RECORD" "KDE_FULL_SESSION=true"
-    check_file_has "${prefix}-restore-version" "$RECORD" "KDE_SESSION_VERSION=5"
-    check_file_has "${prefix}-restore-uid" "$RECORD" "KDE_SESSION_UID=1000"
+    # The shared managers keep the other session's KDE identity untouched: never set, never emptied.
+    check_file_lacks "${prefix}-kde-not-touched" "$RECORD" "KDE_FULL_SESSION="
     update_line="$(grep -nF "dbus-update args=" "$RECORD" | head -n 1 | cut -d: -f1)"
     dbus_restore_line="$(grep -nF "dbus-update args=[XDG_SESSION_TYPE=" "$RECORD" | tail -n 1 | cut -d: -f1)"
     systemd_restore_line="$(grep -nF "UnsetAndSetEnvironment" "$RECORD" | tail -n 1 | cut -d: -f1)"
@@ -450,7 +449,8 @@ check_file_has "xwayland-stage" "$LOG" "stage=xwayland status=ok"
 check_file_has "ready-stage" "$LOG" "stage=ready status=ok"
 check_file_has "activation-wayland-display" "$RECORD" "dbus-update wayland_display=wayland-flame"
 check_file_has "activation-xwayland-display" "$RECORD" "display=:97"
-check_file_has "activation-var-list" "$RECORD" "args=[--systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX KDE_FULL_SESSION= KDE_SESSION_VERSION= KDE_SESSION_UID= WAYLAND_DISPLAY DISPLAY]"
+check_file_has "activation-var-list" "$RECORD" "args=[--systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_MENU_PREFIX WAYLAND_DISPLAY DISPLAY]"
+check_file_lacks "no-empty-kde-vars-pushed" "$RECORD" "KDE_FULL_SESSION="
 check_file_lacks "dbus-address-not-logged" "$LOG" "fixture-bus-do-not-log"
 check_file_lacks "xwayland-not-spawned-by-wrapper" "$RECORD" "Xwayland invoked"
 check_file_has "dbus-run-session-not-used" "$LOG" "dbus_session_bus=present"
@@ -476,7 +476,6 @@ add_env KDE_SESSION_UID "1000"
 run_wrapper
 check_eq "exit" 0 "$RUN_RC"
 check_file_has "kde-identity-sanitized" "$RECORD" "kde_full_session=<unset> kde_session_version=<unset> kde_session_uid=<unset>"
-check_file_has "activation-kde-identity-empty" "$RECORD" "dbus-update kde_full_session=<unset> kde_session_version=<unset> kde_session_uid=<unset>"
 check_activation_restore "kde-identity"
 
 # --- 17. An unsupported --backend value is rejected before anything runs (exit 2).
