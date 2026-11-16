@@ -153,15 +153,11 @@ impl App {
             message: HELP.into(),
         };
         if let Some(path) = path {
-            app.images = siblings(path);
-            if !app.images.iter().any(|image| image == path) {
-                app.images.insert(0, path.to_path_buf());
-            }
-            app.index = app
-                .images
-                .iter()
-                .position(|image| image == path)
-                .unwrap_or(0);
+            // The folder scan runs on the decode worker; the window starts with the opened file alone.
+            app.images = vec![path.to_path_buf()];
+            app.send(Job::Siblings {
+                path: path.to_path_buf(),
+            });
             app.load();
         }
         app
@@ -188,6 +184,11 @@ impl App {
             generation: self.generation,
             path,
         });
+        self.prefetch_neighbours();
+    }
+
+    /// Queues decodes of the images before and after the active one.
+    fn prefetch_neighbours(&self) {
         let len = self.images.len();
         if len > 1 {
             for forward in [false, true] {
@@ -195,6 +196,19 @@ impl App {
                 self.send(Job::Prefetch { path: neighbour });
             }
         }
+    }
+
+    /// Adopts the folder listing only while the window still holds just the opened file.
+    fn adopt_siblings(&mut self, path: PathBuf, mut images: Vec<PathBuf>) {
+        if self.images.len() != 1 || self.images[0] != path {
+            return;
+        }
+        if !images.contains(&path) {
+            images.insert(0, path.clone());
+        }
+        self.index = images.iter().position(|image| *image == path).unwrap_or(0);
+        self.images = images;
+        self.prefetch_neighbours();
     }
 
     fn navigate(&mut self, forward: bool, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -314,6 +328,7 @@ impl App {
                 self.framed = true;
                 self.message.clear();
             }
+            Reply::Siblings { path, images } => self.adopt_siblings(path, images),
             _ => {}
         }
         self.paint(doc)
@@ -583,6 +598,27 @@ mod tests {
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["a.jpg", "b.PNG", "C.gif"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_a_file_queues_the_folder_scan_instead_of_reading_it() {
+        let dir = env::temp_dir().join(format!("imgv-handoff-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for name in ["a.jpg", "b.jpg"] {
+            fs::write(dir.join(name), b"x").unwrap();
+        }
+        let opened = dir.join("a.jpg");
+        let (tx, rx) = mpsc::channel();
+        let app = App::new(SettingsSnapshot::new(0), tx, Some(opened.as_path()));
+        // App::new returns with only the opened file; the listing comes back later as a reply.
+        assert_eq!(app.images, [opened.clone()]);
+        let queued: Vec<Job> = rx.try_iter().collect();
+        assert!(
+            queued
+                .iter()
+                .any(|job| matches!(job, Job::Siblings { path } if *path == opened))
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

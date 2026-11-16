@@ -41,6 +41,8 @@ pub enum Job {
         display: (u32, u32),
         rect: Rect,
     },
+    /// List the image files of the folder that holds `path`, for the window to adopt.
+    Siblings { path: PathBuf },
 }
 
 pub enum Reply {
@@ -60,6 +62,10 @@ pub enum Reply {
         seq: u64,
         size: (u32, u32),
         pixels: Vec<u8>,
+    },
+    Siblings {
+        path: PathBuf,
+        images: Vec<PathBuf>,
     },
 }
 
@@ -278,8 +284,9 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
     let mut worker = Worker::new(decode_file);
     let mut load: Option<Job> = None;
     let mut view: Option<Job> = None;
+    let mut listing: Option<PathBuf> = None;
     loop {
-        let nothing_queued = load.is_none() && view.is_none();
+        let nothing_queued = load.is_none() && view.is_none() && listing.is_none();
         let mut next = if nothing_queued {
             match jobs.recv() {
                 Ok(job) => Some(job),
@@ -309,6 +316,7 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                     load = Some(job);
                 }
                 Job::View { .. } => view = Some(job),
+                Job::Siblings { path } => listing = Some(path),
                 Job::Prefetch { path } => worker.prefetch(path),
             }
         }
@@ -340,6 +348,9 @@ pub fn run(jobs: &Receiver<Job>, replies: &Sender<Reply>, wake: &mut UnixStream)
                 Err(message) => Reply::ViewFailed { seq, message },
             };
             send(replies, wake, reply);
+        } else if let Some(path) = listing.take() {
+            let images = super::siblings(&path);
+            send(replies, wake, Reply::Siblings { path, images });
         }
     }
 }
@@ -390,6 +401,32 @@ mod tests {
         drop(jobs);
         thread.join().unwrap();
         assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn folder_listing_runs_on_the_worker_and_replies_sorted() {
+        let dir = std::env::temp_dir().join(format!("imgv-listing-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for name in ["b.jpg", "a.jpg"] {
+            fs::write(dir.join(name), b"x").unwrap();
+        }
+        let (jobs, receiver) = mpsc::channel();
+        let (replies, received) = mpsc::channel();
+        let (_reader, mut writer) = UnixStream::pair().unwrap();
+        jobs.send(Job::Siblings {
+            path: dir.join("a.jpg"),
+        })
+        .unwrap();
+        let thread = std::thread::spawn(move || run(&receiver, &replies, &mut writer));
+        let Ok(Reply::Siblings { path, images }) = received.recv_timeout(Duration::from_secs(10))
+        else {
+            panic!("worker did not reply with the folder listing");
+        };
+        assert_eq!(path, dir.join("a.jpg"));
+        assert_eq!(images, [dir.join("a.jpg"), dir.join("b.jpg")]);
+        drop(jobs);
+        thread.join().unwrap();
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
