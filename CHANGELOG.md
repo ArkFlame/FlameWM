@@ -1,3 +1,7 @@
+## Unreleased — Tab reaches terminal TUI apps (guard)
+
+- Tests: a Wayland model test pins that bare Tab, Shift+Tab and Ctrl+Tab are not bound, so they are forwarded to focused clients such as Claude Code and opencode. Only Alt+Tab and Alt+Shift+Tab are compositor chords. Static review found no swallowing path. A live repro was not possible in this environment (no key-injection tool scoped to a nested session), so no behaviour change is claimed.
+
 ## Unreleased — Wayland session no longer labelled experimental
 
 - Docs: the README badge, Features and Sessions tables, the Status section and the Wayland known limitations no longer call the Wayland session experimental or in development. The Wayland session is owner-reported working on a real laptop. CI has not re-verified it, and the X11 session stays the default.

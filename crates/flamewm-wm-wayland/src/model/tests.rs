@@ -1,5 +1,5 @@
 use super::*;
-use flamewm_api::shortcuts::{ACTION_LAUNCHER, ACTION_WINDOW_SWITCH};
+use flamewm_api::shortcuts::{ACTION_LAUNCHER, ACTION_WINDOW_SWITCH, ACTION_WINDOW_SWITCH_PREV};
 use flamewm_api::workspace::GridDirection as D;
 use flamewm_platform::shortcuts::ShortcutRegistry;
 
@@ -1089,6 +1089,40 @@ fn shared_registry_resolves_actions_for_wayland_keys() {
     assert_eq!(shortcuts.action_for(logo, "space"), Some(ACTION_LAUNCHER));
     assert_eq!(shortcuts.action_for(alt, "Tab"), Some(ACTION_WINDOW_SWITCH));
     assert_eq!(shortcuts.action_for(Mods::default(), "Tab"), None);
+}
+
+/// Tab must reach focused TUI clients (Claude Code, opencode) unless a Ctrl/Alt/Super chord owns it:
+/// bare Tab, Shift+Tab (`iso_left_tab` level) and Ctrl+Tab stay forwarded, while Alt+Shift+Tab
+/// resolves to the reverse switcher.
+#[test]
+fn plain_and_shift_tab_are_forwarded_to_clients() {
+    let shortcuts = Shortcuts::from_bindings(ShortcutRegistry::default().bindings());
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
+    let alt_shift = Mods {
+        alt: true,
+        shift: true,
+        ..Mods::default()
+    };
+    assert_eq!(shortcuts.action_for(Mods::default(), "Tab"), None);
+    assert_eq!(shortcuts.action_for(shift, "Tab"), None);
+    assert_eq!(shortcuts.action_for(shift, "iso_left_tab"), None);
+    assert_eq!(
+        shortcuts.action_for(
+            Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+            "Tab"
+        ),
+        None
+    );
+    assert_eq!(
+        shortcuts.action_for(alt_shift, "Tab"),
+        Some(ACTION_WINDOW_SWITCH_PREV)
+    );
 }
 /// A removal must carry windows off the removed workspace. The plan's own mapping is what does
 /// it, so a window that sat on the removed index follows the mapping instead of ending up on a
