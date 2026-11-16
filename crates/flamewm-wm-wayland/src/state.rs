@@ -1015,6 +1015,10 @@ impl State {
                 (name, work)
             })
             .collect();
+        self.model.set_primary_output(&self.output.name());
+        for (name, work) in &current {
+            self.model.record_work_area(name, *work);
+        }
         let changed = changed_work_areas(&self.cached_work_areas, &current);
         self.cached_work_areas = current;
         // A shrunk or unplugged output can leave the pointer past its edge; keep it on screen.

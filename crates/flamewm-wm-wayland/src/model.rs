@@ -145,6 +145,8 @@ pub struct Managed {
     pub fullscreen_restore_mode: Mode,
     /// Geometry before fullscreen, independently of normal/maximized restore geometry.
     pub fullscreen_restore_rect: Rect,
+    /// Work area of the output this window was last laid out in; `configure` reflows against it.
+    pub work: Option<Rect>,
 }
 
 impl Managed {
@@ -177,9 +179,11 @@ pub struct WindowModel {
     /// `edgeSnap.enabled` and `edgeSnap.thresholdPx`; the defaults match X11 `live_settings`.
     edge_snap: bool,
     edge_snap_px: i32,
-    /// Work area of the last maximize or refit, so a settings change can reflow without the caller
-    /// repeating it. `None` until the shell first reports one.
-    work_area: Option<Rect>,
+    /// Last-known work area per output name, reported by the shell from its output layout. The
+    /// entry for `primary_output` answers [`WindowModel::work_area`].
+    work_areas: std::collections::BTreeMap<String, Rect>,
+    /// Output name the primary accessor reads; empty until the shell names it.
+    primary_output: String,
 }
 
 impl Default for WindowModel {
@@ -199,7 +203,8 @@ impl WindowModel {
             window_margin: DEFAULT_WINDOW_MARGIN,
             edge_snap: true,
             edge_snap_px: flamewm_window_core::EDGE_THRESHOLD,
-            work_area: None,
+            work_areas: std::collections::BTreeMap::new(),
+            primary_output: String::new(),
         }
     }
 
@@ -229,10 +234,11 @@ impl WindowModel {
     pub fn configure(&mut self, titlebars: bool, margin: i32) {
         self.titlebars = titlebars;
         self.window_margin = margin.max(0);
-        let work = self.work_area;
+        let primary = self.work_area();
         for window in &mut self.windows {
             window.titlebars = titlebars;
-            if let Some(work) = work {
+            // Each window reflows inside the area of its own output, never another output's.
+            if let Some(work) = window.work.or(primary) {
                 match window.mode {
                     Mode::Maximized => {
                         window.rect = maximized_client(work, titlebars, self.window_margin);
@@ -272,6 +278,33 @@ impl WindowModel {
                     );
                 }
             }
+        }
+    }
+
+    /// Records the work area of output `output` as last reported by the shell.
+    pub fn record_work_area(&mut self, output: &str, work: Rect) {
+        self.work_areas.insert(output.to_owned(), work);
+    }
+
+    /// Names the output whose work area the primary accessor reads.
+    pub fn set_primary_output(&mut self, output: &str) {
+        self.primary_output = output.to_owned();
+    }
+
+    /// Last-known work area of output `output`, `None` until the shell reports it.
+    pub fn work_area_on(&self, output: &str) -> Option<Rect> {
+        self.work_areas.get(output).copied()
+    }
+
+    /// Last-known work area of the primary output; `None` until the shell reports one.
+    pub fn work_area(&self) -> Option<Rect> {
+        self.work_area_on(&self.primary_output)
+    }
+
+    /// Stores the work area window `id` was laid out in, so its output's area is what reflows it.
+    fn note_work(&mut self, id: WindowId, work: Rect) {
+        if let Some(window) = self.get_mut(id) {
+            window.work = Some(work);
         }
     }
 
@@ -388,6 +421,7 @@ impl WindowModel {
             maximize_restore_rect: rect,
             fullscreen_restore_mode: Mode::Normal,
             fullscreen_restore_rect: rect,
+            work: None,
         });
     }
 
@@ -689,7 +723,7 @@ impl WindowModel {
     pub fn snap_to(&mut self, id: WindowId, target: SnapTarget, work: Rect, restore: Rect) {
         let titlebars = self.titlebars;
         let margin = self.window_margin;
-        self.work_area = Some(work);
+        self.note_work(id, work);
         let Some(window) = self.get_mut(id) else {
             return;
         };
@@ -765,7 +799,7 @@ impl WindowModel {
     pub fn maximize_to(&mut self, id: WindowId, work: Rect, restore: Rect) {
         let titlebars = self.titlebars;
         let margin = self.window_margin;
-        self.work_area = Some(work);
+        self.note_work(id, work);
         let Some(window) = self.get_mut(id) else {
             return;
         };
@@ -788,7 +822,7 @@ impl WindowModel {
     pub fn toggle_maximize(&mut self, id: WindowId, work: Rect) {
         let titlebars = self.titlebars;
         let margin = self.window_margin;
-        self.work_area = Some(work);
+        self.note_work(id, work);
         let Some(window) = self.get_mut(id) else {
             return;
         };
@@ -869,7 +903,7 @@ impl WindowModel {
     pub fn refit_output(&mut self, id: WindowId, output: Rect, work: Rect) {
         let titlebars = self.titlebars;
         let margin = self.window_margin;
-        self.work_area = Some(work);
+        self.note_work(id, work);
         let Some(window) = self.get_mut(id) else {
             return;
         };

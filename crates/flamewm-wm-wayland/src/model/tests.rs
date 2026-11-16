@@ -438,7 +438,7 @@ fn defaults_are_titlebars_on_and_no_margin() {
         assert_eq!(model.titlebars, DEFAULT_TITLEBARS);
         assert_eq!(model.window_margin, 0);
         assert_eq!(model.window_margin, DEFAULT_WINDOW_MARGIN);
-        assert_eq!(model.work_area, None);
+        assert_eq!(model.work_area(), None);
     }
 }
 
@@ -1386,4 +1386,24 @@ fn reveal_restores_a_minimised_window_and_switches_to_its_workspace() {
     assert!(!model.is_hidden(1));
     assert_eq!(model.visible_top_first(), vec![1, 2]);
     assert!(!model.reveal(9), "unknown window is refused");
+}
+
+/// Two outputs: a titlebar toggle reflows each maximized window inside its own output's work area.
+/// The window laid out last must not pull the other output's window into its area.
+#[test]
+fn configure_reflows_each_window_in_its_own_output_work_area() {
+    let left = Rect::new(0, 0, 1000, 700);
+    let right = Rect::new(1000, 0, 800, 600);
+    let mut model = model_with(&[1, 2]);
+    model.configure(true, 0);
+    model.toggle_maximize(1, left);
+    model.toggle_maximize(2, right);
+    model.record_work_area("left", left);
+    model.record_work_area("right", right);
+    model.set_primary_output("left");
+    assert_eq!(model.work_area_on("right"), Some(right));
+    assert_eq!(model.work_area(), Some(left));
+    model.configure(false, 0);
+    assert_eq!(model.get(1).unwrap().frame(), left);
+    assert_eq!(model.get(2).unwrap().frame(), right);
 }
