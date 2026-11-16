@@ -13,3 +13,13 @@ Agents must read the applicable contract before editing. Explicitly load every h
 Runtime state uses `runtime/inbox/`, `runtime/outbox/`, `runtime/claims/`, and `runtime/locks/`. Empty runtime directories may be kept locally, but their files, status markers, and Python caches are ignored by Git.
 
 Task-scoped ignored evidence belongs under `runtime/` and must identify its job. Shared coordination rules belong in tracked contract files, never ignored evidence.
+
+## Reference-first and commit rule
+
+When in doubt, check how KDE Plasma and other vendors implement it. Look in
+`.vendor/**` first; if the relevant upstream is missing, clone it there
+(`git clone --depth 1 <url> .vendor/<name>`), e.g. clone kwallet to confirm a
+kwallet service fix against its source. Cloning repositories that help finish
+the project is allowed. `.vendor/**` is git-ignored, read-only, never a
+dependency. Record precedent (path + choice) in the commit. Commit and push
+each verified slice automatically.

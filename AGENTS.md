@@ -14,3 +14,15 @@ path entries in `docs/ARCHITECTURE_EXCEPTIONS.toml`; no wildcards.
 
 Keep changes assigned and preserve unrelated work. Runtime, build, and release
 claims require fresh executed evidence; static inspection is not proof.
+
+## Reference-first rule (`.vendor`)
+
+When in doubt about how to implement something, check how KDE Plasma and other
+vendors do it, in `.vendor/**` first. If the relevant upstream is not there
+(e.g. a kwallet question and you need to confirm a fix against its source),
+clone that repository into `.vendor/` (shallow: `git clone --depth 1`). Cloning
+repositories useful to completing this project is allowed. `.vendor/**` stays
+git-ignored, read-only reference, never a dependency or runtime input. Record
+the precedent (path + choice) in the commit message or docs.
+
+Commit and push every verified slice automatically; do not leave work uncommitted.
