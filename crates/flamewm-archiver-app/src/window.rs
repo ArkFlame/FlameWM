@@ -185,6 +185,7 @@ impl App {
         std::thread::Builder::new()
             .name("flamewm-archiver-list".into())
             .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
                 let mut wake = wake;
                 let result = list(&archive).map_err(|error| error.to_string());
                 if tx.send(Reply::Listed { archive, result }).is_ok() {
@@ -222,6 +223,7 @@ impl App {
         let worker = std::thread::Builder::new()
             .name("flamewm-archiver-job".into())
             .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
                 let mut signal = {
                     let mut wake = wake;
                     let pending = Arc::clone(&pending);

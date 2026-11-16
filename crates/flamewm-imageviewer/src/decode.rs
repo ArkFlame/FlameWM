@@ -172,7 +172,10 @@ impl Worker {
         // Without the thread, prefetch is skipped: a neighbour is then decoded when it is opened.
         let _ = std::thread::Builder::new()
             .name("flamewm-imageviewer-prefetch".into())
-            .spawn(move || prefetch_loop(&prefetch_state, decode));
+            .spawn(move || {
+                flamewm_integrations_linux::background::lower_current_thread();
+                prefetch_loop(&prefetch_state, decode);
+            });
         Self {
             shared,
             decode,

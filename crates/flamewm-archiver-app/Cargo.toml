@@ -11,6 +11,7 @@ description = "FlameWM archive manager: browse, extract and create zip, tar, tar
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-archiver = { path = "../flamewm-archiver" }
+flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 

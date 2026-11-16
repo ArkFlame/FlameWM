@@ -712,6 +712,7 @@ version = "0.1.7"
 dependencies = [
  "flamewm-api",
  "flamewm-archiver",
+ "flamewm-integrations-linux",
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-x11",
@@ -891,6 +892,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-integrations-linux",
  "flamewm-reactor",
  "flamewm-render-compiler",
  "flamewm-ui-core",
@@ -918,6 +920,7 @@ dependencies = [
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
  "flamewm-image-core",
+ "flamewm-integrations-linux",
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-x11",

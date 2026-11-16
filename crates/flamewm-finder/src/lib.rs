@@ -345,6 +345,8 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         .map(|path| recent_docs::load(&path))
         .unwrap_or_default();
     std::thread::spawn(move || {
+        // Background priority: the file walk must never compete with the UI thread.
+        flamewm_integrations_linux::background::lower_current_thread();
         // Applications first: the desktop catalog is a few hundred small files, so it lands
         // long before the file walk finishes.
         let apps = ApplicationCatalog::discover()
