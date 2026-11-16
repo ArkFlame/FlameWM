@@ -105,9 +105,12 @@ pub fn bucket_for_application(application: &DesktopApplication) -> StartBucket {
         .unwrap_or(StartBucket::Utilities)
 }
 
-#[must_use]
-pub fn start_category(application: &DesktopApplication) -> StartCategory {
-    StartCategory::from_application(application)
+/// Start list presentation. `AllPrograms` replaces the category rail with one alphabetical list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StartView {
+    #[default]
+    Categories,
+    AllPrograms,
 }
 
 /// Separator for the persisted `startFavorites` value: desktop ids never contain `;`.
@@ -217,6 +220,10 @@ pub struct StartModel {
     query: String,
     /// Bumped on every application-set replacement so callers can key caches on it.
     generation: u64,
+    /// Current list presentation; changed by the start view events.
+    pub view: StartView,
+    /// Input: whether Start opens in All Programs (applied by `set_show_all_by_default`).
+    pub show_all_by_default: bool,
 }
 
 impl StartModel {
@@ -229,6 +236,8 @@ impl StartModel {
             favorites: Vec::new(),
             query: String::new(),
             generation: 0,
+            view: StartView::Categories,
+            show_all_by_default: false,
         };
         model.rebuild();
         model
@@ -338,15 +347,6 @@ impl StartModel {
     #[must_use]
     pub fn results_for_category(&self, category: StartCategory) -> Vec<&DesktopApplication> {
         self.filter_view(category, &self.query)
-    }
-
-    #[must_use]
-    pub fn results_in_slots(
-        &self,
-        first_slot: usize,
-        slot_count: usize,
-    ) -> Vec<&DesktopApplication> {
-        self.slot_view(StartCategory::All, &self.query, first_slot, slot_count)
     }
 
     fn rebuild(&mut self) {
@@ -537,7 +537,6 @@ mod tests {
             1
         );
         assert_eq!(model.results_for_category(StartCategory::Games).len(), 0);
-        assert_eq!(model.results_in_slots(0, 1).len(), 1);
         model.replace_applications(vec![application("Solo")]);
         assert_eq!(model.results_view().len(), 1);
     }
@@ -644,5 +643,12 @@ mod tests {
             "ok"
         );
         assert_eq!(decode_favorites(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn start_view_defaults_to_categories() {
+        let model = StartModel::new(Vec::new());
+        assert_eq!(model.view, StartView::Categories);
+        assert!(!model.show_all_by_default);
     }
 }

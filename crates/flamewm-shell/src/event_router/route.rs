@@ -164,7 +164,13 @@ impl ShellLoop {
                 return self.route_bluetooth_text(runtime, input);
             }
             // Start with a query: the Start branch below clears it; the generic close must not run first.
-            if input == "\u{1b}" && !escape_clears_start_query(self.start_open, &self.start_query) {
+            // In All Programs with no query, Escape returns to Categories instead of closing.
+            let in_all_programs = self.start_open
+                && self.start_model.view == flamewm_shell_core::start_menu::StartView::AllPrograms;
+            if input == "\u{1b}"
+                && !escape_clears_start_query(self.start_open, &self.start_query)
+                && !in_all_programs
+            {
                 if let Some(request) = self.network_secret_request(false) {
                     self.submit(request);
                 }
@@ -423,13 +429,29 @@ impl ShellLoop {
             let input = event.action.text.as_deref().unwrap_or_default();
             match input {
                 "\u{8}" => {
+                    // Backspace on an empty query leaves All Programs for Categories.
+                    let back = crate::projection::view_after_back(
+                        self.start_model.view,
+                        self.start_query.is_empty(),
+                    );
+                    if let Some(view) = back {
+                        self.start_model.view = view;
+                    }
                     self.start_query.pop();
                     self.start_selection.reset();
                     self.start_scroll = 0;
                     self.project_start(runtime)?;
                 }
                 "\u{1b}" => {
-                    if self.start_query.is_empty() {
+                    if let Some(view) = crate::projection::view_after_back(
+                        self.start_model.view,
+                        self.start_query.is_empty(),
+                    ) {
+                        self.start_model.view = view;
+                        self.start_selection.reset();
+                        self.start_scroll = 0;
+                        self.project_start(runtime)?;
+                    } else if self.start_query.is_empty() {
                         self.close_transients(runtime)?;
                     } else {
                         self.start_query.clear();
@@ -461,6 +483,13 @@ impl ShellLoop {
                 for request in requests {
                     self.submit(request);
                 }
+            }
+            return Ok(());
+        }
+
+        if let Some(view_action) = flamewm_shell::start::view_for_action(action) {
+            if event.action.phase == ActionPhase::Release && event.action.inside {
+                self.apply_start_view(runtime, view_action)?;
             }
             return Ok(());
         }

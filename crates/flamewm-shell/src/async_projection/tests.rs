@@ -111,7 +111,7 @@ pub(super) fn tray_visibility(document: &FakeDoc) -> HashMap<String, bool> {
         .collect()
 }
 
-pub(super) fn project_start_doc(
+pub(crate) fn project_start_doc(
     model: &StartModel,
     category: StartCategory,
     query: &str,
@@ -139,7 +139,7 @@ pub(super) fn sized_test_image(source: &str, side: u32) -> RuntimeImage {
     }
 }
 
-pub(super) fn start_test_app(id: &str, name: &str, category: &str) -> DesktopApplication {
+pub(crate) fn start_test_app(id: &str, name: &str, category: &str) -> DesktopApplication {
     DesktopApplication {
         id: flamewm_api::DesktopAppId::new(id),
         name: name.to_owned(),

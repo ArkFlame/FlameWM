@@ -73,9 +73,10 @@ pub(crate) use panel::{
 };
 pub use polkit::project_polkit;
 pub use start::{
-    project_start, project_start_error, start_application_for_slot,
-    start_application_name_for_slot, start_scroll_max, start_scroll_step, start_visible_results,
-    START_STATUS_NODE, START_WHEEL_ROWS,
+    next_selectable_slot, project_start, project_start_error, start_application_for_slot,
+    start_application_name_for_slot, start_program_rows, start_scroll_max, start_scroll_step,
+    start_selectable_window, start_visible_results, view_after_back, ProgramRow, START_STATUS_NODE,
+    START_WHEEL_ROWS,
 };
 pub use usage::{project_usage, project_usage_focus};
 pub use weather::{project_weather_popup, project_weather_tray};

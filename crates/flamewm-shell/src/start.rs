@@ -3,6 +3,24 @@ use flamewm_shell_core::StartModel;
 
 pub type StartState = StartModel;
 
+/// Start list view event actions (`start.view.*`), routed by the event router.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartViewAction {
+    Show(flamewm_shell_core::start_menu::StartView),
+    Toggle,
+}
+
+#[must_use]
+pub fn view_for_action(action: &str) -> Option<StartViewAction> {
+    use flamewm_shell_core::start_menu::StartView;
+    match action {
+        "start.view.all" => Some(StartViewAction::Show(StartView::AllPrograms)),
+        "start.view.categories" => Some(StartViewAction::Show(StartView::Categories)),
+        "start.view.toggle" => Some(StartViewAction::Toggle),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartCategory {
     All,

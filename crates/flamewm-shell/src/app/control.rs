@@ -98,6 +98,7 @@ impl ShellLoop {
     /// popups are left alone.
     pub(crate) fn end_start_session(&mut self) {
         end_start_session_fields(&mut self.start_open, &mut self.start_query);
+        self.reset_start_view();
     }
 
     pub(super) fn select_control_target(

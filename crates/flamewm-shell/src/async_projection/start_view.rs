@@ -1,5 +1,6 @@
 //! Start menu projection: unified start view, highlight and view notes.
 use super::*;
+use crate::projection::ProgramRow;
 
 /// Pixel height of one Start application row in the virtual list.
 const START_APP_ROW_HEIGHT: u32 = 36;
@@ -40,25 +41,25 @@ pub fn project_start_unified(
                              // index, then the single presentation-bucket filter. No clone, no
                              // set_query-on-temporary. (Shell StartCategory is the presentation
                              // seam; core filter_view takes the core category type.)
-    let applications = crate::projection::start_visible_results(model, category, query);
-    document.visible("start-applications", !applications.is_empty())?;
+                             // Rows, not bare apps: All Programs interleaves letter headers, and every slot index maps
+                             // to one row so headers keep their place in scrolling and slot numbering.
+    let rows = crate::projection::start_program_rows(model, category, query);
+    document.visible("start-applications", !rows.is_empty())?;
     // Clamp here so the rows painted always match `start_scroll_rows` for slot mapping.
     let scroll_rows = crate::projection::start_scroll_step(
         scroll_rows,
         0,
-        crate::projection::start_scroll_max(applications.len()),
+        crate::projection::start_scroll_max(rows.len()),
     );
     let scroll_px = u32::try_from(scroll_rows.saturating_mul(START_APP_ROW_HEIGHT as usize))
         .unwrap_or(u32::MAX);
     let (first, last) = flamewm_shell_core::status::visible_window(
-        applications.len(),
+        rows.len(),
         START_APP_ROW_HEIGHT,
         320,
         scroll_px,
     );
-    let window = applications
-        .get(first..last.min(applications.len()))
-        .unwrap_or_default();
+    let window = rows.get(first..last.min(rows.len())).unwrap_or_default();
     let (mut button_id, mut label_id, mut icon_id) = (String::new(), String::new(), String::new());
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
@@ -68,23 +69,33 @@ pub fn project_start_unified(
         write!(label_id, "start-app-slot-{slot}-label").expect("write to String is infallible");
         icon_id.clear();
         write!(icon_id, "start-app-slot-{slot}-icon").expect("write to String is infallible");
-        if let Some(application) = window.get(index) {
-            document.text_ref(&label_id, &application.name)?;
-            document.visible(&button_id, true)?;
-            document.visible(&icon_id, true)?;
-            schedule_visible(
-                document,
-                &icon_id,
-                &mut loader.as_deref_mut(),
-                IconTarget::StartSlot(index as u8),
-                &application.icon_name,
-                20,
-                20,
-            )?;
-        } else {
-            document.text(&label_id, String::new())?;
-            document.visible(&button_id, false)?;
-            document.visible(&icon_id, false)?;
+        match window.get(index) {
+            // Header: letter as the row label, no icon. Slot nodes are reused, so no new ids are
+            // needed; the click path maps header rows to no application.
+            Some(ProgramRow::Header(letter)) => {
+                document.text_ref(&label_id, &letter.to_string())?;
+                document.visible(&button_id, true)?;
+                document.visible(&icon_id, false)?;
+            }
+            Some(ProgramRow::App(application)) => {
+                document.text_ref(&label_id, &application.name)?;
+                document.visible(&button_id, true)?;
+                document.visible(&icon_id, true)?;
+                schedule_visible(
+                    document,
+                    &icon_id,
+                    &mut loader.as_deref_mut(),
+                    IconTarget::StartSlot(index as u8),
+                    &application.icon_name,
+                    20,
+                    20,
+                )?;
+            }
+            None => {
+                document.text(&label_id, String::new())?;
+                document.visible(&button_id, false)?;
+                document.visible(&icon_id, false)?;
+            }
         }
     }
     let show_session = query.trim().is_empty()

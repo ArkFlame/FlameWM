@@ -3,6 +3,15 @@
 use super::*;
 
 impl ShellLoop {
+    /// Returns the list to the view `show_all_by_default` selects (on open and close).
+    pub(crate) fn reset_start_view(&mut self) {
+        self.start_model.view = if self.start_model.show_all_by_default {
+            flamewm_shell_core::start_menu::StartView::AllPrograms
+        } else {
+            flamewm_shell_core::start_menu::StartView::Categories
+        };
+    }
+
     /// Projects and presents the Start group on `output`. Returns `false` when
     /// the popup refused the open, leaving the caller's state untouched.
     pub(super) fn open_start_surface(
@@ -11,6 +20,7 @@ impl ShellLoop {
         output: &flamewm_api::OutputId,
         started: Instant,
     ) -> Result<bool, UiBackendError> {
+        self.reset_start_view();
         self.project_start(runtime)?;
         let _measure = shell_stage!("shell.start.open.measure");
         let _place = shell_stage!("shell.start.open.place");
@@ -81,10 +91,71 @@ impl ShellLoop {
                 return Ok(());
             }
         }
-        if self.start_selection.step(delta, count) {
+        // Headers are never selectable: step past them in the same direction.
+        let selectable = self.start_selectable_window();
+        let mut changed = false;
+        for _ in 0..count {
+            if !self.start_selection.step(delta, count) {
+                break;
+            }
+            changed = true;
+            let on_header = self
+                .start_selection
+                .highlighted()
+                .is_some_and(|slot| selectable.get(slot) != Some(&true));
+            if !on_header {
+                break;
+            }
+        }
+        if self
+            .start_selection
+            .highlighted()
+            .is_some_and(|slot| selectable.get(slot) != Some(&true))
+        {
+            self.start_selection.reset();
+            changed = true;
+        }
+        if changed {
             self.project_start_selection(runtime)?;
         }
         Ok(())
+    }
+
+    /// Selectability of the visible Start rows (`false` for letter headers), slot-aligned.
+    pub(crate) fn start_selectable_window(&self) -> Vec<bool> {
+        projection::start_selectable_window(
+            &self.start_model,
+            self.start_category,
+            &self.start_query,
+            self.start_scroll_rows(),
+            async_projection::START_APP_SLOT_COUNT,
+        )
+    }
+
+    /// Applies a `start.view.*` event: switches the list presentation, resets the list position
+    /// and selection, and reprojects the one Start document.
+    pub(crate) fn apply_start_view(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        action: crate::start::StartViewAction,
+    ) -> Result<(), UiBackendError> {
+        match action {
+            crate::start::StartViewAction::Show(view) => self.start_model.view = view,
+            crate::start::StartViewAction::Toggle => {
+                let next = match self.start_model.view {
+                    flamewm_shell_core::start_menu::StartView::AllPrograms => {
+                        flamewm_shell_core::start_menu::StartView::Categories
+                    }
+                    flamewm_shell_core::start_menu::StartView::Categories => {
+                        flamewm_shell_core::start_menu::StartView::AllPrograms
+                    }
+                };
+                self.start_model.view = next;
+            }
+        }
+        self.start_scroll = 0;
+        self.start_selection.reset();
+        self.project_start(runtime)
     }
 
     /// Wheel over the Start application list: moves it by `delta` rows and clears the highlight.
@@ -108,7 +179,7 @@ impl ShellLoop {
         delta: isize,
     ) -> Result<bool, UiBackendError> {
         let current = self.start_scroll_rows();
-        let total = projection::start_visible_results(
+        let total = projection::start_program_rows(
             &self.start_model,
             self.start_category,
             &self.start_query,
@@ -126,7 +197,7 @@ impl ShellLoop {
 
     /// Current Start list offset in rows, clamped to the live application count.
     pub(crate) fn start_scroll_rows(&self) -> usize {
-        let total = projection::start_visible_results(
+        let total = projection::start_program_rows(
             &self.start_model,
             self.start_category,
             &self.start_query,
@@ -147,6 +218,11 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         slot: usize,
     ) -> Result<(), UiBackendError> {
+        // Pointer over a letter header clears the highlight instead of selecting it.
+        let selectable = self.start_selectable_window();
+        if selectable.get(slot) != Some(&true) {
+            return self.reset_start_selection(runtime);
+        }
         let count = self.start_visible_count();
         if self.start_selection.hover(slot, count) {
             self.project_start_selection(runtime)?;
@@ -166,7 +242,7 @@ impl ShellLoop {
     }
 
     pub(super) fn start_visible_count(&self) -> usize {
-        projection::start_visible_results(&self.start_model, self.start_category, &self.start_query)
+        projection::start_program_rows(&self.start_model, self.start_category, &self.start_query)
             .len()
             .saturating_sub(self.start_scroll_rows())
             .min(async_projection::START_APP_SLOT_COUNT)
