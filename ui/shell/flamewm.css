@@ -94,9 +94,9 @@ input { cursor:text; }
 .about-link:hover { border-color:var(--accent); background:var(--c-383c40); }
 .about-link img { width:18px; height:18px; }
 .terminal-body { height:359px; display:flex; flex-direction:column; gap:var(--sp-3); padding:18px; background:var(--c-0c0d0e); color:var(--c-d5d8da); font-size:var(--fs-md); border-radius:var(--radius-md); }
-.start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:var(--c-1c2740); color:var(--text); border:1px solid var(--rim); border-radius:var(--r-lg); }
+.start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; height:420px; display:flex; flex-direction:row; background:var(--c-1c2740); color:var(--text); border:1px solid var(--rim); border-radius:var(--r-lg); }
 .start-left-pane { width:292px; min-height:349px; display:flex; flex-direction:column; justify-content:flex-end; }
-.start-content-pane { position:relative; box-sizing:border-box; border-radius:var(--r-lg); width:258px; min-height:420px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
+.start-content-pane { position:absolute; left:292px; top:0px; box-sizing:border-box; border-radius:var(--r-lg); width:258px; height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
 .start-categories { padding:var(--space-sm) 5px 5px 5px; flex-grow:1; display:flex; flex-direction:column; }
 .start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border-radius:var(--radius-lg); cursor:default; }
 .start-category:hover { background:var(--accent-soft); }.start-category div { flex-grow:1; }
@@ -108,7 +108,7 @@ input { cursor:text; }
 .start-search-field img { width:15px; height:15px; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
 .start-group, .calendar-days { width:100%; display:flex; flex-direction:column; }
-.start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border-radius:var(--radius-lg); cursor:default; }
+.start-app { width:100%; height:36px; padding:0px 9px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border-radius:var(--radius-lg); cursor:default; }
 .start-app:hover { background:var(--accent-soft); }
 /* Long application names end in an ellipsis inside the row instead of running under the scroll gutter. */
 .start-app > div { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }.start-status { min-height:18px; padding:var(--sp-2) var(--sp-3); display:flex; align-items:center; color:var(--c-ff9c9f); font-size:var(--fs-xs); }

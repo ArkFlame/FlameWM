@@ -123,6 +123,31 @@ pub(crate) const TASK_ATTENTION: UiColor = UiColor {
     a: 0xff,
 };
 
+/// Start section-letter ink (ARGB), fed by the settings projection: the accent in Dark and a
+/// contrast-safe darkened accent in Light. Keeps letters off the accent-only path that fails on light chrome.
+static START_HEADER_ARGB: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0xFF3D_AEE9);
+
+/// Records the Start section-letter ink from the next Start projection on.
+pub(crate) fn set_start_header_ink(color: UiColor) {
+    let packed = (u32::from(color.a) << 24)
+        | (u32::from(color.r) << 16)
+        | (u32::from(color.g) << 8)
+        | u32::from(color.b);
+    START_HEADER_ARGB.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Section-letter ink for Start headers.
+pub(crate) fn start_header_ink() -> UiColor {
+    let packed = START_HEADER_ARGB.load(std::sync::atomic::Ordering::Relaxed);
+    UiColor {
+        a: (packed >> 24) as u8,
+        r: (packed >> 16) as u8,
+        g: (packed >> 8) as u8,
+        b: packed as u8,
+    }
+}
+
 pub(crate) fn task_accent() -> UiColor {
     let packed = TASK_ACCENT_ARGB.load(std::sync::atomic::Ordering::Relaxed);
     UiColor {

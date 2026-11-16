@@ -9,10 +9,25 @@ const START_ROW_FONT_PX: f32 = 12.0;
 const START_HEADER_FONT_PX: f32 = 11.0;
 /// Projected scroll thumb: a 3px bar on the right edge of the slot track (px from pane origin).
 const START_SCROLL_THUMB: &str = "start-scroll-thumb";
-const START_SCROLL_THUMB_LEFT_PX: f32 = 251.0;
 const START_SCROLL_TRACK_TOP_PX: f32 = 5.0;
 const START_SCROLL_THUMB_WIDTH_PX: f32 = 3.0;
+const START_SCROLL_THUMB_RIGHT_INSET_PX: f32 = 4.0;
 const START_SCROLL_MIN_THUMB_PX: f32 = 24.0;
+/// Content pane node and its frame (px from the menu padding box). Categories keep the right column
+/// beside the rail; All Programs spans the menu. Its height stops above the bottom toggle (menu y 327).
+const START_CONTENT_PANE: &str = "start-content-pane";
+const START_CONTENT_HEIGHT_PX: f32 = 420.0;
+const START_CONTENT_ALL_HEIGHT_PX: f32 = 326.0;
+
+/// `(left, width, height)` of the Start content pane for the active view.
+#[must_use]
+pub fn start_content_frame(all_programs: bool) -> (f32, f32, f32) {
+    if all_programs {
+        (0.0, 548.0, START_CONTENT_ALL_HEIGHT_PX)
+    } else {
+        (292.0, 258.0, START_CONTENT_HEIGHT_PX)
+    }
+}
 
 /// Thumb `(top, height)` in px on a slot track of `track_px` for `total` rows at `offset`, or
 /// `None` when every row fits. Pure so the geometry has a regression check.
@@ -106,7 +121,7 @@ pub fn project_start_unified(
                 // Heading style: smaller bold accent letter (the hover fill is cleared by the highlight pass).
                 document.font_size(&label_id, START_HEADER_FONT_PX)?;
                 document.font_weight(&label_id, 700)?;
-                document.foreground(&label_id, crate::projection::task_accent())?;
+                document.foreground(&label_id, crate::projection::start_header_ink())?;
             }
             Some(ProgramRow::App(application)) => {
                 document.text_ref(&label_id, &application.name)?;
@@ -132,6 +147,12 @@ pub fn project_start_unified(
             }
         }
     }
+    // The content pane follows the view: full menu width for All Programs, the right column otherwise.
+    let all_programs = model.view == flamewm_shell_core::start_menu::StartView::AllPrograms;
+    let (pane_left, pane_width, pane_height) = start_content_frame(all_programs);
+    document.position(START_CONTENT_PANE, pane_left, 0.0)?;
+    document.size(START_CONTENT_PANE, pane_width, pane_height)?;
+    let thumb_left = pane_width - START_SCROLL_THUMB_WIDTH_PX - START_SCROLL_THUMB_RIGHT_INSET_PX;
     match start_scroll_thumb_geometry(
         rows.len(),
         scroll_rows,
@@ -141,7 +162,7 @@ pub fn project_start_unified(
             document.size(START_SCROLL_THUMB, START_SCROLL_THUMB_WIDTH_PX, height)?;
             document.position(
                 START_SCROLL_THUMB,
-                START_SCROLL_THUMB_LEFT_PX,
+                thumb_left,
                 START_SCROLL_TRACK_TOP_PX + top,
             )?;
             document.visible(START_SCROLL_THUMB, true)?;
@@ -185,6 +206,14 @@ pub fn project_start_highlight(
 mod tests {
     use super::*;
     use crate::async_projection::tests::*;
+
+    #[test]
+    fn all_programs_pane_spans_menu_and_categories_keep_right_column() {
+        assert_eq!(start_content_frame(true), (0.0, 548.0, 326.0));
+        assert_eq!(start_content_frame(false), (292.0, 258.0, 420.0));
+        // The All Programs pane stops above the bottom toggle, which starts at menu y 327.
+        assert!(start_content_frame(true).2 <= 327.0);
+    }
 
     #[test]
     fn async_start_submenu_hides_empty_slots() {
@@ -250,10 +279,9 @@ mod tests {
 
     #[test]
     fn start_content_pane_keeps_fixed_height_across_search_states() {
-        // Search hides the category rail, so the content pane is the only tall
-        // child left. Its min-height must equal its max-height (the shared
-        // 420px cap) or the Start outer height drops during search and
-        // zero-result states. The search bar stays bottom-anchored via auto top margin.
+        // The content pane is absolutely placed, so it no longer sizes the Start menu. The menu
+        // keeps the 420px height itself, and the pane keeps the same 420px height, so the outer
+        // height holds during search and zero-result states.
         let css = include_str!("../../../../ui/shell/flamewm.css");
         let rule = |selector: &str| -> &str {
             let start = css
@@ -263,8 +291,8 @@ mod tests {
             &css[start..end]
         };
         let pane = rule(".start-content-pane");
-        assert!(pane.contains("min-height:420px"), "{pane}");
-        assert!(pane.contains("max-height:420px"), "{pane}");
+        assert!(pane.contains("height:420px"), "{pane}");
+        assert!(rule(".start-menu").contains("height:420px"));
         assert!(rule(".start-left-pane").contains("justify-content:flex-end"));
     }
 

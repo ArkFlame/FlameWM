@@ -42,7 +42,70 @@ pub(super) fn project_palette_tokens(
             };
         let _ = document.color_variable(tone.name, rgb(value, alpha));
     }
+    crate::projection::set_start_header_ink(start_header_ink(
+        accent_color(snapshot),
+        flamewm_ui_core::glass::appearance_from_settings(snapshot).light,
+    ));
     Ok(())
+}
+
+/// Start section-letter ink. Dark keeps the accent. Light darkens the accent in 5% steps until it
+/// reaches `BODY_MIN_CONTRAST` on the light Start surface (`--c-1c2740` Light tone).
+pub(super) fn start_header_ink(accent: UiColor, light: bool) -> UiColor {
+    if !light {
+        return accent;
+    }
+    let surface = FIXED_TONES
+        .iter()
+        .find(|tone| tone.name == "--c-1c2740")
+        .map_or(flamewm_skin::palette::Rgb(0x00eb_edee), |tone| {
+            tone.light.color
+        });
+    let channels = |scale: u32| {
+        let scale_channel = |c: u8| u32::from(c) * scale / 100;
+        flamewm_skin::palette::Rgb(
+            (scale_channel(accent.r) << 16)
+                | (scale_channel(accent.g) << 8)
+                | scale_channel(accent.b),
+        )
+    };
+    (0..=100)
+        .rev()
+        .step_by(5)
+        .map(channels)
+        .find(|ink| {
+            flamewm_skin::palette::contrast_ratio(*ink, surface)
+                >= flamewm_skin::palette::BODY_MIN_CONTRAST
+        })
+        .map_or(rgb(0, 0xff), |ink| rgb(ink.0, 0xff))
+}
+
+#[cfg(test)]
+mod start_header_tests {
+    use super::*;
+
+    #[test]
+    fn light_header_ink_meets_body_contrast_and_dark_keeps_accent() {
+        let accent = UiColor {
+            a: 0xff,
+            r: 0x3d,
+            g: 0xae,
+            b: 0xe9,
+        };
+        let ink = start_header_ink(accent, true);
+        let surface = flamewm_skin::palette::Rgb(0x00eb_edee);
+        let ratio = flamewm_skin::palette::contrast_ratio(
+            flamewm_skin::palette::Rgb(
+                (u32::from(ink.r) << 16) | (u32::from(ink.g) << 8) | u32::from(ink.b),
+            ),
+            surface,
+        );
+        assert!(
+            ratio >= flamewm_skin::palette::BODY_MIN_CONTRAST,
+            "ratio {ratio}"
+        );
+        assert_eq!(start_header_ink(accent, false), accent);
+    }
 }
 
 /// `ui/shell/flamewm.css` accent-derived tokens with the alpha each keeps in its `:root` default.

@@ -34,7 +34,9 @@ pub fn project(
         integer_setting(snapshot, "fontSizeOffset", 0) as f32,
         bool_setting(snapshot, "fontBold", false),
     )?;
-    document.ui_text_shadow(bool_setting(snapshot, "textShadow", true))?;
+    // A dark text shadow reads as a halo on the light chrome, so Light draws none.
+    let light = flamewm_ui_core::glass::appearance_from_settings(snapshot).light;
+    document.ui_text_shadow(bool_setting(snapshot, "textShadow", true) && !light)?;
     project_accent_tokens(document, snapshot)?;
     // The classic/separate panel overwrites the root border with a transparent one below. Writing
     // the contour first alternated two values on the same node every projection, dirtying the
@@ -119,15 +121,23 @@ pub fn project(
                 "start-search-box",
                 flamewm_ui_x11::surface_style::surface_outline(snapshot),
             )?;
-            document.background(
-                "start-search-box",
+            // Dark keeps the near-black field; Light uses the light input tone.
+            let field = if light {
+                UiColor {
+                    r: 0xf4,
+                    g: 0xf5,
+                    b: 0xf7,
+                    a: 0xff,
+                }
+            } else {
                 UiColor {
                     r: 0x14,
                     g: 0x16,
                     b: 0x18,
                     a: 0xff,
-                },
-            )?;
+                }
+            };
+            document.background("start-search-box", field)?;
             // No accent outline: the menu's rounded panes cover the border on three sides, so an
             // accent-coloured border only ever showed as a red line down the left edge.
         }
