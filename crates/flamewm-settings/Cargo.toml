@@ -21,6 +21,7 @@ flamewm-session-core = { path = "../flamewm-session-core" }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+flamewm-ui-x11 = { path = "../flamewm-ui-x11", features = ["test-support"] }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }

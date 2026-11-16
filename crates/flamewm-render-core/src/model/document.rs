@@ -162,6 +162,8 @@ pub struct RuntimeDocument {
     pub(super) hidden_nodes: FastSet<u32>,
     /// Keyboard focus node; the render path mirrors it into `InteractionState::focus`.
     pub(super) focus: Option<u32>,
+    /// Logical window extent of the last render-path layout (see `set_live_viewport`).
+    live_viewport: std::cell::Cell<Option<(f32, f32)>>,
     /// Window backdrop change requested by the UI after window creation: `Some(None)` removes it,
     /// `Some(Some(spec))` installs or replaces it. The X11 loop takes it after the same reactor turn.
     pub(super) pending_window_backdrop: Option<Option<crate::backdrop::WindowBackdrop>>,
@@ -246,6 +248,7 @@ impl RuntimeDocument {
             hidden_nodes: FastSet::default(),
             focus: None,
             pending_window_backdrop: None,
+            live_viewport: std::cell::Cell::new(None),
             pending_close: false,
             image_revision: FastMap::default(),
             node_image_overrides: FastMap::default(),
@@ -283,6 +286,18 @@ impl RuntimeDocument {
     /// Stores the keyboard focus node. Callers validate focusability; the render path only mirrors it.
     pub fn set_focus(&mut self, focus: Option<u32>) {
         self.focus = focus;
+    }
+
+    /// Logical window extent the render path last laid this document out at. Read by UI routing
+    /// (keyboard reveal) so it measures the same boxes the user sees.
+    #[must_use]
+    pub fn live_viewport(&self) -> Option<(f32, f32)> {
+        self.live_viewport.get()
+    }
+
+    /// Records the logical window extent for the layout about to be computed. Render-owned.
+    pub fn set_live_viewport(&self, extent: (f32, f32)) {
+        self.live_viewport.set(Some(extent));
     }
 
     /// Requests a window backdrop change (`None` removes it). The render path compares it with the

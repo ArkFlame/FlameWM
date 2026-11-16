@@ -158,6 +158,8 @@ mod cursor_reload_tests;
 #[cfg(test)]
 mod display_pager_fixture_tests;
 #[cfg(test)]
+mod nav_focus_reveal_tests;
+#[cfg(test)]
 mod nav_indicator_layout_tests;
 #[cfg(test)]
 mod test_transport;

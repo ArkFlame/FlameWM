@@ -618,6 +618,69 @@ where
     )
 }
 
+/// Where the control with a given action sits after Tab reveals it. `row` and `viewport` are
+/// `[x, y, width, height]` in window space; `offset_y` is the nearest scroll ancestor's scroll.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FocusProbe {
+    pub action: String,
+    pub row: [f32; 4],
+    pub viewport: [f32; 4],
+    pub offset_y: f32,
+}
+
+/// Test hook: presses Tab on a real window document, as the event loop does, until the control
+/// with `action` takes focus. Reports its painted rect against its nearest scrolling ancestor.
+#[cfg(any(test, feature = "test-support"))]
+pub fn tab_to_action_for_test(
+    document: UiDocument,
+    extent: (f32, f32),
+    action: &str,
+    max_presses: usize,
+) -> Option<FocusProbe> {
+    let (mut runtime, _, _, _, _) = document.into_parts();
+    // The render path records the window extent before laying out; mirror it here.
+    runtime.set_live_viewport(extent);
+    for _ in 0..max_presses {
+        let tab = UiControllerEvent::Key(UiKeyEvent {
+            phase: UiKeyPhase::Press,
+            modifiers: Vec::new(),
+            key: "Tab".to_owned(),
+            text: None,
+        });
+        if route_focus(&mut runtime, tab).is_some() {
+            return None;
+        }
+        let focus = runtime.focus()?;
+        if action_for(&runtime.document, focus) != Some(action) {
+            continue;
+        }
+        let layout = surface_runtime::default_layout(&runtime);
+        let row = layout.boxes.get(focus as usize)?.rect;
+        let mut ancestor = runtime.document.nodes[focus as usize].parent;
+        while let Some(index) = ancestor {
+            let style =
+                runtime.runtime_style_cow(index, flamewm_render_core::InteractionState::default());
+            if matches!(
+                style.overflow_y,
+                flamewm_render_core::Overflow::Auto | flamewm_render_core::Overflow::Scroll
+            ) {
+                let offset = runtime.scroll_offset(index);
+                let view = layout.boxes[index as usize].rect;
+                return Some(FocusProbe {
+                    action: action.to_owned(),
+                    row: [row.x, row.y - offset.offset_y, row.width, row.height],
+                    viewport: [view.x, view.y, view.width, view.height],
+                    offset_y: offset.offset_y,
+                });
+            }
+            ancestor = runtime.document.nodes[index as usize].parent;
+        }
+        return None;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use flamewm_render_core::{

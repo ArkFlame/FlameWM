@@ -816,6 +816,9 @@ fn logical_intrinsic_to_device(
 fn document_space_extent(document: &RuntimeDocument) -> (f32, f32) {
     // Last-known surface size is render-owned; fall back to root style size,
     // then to a conservative default so queries stay total without display.
+    if let Some(extent) = document.live_viewport() {
+        return extent;
+    }
     let style = document.runtime_style(
         document.document.root,
         flamewm_render_core::InteractionState::default(),

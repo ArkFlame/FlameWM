@@ -175,6 +175,7 @@ impl X11App {
         let interaction_only = std::mem::take(&mut self.skip_eligible);
         let layout_guard = flamewm_profiler::start("render.layout");
         let scale = document.ui_scale();
+        document.set_live_viewport((self.width as f32 / scale, self.height as f32 / scale));
         let layout_key = LayoutKey {
             layout_revision: document.layout_revision(),
             geometry_revision: document.geometry_revision(),
