@@ -39,6 +39,7 @@ impl Finder {
             verb: 0,
             frecency: quick::Frecency::default(),
             frecency_file: None,
+            frecency_ready: false,
         };
         app.refresh();
         app
@@ -66,7 +67,9 @@ impl Finder {
         };
         let quick = files && !self.query.trim().is_empty();
         self.answer = quick.then(|| quick::calculate(&self.query)).flatten();
-        self.app_hits = if quick {
+        // Applications rank only once the launch-frequency table is in, so no row is ordered by an
+        // empty table that is about to change.
+        self.app_hits = if quick && self.frecency_ready {
             quick::rank_apps(&self.apps, &self.query, &self.frecency, now)
         } else {
             Vec::new()
@@ -98,6 +101,13 @@ impl Finder {
     pub(super) fn accept_apps(&mut self, apps: Vec<DesktopApplication>) {
         self.apps = apps;
         self.refresh();
+    }
+
+    /// Adopts the launch-frequency table and ranks the applications with it.
+    pub(super) fn accept_frecency(&mut self, frecency: quick::Frecency) {
+        self.frecency = frecency;
+        self.frecency_ready = true;
+        self.rerank();
     }
 
     pub(super) fn launch_app(&mut self, position: usize) {

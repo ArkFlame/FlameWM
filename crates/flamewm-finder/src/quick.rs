@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 
 use std::thread;
 use std::time::Duration;
@@ -470,6 +471,17 @@ impl Frecency {
         Self { uses }
     }
 
+    /// Starts `load` on its own thread and returns at once; the receiver yields the table when the
+    /// file has been read. Precedent: `recent_docs::load_later` (3f754bda) does the same for documents.
+    #[must_use]
+    pub fn load_later(path: PathBuf) -> Receiver<Self> {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(Self::load(&path));
+        });
+        receiver
+    }
+
     /// Writes the most recently used rows through a temporary file, so a crash keeps the old file.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let mut rows: Vec<(&String, &(u32, i64))> = self.uses.iter().collect();
@@ -751,6 +763,35 @@ mod tests {
         loaded.record("other.desktop", 50);
         loaded.save(&path).unwrap();
         assert_eq!(Frecency::load(&path), loaded);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn frecency_load_later_returns_before_the_file_is_read() {
+        // A FIFO with no writer blocks any reader, so a read on the caller's thread would hang here.
+        let dir =
+            std::env::temp_dir().join(format!("finder-frecency-later-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("frecency.tsv");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let started = std::time::Instant::now();
+        let receiver = Frecency::load_later(fifo.clone());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+            "the read must wait for the FIFO writer, not finish on the caller"
+        );
+        let mut writer = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        std::io::Write::write_all(&mut writer, b"good.desktop\t3\t100\n").unwrap();
+        drop(writer);
+        let loaded = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(loaded.bonus("good.desktop", 100), 3 * 40 + 300);
         fs::remove_dir_all(dir).unwrap();
     }
 

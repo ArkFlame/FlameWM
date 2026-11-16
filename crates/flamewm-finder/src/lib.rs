@@ -112,6 +112,8 @@ enum Loaded {
     Apps(Vec<DesktopApplication>),
     /// Whether the session allows the log out action.
     Session(bool),
+    /// The launch-frequency table that ranks applications.
+    Frecency(quick::Frecency),
     /// The shared index holds the cached listing; the fresh walk still runs.
     Cached,
     /// The shared index holds the fresh walk.
@@ -204,6 +206,8 @@ struct Finder {
     verb: usize,
     frecency: quick::Frecency,
     frecency_file: Option<PathBuf>,
+    /// Stays false until the worker delivers the table; applications are not ranked before that.
+    frecency_ready: bool,
 }
 
 fn now_secs() -> i64 {
@@ -329,17 +333,13 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     app.frecency_file = cache_file
         .and_then(Path::parent)
         .map(|dir| dir.join("frecency.tsv"));
-    app.frecency = app
-        .frecency_file
-        .as_deref()
-        .map(quick::Frecency::load)
-        .unwrap_or_default();
-
     let (mut index_reader, mut index_writer) = nonblocking_pair()?;
     let (sender, receiver) = mpsc::sync_channel::<Loaded>(1);
     let walk_cache = cache_file.map(Path::to_path_buf);
     let roots = index::default_roots(env::var_os("HOME"));
     let worker_index = shared;
+    // The frecency table is read on its own thread; applications rank only once it arrives.
+    let frecency_rx = app.frecency_file.clone().map(quick::Frecency::load_later);
     // Read once per launch: documents opened later show up after the next start. The read runs on
     // its own thread, so the UI thread never waits on the file before the first paint.
     let docs_rx = recent_docs::path(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
@@ -359,6 +359,12 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
             .send(Loaded::Session(quick::logout_allowed()))
             .is_ok()
         {
+            let _ = index_writer.write(&[1]);
+        }
+        let frecency = frecency_rx
+            .map(|rx| rx.recv().unwrap_or_default())
+            .unwrap_or_default();
+        if sender.send(Loaded::Frecency(frecency)).is_ok() {
             let _ = index_writer.write(&[1]);
         }
         let docs = docs_rx
@@ -454,6 +460,7 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
                 match message {
                     Loaded::Apps(apps) => app.accept_apps(apps),
                     Loaded::Session(logout) => app.accept_session(logout),
+                    Loaded::Frecency(frecency) => app.accept_frecency(frecency),
                     Loaded::Cached => app.accept_cached(),
                     Loaded::Files => app.accept_index(),
                     Loaded::Changed => app.accept_changes(),
