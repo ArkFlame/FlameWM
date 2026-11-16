@@ -249,6 +249,16 @@ pub(crate) fn homed_on<T: Clone>(homes: &[(T, String)], output: &str) -> Vec<T> 
         .collect()
 }
 
+/// Popups to dismiss when `removed` goes away. Each entry is `(popup, popup output, root output)`;
+/// a popup is dismissed when it or the surface it hangs off is still tagged with the removed output.
+pub(crate) fn popups_to_dismiss<K>(popups: Vec<(K, String, String)>, removed: &str) -> Vec<K> {
+    popups
+        .into_iter()
+        .filter(|(_, popup_output, root_output)| popup_output == removed || root_output == removed)
+        .map(|(popup, _, _)| popup)
+        .collect()
+}
+
 /// Whether a surface moving from `previous` to `next` changes output, so `wl_surface.leave` is due.
 pub(crate) fn changes_output(previous: &str, next: &str) -> bool {
     previous != next
@@ -729,5 +739,26 @@ mod tests {
         // Off every output: unchanged, so the single-output path keeps its coordinates.
         assert_eq!(relative_to_output(&row, -5.0, 20.0), (-5.0, 20.0));
         assert_eq!(relative_to_output(&[], 3.0, 4.0), (3.0, 4.0));
+    }
+
+    #[test]
+    fn no_popup_stays_on_a_removed_output() {
+        // Two outputs, DP-2 removed. Popups: on DP-2 under a DP-1 window (stale tag), a DP-2 menu
+        // under a DP-2 layer surface, a DP-1 popup under a DP-2 root (window moved away), and a DP-1
+        // popup under a DP-1 root.
+        let popups = vec![
+            ("stale-tag", "DP-2".to_owned(), "DP-1".to_owned()),
+            ("layer-menu", "DP-1".to_owned(), "DP-2".to_owned()),
+            (
+                "kept-under-moved-root",
+                "DP-1".to_owned(),
+                "DP-1".to_owned(),
+            ),
+            ("kept-on-primary", "DP-1".to_owned(), "DP-1".to_owned()),
+        ];
+        let dismissed = popups_to_dismiss(popups, "DP-2");
+        assert_eq!(dismissed, ["stale-tag", "layer-menu"]);
+        let none = popups_to_dismiss(vec![("p", "DP-1".to_owned(), "DP-1".to_owned())], "DP-2");
+        assert!(none.is_empty());
     }
 }

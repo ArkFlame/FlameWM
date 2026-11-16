@@ -820,8 +820,38 @@ impl State {
         for wl in crate::output_layout::homed_on(&homes, &name) {
             out.leave(&wl);
         }
+        // Popups are dismissed before their roots move: a popup hangs off a window or a layer surface
+        // (nested popups included, via PopupManager's tree walk), and is dismissed when either it or its
+        // root is still tagged with the removed output. A popup of a window that moved earlier keeps a
+        // stale tag, so checking the popup's own tag as well closes that leak. Choice: dismiss with
+        // `send_popup_done`, the primitive smithay uses to close a popup (`.vendor/smithay-master/src/
+        // desktop/wayland/popup/mod.rs:78`); KWin is not vendored, so no KWin precedent is cited.
+        let layers: Vec<smithay::desktop::LayerSurface> =
+            layer_map_for_output(out).layers().cloned().collect();
+        let roots: Vec<WlSurface> = self
+            .toplevels
+            .iter()
+            .map(|(_, top)| top.wl_surface().clone())
+            .chain(layers.iter().map(|layer| layer.wl_surface().clone()))
+            .collect();
+        let mut popups = Vec::new();
+        for root in &roots {
+            let root_output = self.output_name_of(root);
+            for (popup, _) in PopupManager::popups_for_surface(root) {
+                if let PopupKind::Xdg(xdg) = popup {
+                    let popup_output = self.output_name_of(xdg.wl_surface());
+                    popups.push((xdg, popup_output, root_output.clone()));
+                }
+            }
+        }
+        for xdg in crate::output_layout::popups_to_dismiss(popups, &name) {
+            xdg.send_popup_done();
+            out.leave(xdg.wl_surface());
+            let key = smithay::reexports::wayland_server::Resource::id(xdg.wl_surface());
+            self.surface_outputs.remove(&key);
+        }
         // Windows homed on the removed output move onto the primary work area, keeping their offset
-        // from the removed output; their popups are dismissed because the output they opened on is gone.
+        // from the removed output.
         let removed = self.output_rect_on(&name);
         let work = self.work_area();
         let moved: Vec<_> = self
@@ -830,20 +860,13 @@ impl State {
             .filter(|(_, top)| self.output_name_of(top.wl_surface()) == name)
             .map(|(id, top)| (*id, top.wl_surface().clone()))
             .collect();
-        for (id, wl) in &moved {
+        for (id, _) in &moved {
             if let Some(rect) = self.model.get(*id).map(|w| w.rect) {
                 self.model
                     .set_rect(*id, crate::output_layout::migrate_rect(rect, removed, work));
             }
-            for (popup, _) in PopupManager::popups_for_surface(wl) {
-                if let PopupKind::Xdg(xdg) = popup {
-                    xdg.send_popup_done();
-                }
-            }
             self.apply_geometry(*id);
         }
-        let layers: Vec<smithay::desktop::LayerSurface> =
-            layer_map_for_output(out).layers().cloned().collect();
         let primary = self.output.clone();
         for layer in layers {
             layer_map_for_output(out).unmap_layer(&layer);
