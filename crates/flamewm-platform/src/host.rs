@@ -95,6 +95,7 @@ impl<E: EnginePorts> PlatformHost<E> {
                         path.display(),
                         error.message
                     );
+                    crate::storage::quarantine_and_report(&path);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -103,6 +104,7 @@ impl<E: EnginePorts> PlatformHost<E> {
                     "flamewm: settings {} is not UTF-8, using defaults: {error}",
                     path.display()
                 );
+                crate::storage::quarantine_and_report(&path);
             }
             Err(error) => {
                 return Err(FlameError::new(ErrorCode::IoFailure, error.to_string()));
