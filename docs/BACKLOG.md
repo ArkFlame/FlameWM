@@ -550,3 +550,20 @@ Open after this range:
 - Keyboard cards: power, wifi, bluetooth and audio are unit only. Media card is the only executed card proof in this range.
 - `b5db3437` taskbar, start app and tray rows have an unrun sweep.
 - `settings-keys-proof` Tab focus ring still open (from the prior range).
+
+## Landed 2026-11-16 (orchestrator ledger; verified by targeted `cargo test`, clippy not installed so not run)
+
+| id | commit | evidence |
+|---|---|---|
+| assistant-osd-motion | `8a4d151e` | `cargo test -p flamewm-assistant osd` 12 passed; motion gate shared with `02dce1d1` |
+| perf-bgaudit | `77a17b1b` | finder index, imageviewer prefetch, archiver list/job lower priority via integrations-linux helper; crate suites pass |
+| work-area-per-output | `283c5685`, `18738419`, `5a9699db` | per-output struts, per-output reflow, per-output model work area; `cargo test -p flamewm-wm-wayland` 12+414 passed; precedent `.vendor/kwin` `Workspace::rearrange` |
+| popups-on-removed-output | `6ba73444` | dismiss popups on retire (unit test only; runtime hot-unplug proof still OPEN, needs two-output harness) |
+| settings-keys-proof (Tab reveal) | `d7143756`, `26a41978`, `b7cd483f` | render-core scroll extent from flow children; Tab reveal at live window extent; real-Settings test `nav_focus_reveal_tests` passes; paint-level focus ring (no `:focus-visible` rule in settings.css) still OPEN |
+| read-U8 | `b372375d` | identical single-instance claim/release and watch-thread stop consolidated; differing variants left and documented |
+| read-SIZE | `2615a5e2`, `bdbfd880`, `945cb786` | desktop `widgets/`, wm-wayland `state/`, wm-x11 `runtime/` split; tests pass unchanged |
+| config corrupt-file quarantine | `60f30a25` | unparsable settings renamed to `.bak[.N]` before defaults |
+| display arrangement overflow | `5b8af9b0` | i64 geometry, extents past i32 rejected |
+| settings redundant notes | `6b2a4878` | nine restating notes removed, digest re-pinned |
+
+Open from this pass: `sync_widgets` per-call key allocation (candidate, unmeasured; needs a `DesktopState` fixture), doc-test E0463 races on the shared target dir, popup hot-unplug runtime proof.
