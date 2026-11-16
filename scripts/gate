@@ -7,7 +7,7 @@
 #   Log: $GATE_LOG or /tmp/flamewm-gate-<pid>.log
 # Log lines to wait on:  EXIT_GUARD= EXIT_FMT= EXIT_TEST= EXIT_CLIPPY=  then  GATE_DONE all=<0|1>
 # Wait with one command:  timeout 580 bash -c 'until grep -q GATE_DONE LOG; do sleep 15; done'
-# Env: FLAMEWM_TOOLCHAIN_BIN (dir with cargo 1.89), GATE_TARGET (default target-shared),
+# Env: FLAMEWM_TOOLCHAIN_BIN (dir with nightly cargo), GATE_TARGET (default target-shared),
 #      GATE_CLIPPY_TARGET (default target-clippy189), GATE_LOCK (default /tmp/opencode/flamewm-terra-cargo.lock).
 set -uo pipefail
 [ "$#" -ge 1 ] || { echo "usage: scripts/gate <crate> [crate...]" >&2; exit 2; }

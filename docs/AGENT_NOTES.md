@@ -10,8 +10,8 @@ Lessons from the 2026-11-09 backlog session. Each item gives the rule, then evid
 2. **Blocking waits only.** A worker that ends its turn mid-build gives the orchestrator a silent notification and no result. Run the build and its wait in one foreground command or one bounded wait loop.
    Evidence: session-only, reported in this session.
 
-3. **Use the pinned 1.89 toolchain.** Clippy run under the wrong toolchain fails falsely. Set `FLAMEWM_TOOLCHAIN_BIN` to the 1.89 `cargo` directory before `scripts/gate` or `scripts/lint`.
-   Evidence: `scripts/gate:10`, `scripts/lint:4-6` (CI pins Rust 1.89.0).
+3. **Use the pinned nightly toolchain (rust-toolchain.toml).** Clippy run under the wrong toolchain fails falsely. Set `FLAMEWM_TOOLCHAIN_BIN` to the nightly `cargo` directory before `scripts/gate` or `scripts/lint`.
+   Evidence: `scripts/gate:10`, `scripts/lint:4-6` (CI and rust-toolchain.toml use nightly).
 
 4. **UI changes move goldens.** Changes under `ui/` turn these red: `crates/flamewm-render-core/tests/layout_snapshot.rs` (`layout_fnv.txt`) and the `utilities.rs` digest test in `flamewm-render-compiler`. Run both crates whenever `ui/` changes.
    Evidence: `measure.md:161-163` (layout_snapshot failed; `settings_hotkeys_document_is_unchanged_by_utility_migration` failed); `look.md:125` (re-pin needed). Re-pin hash example: `look.md:79`.
