@@ -85,17 +85,17 @@ canonical_target = "crates/flamewm-desktop/src"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-desktop/src/widgets/mod.rs"
+path = "crates/flamewm-desktop/src/widgets/sampling.rs"
 capability = "j11-g08-prefixed-env"
 reason = "The task-manager widget shows the login name taken from `USER`."
-canonical_target = "crates/flamewm-desktop/src/widgets/mod.rs"
+canonical_target = "crates/flamewm-desktop/src/widgets/sampling.rs"
 remove_by = "0.2.0"
 
 [[exception]]
-path = "crates/flamewm-desktop/src/widgets/mod.rs"
+path = "crates/flamewm-desktop/src/widgets/panels.rs"
 capability = "j12-g12-wallpaper-not-cpu"
-reason = "The rule matches `cpu` to keep CPU cost out of the wallpaper projection, but this module is the widget sampler that reads `/proc/stat` for `WidgetKind::Cpu`; no wallpaper code is involved."
-canonical_target = "crates/flamewm-desktop/src/widgets/mod.rs"
+reason = "The widget gallery previews the CPU and memory gauge kinds (`WidgetKind::Cpu`, `WidgetKind::Memory`); no wallpaper code is involved."
+canonical_target = "crates/flamewm-desktop/src/widgets/panels.rs"
 remove_by = "0.2.0"
 
 [[exception]]
