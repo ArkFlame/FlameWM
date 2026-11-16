@@ -78,7 +78,7 @@
 # Shutdown: INT/TERM/HUP are forwarded with the same signal to the compositor, the wrapper waits with
 # a bounded grace period, then sends SIGKILL to that one pid only; the bridge is stopped afterwards.
 # There is no pkill/killall and no process-group kill. Exit code is the compositor's; 127 (missing
-# binary), 126 (not executable) and 2 (missing feature) are produced by the wrapper itself.
+# binary), 126 (not executable), 3 (XWayland unavailable on the drm backend) and 2 (missing feature) are produced by the wrapper itself.
 #
 # Test-only knobs (scripts/tests/wayland-session-matrix.sh; they do not change a real session):
 #   FLAMEWM_WAYLAND_BINARY               compositor path (default /usr/bin/flamewm-wayland)
@@ -622,6 +622,8 @@ if (( socket_ok )) && [[ -n "$LOG_FILE" ]]; then
         xwayland_display="$(grep -oE 'XWayland ready on DISPLAY=:[0-9]+' "$LOG_FILE" 2>/dev/null | tail -n 1 | sed 's/.*DISPLAY=//')"
         [[ -n "$xwayland_display" ]] && break
         scan_compositor
+        # The compositor says so the moment Xwayland cannot start: stop waiting out the budget.
+        grep -qaE '^flamewm-wayland: XWayland (unavailable|failed to start)' "$LOG_FILE" 2>/dev/null && break
         pid_alive "$session_pid" || break
         sleep 0.1
         waited=$(( waited + 100 ))
@@ -635,6 +637,31 @@ elif [[ -z "$LOG_FILE" ]]; then
     stage xwayland skip 0 "no_log,continuing"
 else
     stage xwayland skip 0 "not_detected,continuing"
+fi
+
+# Shell, desktop and panel are X11 clients that only start once XWayland is serving. Without it the
+# native session is an empty compositor: a black screen that looks like a hang. On the tty backend
+# that is a failed session start, reported on the VT and in the durable report, not a silent skip.
+xwayland_failed=0
+if [[ "$backend" == drm ]] && (( socket_ok )) && [[ -n "$LOG_FILE" && -z "$xwayland_display" ]] \
+    && pid_alive "$session_pid"; then
+    xwayland_failed=1
+    if ! command -v Xwayland >/dev/null 2>&1; then
+        xwayland_why="Xwayland_not_in_PATH"
+        log "ACTION: install the Xwayland package (Debian/Ubuntu: xwayland, Arch: xorg-xwayland, Fedora: xorg-x11-server-Xwayland); the FlameWM shell and desktop are X11 clients"
+    else
+        xwayland_why="Xwayland_did_not_become_ready"
+        log "ACTION: Xwayland is installed but did not start; run 'Xwayland -version' and check ${LOG_FILE} for its errors"
+    fi
+    log "FAILED: XWayland is unavailable, so the shell and desktop cannot start (would be a black screen); stopping the compositor"
+    stage exit fail 3 "xwayland_unavailable,$xwayland_why"
+    kill -TERM "$session_pid" 2>/dev/null || :
+    remaining=20
+    while (( remaining-- > 0 )) && pid_alive "$session_pid"; do sleep 0.1; done
+    pid_alive "$session_pid" && kill -KILL "$session_pid" 2>/dev/null
+    elapsed_ms=$(( $(now_ms) - start_ms ))
+    report_failure xwayland_unavailable 3 none "$xwayland_why"
+    failure_reported=1
 fi
 
 # D-Bus activation environment, synced AFTER the Wayland socket and the XWayland DISPLAY exist so an
@@ -900,6 +927,9 @@ if (( ACTIVATION_SNAPSHOT_READY )); then
         report_failure activation_environment_restore_failed "$result"
     fi
 fi
+
+# A session without XWayland never showed its shell: fail it with its own code.
+if (( xwayland_failed )); then result=3; fi
 
 # A timed-out compositor that then managed to exit 0 is still a failed session start.
 if (( first_frame_timed_out )) && (( result == 0 )); then result=124; fi

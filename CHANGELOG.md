@@ -1,3 +1,9 @@
+## Unreleased — Wayland session fails loudly without Xwayland
+
+- Fix: the native Wayland session used to continue as an empty black compositor when Xwayland was missing or failed to start, because the shell and desktop are X11 clients that only launch once XWayland is serving. The wrapper now stops the compositor, prints the missing package (Debian `xwayland`, Arch `xorg-xwayland`, Fedora `xorg-x11-server-Xwayland`) on the VT and in the durable failure report, and exits 3 (`reason=xwayland_unavailable`). Nested backends are unchanged.
+- Packaging: Debian `Depends` adds `libsystemd0` (linked by the compositor), `libegl-mesa0` and `libgl1-mesa-dri` (EGL/GBM driver stack; `libegl1` alone is only the GLVND dispatcher and fails on minimal installs).
+- Tests: `xwayland-unavailable` case in `scripts/tests/wayland-session-matrix.sh`.
+
 ## Unreleased — Start menu All Programs view
 
 - Feature: Start has an All Programs toggle above search. It switches the category rail to one alphabetical list with letter headers (Esc or Backspace on an empty query returns to Categories).

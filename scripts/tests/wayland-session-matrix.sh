@@ -92,6 +92,13 @@ case "${STUB_RUN:-exit0}" in
         sleep "${STUB_RUN_SLEEP:-0.4}"
         exit "${STUB_RUN_RC:-0}"
         ;;
+    noxwayland)
+        # Compositor owns the socket but Xwayland cannot start: no shell or desktop would ever draw.
+        if [ -n "${XDG_RUNTIME_DIR:-}" ]; then : > "$XDG_RUNTIME_DIR/${STUB_SOCKET:-wayland-flame}"; fi
+        printf "flamewm-wayland: XWayland unavailable (fixture); continuing without X11 clients\n"
+        trap "printf \"got TERM\\n\" >> \"\$record\"; exit 143" TERM
+        while :; do sleep 0.05; done
+        ;;
     presented)
         # The successful native start: the event loop runs, a flip is queued and then presented.
         printf "FLAMEWM-WAYLAND-STARTUP stage=ready status=ok code=6 detail=backend_init t=30ms\n"
@@ -448,6 +455,17 @@ check_file_lacks "dbus-address-not-logged" "$LOG" "fixture-bus-do-not-log"
 check_file_lacks "xwayland-not-spawned-by-wrapper" "$RECORD" "Xwayland invoked"
 check_file_has "dbus-run-session-not-used" "$LOG" "dbus_session_bus=present"
 check_activation_restore "normal-activation"
+
+# --- 15b. XWayland unavailable on the tty backend: the shell would never draw (black screen), so the
+#         session fails loudly with its own exit code instead of continuing.
+start_case xwayland-unavailable
+add_env STUB_RUN "noxwayland"
+run_wrapper
+check_eq "exit" 3 "$RUN_RC"
+check_file_has "xwayland-fail-stage" "$LOG" "xwayland_unavailable"
+check_file_has "action-line" "$LOG" "ACTION: "
+check_file_has "report-reason" "$LOG" "reason=xwayland_unavailable"
+check_file_has "got-term" "$RECORD" "got TERM"
 
 # --- 16. KDE identity inherited from the display manager is removed from the compositor and the
 #        systemd/D-Bus activation state is restored on normal exit.
