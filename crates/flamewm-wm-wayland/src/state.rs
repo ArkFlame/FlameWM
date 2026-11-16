@@ -916,17 +916,41 @@ impl State {
         map.arrange();
         let zone: Rectangle<i32, Logical> = map.non_exclusive_zone();
         let size = (self.output_size.w, self.output_size.h);
-        let struts: Vec<[i32; 4]> = self
-            .unmanaged
-            .iter()
-            .filter_map(|entry| entry.strut)
-            .filter_map(|strut| flamewm_window_core::strut::sanitize_strut(strut, None, size))
-            .collect();
+        let struts = self.struts_on(&self.output.name(), size);
         work_area_with_dock(
             Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h),
             &struts,
             self.dock_reserve,
         )
+    }
+
+    /// Sanitized unmanaged struts that reserve space on output `name`, in its local coordinates.
+    fn struts_on(&self, name: &str, size: (i32, i32)) -> Vec<[i32; 4]> {
+        let owned: Vec<(Rect, [i32; 4])> = self
+            .unmanaged
+            .iter()
+            .filter_map(|entry| {
+                let strut = entry.strut?;
+                let geometry = entry.surface.geometry();
+                let rect = Rect::new(
+                    geometry.loc.x,
+                    geometry.loc.y,
+                    geometry.size.w,
+                    geometry.size.h,
+                );
+                Some((rect, strut))
+            })
+            .collect();
+        crate::output_layout::struts_on_output(
+            &self.pointer_layout,
+            &self.layout_outputs,
+            &self.output.name(),
+            &owned,
+            name,
+        )
+        .into_iter()
+        .filter_map(|strut| flamewm_window_core::strut::sanitize_strut(strut, None, size))
+        .collect()
     }
 
     /// Output-local layout rect of `name`: its row in the placed layout, or the primary output.
@@ -938,8 +962,8 @@ impl State {
             .unwrap_or_else(|| self.output_rect())
     }
 
-    /// Work area of output `name`: its own layer zone lifted to layout coordinates. Unmanaged struts
-    /// and the Dock belong to the primary output, so they apply only there.
+    /// Work area of output `name`: its layer zone and the unmanaged struts whose window sits on it,
+    /// lifted to layout coordinates. The Dock stays on the primary output.
     pub fn work_area_on(&self, name: &str) -> Rect {
         if name == self.output.name() {
             return self.work_area();
@@ -949,7 +973,10 @@ impl State {
         map.arrange();
         let zone = map.non_exclusive_zone();
         let zone = Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h);
-        crate::output_layout::zone_in_layout(self.output_rect_on(name), zone)
+        let output = self.output_rect_on(name);
+        let struts = self.struts_on(name, (output.w, output.h));
+        let zone = reserve_struts(zone, struts.into_iter());
+        crate::output_layout::zone_in_layout(output, zone)
     }
 
     /// Work area of the output the window's rect sits on, the primary output when none does.

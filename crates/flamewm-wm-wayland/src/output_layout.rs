@@ -297,6 +297,81 @@ pub(crate) fn zone_in_layout(output: Rect, zone: Rect) -> Rect {
     Rect::new(left, top, (right - left).max(0), (bottom - top).max(0))
 }
 
+/// Unmanaged struts that reserve space on output `name`. A strut belongs to the output its X11
+/// window sits on, the primary when it overlaps none (the rule windows use). Precedent: KWin
+/// computes a client area per screen by intersecting each strut with the screen it touches.
+pub(crate) fn struts_on_output(
+    outputs: &[Rect],
+    names: &[String],
+    primary: &str,
+    owned: &[(Rect, [i32; 4])],
+    name: &str,
+) -> Vec<[i32; 4]> {
+    owned
+        .iter()
+        .filter(|(geometry, _)| output_name_for_rect(outputs, names, *geometry, primary) == name)
+        .map(|(_, strut)| *strut)
+        .collect()
+}
+
+#[cfg(test)]
+mod strut_owner_tests {
+    use super::*;
+    use crate::state::reserve_struts;
+
+    fn two_outputs() -> ([Rect; 2], [String; 2]) {
+        (
+            [Rect::new(0, 0, 1280, 800), Rect::new(1280, 0, 1920, 1080)],
+            ["DP-1".to_owned(), "DP-2".to_owned()],
+        )
+    }
+
+    #[test]
+    fn strut_belongs_to_the_output_its_window_sits_on() {
+        let (outputs, names) = two_outputs();
+        let owned = [
+            (Rect::new(1300, 0, 200, 32), [0, 0, 32, 0]),
+            (Rect::new(0, 760, 300, 40), [0, 0, 0, 40]),
+        ];
+        assert_eq!(
+            struts_on_output(&outputs, &names, "DP-1", &owned, "DP-2"),
+            vec![[0, 0, 32, 0]]
+        );
+        assert_eq!(
+            struts_on_output(&outputs, &names, "DP-1", &owned, "DP-1"),
+            vec![[0, 0, 0, 40]]
+        );
+    }
+
+    #[test]
+    fn strut_on_one_output_shrinks_only_that_work_area() {
+        let (outputs, names) = two_outputs();
+        let owned = [(Rect::new(1300, 0, 200, 40), [0, 0, 40, 0])];
+        let work = |name: &str, index: usize| {
+            let zone = Rect::new(0, 0, outputs[index].w, outputs[index].h);
+            let struts = struts_on_output(&outputs, &names, "DP-1", &owned, name);
+            zone_in_layout(outputs[index], reserve_struts(zone, struts.into_iter()))
+        };
+        assert_eq!(work("DP-1", 0), outputs[0]);
+        assert_eq!(work("DP-2", 1), Rect::new(1280, 40, 1920, 1040));
+    }
+
+    #[test]
+    fn unplaced_or_single_output_struts_fall_to_primary() {
+        let (outputs, names) = two_outputs();
+        let owned = [(Rect::new(5000, 5000, 10, 10), [0, 0, 0, 44])];
+        assert_eq!(
+            struts_on_output(&outputs, &names, "DP-1", &owned, "DP-1"),
+            vec![[0, 0, 0, 44]]
+        );
+        assert!(struts_on_output(&outputs, &names, "DP-1", &owned, "DP-2").is_empty());
+        assert_eq!(
+            struts_on_output(&[], &[], "DP-1", &owned, "DP-1"),
+            vec![[0, 0, 0, 44]]
+        );
+    }
+}
+
 /// Where a window homed on a removed output lands on `work`: the same offset from the removed
 /// output's origin, clamped so it stays inside `work`. A window larger than `work` keeps its size.
 pub(crate) fn migrate_rect(rect: Rect, removed: Rect, work: Rect) -> Rect {
