@@ -109,7 +109,9 @@ input { cursor:text; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
 .start-group, .calendar-days { width:100%; display:flex; flex-direction:column; }
 .start-app { width:248px; height:36px; padding:0px 9px; display:flex; align-items:center; gap:var(--space-lg); background:transparent; color:var(--text); border-radius:var(--radius-lg); cursor:default; }
-.start-app:hover { background:var(--accent-soft); }.start-status { min-height:18px; padding:var(--sp-2) var(--sp-3); display:flex; align-items:center; color:var(--c-ff9c9f); font-size:var(--fs-xs); }
+.start-app:hover { background:var(--accent-soft); }
+/* Long application names end in an ellipsis inside the row instead of running under the scroll gutter. */
+.start-app > div { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }.start-status { min-height:18px; padding:var(--sp-2) var(--sp-3); display:flex; align-items:center; color:var(--c-ff9c9f); font-size:var(--fs-xs); }
 .taskbar { border:1px solid var(--rim); box-sizing:border-box; position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:1px var(--sp-1); background:var(--panel); }
 /* Classic layout draws one 1 px top edge across the whole panel, not a contour around the
    bar's inset border box; the projection owns its colour (transparent while floating). */
