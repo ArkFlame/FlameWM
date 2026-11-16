@@ -831,7 +831,7 @@ fn document_space_extent(document: &RuntimeDocument) -> (f32, f32) {
 }
 
 /// Layout at the document-space extent, shared by the node-rect and intrinsic-size queries.
-fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResult {
+pub(crate) fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResult {
     let (width, height) = document_space_extent(document);
     flamewm_render_core::LayoutEngine::compute(
         document,

@@ -232,12 +232,7 @@ impl LayoutEngine {
             } else {
                 entry.rect.width.max(0.0)
             };
-            let avail_h = if scrolls_y {
-                f32::MAX / 1024.0
-            } else {
-                entry.rect.height.max(0.0)
-            };
-            let measured = probe.measure_node(index as u32, avail_w, avail_h);
+            let measured = probe.scroll_content_extent(index as u32, avail_w);
             let content_w = if scrolls_x {
                 measured.0.max(entry.rect.width)
             } else {

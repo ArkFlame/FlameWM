@@ -454,6 +454,7 @@ fn route_focus(
     match owner.handle_key_where(&document.document, &key.key, shift, visible) {
         FocusKey::Moved => {
             document.set_focus(owner.focus());
+            reveal_focus(document);
             None
         }
         FocusKey::Ignored if traversal => None,
@@ -471,6 +472,47 @@ fn route_focus(
             })),
             None => Some(event),
         },
+    }
+}
+
+/// Scrolls each `overflow-y: auto|scroll` ancestor of the focused node just enough to show it, so
+/// Tab never lands on a clipped row (the Settings nav case). Same walk and `reveal_delta` rule as
+/// render-x11 `reveal_focus`: browser `scrollIntoView` nearest alignment, WAI-ARIA focus visibility.
+fn reveal_focus(document: &mut flamewm_render_core::RuntimeDocument) {
+    let Some(focus) = document.focus() else {
+        return;
+    };
+    let layout = surface_runtime::default_layout(document);
+    let Some(entry) = layout.boxes.get(focus as usize) else {
+        return;
+    };
+    let mut node = entry.rect;
+    let interaction = flamewm_render_core::InteractionState {
+        focus: Some(focus),
+        ..Default::default()
+    };
+    let mut ancestor = document.document.nodes[focus as usize].parent;
+    while let Some(index) = ancestor {
+        let style = document.runtime_style_cow(index, interaction);
+        if matches!(
+            style.overflow_y,
+            flamewm_render_core::Overflow::Auto | flamewm_render_core::Overflow::Scroll
+        ) {
+            let view = layout.boxes[index as usize].rect;
+            let (dx, dy) = flamewm_render_core::reveal_delta(view, node);
+            if dx != 0.0 || dy != 0.0 {
+                let before = document.scroll_offset(index);
+                let metrics = layout.metrics_for(index, before);
+                let after = document.apply_scroll_delta(
+                    index,
+                    flamewm_render_core::ScrollDelta { dx, dy },
+                    (metrics.max_x, metrics.max_y),
+                );
+                node.x -= after.offset_x - before.offset_x;
+                node.y -= after.offset_y - before.offset_y;
+            }
+        }
+        ancestor = document.document.nodes[index as usize].parent;
     }
 }
 
@@ -632,6 +674,62 @@ mod tests {
             y: 0.0,
             text: None,
         })
+    }
+
+    /// 0 root, 1 `overflow-y: scroll` 40px list, 2..=6 twenty-pixel rows with actions.
+    fn scroll_list_document() -> RuntimeDocument {
+        let list = flamewm_render_core::Style {
+            width: flamewm_render_core::Length::Px(100.0),
+            height: flamewm_render_core::Length::Px(40.0),
+            overflow_y: flamewm_render_core::Overflow::Scroll,
+            ..Default::default()
+        };
+        let mut nodes = vec![
+            crate::test_support::compiled_node("", NodeKind::Element),
+            CompiledNode {
+                style: std::sync::Arc::new(list),
+                ..crate::test_support::compiled_node("", NodeKind::Element)
+            },
+        ];
+        for index in 2..=6u32 {
+            let row = flamewm_render_core::Style {
+                width: flamewm_render_core::Length::Px(100.0),
+                height: flamewm_render_core::Length::Px(20.0),
+                ..Default::default()
+            };
+            nodes.push(CompiledNode {
+                style: std::sync::Arc::new(row),
+                action: std::borrow::Cow::Owned(format!("row.{index}")),
+                ..crate::test_support::compiled_node("", NodeKind::Element)
+            });
+        }
+        nodes[0].first_child = Some(1);
+        nodes[1].parent = Some(0);
+        nodes[1].first_child = Some(2);
+        for index in 2..=6usize {
+            nodes[index].parent = Some(1);
+            nodes[index].next_sibling = (index < 6).then_some(index as u32 + 1);
+        }
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes,
+        })
+        .expect("fixture validates")
+    }
+
+    #[test]
+    fn tab_into_clipped_row_scrolls_its_scroll_container() {
+        let mut document = scroll_list_document();
+        document.set_focus(Some(5));
+        assert_eq!(
+            route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None)),
+            None
+        );
+        assert_eq!(document.focus(), Some(6));
+        assert!(document.scroll_offset(1).offset_y > 0.0);
     }
 
     #[test]

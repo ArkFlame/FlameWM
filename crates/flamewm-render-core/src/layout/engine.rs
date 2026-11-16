@@ -96,15 +96,26 @@ impl<'a> Engine<'a> {
         let inner_w = box_w.max(style.padding.horizontal()) - style.padding.horizontal();
         let inner_h =
             explicit_h.unwrap_or(avail_h).max(style.padding.vertical()) - style.padding.vertical();
-        let children = self.children(index);
+        let (content_w, content_h) = self.flow_extent(index, &style, inner_w, inner_h);
+
+        let width = explicit_w.unwrap_or(content_w + style.padding.horizontal());
+        let height = explicit_h.unwrap_or(content_h + style.padding.vertical());
+        (
+            clamp_length(width, style.min_width, style.max_width, avail_w),
+            clamp_length(height, style.min_height, style.max_height, avail_h),
+        )
+    }
+
+    /// Intrinsic size of the flow children of `index` (absolute and hidden children excluded),
+    /// ignoring the box's own explicit size. Shared by `measure_node` and `scroll_content_extent`.
+    fn flow_extent(&self, index: u32, style: &Style, inner_w: f32, inner_h: f32) -> (f32, f32) {
         let mut content_w: f32 = 0.0;
         let mut content_h: f32 = 0.0;
         let mut flow_count = 0usize;
-
         match style.display {
             Display::None => return (0.0, 0.0),
             Display::Flex if style.flex_direction == FlexDirection::Row => {
-                for child in children {
+                for child in self.children(index) {
                     let child_style = self.style(child);
                     if child_style.position == Position::Absolute
                         || child_style.display == Display::None
@@ -122,7 +133,7 @@ impl<'a> Engine<'a> {
             }
             // Block and column flex both stack children along the vertical axis.
             Display::Block | Display::Flex => {
-                for child in children {
+                for child in self.children(index) {
                     let child_style = self.style(child);
                     if child_style.position == Position::Absolute
                         || child_style.display == Display::None
@@ -139,12 +150,19 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        (content_w, content_h)
+    }
 
-        let width = explicit_w.unwrap_or(content_w + style.padding.horizontal());
-        let height = explicit_h.unwrap_or(content_h + style.padding.vertical());
+    /// Scroll extent of a box: its flow children plus padding, measured unconstrained on the
+    /// scroll axis. The box's own explicit height is not used, or a fixed-height scroller would
+    /// report its viewport as its content and never scroll.
+    pub(super) fn scroll_content_extent(&self, index: u32, box_w: f32) -> (f32, f32) {
+        let style = self.style(index);
+        let inner_w = box_w.max(style.padding.horizontal()) - style.padding.horizontal();
+        let (content_w, content_h) = self.flow_extent(index, &style, inner_w, f32::MAX / 1024.0);
         (
-            clamp_length(width, style.min_width, style.max_width, avail_w),
-            clamp_length(height, style.min_height, style.max_height, avail_h),
+            content_w + style.padding.horizontal(),
+            content_h + style.padding.vertical(),
         )
     }
 
