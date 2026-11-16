@@ -13,6 +13,7 @@ flamewm-api = { path = "../flamewm-api" }
 flamewm-assistant-core = { path = "../flamewm-assistant-core" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-integrations-core = { path = "../flamewm-integrations-core" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }

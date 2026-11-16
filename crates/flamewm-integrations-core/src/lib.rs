@@ -8,3 +8,4 @@ pub mod dispatcher;
 pub mod mpris;
 pub mod network;
 pub mod pulse;
+pub mod single_instance;

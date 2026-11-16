@@ -727,6 +727,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-integrations-core",
  "flamewm-reactor",
  "flamewm-render-compiler",
  "flamewm-render-core",
@@ -892,6 +893,7 @@ dependencies = [
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
+ "flamewm-integrations-core",
  "flamewm-integrations-linux",
  "flamewm-reactor",
  "flamewm-render-compiler",
@@ -931,6 +933,7 @@ name = "flamewm-integrations-core"
 version = "0.1.7"
 dependencies = [
  "flamewm-api",
+ "rustix 1.1.4",
 ]
 
 [[package]]

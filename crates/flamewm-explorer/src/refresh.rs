@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flamewm_integrations_linux::device_watch::stop_and_join;
 use inotify::{Inotify, WatchMask};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
@@ -112,10 +113,7 @@ impl DirWatch {
 
 impl Drop for DirWatch {
     fn drop(&mut self) {
-        let _ = rustix::io::write(&self.stop_tx, &[1]);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        stop_and_join(&self.stop_tx, self.thread.take());
     }
 }
 

@@ -45,6 +45,15 @@ fn drain_uevents(socket: &OwnedFd, buffer: &mut [u8]) -> bool {
     block
 }
 
+/// Stops a poll-loop watch thread: writes the stop pipe, then joins. Owner of the drop rule shared by
+/// every helper-thread watch (`device_watch`, explorer `refresh`).
+pub fn stop_and_join(stop_tx: &OwnedFd, thread: Option<JoinHandle<()>>) {
+    let _ = rustix::io::write(stop_tx, &[1]);
+    if let Some(thread) = thread {
+        let _ = thread.join();
+    }
+}
+
 /// Owns the watch thread. Dropping it writes the stop pipe and joins the thread.
 pub struct DeviceWatch {
     stop_tx: OwnedFd,
@@ -113,10 +122,7 @@ impl DeviceWatch {
 
 impl Drop for DeviceWatch {
     fn drop(&mut self) {
-        let _ = rustix::io::write(&self.stop_tx, &[1]);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        stop_and_join(&self.stop_tx, self.thread.take());
     }
 }
 
