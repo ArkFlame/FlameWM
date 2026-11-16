@@ -129,6 +129,11 @@ pub(super) fn validate_arrangement<'a>(
         if !output.geometry.is_valid() {
             return Err(invalid("display output has no active mode"));
         }
+        if placement.x.checked_add(output.geometry.width).is_none()
+            || placement.y.checked_add(output.geometry.height).is_none()
+        {
+            return Err(invalid("arrangement extends beyond the coordinate range"));
+        }
         rects.push(Rect::new(
             placement.x,
             placement.y,
@@ -141,10 +146,8 @@ pub(super) fn validate_arrangement<'a>(
     }
     for (index, rect) in rects.iter().enumerate() {
         for other in &rects[index + 1..] {
-            if rect.x < other.x + other.width
-                && other.x < rect.x + rect.width
-                && rect.y < other.y + other.height
-                && other.y < rect.y + rect.height
+            if spans_overlap(span(rect.x, rect.width), span(other.x, other.width))
+                && spans_overlap(span(rect.y, rect.height), span(other.y, other.height))
             {
                 return Err(invalid("arrangement outputs overlap"));
             }
@@ -160,10 +163,20 @@ pub(super) fn validate_arrangement<'a>(
     Ok(())
 }
 
+/// Half-open `[start, end)` extent computed in i64 so `start + len` never overflows i32 inputs.
+fn span(start: i32, len: i32) -> (i64, i64) {
+    (i64::from(start), i64::from(start) + i64::from(len))
+}
+
+fn spans_overlap(a: (i64, i64), b: (i64, i64)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
 /// Two rectangles share an edge segment (not just a corner).
 pub(super) fn touches(a: &Rect, b: &Rect) -> bool {
-    let x_overlap = a.x < b.x + b.width && b.x < a.x + a.width;
-    let y_overlap = a.y < b.y + b.height && b.y < a.y + a.height;
-    (x_overlap && (a.y + a.height == b.y || b.y + b.height == a.y))
-        || (y_overlap && (a.x + a.width == b.x || b.x + b.width == a.x))
+    let (ax, ay) = (span(a.x, a.width), span(a.y, a.height));
+    let (bx, by) = (span(b.x, b.width), span(b.y, b.height));
+    let x_overlap = spans_overlap(ax, bx);
+    let y_overlap = spans_overlap(ay, by);
+    (x_overlap && (ay.1 == by.0 || by.1 == ay.0)) || (y_overlap && (ax.1 == bx.0 || bx.1 == ax.0))
 }

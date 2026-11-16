@@ -279,6 +279,51 @@ fn valid_arrangement_moves_outputs_and_reverts_on_rollback() {
     assert_eq!(port.outputs[1].geometry.y, 0);
 }
 
+fn check_arrangement(
+    snapshot: &DisplaySnapshot,
+    placements: &[OutputPlacement],
+) -> FlameResult<()> {
+    super::topology::validate_arrangement(snapshot, placements, &|id: &OutputId| {
+        snapshot
+            .outputs
+            .iter()
+            .find(|output| &output.id == id && output.connected)
+            .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "output not connected"))
+    })
+}
+
+#[test]
+fn arrangement_extent_past_i32_max_is_rejected_not_wrapped() {
+    let mut port = TopologyPort::new();
+    port.outputs[0].geometry = Rect::new(0, 0, i32::MAX - 10, 1080);
+    let snapshot = port.display_snapshot().expect("snapshot");
+    // DP-B's far edge overflows i32; old i32 math wrapped it negative and missed the overlap.
+    let placements = vec![place("DP-A", 0, 0), place("DP-B", i32::MAX - 100, 0)];
+    let error = check_arrangement(&snapshot, &placements).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+}
+
+#[test]
+fn arrangement_overlap_near_i32_max_is_rejected() {
+    let mut port = TopologyPort::new();
+    port.outputs[0].geometry = Rect::new(0, 0, i32::MAX - 10, 1080);
+    port.outputs[1].geometry = Rect::new(0, 0, 1000, 1080);
+    let snapshot = port.display_snapshot().expect("snapshot");
+    let placements = vec![place("DP-A", 0, 0), place("DP-B", i32::MAX - 1500, 0)];
+    let error = check_arrangement(&snapshot, &placements).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+}
+
+#[test]
+fn arrangement_edge_adjacent_near_i32_max_is_accepted() {
+    let mut port = TopologyPort::new();
+    port.outputs[0].geometry = Rect::new(0, 0, i32::MAX - 1000, 1080);
+    port.outputs[1].geometry = Rect::new(0, 0, 1000, 1080);
+    let snapshot = port.display_snapshot().expect("snapshot");
+    let placements = vec![place("DP-A", 0, 0), place("DP-B", i32::MAX - 1000, 0)];
+    check_arrangement(&snapshot, &placements).expect("edge-adjacent pair is valid");
+}
+
 #[test]
 fn failed_apply_leaves_no_pending_transaction() {
     let mut port = TopologyPort::new();
