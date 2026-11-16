@@ -711,12 +711,14 @@ mod tests {
     /// Re-pinned 845_055 -> 850_429 for the intended Displays canvas changes (1858d480, 62bdee42, 915b9343; fee4cc54
     /// settings.css changes the hash at the same byte count).
     /// Re-pinned 850_429 -> 853_259 for the intended All Programs default toggle row in settings.html.
+    /// Re-pinned 853_259 -> 849_574 / 0xbbbe_c96d_4717_3e3b for removing nine redundant `setting-note`
+    /// descriptions that only restated their row titles (settings.html; see the commit message for the list).
     #[test]
     fn settings_hotkeys_document_is_unchanged_by_utility_migration() {
         let page = ui_dir().join("settings.html");
         assert_eq!(
             compiled_page_digest(&page, true),
-            (853_259, 0x70ab_aa1a_02e1_09cc)
+            (849_574, 0xbbbe_c96d_4717_3e3b)
         );
     }
 
