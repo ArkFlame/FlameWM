@@ -2,7 +2,9 @@
 
 - Feature: Start has an All Programs toggle above search. It switches the category rail to one alphabetical list with letter headers (Esc or Backspace on an empty query returns to Categories).
 - Setting: `showAllProgramsByDefault` (default off) opens Start in All Programs. It is in the Taskbar settings page.
-- Limits: the renderer accepts no at-rules, so the view change has no slide animation and no reduced-motion query. Header rows keep the slot styling, and the list scrollbar stays hidden.
+- Limits: the renderer accepts no at-rules, so the view change has no slide animation and no reduced-motion query. The list scrollbar stays hidden; a projected 3px scroll thumb on the right edge shows position instead.
+- Style: letter headers in All Programs use a smaller, bold accent letter (projected per slot; no class or hover-free state is available, so the hover fill comes from the shared highlight pass).
+- Scope: switching the desktop session (Xfce, KDE) is out of scope. FlameWM is a desktop environment; the display manager picks the session. See `docs/SESSION_SCOPE.md`.
 
 ## Unreleased — Tab reaches terminal TUI apps (guard)
 

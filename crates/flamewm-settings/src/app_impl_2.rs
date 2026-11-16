@@ -935,6 +935,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "show-content-off",
             ),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
+            (
+                "showAllProgramsByDefault",
+                "start-all-programs-on",
+                "start-all-programs-off",
+            ),
         ] {
             let enabled = self.setting_value(key).and_then(|value| match value {
                 SettingValue::Boolean(value) => Some(*value),

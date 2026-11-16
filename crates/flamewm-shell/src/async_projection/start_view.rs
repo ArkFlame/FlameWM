@@ -4,6 +4,33 @@ use crate::projection::ProgramRow;
 
 /// Pixel height of one Start application row in the virtual list.
 const START_APP_ROW_HEIGHT: u32 = 36;
+/// Label size for application rows, and the smaller accent size for letter headers.
+const START_ROW_FONT_PX: f32 = 12.0;
+const START_HEADER_FONT_PX: f32 = 11.0;
+/// Projected scroll thumb: a 3px bar on the right edge of the slot track (px from pane origin).
+const START_SCROLL_THUMB: &str = "start-scroll-thumb";
+const START_SCROLL_THUMB_LEFT_PX: f32 = 251.0;
+const START_SCROLL_TRACK_TOP_PX: f32 = 5.0;
+const START_SCROLL_THUMB_WIDTH_PX: f32 = 3.0;
+const START_SCROLL_MIN_THUMB_PX: f32 = 24.0;
+
+/// Thumb `(top, height)` in px on a slot track of `track_px` for `total` rows at `offset`, or
+/// `None` when every row fits. Pure so the geometry has a regression check.
+#[must_use]
+pub fn start_scroll_thumb_geometry(
+    total: usize,
+    offset: usize,
+    track_px: f32,
+) -> Option<(f32, f32)> {
+    let max = crate::projection::start_scroll_max(total);
+    if total == 0 || max == 0 {
+        return None;
+    }
+    let visible = START_APP_SLOT_COUNT.min(total) as f32;
+    let height = (track_px * visible / total as f32).clamp(START_SCROLL_MIN_THUMB_PX, track_px);
+    let top = (track_px - height) * offset.min(max) as f32 / max as f32;
+    Some((top, height))
+}
 
 #[derive(Debug, Default)]
 pub struct StartViewNote {
@@ -37,12 +64,12 @@ pub fn project_start_unified(
     mut loader: Option<&mut IconLoader>,
     scroll_rows: usize,
 ) -> Result<(), String> {
-    bump_start_view_epoch(); // Canonical indexed path: borrowed query view from the precomputed
-                             // index, then the single presentation-bucket filter. No clone, no
-                             // set_query-on-temporary. (Shell StartCategory is the presentation
-                             // seam; core filter_view takes the core category type.)
-                             // Rows, not bare apps: All Programs interleaves letter headers, and every slot index maps
-                             // to one row so headers keep their place in scrolling and slot numbering.
+    // Canonical indexed path: borrowed query view from the precomputed index, then the single
+    // presentation-bucket filter. No clone, no set_query-on-temporary. (Shell StartCategory is
+    // the presentation seam; core filter_view takes the core category type.)
+    bump_start_view_epoch();
+    // Rows, not bare apps: All Programs interleaves letter headers, and every slot index maps
+    // to one row so headers keep their place in scrolling and slot numbering.
     let rows = crate::projection::start_program_rows(model, category, query);
     document.visible("start-applications", !rows.is_empty())?;
     // Clamp here so the rows painted always match `start_scroll_rows` for slot mapping.
@@ -76,11 +103,18 @@ pub fn project_start_unified(
                 document.text_ref(&label_id, &letter.to_string())?;
                 document.visible(&button_id, true)?;
                 document.visible(&icon_id, false)?;
+                // Heading style: smaller bold accent letter (the hover fill is cleared by the highlight pass).
+                document.font_size(&label_id, START_HEADER_FONT_PX)?;
+                document.font_weight(&label_id, 700)?;
+                document.foreground(&label_id, crate::projection::task_accent())?;
             }
             Some(ProgramRow::App(application)) => {
                 document.text_ref(&label_id, &application.name)?;
                 document.visible(&button_id, true)?;
                 document.visible(&icon_id, true)?;
+                document.font_size(&label_id, START_ROW_FONT_PX)?;
+                document.font_weight(&label_id, 400)?;
+                document.foreground_clear(&label_id)?;
                 schedule_visible(
                     document,
                     &icon_id,
@@ -97,6 +131,22 @@ pub fn project_start_unified(
                 document.visible(&icon_id, false)?;
             }
         }
+    }
+    match start_scroll_thumb_geometry(
+        rows.len(),
+        scroll_rows,
+        START_APP_SLOT_COUNT as f32 * START_APP_ROW_HEIGHT as f32,
+    ) {
+        Some((top, height)) => {
+            document.size(START_SCROLL_THUMB, START_SCROLL_THUMB_WIDTH_PX, height)?;
+            document.position(
+                START_SCROLL_THUMB,
+                START_SCROLL_THUMB_LEFT_PX,
+                START_SCROLL_TRACK_TOP_PX + top,
+            )?;
+            document.visible(START_SCROLL_THUMB, true)?;
+        }
+        None => document.visible(START_SCROLL_THUMB, false)?,
     }
     let show_session = query.trim().is_empty()
         && category == StartCategory::Power
@@ -417,6 +467,23 @@ mod start_scroll_tests {
         model.set_favorites(vec!["org.example.calc".into()]);
         let doc = project_start_doc(&model, StartCategory::All, "");
         assert_eq!(doc.visible.get("start-category-favorites"), Some(&true));
+    }
+}
+
+#[cfg(test)]
+mod scroll_thumb_tests {
+    use super::*;
+
+    #[test]
+    fn scroll_thumb_hidden_when_rows_fit_and_tracks_offset() {
+        assert_eq!(start_scroll_thumb_geometry(4, 0, 288.0), None);
+        assert_eq!(start_scroll_thumb_geometry(0, 0, 288.0), None);
+        let (top, height) = start_scroll_thumb_geometry(16, 0, 288.0).expect("scrolls");
+        assert_eq!((top, height), (0.0, 144.0));
+        let (top_end, _) = start_scroll_thumb_geometry(16, 8, 288.0).expect("scrolls");
+        assert!((top_end - 144.0).abs() < 1e-3);
+        let (_, tiny) = start_scroll_thumb_geometry(1000, 0, 288.0).expect("scrolls");
+        assert_eq!(tiny, START_SCROLL_MIN_THUMB_PX);
     }
 }
 
