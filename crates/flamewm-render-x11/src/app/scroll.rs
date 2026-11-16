@@ -617,8 +617,8 @@ mod tests {
         let mut layout = LayoutEngine::compute(&doc, 300.0, 100.0, it);
         assert_eq!(
             layout.metrics_for(0, Default::default()).max_y,
-            0.0,
-            "engine reports no overflow for an explicit height"
+            400.0,
+            "engine reports the flow-children extent for an explicit height (d7143756)"
         );
         fit_scroll_extents(&mut layout, &doc, it);
         let max_y = layout.metrics_for(0, Default::default()).max_y;
