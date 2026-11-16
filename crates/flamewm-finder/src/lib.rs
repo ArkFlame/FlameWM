@@ -340,10 +340,10 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
     let walk_cache = cache_file.map(Path::to_path_buf);
     let roots = index::default_roots(env::var_os("HOME"));
     let worker_index = shared;
-    // Read once per launch: documents opened later show up after the next start.
-    let docs = recent_docs::path(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
-        .map(|path| recent_docs::load(&path))
-        .unwrap_or_default();
+    // Read once per launch: documents opened later show up after the next start. The read runs on
+    // its own thread, so the UI thread never waits on the file before the first paint.
+    let docs_rx = recent_docs::path(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
+        .map(recent_docs::load_later);
     std::thread::spawn(move || {
         // Background priority: the file walk must never compete with the UI thread.
         flamewm_integrations_linux::background::lower_current_thread();
@@ -361,6 +361,9 @@ fn show(home: &str, cache_file: Option<&Path>, pid_file: &Path) -> Result<(), St
         {
             let _ = index_writer.write(&[1]);
         }
+        let docs = docs_rx
+            .map(|rx| rx.recv().unwrap_or_default())
+            .unwrap_or_default();
         // The cached index answers queries while the fresh walk runs; reading it here keeps the
         // window's first paint off the disk.
         if let Some(mut cached) = walk_cache.as_deref().and_then(index::load_cache) {

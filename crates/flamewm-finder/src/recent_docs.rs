@@ -5,9 +5,22 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 
 /// Most local paths kept from the file.
 const MAX_DOCS: usize = 200;
+
+/// Starts `load` on its own thread and returns at once. The receiver yields the list when the file
+/// has been read, so a slow or stalled file never blocks the caller. Precedent: the imageviewer
+/// fix in 4c8e3c07 moved its directory scan off the UI thread the same way.
+#[must_use]
+pub fn load_later(path: PathBuf) -> Receiver<Vec<String>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(load(&path));
+    });
+    receiver
+}
 
 /// `$XDG_DATA_HOME/recently-used.xbel`, or the default under `$HOME/.local/share`.
 #[must_use]
@@ -114,6 +127,45 @@ mod tests {
   <bookmark href="file:///home/u/a&amp;b.md" modified="2026-04-01T00:00:00Z"/>
 </xbel>
 "#;
+
+    #[test]
+    fn load_later_returns_before_the_file_is_read() {
+        // A FIFO with no writer blocks any reader, so a read on the caller's thread would hang here.
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-recent-docs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("recently-used.xbel");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let started = std::time::Instant::now();
+        let receiver = load_later(fifo.clone());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "the read must wait for the FIFO writer, not finish on the caller"
+        );
+        let mut writer = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        std::io::Write::write_all(&mut writer, SAMPLE.as_bytes()).unwrap();
+        drop(writer);
+        let docs = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(docs, parse(SAMPLE));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn lists_local_paths_newest_use_first_without_duplicates() {
