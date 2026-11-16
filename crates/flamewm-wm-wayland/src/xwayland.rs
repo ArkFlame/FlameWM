@@ -949,12 +949,15 @@ mod stacking_tests {
         assert!(replace_strut(&mut cached, Some([0, 0, 0, 48])));
         let work = crate::state::reserve_struts(output, cached.into_iter());
         assert_eq!(
-            refit_model_placements(&mut model, output, output, work),
+            refit_model_placements(&mut model, output, output, work, |_| true),
             [1]
         );
         let snapped_area = work;
         let unchanged = model.get(1).unwrap().clone();
-        assert!(refit_model_placements(&mut model, output, snapped_area, snapped_area).is_empty());
+        assert!(
+            refit_model_placements(&mut model, output, snapped_area, snapped_area, |_| true)
+                .is_empty()
+        );
         assert_eq!(model.get(1), Some(&unchanged));
         let snapped = model.get(1).unwrap();
         assert_eq!(snapped.mode, Mode::Snapped(SnapTarget::BottomRightQuarter));
@@ -965,7 +968,7 @@ mod stacking_tests {
         let work = crate::state::reserve_struts(output, cached.into_iter());
         assert_eq!(work, output);
         assert_eq!(
-            refit_model_placements(&mut model, output, snapped_area, work),
+            refit_model_placements(&mut model, output, snapped_area, work, |_| true),
             [1]
         );
         let snapped = model.get(1).unwrap();
@@ -985,7 +988,7 @@ mod stacking_tests {
         model.snap_to(1, SnapTarget::BottomRightQuarter, output, start);
 
         assert_eq!(
-            refit_model_placements(&mut model, output, output, layer_work),
+            refit_model_placements(&mut model, output, output, layer_work, |_| true),
             [1]
         );
         let placed = model.get(1).unwrap();

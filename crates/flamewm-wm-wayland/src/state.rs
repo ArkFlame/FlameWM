@@ -384,8 +384,8 @@ pub struct State {
     pub seat: Seat<State>,
     pub output: Output,
     pub output_size: Size<i32, Logical>,
-    /// Last work area used to place snapped/maximized/fullscreen windows.
-    cached_work_area: Rect,
+    /// Last work area per output, used to place snapped/maximized/fullscreen windows.
+    cached_work_areas: Vec<(String, Rect)>,
     /// Dock cut from the work area, from `dock.*` settings; `None` while the dock is hidden.
     pub(crate) dock_reserve: Option<(ReserveEdge, i32)>,
     pub damage: OutputDamageTracker,
@@ -583,7 +583,7 @@ impl State {
             seat,
             output,
             output_size: Size::from((1280, 800)),
-            cached_work_area: Rect::new(0, 0, 1280, 800),
+            cached_work_areas: Vec::new(),
             dock_reserve: None,
             damage,
             model,
@@ -1000,26 +1000,75 @@ impl State {
         self.work_area_on(&self.output_name_under_pointer())
     }
 
-    /// Refit output-sized placements once, and only once, for each effective work-area change.
+    /// Refits placements on each output whose work area changed, once per change. Outputs whose
+    /// work area is untouched keep their placements, so a strut on one output never moves another.
     pub(crate) fn reflow_if_work_area_changed(&mut self) {
-        let work = self.work_area();
-        let previous = std::mem::replace(&mut self.cached_work_area, work);
-        let output = self.output_rect();
+        let primary = self.output.name();
+        let mut names = self.layout_outputs.clone();
+        if !names.contains(&primary) {
+            names.push(primary);
+        }
+        let current: Vec<(String, Rect)> = names
+            .into_iter()
+            .map(|name| {
+                let work = self.work_area_on(&name);
+                (name, work)
+            })
+            .collect();
+        let changed = changed_work_areas(&self.cached_work_areas, &current);
+        self.cached_work_areas = current;
         // A shrunk or unplugged output can leave the pointer past its edge; keep it on screen.
+        let output = self.output_rect();
         let (px, py) = crate::model::clamp_point_into(self.pointer.x, self.pointer.y, output);
         self.pointer = Point::from((px, py));
-        let mut fitted = refit_model_placements(&mut self.model, output, previous, work);
-        // Floating windows only need pulling back when the usable area itself changed (an output
-        // resize, unplug or panel change); otherwise they keep the spot the user put them.
-        if previous != work {
-            fitted.extend(self.model.clamp_floating_into(output));
+        let mut fitted = Vec::new();
+        for (name, previous, work) in &changed {
+            let rect = self.output_rect_on(name);
+            let ids: Vec<WindowId> = self
+                .model
+                .managed()
+                .iter()
+                .filter(|window| self.rect_on_output(window.rect, name))
+                .map(|window| window.id)
+                .collect();
+            // Floating windows only need pulling back when this output's usable area itself changed
+            // (resize, unplug or panel); otherwise they keep the spot the user put them.
+            let floating: Vec<WindowId> = self
+                .model
+                .managed()
+                .iter()
+                .filter(|window| window.mode == Mode::Normal && ids.contains(&window.id))
+                .map(|window| window.id)
+                .collect();
+            fitted.extend(refit_model_placements(
+                &mut self.model,
+                rect,
+                *previous,
+                *work,
+                |window| ids.contains(&window.id),
+            ));
+            fitted.extend(
+                floating
+                    .into_iter()
+                    .filter(|id| self.model.clamp_floating_window_into(*id, rect)),
+            );
         }
         for id in fitted {
             self.apply_geometry(id);
         }
-        if previous != work {
+        if !changed.is_empty() {
             self.request_redraw();
         }
+    }
+
+    /// Whether `rect` sits on output `name`, by the same rule `work_area_of` applies.
+    fn rect_on_output(&self, rect: Rect, name: &str) -> bool {
+        crate::output_layout::output_name_for_rect(
+            &self.pointer_layout,
+            &self.layout_outputs,
+            rect,
+            &self.output.name(),
+        ) == name
     }
 
     /// Sends the configure a resize grab deferred. Called once per paint, so a burst of pointer
@@ -1492,6 +1541,24 @@ mod dock_work_area_tests {
     fn hidden_dock_and_no_taskbar_leave_the_output_whole() {
         assert_eq!(work_area(OUTPUT, &[], None), OUTPUT);
     }
+
+    /// KWin's `Workspace::rearrange` keeps one client area per screen and reports only the
+    /// screens whose area changed. A panel on output B must reflow B alone, not output A.
+    #[test]
+    fn strut_on_the_secondary_output_reflows_only_that_output() {
+        let primary = Rect::new(0, 0, 1280, 800);
+        let secondary = Rect::new(1280, 0, 1920, 1080);
+        let secondary_with_panel = Rect::new(1280, 0, 1920, 1036);
+        let previous = [("A".to_owned(), primary), ("B".to_owned(), secondary)];
+        let current = [
+            ("A".to_owned(), primary),
+            ("B".to_owned(), secondary_with_panel),
+        ];
+        assert_eq!(
+            changed_work_areas(&previous, &current),
+            vec![("B".to_owned(), secondary, secondary_with_panel)]
+        );
+    }
 }
 
 /// Work area after the layer zone and the unmanaged struts, then the Dock's reserve. The Dock's
@@ -1517,12 +1584,29 @@ fn cut_dock(work: Rect, dock: Option<(ReserveEdge, i32)>) -> Rect {
     Rect::new(cut.x, cut.y, cut.width, cut.height)
 }
 
-/// Refit every output-sized placement only when the effective work area changes.
+/// Outputs whose work area differs from `previous`, as (name, previous, current). An output with no
+/// previous entry, such as a fresh hotplug, counts as changed from an empty rect.
+fn changed_work_areas(
+    previous: &[(String, Rect)],
+    current: &[(String, Rect)],
+) -> Vec<(String, Rect, Rect)> {
+    current
+        .iter()
+        .filter_map(|(name, work)| {
+            let old = previous.iter().find(|(p, _)| p == name).map(|(_, r)| *r);
+            (old != Some(*work))
+                .then(|| (name.clone(), old.unwrap_or(Rect::new(0, 0, 0, 0)), *work))
+        })
+        .collect()
+}
+
+/// Refit every output-sized placement that `on_output` accepts, only when the work area changes.
 pub(crate) fn refit_model_placements(
     model: &mut WindowModel,
     output: Rect,
     previous_work: Rect,
     work: Rect,
+    on_output: impl Fn(&crate::model::Managed) -> bool,
 ) -> Vec<WindowId> {
     if previous_work == work {
         return Vec::new();
@@ -1530,7 +1614,7 @@ pub(crate) fn refit_model_placements(
     let fitted: Vec<_> = model
         .managed()
         .iter()
-        .filter(|window| window.mode != Mode::Normal)
+        .filter(|window| window.mode != Mode::Normal && on_output(window))
         .map(|window| window.id)
         .collect();
     for id in &fitted {

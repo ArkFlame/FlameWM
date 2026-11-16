@@ -823,30 +823,46 @@ impl WindowModel {
             .iter_mut()
             .filter(|window| window.mode == Mode::Normal)
         {
-            // The client rect sits below the titlebar band, so the frame starts `band` pixels above it.
-            let band = if window.decorated() {
-                TITLEBAR_HEIGHT
-            } else {
-                0
-            };
-            let frame = Rect::new(
-                window.rect.x,
-                window.rect.y - band,
-                window.rect.w,
-                window.rect.h + band,
-            );
-            let fitted = clamp_into_output(frame, output);
-            if fitted != frame {
-                window.rect = Rect::new(
-                    fitted.x,
-                    fitted.y + band,
-                    fitted.w,
-                    (fitted.h - band).max(0),
-                );
+            if Self::clamp_window_into(window, output) {
                 moved.push(window.id);
             }
         }
         moved
+    }
+
+    /// Pulls one floating window back inside `output`; `true` when it moved.
+    pub fn clamp_floating_window_into(&mut self, id: WindowId, output: Rect) -> bool {
+        match self.get_mut(id) {
+            Some(window) if window.mode == Mode::Normal => Self::clamp_window_into(window, output),
+            _ => false,
+        }
+    }
+
+    /// Moves a floating frame fully inside `output`, keeping the titlebar band above the client rect.
+    fn clamp_window_into(window: &mut Managed, output: Rect) -> bool {
+        // The client rect sits below the titlebar band, so the frame starts `band` pixels above it.
+        let band = if window.decorated() {
+            TITLEBAR_HEIGHT
+        } else {
+            0
+        };
+        let frame = Rect::new(
+            window.rect.x,
+            window.rect.y - band,
+            window.rect.w,
+            window.rect.h + band,
+        );
+        let fitted = clamp_into_output(frame, output);
+        if fitted == frame {
+            return false;
+        }
+        window.rect = Rect::new(
+            fitted.x,
+            fitted.y + band,
+            fitted.w,
+            (fitted.h - band).max(0),
+        );
+        true
     }
 
     /// Refit output-sized placements without overwriting a floating window's restore geometry.
