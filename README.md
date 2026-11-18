@@ -1,6 +1,7 @@
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/026cd639-61b3-4eff-9f07-b886ba6366c0" />
 <div align="center">
 
-# FlameWM
+  # FlameWM
 
 **A window manager and desktop shell for Linux, written in Rust, with its UI in HTML and CSS compiled to native code.**
 
