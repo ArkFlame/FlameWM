@@ -10,7 +10,7 @@ max_wall_seconds = 40           # measured 20-30s (QEMU start to FLAME_PROBE_END
 allowed_systemd_states = ["running"]
 
 [ram]
-max_idle_used_mb = 900          # `free -m` used at lightdm active, no user apps
+max_idle_used_mb = 450          # `free -m` used at lightdm active, no user apps
 
 [services]
 max_running = 18               # systemctl list-units --type=service --state=running
