@@ -17,9 +17,19 @@ while (( SECONDS < deadline )); do
 done
 if (( active )); then emit FLAME_LIGHTDM_ACTIVE; fi
 
-# is-system-running --wait blocks until the state leaves starting/initializing; bounded by timeout.
-settle=$(timeout 90 systemctl is-system-running --wait 2>/dev/null || true)
-[[ -n $settle ]] || settle=timeout
+# The probe is itself a pending start job, so is-system-running can never leave "starting"
+# while it runs. Settled = no pending jobs besides this unit and its parent targets, and no
+# failed units. Bounded at 90s; reports "timeout" if other jobs are still pending.
+settle=timeout
+for _ in $(seq 1 90); do
+  pending=$(systemctl list-jobs --no-legend 2>/dev/null | awk '{print $2}' \
+    | grep -vxE 'flame-probe.service|multi-user.target|graphical.target' || true)
+  if [[ -z $pending ]]; then
+    if [[ -n $(systemctl --failed --no-legend 2>/dev/null) ]]; then settle=degraded; else settle=running; fi
+    break
+  fi
+  sleep 1
+done
 
 emit FLAME_PROBE_BEGIN
 emit "lightdm_active=$active"

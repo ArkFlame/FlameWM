@@ -159,6 +159,10 @@ if [[ -s "$MASKS" ]]; then
     done < <(awk '{ sub(/#.*/, ""); gsub(/[ \t\r]/, ""); if (length) print }' "$MASKS")
 fi
 
+# D-Bus-activated daemons FlameWM queries on demand: drop boot-time enablement so they
+# neither cost boot time nor block graphical.target (power-profiles-daemon hung in 'start').
+rm -f "$ROOTFS"/etc/systemd/system/*.wants/power-profiles-daemon.service
+
 # Mount proc and dev only while chroot steps run; always unmount on exit.
 umount_chroot() {
     local m

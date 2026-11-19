@@ -74,3 +74,5 @@ ubuntu-advantage.service
 systemd-networkd-wait-online.service
 apt-news.service
 casper-md5check.service
+# Hung in "start" in the qemu boot test and blocked graphical.target; FlameWM treats it as optional
+power-profiles-daemon.service

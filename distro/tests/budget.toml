@@ -6,7 +6,7 @@
 max_size_mb = 1680              # squashfs + kernel + initrd + EFI image; measured 1524.6 (2026-11-19) + ~10%
 
 [boot]
-max_wall_seconds = 29           # measured 26.22 + ~10%; QEMU start until FLAME_LIGHTDM_ACTIVE (firmware + grub + kernel + userspace)
+max_wall_seconds = 40           # measured 20-30s (QEMU start to FLAME_PROBE_END incl. the probe's settle wait); noise is firmware+grub on shared host
 allowed_systemd_states = ["running"]
 
 [ram]
