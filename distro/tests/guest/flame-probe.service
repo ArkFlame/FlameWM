@@ -1,0 +1,14 @@
+# flame-probe.service - FlameDE TEST-ONLY boot metrics probe. Install into test ISOs only.
+# Runs flame-probe.sh once after the graphical session comes up. Consumed by boot-smoke.sh.
+[Unit]
+Description=FlameDE boot metrics probe (test only)
+After=lightdm.service
+Wants=lightdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/flame-test/flame-probe.sh
+TimeoutStartSec=400
+
+[Install]
+WantedBy=graphical.target

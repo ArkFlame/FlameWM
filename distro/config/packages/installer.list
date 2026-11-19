@@ -1,0 +1,21 @@
+# installer.list - installer stack, installed into the live image only, removed from the installed system.
+# Format: one package per line; '#' lines are comments; no inline comments.
+# Decision rule: Calamares is the primary installer. It is expected in Ubuntu universe, but this
+# was NOT verified against the 26.10 archive (no network access in this pass). Run
+# `apt-cache policy calamares` against the 26.10 archive before the first build.
+# If it is absent or fails to build, use the fallback in DESIGN.md section 5 (ubiquity).
+
+# Primary installer.
+calamares
+# Ubuntu settings module set used by the Calamares 'welcome', 'users' and 'locale' modules.
+# GRUB EFI binaries used by the Calamares 'bootloader' module on the target.
+grub-efi-amd64-bin
+grub-common
+# GPT partition tool for the installer's partitioning page.
+gdisk
+# Keyboard layout selection on the installer page.
+keyboard-configuration
+# Copies the root filesystem into the target through the 'unpackfs' module.
+rsync
+# Writes the ISO-side metadata the installer reads back.
+genisoimage

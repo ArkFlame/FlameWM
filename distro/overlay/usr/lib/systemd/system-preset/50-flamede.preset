@@ -1,0 +1,10 @@
+# FlameDE presets: units enabled on first boot of the installed system.
+# Masks live in distro/config/system/mask-list.txt; this file only enables.
+enable NetworkManager.service
+enable lightdm.service
+enable systemd-timesyncd.service
+enable systemd-resolved.service
+enable avahi-daemon.service
+enable irqbalance.service
+enable earlyoom.service
+enable fstrim.timer

@@ -1,0 +1,98 @@
+# remove.list - packages purged from the INSTALLED system (chroot purge before squashfs).
+# Format: one package per line; '#' lines are comments; no inline comments.
+# Purge: `apt-get purge --auto-remove`. Dependents of a purged package are purged too, so only
+# list leaf-level packages; library packages are NOT listed (they go when their dependents go).
+
+# Ubuntu telemetry, error reporting and advertising.
+apport
+apport-gtk
+whoopsie
+ubuntu-report
+popularity-contest
+ubuntu-advantage-tools
+ubuntu-pro-client
+ubuntu-pro-client-l10n
+motd-news-config
+landscape-common
+
+# Snap and Ubuntu desktop metapackages not used by FlameDE.
+snapd
+ubuntu-desktop
+ubuntu-desktop-minimal
+gnome-software
+gnome-software-plugin-snap
+update-manager
+update-manager-core
+ubuntu-release-upgrader-gtk
+ubuntu-release-upgrader-core
+
+# Cloud and VM provisioning: the installed system is a desktop, not a cloud guest.
+cloud-init
+cloud-initramfs-copymods
+cloud-guest-utils
+cloud-image-utils
+
+# Logging and scheduling: journald is the only logger; systemd timers replace cron.
+rsyslog
+cron
+anacron
+
+# Network stacks FlameDE does not use. NetworkManager and systemd-resolved stay.
+netplan.io
+ifupdown
+resolvconf
+modemmanager
+ppp
+pppoeconf
+
+# Audio stack replaced by PipeWire.
+pulseaudio
+pulseaudio-utils
+
+# LXQt, LXDE and Openbox desktop components (replaced by FlameWM and GTK apps).
+lxqt-core
+lxqt-session
+lxqt-panel
+lxqt-config
+lxqt-openssh-askpass
+lxqt-policykit
+lxqt-powermanagement
+lxqt-notificationd
+lxqt-admin
+lxqt-sudo
+lxqt-themes
+lxqt-about
+lxqt-globalkeys
+lxqt-runner
+lxqt-archiver
+lxqt-build-tools
+lxde-core
+lxde-common
+lxpanel
+lxsession
+openbox
+obconf-qt
+pcmanfm-qt
+qterminal
+lximage-qt
+featherpad
+pavucontrol-qt
+xscreensaver
+xscreensaver-data
+xscreensaver-gl
+xscreensaver-data-extra
+kwin-x11
+kde-cli-tools
+qt5-gtk-platformtheme
+
+# Display managers replaced by LightDM.
+sddm
+sddm-theme-breeze
+gdm3
+
+# Office, mail and media applications outside the FlameDE baseline.
+libreoffice-common
+thunderbird
+rhythmbox
+totem
+transmission-gtk

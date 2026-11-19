@@ -1,0 +1,24 @@
+---
+componentName: flamede
+welcomeStyleCalamares: true
+welcomeExpandingLogo: false
+strings:
+  productName: "FlameDE"
+  shortProductName: "FlameDE"
+  version: "26.10"
+  shortVersion: "26.10"
+  versionedName: "FlameDE 26.10"
+  shortVersionedName: "FlameDE 26.10"
+  bootloaderEntryName: "FlameDE"
+  productUrl: "https://example.invalid/flamede"
+  supportUrl: "https://example.invalid/flamede/support"
+  knownIssuesUrl: "https://example.invalid/flamede/issues"
+  releaseNotesUrl: "https://example.invalid/flamede/release"
+  donateUrl: ""
+images:
+  productLogo: "logo.svg"
+  productIcon: "logo.svg"
+  productWelcome: "logo.svg"
+slideshow: "show.qml"
+slideshowAPI: 2
+style: "stylesheet.qss"

@@ -1,0 +1,61 @@
+# mask-list.txt - units to mask on the installed system (systemctl mask <unit>).
+# One unit per line. '#' lines are comments. Masking links the unit to /dev/null in /etc/systemd/system.
+# Units removed by packages/remove.list are not repeated here.
+# fstrim.timer is deliberately NOT masked: weekly TRIM is required for SSD health.
+
+# Package maintenance timers: apt updates are driven by the Software Updater, not background timers.
+# Security updates are handled by unattended-upgrades on its own timer, which the image build enables.
+apt-daily.timer
+apt-daily.service
+apt-daily-upgrade.timer
+apt-daily-upgrade.service
+
+# Login banner and news fetching: no network request at login.
+motd-news.timer
+motd-news.service
+
+# man-db index rebuild: runs at install and nightly; not needed on a desktop without man pages in use.
+man-db.timer
+man-db.service
+
+# e2fsck scrubbing: ext4 online scrub adds a periodic full read on large disks. Offline fsck still runs at boot.
+e2scrub_all.timer
+e2scrub_all.service
+e2scrub_reap.service
+
+# Ubuntu Pro and advantage services (client removed in remove.list; mask any leftover units).
+ua-timer.timer
+ua-timer.service
+ua-reboot-cmds.service
+ua-messaging.timer
+ua-messaging.service
+
+# Error reporting daemons (apport and whoopsie removed; masks guard against reinstalls).
+apport.service
+whoopsie.service
+whoopsie-paths.service
+
+# Modem manager: no cellular hardware in scope.
+ModemManager.service
+
+# Cloud-init (removed from installed system; masks guard against reinstalls).
+cloud-init.service
+cloud-init-local.service
+cloud-config.service
+cloud-final.service
+cloud-init.target
+
+# Legacy time and log daemons replaced by systemd-timesyncd and journald.
+chrony.service
+rsyslog.service
+
+# Snap services (snapd removed).
+snapd.service
+snapd.socket
+snapd.seeded.service
+snapd.apparmor.service
+
+# Printer mDNS discovery of print queues is optional; cups-browsed is off unless printing is enabled.
+cups-browsed.service
+
+# Bluetooth stays enabled, so bluetooth.service is NOT masked. Power-saving tuning is in system config.

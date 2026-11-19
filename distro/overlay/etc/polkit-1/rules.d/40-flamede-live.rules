@@ -1,0 +1,27 @@
+// FlameDE live session: the live user gets mount, network and power actions
+// only while its local session is active. Removed on install (removeuser).
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "flamelive" || !subject.local || !subject.active) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var udisks = [
+        "org.freedesktop.udisks2.filesystem-mount",
+        "org.freedesktop.udisks2.filesystem-mount-system",
+        "org.freedesktop.udisks2.eject-media",
+        "org.freedesktop.udisks2.power-off-drive"
+    ];
+    var nm = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.settings.modify.system"
+    ];
+    var power = [
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.power-off-multiple-sessions",
+        "org.freedesktop.login1.reboot",
+        "org.freedesktop.login1.reboot-multiple-sessions"
+    ];
+    if (udisks.indexOf(action.id) !== -1 || nm.indexOf(action.id) !== -1 || power.indexOf(action.id) !== -1) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

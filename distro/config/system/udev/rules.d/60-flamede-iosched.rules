@@ -1,0 +1,19 @@
+# 60-flamede-iosched.rules - block-device I/O scheduler selection for FlameDE.
+# Installed to /etc/udev/rules.d/. Applied on device add and change.
+# Rule: NVMe uses none (the device has its own queueing); SATA/eMMC SSDs use mq-deadline;
+# rotational disks use bfq for interactive fairness.
+
+# NVMe: no software scheduler.
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none"
+
+# SATA SSD (non-rotational): mq-deadline gives predictable latency.
+ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
+
+# eMMC (mmcblk) non-rotational: same policy. Separate rule because udev KERNEL matches do not support '|'.
+ACTION=="add|change", KERNEL=="mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
+
+# Rotational disks: bfq for per-process fairness during desktop I/O bursts.
+ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+
+# Read-ahead: 256 KiB on rotational media, default elsewhere.
+ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/read_ahead_kb}="256"

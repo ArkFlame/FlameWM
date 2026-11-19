@@ -1,0 +1,16 @@
+# FlameDE ISO builder. Runs rootless under podman; mmdebstrap uses unshare mode.
+# Default base is ubuntu:26.10. Fallback: --build-arg UBUNTU_IMAGE=ubuntu:rolling
+ARG UBUNTU_IMAGE=ubuntu:26.10
+FROM ${UBUNTU_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates ubuntu-keyring \
+      mmdebstrap fakeroot fakechroot uidmap \
+      xorriso squashfs-tools zstd dpkg-dev \
+      grub-common grub-pc-bin grub-efi-amd64-bin \
+      mtools dosfstools isolinux syslinux-common \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src

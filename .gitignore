@@ -33,3 +33,5 @@ icon-theme.cache
 !/assets/theme-sources/SHA256SUMS
 /.vendor/
 /target-*/
+distro/out/
+distro/build/repo/*.deb

@@ -1,0 +1,85 @@
+# desktop.list - FlameWM session, display manager, audio, desktop services and apps.
+# Format: one package per line; '#' lines are comments; no inline comments.
+# No LXQt, LXDE, Openbox, SDDM, GDM, or Qt desktop components are listed here.
+# Qt-based packages are excluded on purpose: FlameDE stays on the GTK + FlameWM stack.
+
+# Session and display manager
+# FlameWM itself is NOT an archive package. The image build installs
+# distro/build/repo/flamewm_*.deb from a local repo after this list is applied.
+# LightDM: display manager core. Chosen over SDDM (Qt) and GDM (GNOME).
+lightdm
+# GTK greeter: no GNOME dependency, supports the keys in config/system/lightdm/lightdm.conf.d/50-flamede.conf.
+lightdm-gtk-greeter
+# Xwayland: X11 client compatibility under the Wayland session.
+xwayland
+# Session-scoped D-Bus activation for FlameWM and GTK apps.
+dbus-user-session
+# polkit daemon: privilege checks for udisks, NetworkManager and GUI admin actions.
+polkitd
+# pkexec and the policy kit tools used by the session. Verify the package name on 26.10 (see DESIGN.md section 4).
+policykit-1
+# AT-SPI registry: required for keyboard navigation and screen reader support.
+at-spi2-core
+
+# Audio: PipeWire with the PulseAudio socket compatibility layer.
+# Chosen over PulseAudio because one daemon covers Bluetooth A2DP/HFP and screen sharing.
+pipewire
+pipewire-pulse
+wireplumber
+pipewire-alsa
+# ALSA tools for diagnostics and volume recovery from a TTY.
+alsa-utils
+# Volume control window, GTK, replaces LXQt volume applet.
+pavucontrol
+
+# Storage and removable media
+# udisks2: mount and eject removable drives without root, used by the file manager.
+udisks2
+# gvfs: trash, MTP phones and network locations for the file manager.
+gvfs
+gvfs-backends
+
+# Power and hardware
+# UPower: battery and lid state for FlameWM and NetworkManager.
+upower
+# Thermal management for laptops (Intel); harmless no-op on other CPUs.
+thermald
+# Backlight control from the session.
+brightnessctl
+# Balanced, power-saver and performance profiles exposed to the panel.
+power-profiles-daemon
+# Bluetooth stack: BlueZ daemon and CLI.
+bluez
+# Bluetooth tray applet, GTK.
+blueman
+
+# Fonts: UI, CJK fallback, emoji and terminal monospace. Kept minimal.
+fonts-noto-core
+fonts-noto-color-emoji
+fonts-dejavu-core
+fonts-liberation2
+fonts-ubuntu
+fonts-noto-cjk
+fonts-ubuntu-console
+fonts-firacode
+
+# Desktop applications (Lubuntu parity; FlameDE replacement noted per line)
+# Terminal: replaces LXQt qterminal. foot is Wayland-native; xterm is the X11 fallback.
+foot
+xterm
+# File manager: replaces PCManFM-Qt. GTK PCManFM is the Lubuntu-parity baseline.
+pcmanfm
+# Image viewer: replaces LXImage-Qt.
+gthumb
+# PDF and document viewer: replaces the Qt viewer used by LXQt.
+evince
+# Archive manager: replaces LXQt archiver.
+file-roller
+# Text editor: replaces FeatherPad.
+mousepad
+# Calculator: small GTK calculator.
+galculator
+# Screenshot CLI used by FlameWM screenshot keybinding.
+scrot
+# Printing front end. Printing is optional; see installer.list and the Printing row in DESIGN.md.
+system-config-printer

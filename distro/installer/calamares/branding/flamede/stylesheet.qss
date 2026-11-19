@@ -1,0 +1,7 @@
+/* FlameDE installer: dark, flat. */
+QWidget { background-color: #1b1b1f; color: #e8e6e3; }
+QPushButton { background-color: #2a2a31; border: 1px solid #3a3a44; padding: 6px 14px; border-radius: 4px; }
+QPushButton:hover { background-color: #34343d; }
+QPushButton:disabled { color: #6b6b75; }
+QProgressBar { border: 1px solid #3a3a44; text-align: center; }
+QProgressBar::chunk { background-color: #e0623a; }

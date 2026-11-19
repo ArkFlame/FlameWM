@@ -1,0 +1,14 @@
+# live.list - packages present only in the live ISO session, not in the installed system.
+# Format: one package per line; '#' lines are comments; no inline comments.
+
+# Live-boot framework: casper builds the overlay root from squashfs and runs the live user setup.
+casper
+# Discovers the live medium and mounts it for casper.
+discover
+# Live-session user and hostname plumbing pulled in by casper.
+live-config
+# Live-session hardware detection and driver hints (live only; installed system keeps its own choice).
+ubuntu-drivers-common
+# Live-session partition tool, reachable from the menu before installation.
+gparted
+# Installer fallback frontend is NOT listed here. If the Calamares fallback is taken, see DESIGN.md section 5.

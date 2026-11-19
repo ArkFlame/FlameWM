@@ -1,0 +1,92 @@
+# base.list - minimal Ubuntu 26.10 system for FlameDE.
+# Format: one package name per line. Lines starting with '#' are comments. No inline comments.
+# Installed into the live image AND the installed system.
+# Rule: only what boots, networks, stores data, logs, updates and runs a graphical session.
+# Recommends are disabled (APT::Install-Recommends "false") at install time.
+
+# Kernel and boot
+# linux-generic: generic kernel. linux-lowlatency rejected: generic latency is adequate and it avoids a second kernel tree.
+linux-generic
+# Hardware firmware blobs for GPU, Wi-Fi and Bluetooth. Pruned later only by hardware support policy.
+linux-firmware
+# initramfs generator required by Ubuntu kernel packaging.
+initramfs-tools
+# Microsoft-signed first-stage loader for Secure Boot.
+shim-signed
+# Signed GRUB EFI image for Secure Boot installs.
+grub-efi-amd64-signed
+# GRUB BIOS modules, needed so the hybrid ISO also boots on legacy BIOS.
+grub-pc-bin
+# Detects other OSes for dual-boot menus.
+os-prober
+# UEFI boot entry management.
+efibootmgr
+# Keeps /sbin/init and reboot/halt symlinks on systemd.
+systemd-sysv
+# System and session message bus; required by NetworkManager, logind, LightDM and FlameWM.
+dbus
+# NTP client. chrony is not needed on a desktop.
+systemd-timesyncd
+# Locale generation for the installed system.
+locales
+# Console keyboard layout for early boot and VT login.
+console-setup
+
+# Core userspace
+# Administrative access for the first user.
+sudo
+# Shell completion for interactive terminal use.
+bash-completion
+# Base file utilities.
+coreutils
+# mount, lsblk, blkid and friends used by installer and udisks.
+util-linux
+# ext4 creation and checks.
+e2fsprogs
+# FAT tools for the EFI System Partition.
+dosfstools
+# exFAT for USB sticks and SD cards.
+exfatprogs
+# NTFS read/write for dual-boot data partitions.
+ntfs-3g
+# LUKS full-disk encryption, selectable at install time.
+cryptsetup
+# LVM support offered by the installer partitioning options.
+lvm2
+# btrfs tools for the installer filesystem choice.
+btrfs-progs
+# Partition editing for scripted installs.
+parted
+# HTTP fetch for diagnostics and scripts.
+curl
+# Fallback HTTP fetch used by installer hooks.
+wget
+# TLS trust store.
+ca-certificates
+# ssh and scp client for administration.
+openssh-client
+# xz and zstd: squashfs and initramfs compression support.
+xz-utils
+zstd
+
+# Memory, scheduling and system services
+# Userspace OOM killer; prevents full-system freezes on 4-8 GB machines.
+earlyoom
+# zram swap generator; reads config/system/systemd/zram-generator.conf. Required for that file to take effect.
+systemd-zram-generator
+# Spreads IRQs across cores; measurable on multi-core laptops.
+irqbalance
+# Hardware and firmware sensor/updates daemon for vendor firmware updates.
+fwupd
+
+# Networking
+# NetworkManager: Wi-Fi, Ethernet and VPN plugins. Kept per layout contract.
+network-manager
+# wpa_supplicant backend used by NetworkManager for Wi-Fi.
+wpasupplicant
+# iw: wireless diagnostics used when NM fails to associate.
+iw
+# systemd-resolved is the DNS stub expected by the default NM configuration.
+systemd-resolved
+# mDNS/DNS-SD for printer and LAN share discovery.
+avahi-daemon
