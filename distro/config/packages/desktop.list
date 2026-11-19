@@ -83,3 +83,8 @@ scrot
 # Printing front end. Printing is optional; see installer.list and the Printing row in DESIGN.md.
 system-config-printer
 
+
+# X server (LightDM + FlameWM are X11): modesetting driver is built into core
+xserver-xorg-core
+xserver-xorg-input-libinput
+xserver-xorg-video-fbdev
