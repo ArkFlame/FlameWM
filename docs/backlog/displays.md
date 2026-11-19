@@ -1,6 +1,7 @@
 # Displays: per-output layout and scale
 
 Status: **Partial** (README roadmap row, `Displays | Per-output layout and scale`).
+Window-management and multi-head behaviour overall: [`docs/WINDOW_MANAGEMENT.md`](../WINDOW_MANAGEMENT.md).
 Basis: source reading of `origin/main` at the time of this note. No runtime
 evidence was captured, so nothing here is Shipped.
 
