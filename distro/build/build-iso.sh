@@ -171,9 +171,8 @@ mount -t proc proc "$ROOTFS/proc"
 mount --bind /dev "$ROOTFS/dev"
 
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive sh -c '
-    id -u flamelive >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/bash \
-        -G sudo,adm,audio,video,plugdev,netdev flamelive
-    passwd -d flamelive
+    # live user is created by casper at boot from /etc/casper.conf (overlay)
+    true
 '
 
 # ---- 3) initramfs (casper) ----------------------------------------------------
@@ -221,7 +220,7 @@ set timeout=5
 set default=0
 
 menuentry "Try or Install FlameDE" {
-    linux /casper/vmlinuz boot=casper quiet systemd.show_status=0 zswap.enabled=1 zram.num_devices=1 ---
+    linux /casper/vmlinuz boot=casper quiet systemd.show_status=0 zram.num_devices=1 nowatchdog nmi_watchdog=0 ---
     initrd /casper/initrd
 }
 EOF

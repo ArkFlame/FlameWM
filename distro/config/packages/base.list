@@ -76,8 +76,6 @@ earlyoom
 systemd-zram-generator
 # Spreads IRQs across cores; measurable on multi-core laptops.
 irqbalance
-# Hardware and firmware sensor/updates daemon for vendor firmware updates.
-fwupd
 
 # Networking
 # NetworkManager: Wi-Fi, Ethernet and VPN plugins. Kept per layout contract.
@@ -88,5 +86,3 @@ wpasupplicant
 iw
 # systemd-resolved is the DNS stub expected by the default NM configuration.
 systemd-resolved
-# mDNS/DNS-SD for printer and LAN share discovery.
-avahi-daemon

@@ -3,14 +3,14 @@
 # measured baseline + ~10% and record the baseline date in distro/docs/OPTIMIZATION.md.
 
 [iso]
-max_size_mb = 2400              # squashfs + kernel + initrd + EFI image
+max_size_mb = 1680              # squashfs + kernel + initrd + EFI image; measured 1524.6 (2026-11-19) + ~10%
 
 [boot]
-max_wall_seconds = 45           # QEMU start until FLAME_LIGHTDM_ACTIVE (firmware + grub + kernel + userspace)
+max_wall_seconds = 29           # measured 26.22 + ~10%; QEMU start until FLAME_LIGHTDM_ACTIVE (firmware + grub + kernel + userspace)
 allowed_systemd_states = ["running"]
 
 [ram]
 max_idle_used_mb = 900          # `free -m` used at lightdm active, no user apps
 
 [services]
-max_running = 45                # systemctl list-units --type=service --state=running
+max_running = 18               # systemctl list-units --type=service --state=running

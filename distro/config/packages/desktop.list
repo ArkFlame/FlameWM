@@ -41,16 +41,12 @@ gvfs-backends
 # Power and hardware
 # UPower: battery and lid state for FlameWM and NetworkManager.
 upower
-# Thermal management for laptops (Intel); harmless no-op on other CPUs.
-thermald
 # Backlight control from the session.
 brightnessctl
 # Balanced, power-saver and performance profiles exposed to the panel.
 power-profiles-daemon
-# Bluetooth stack: BlueZ daemon and CLI.
+# Bluetooth stack: BlueZ daemon and CLI. blueman (GTK applet, ~26 MB RSS measured) dropped; bluetoothctl and the panel use bluez directly.
 bluez
-# Bluetooth tray applet, GTK.
-blueman
 
 # Fonts: UI, CJK fallback, emoji and terminal monospace. Kept minimal.
 fonts-noto-core

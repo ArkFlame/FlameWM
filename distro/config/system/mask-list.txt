@@ -59,3 +59,18 @@ snapd.apparmor.service
 cups-browsed.service
 
 # Bluetooth stays enabled, so bluetooth.service is NOT masked. Power-saving tuning is in system config.
+
+# Daemons whose packages were dropped from base/desktop.list (guards against reinstall).
+avahi-daemon.service
+avahi-daemon.socket
+fwupd.service
+fwupd-refresh.service
+fwupd-refresh.timer
+thermald.service
+
+# Pro leftovers and boot waits: NetworkManager owns networking, so networkd wait-online is unused.
+esm-cache.service
+ubuntu-advantage.service
+systemd-networkd-wait-online.service
+apt-news.service
+casper-md5check.service

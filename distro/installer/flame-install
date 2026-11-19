@@ -4,18 +4,25 @@
 # configures fstab, hostname, locale, timezone, user and GRUB in a chroot. Fail-closed.
 set -Eeuo pipefail
 
+export DEBIAN_FRONTEND=noninteractive
 DRY=0
+YES=0
 DISK=""
 SQUASHFS=""
 TARGET="/mnt/flamede"
+KARGS=()
 
 usage() {
     cat <<'EOF'
-Usage: flame-install [--dry-run] --disk /dev/sdX [--squashfs PATH] [--target DIR]
+Usage: flame-install [--dry-run] [--yes] --disk /dev/sdX [--squashfs PATH] [--target DIR] [--kernel-arg ARG]...
   --dry-run    print every mutating command; change nothing
+  --yes        no prompts: answers come from FLAME_HOSTNAME, FLAME_USER, FLAME_LOCALE, FLAME_TZ,
+               FLAME_PASSWORD (required, min 8); the disk-path confirmation is skipped
   --disk       whole target disk; ALL DATA ON IT IS ERASED
   --squashfs   live root image (default: casper/filesystem.squashfs on the live medium)
   --target     mount point for the new root (default /mnt/flamede)
+  --kernel-arg extra kernel argument appended to GRUB_CMDLINE_LINUX_DEFAULT (repeatable,
+               e.g. console=ttyS0 for headless serial consoles)
 EOF
 }
 log() { printf '[flame-install] %s\n' "$*"; }
@@ -28,6 +35,8 @@ while (($#)); do
         --disk) DISK="${2:-}"; shift ;;
         --squashfs) SQUASHFS="${2:-}"; shift ;;
         --target) TARGET="${2:-}"; shift ;;
+        --yes) YES=1 ;;
+        --kernel-arg) KARGS+=("${2:-}"); shift ;;
         -h | --help) usage; exit 0 ;;
         *) usage >&2; die "unknown argument: $1" ;;
     esac
@@ -39,10 +48,17 @@ cleanup() {
     if ((!DRY)) && mountpoint -q "$TARGET"; then
         sync
         if ! umount -R "$TARGET"; then
-            printf '[flame-install] could not unmount %s\n' "$TARGET" >&2
-            rc=1
+            # Busy submounts (e.g. cgroup under the chroot's /sys) after a successful sync:
+            # detach lazily so the disk is released; all writes were flushed above.
+            printf '[flame-install] umount -R %s busy; retrying lazily after sync\n' "$TARGET" >&2
+            sync
+            if ! umount -R -l "$TARGET"; then
+                printf '[flame-install] could not unmount %s\n' "$TARGET" >&2
+                rc=1
+            fi
         fi
     fi
+    if ((!DRY)) && mountpoint -q "$SQ_MNT" 2>/dev/null; then umount "$SQ_MNT" || rc=1; fi
     if ((rc == 0)); then log "finished"; else printf '[flame-install] aborted (rc=%d)\n' "$rc" >&2; fi
     exit "$rc"
 }
@@ -53,8 +69,12 @@ trap cleanup EXIT
 [[ -n "$DISK" ]] || { usage >&2; die "--disk is required"; }
 [[ -b "$DISK" ]] || die "$DISK is not a block device"
 [[ "$(lsblk -dno TYPE "$DISK")" == disk ]] || die "$DISK is not a whole disk"
-for c in sgdisk partprobe mkfs.vfat mkfs.ext4 unsquashfs blkid chroot grub-install lsblk findmnt mountpoint; do
+SQ_MNT=/run/flame-squashfs
+for c in sgdisk partprobe udevadm mkfs.vfat mkfs.ext4 blkid chroot grub-install lsblk findmnt mountpoint cp; do
     command -v "$c" >/dev/null || die "missing command: $c"
+done
+for k in "${KARGS[@]}"; do
+    [[ "$k" =~ ^[A-Za-z0-9_=,.:/-]+$ ]] || die "bad --kernel-arg: $k"
 done
 if [[ -z "$SQUASHFS" ]]; then
     for p in /run/live/medium/casper/filesystem.squashfs /cdrom/casper/filesystem.squashfs; do
@@ -69,24 +89,40 @@ if [[ -n "$live_src" ]]; then
 fi
 if lsblk -nro MOUNTPOINT "$DISK" | grep -q .; then die "$DISK has mounted partitions; unmount first"; fi
 
-# Answers: validated before anything is written.
+# Answers: validated before anything is written. --yes reads them from FLAME_* env.
 ask() { local v; read -r -p "$1 [$2]: " v; printf '%s' "${v:-$2}"; }
-HOST_NEW="$(ask 'Hostname' flamede)"
-USER_NEW="$(ask 'Username' flame)"
-LOCALE_NEW="$(ask 'Locale' en_US.UTF-8)"
-TZ_NEW="$(ask 'Timezone' UTC)"
+if ((YES)); then
+    HOST_NEW="${FLAME_HOSTNAME:-flamede}"
+    USER_NEW="${FLAME_USER:-flame}"
+    LOCALE_NEW="${FLAME_LOCALE:-en_US.UTF-8}"
+    TZ_NEW="${FLAME_TZ:-UTC}"
+else
+    HOST_NEW="$(ask 'Hostname' flamede)"
+    USER_NEW="$(ask 'Username' flame)"
+    LOCALE_NEW="$(ask 'Locale' en_US.UTF-8)"
+    TZ_NEW="$(ask 'Timezone' UTC)"
+fi
 [[ "$HOST_NEW" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "invalid hostname"
 [[ "$USER_NEW" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$USER_NEW" != root ]] || die "invalid username"
 [[ "$LOCALE_NEW" =~ ^[A-Za-z_]+\.UTF-8$ ]] || die "locale must look like en_US.UTF-8"
 [[ -f "/usr/share/zoneinfo/$TZ_NEW" ]] || die "unknown timezone: $TZ_NEW"
-read -r -s -p "Password for $USER_NEW (min 8): " PW1; echo
-read -r -s -p "Repeat password: " PW2; echo
+if ((YES)); then
+    PW1="${FLAME_PASSWORD:-}"
+    PW2="$PW1"
+else
+    read -r -s -p "Password for $USER_NEW (min 8): " PW1; echo
+    read -r -s -p "Repeat password: " PW2; echo
+fi
 [[ "$PW1" == "$PW2" ]] || die "passwords differ"
-((${#PW1} >= 8)) || die "password shorter than 8 characters"
+((${#PW1} >= 8)) || die "password shorter than 8 characters (FLAME_PASSWORD with --yes)"
 
 log "Target disk: $DISK. ALL DATA ON IT WILL BE ERASED."
-read -r -p "Type the disk path to confirm: " confirm
-[[ "$confirm" == "$DISK" ]] || die "confirmation mismatch; nothing changed"
+if ((YES)); then
+    log "--yes: disk path confirmed by flag"
+else
+    read -r -p "Type the disk path to confirm: " confirm
+    [[ "$confirm" == "$DISK" ]] || die "confirmation mismatch; nothing changed"
+fi
 
 case "$DISK" in *[0-9]) P="${DISK}p" ;; *) P="$DISK" ;; esac
 ESP="${P}2"; ROOT="${P}3"
@@ -97,25 +133,45 @@ run sgdisk -n1:1MiB:+1MiB -t1:ef02 -c1:bios-boot "$DISK"
 run sgdisk -n2:0:+512MiB -t2:ef00 -c2:efi "$DISK"
 run sgdisk -n3:0:0 -t3:8300 -c3:flamede-root "$DISK"
 run partprobe "$DISK"
+run udevadm settle
 run mkfs.vfat -F32 -n FLAMEEFI "$ESP"
 run mkfs.ext4 -F -L flamede-root "$ROOT"
 
 # Mount and copy the live root.
 run mkdir -p "$TARGET"
 run mount "$ROOT" "$TARGET"
-run unsquashfs -f -no-progress -d "$TARGET" "$SQUASHFS"
+run mount --make-rprivate "$TARGET"
+run mkdir -p "$SQ_MNT"
+run mount -t squashfs -o ro,loop "$SQUASHFS" "$SQ_MNT"
+run cp -a "$SQ_MNT/." "$TARGET/"
+run umount "$SQ_MNT"
 run mkdir -p "$TARGET/boot/efi"
 run mount "$ESP" "$TARGET/boot/efi"
 run mount --rbind /dev "$TARGET/dev"
 run mount --rbind /sys "$TARGET/sys"
 run mount -t proc proc "$TARGET/proc"
 run mount --bind /run "$TARGET/run"
+# Private propagation: otherwise the target's bind mounts share peers with the live /dev, and
+# unmounting the target detaches the live system's /dev/pts (sudo then fails to allocate a pty).
+run mount --make-rprivate "$TARGET"
 run rm -f "$TARGET/etc/resolv.conf"
 run cp /etc/resolv.conf "$TARGET/etc/resolv.conf"
 
 # Strip live-only parts, then configure the installed system.
-run chroot "$TARGET" apt-get purge -y casper lupin-casper
+for p in casper lupin-casper; do
+    if ((DRY)); then
+        log "[dry-run] would purge $p if installed"
+    elif chroot "$TARGET" dpkg -s "$p" >/dev/null 2>&1; then
+        run chroot "$TARGET" apt-get purge -y "$p"
+    fi
+done
 run rm -f "$TARGET/etc/casper.conf"
+# Live-only autologin and sudo drop-ins naming flamelive must not survive (the live
+# lightdm drop-in is 50-flamede.conf, which the Calamares *live* pattern does not match).
+for f in "$TARGET"/etc/lightdm/lightdm.conf.d/*.conf "$TARGET"/etc/sudoers.d/*; do
+    [[ -f "$f" ]] || continue
+    if grep -q 'flamelive' "$f"; then run rm -f "$f"; fi
+done
 if ((DRY)); then
     log "[dry-run] would remove account flamelive if present"
 elif chroot "$TARGET" id flamelive >/dev/null 2>&1; then
@@ -142,10 +198,26 @@ else
     printf '%s:%s\n' "$USER_NEW" "$PW1" | chroot "$TARGET" chpasswd
 fi
 run chroot "$TARGET" update-initramfs -u -k all
+if ((${#KARGS[@]})); then
+    if ((DRY)); then
+        log "[dry-run] would append to /etc/default/grub: ${KARGS[*]}"
+    else
+        # shellcheck disable=SC2016  # the ${...} must reach /etc/default/grub unexpanded
+        printf 'GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} %s"\n' "${KARGS[*]}" >>"$TARGET/etc/default/grub"
+    fi
+fi
 
-# Boot loader: match the mode this live system booted in.
+# Boot loader: match the mode this live system booted in. --removable also writes the
+# EFI fallback path, so firmware without a saved boot entry still boots the disk.
 if [[ -d /sys/firmware/efi ]]; then
     run chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=flamede --recheck
+    # Fallback path for firmware without a saved boot entry. Its prefix is /EFI/BOOT, so it
+    # needs the same stub config (search by root UUID, then /boot/grub/grub.cfg) as EFI/flamede.
+    run chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --recheck
+    if ((!DRY)); then
+        [[ -f "$TARGET/boot/efi/EFI/flamede/grub.cfg" ]] || die "grub stub missing: EFI/flamede/grub.cfg"
+        install -D -m0644 "$TARGET/boot/efi/EFI/flamede/grub.cfg" "$TARGET/boot/efi/EFI/BOOT/grub.cfg"
+    fi
 else
     run chroot "$TARGET" grub-install --target=i386-pc --recheck "$DISK"
 fi
