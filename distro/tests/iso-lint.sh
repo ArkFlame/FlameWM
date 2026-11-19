@@ -54,7 +54,8 @@ if [[ -s $WORK/iso.list ]] && grep -Fxq /casper/filesystem.squashfs "$WORK/iso.l
   SQ=$WORK/filesystem.squashfs
   isoinfo -R -i "$ISO" -x /casper/filesystem.squashfs > "$SQ"
   unsquashfs -no-progress -l "$SQ" | sed 's#^squashfs-root##' > "$WORK/fs.list"
-  unsquashfs -no-progress -f -d "$WORK/root" -e var/lib/dpkg/status "$SQ" >/dev/null
+  mkdir -p "$WORK/root/var/lib/dpkg"
+  unsquashfs -cat "$SQ" var/lib/dpkg/status > "$WORK/root/var/lib/dpkg/status"
   awk '/^Package: /{p=$2} /^Status: .* installed$/{print p}' "$WORK/root/var/lib/dpkg/status" \
     | sort -u > "$WORK/installed.txt"
 

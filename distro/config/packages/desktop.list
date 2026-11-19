@@ -17,7 +17,6 @@ dbus-user-session
 # polkit daemon: privilege checks for udisks, NetworkManager and GUI admin actions.
 polkitd
 # pkexec and the policy kit tools used by the session. Verify the package name on 26.10 (see DESIGN.md section 4).
-policykit-1
 # AT-SPI registry: required for keyboard navigation and screen reader support.
 at-spi2-core
 
@@ -83,3 +82,4 @@ galculator
 scrot
 # Printing front end. Printing is optional; see installer.list and the Printing row in DESIGN.md.
 system-config-printer
+

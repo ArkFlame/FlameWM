@@ -97,6 +97,7 @@ mmdebstrap \
     --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg \
     --essential-hook='copy-in /work/localrepo /opt/' \
     --essential-hook='echo "deb [trusted=yes] file:/opt/localrepo ./" > "$1/etc/apt/sources.list.d/flamewm-local.list"' \
+    --customize-hook='chroot "$1" sh -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install flamewm"' \
     --customize-hook='copy-in /work/remove.txt /root/' \
     --customize-hook='chroot "$1" sh -c "xargs -r apt-get -y purge < /root/remove.txt && rm -f /root/remove.txt"' \
     "$SUITE" "$ROOTFS" "$MIRROR"

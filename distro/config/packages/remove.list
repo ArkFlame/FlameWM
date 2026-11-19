@@ -38,7 +38,6 @@ cron
 anacron
 
 # Network stacks FlameDE does not use. NetworkManager and systemd-resolved stay.
-netplan.io
 ifupdown
 resolvconf
 modemmanager
