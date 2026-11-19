@@ -160,8 +160,11 @@ if [[ -s "$MASKS" ]]; then
 fi
 
 # D-Bus-activated daemons FlameWM queries on demand: drop boot-time enablement so they
-# neither cost boot time nor block graphical.target (power-profiles-daemon hung in 'start').
+# neither cost boot time nor hold graphical.target. The units stay installed and are started by
+# their D-Bus service files (SystemdService=), which a mask would break.
 rm -f "$ROOTFS"/etc/systemd/system/*.wants/power-profiles-daemon.service
+rm -f "$ROOTFS"/etc/systemd/system/*.wants/udisks2.service
+rm -f "$ROOTFS"/etc/xdg/autostart/print-applet.desktop
 
 # Mount proc and dev only while chroot steps run; always unmount on exit.
 umount_chroot() {
@@ -204,6 +207,8 @@ find "$ROOTFS/usr/share/locale" -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name C 
 rm -rf "$ROOTFS"/var/tmp/* "$ROOTFS"/tmp/* "$ROOTFS"/root/.cache
 find "$ROOTFS/var/log" -type f -delete 2>/dev/null || true
 rm -rf "$ROOTFS/opt/localrepo" "$ROOTFS/etc/apt/sources.list.d/flamewm-local.list"
+# ldconfig.service is masked (mask-list.txt): build the linker cache here, after the last /etc write.
+chroot "$ROOTFS" ldconfig
 
 # ---- 5) manifest, size, squashfs ------------------------------------------------
 # shellcheck disable=SC2016

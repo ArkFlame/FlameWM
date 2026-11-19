@@ -21,4 +21,8 @@ images:
   productWelcome: "logo.svg"
 slideshow: "show.qml"
 slideshowAPI: 2
-style: "stylesheet.qss"
+style:
+   SidebarBackground:        "#292F34"
+   SidebarText:              "#FFFFFF"
+   SidebarTextCurrent:       "#292F34"
+   SidebarBackgroundCurrent: "#D35400"

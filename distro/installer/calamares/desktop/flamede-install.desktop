@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install FlameDE
+GenericName=System Installer
+Comment=Install FlameDE to this computer
+Keywords=calamares;installer;install;flamede;
+TryExec=calamares
+Exec=sh -c "sudo -E calamares"
+Icon=calamares
+Terminal=false
+StartupNotify=true
+Categories=System;
+X-AppStream-Ignore=true
+# Live session only: the installer removes this file from the installed system (shellprocess-cleanup.conf).
+# Propose overlay path (outside this task's scope): distro/overlay/usr/share/applications/flamede-install.desktop

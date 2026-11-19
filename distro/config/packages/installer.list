@@ -19,3 +19,4 @@ keyboard-configuration
 rsync
 # Writes the ISO-side metadata the installer reads back.
 genisoimage
+squashfs-tools

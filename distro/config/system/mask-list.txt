@@ -74,5 +74,6 @@ ubuntu-advantage.service
 systemd-networkd-wait-online.service
 apt-news.service
 casper-md5check.service
-# Hung in "start" in the qemu boot test and blocked graphical.target; FlameWM treats it as optional
-power-profiles-daemon.service
+# ldconfig.service: 0.9 s at boot rebuilding the linker cache. dpkg triggers keep the cache current on
+# installs, and build-iso.sh runs ldconfig once after the last /etc write (see OPTIMIZATION.md).
+ldconfig.service

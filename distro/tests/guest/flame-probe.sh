@@ -40,6 +40,21 @@ emit "systemd_jobs=$(systemctl list-jobs --no-legend 2>/dev/null | awk '{printf 
 emit "systemd_failed=$(systemctl --failed --no-legend 2>/dev/null | awk '{printf "%s;", $2}')"
 emit "systemd_blame=$(systemd-analyze blame 2>/dev/null | head -n 10 | awk '{printf "%s %s;", $1, $2}')"
 emit "systemd_critical=$(systemd-analyze critical-chain 2>/dev/null | tr -s ' \n' ' ' | cut -c1-800)"
+# power-profiles-daemon: exercise the D-Bus activation path FlameWM uses, with a bounded wait,
+# then record why it did or did not start (unit state, journal tail, status).
+emit "ppd_enabled=$(systemctl is-enabled power-profiles-daemon.service 2>&1 | tr '\n' ' ')"
+ppd_out=$(timeout 10 busctl --system --timeout=3 get-property org.freedesktop.UPower.PowerProfiles /net/hadess/PowerProfiles net.hadess.PowerProfiles ActiveProfile 2>&1); ppd_rc=$?
+emit "ppd_activate_rc=$ppd_rc"
+emit "ppd_activate_out=$(printf '%s' "$ppd_out" | tr '\n' ' ' | cut -c1-200)"
+emit "ppd_state=$(systemctl is-active power-profiles-daemon.service 2>&1 | tr '\n' ' ')"
+emit "ppd_jobs_after=$(systemctl list-jobs --after --no-legend 2>/dev/null | tr -s ' \n' ' ' | cut -c1-600)"
+emit "ppd_deps=$(systemctl show power-profiles-daemon.service -p Requires -p Wants -p BindsTo -p After -p Before -p Conflicts -p JobTimeoutUSec 2>/dev/null | tr '\n' ' ' | cut -c1-500)"
+emit "ppd_verify=$(systemd-analyze verify /usr/lib/systemd/system/power-profiles-daemon.service 2>&1 | tr '\n' ' ' | cut -c1-300)"
+emit "ppd_journal=$(journalctl -b -u power-profiles-daemon.service --no-pager -o cat 2>/dev/null | tail -n 12 | tr '\n' '|' | cut -c1-900)"
+emit "ppd_status=$(systemctl status power-profiles-daemon.service --no-pager -l 2>/dev/null | tr '\n' '|' | cut -c1-700)"
+emit "udisks2_rss_mb=$(ps -C udisksd -o rss= 2>/dev/null | awk '{s+=$1} END{printf "%d", s/1024}')"
+emit "bluetoothd_rss_mb=$(ps -C bluetoothd -o rss= 2>/dev/null | awk '{s+=$1} END{printf "%d", s/1024}')"
+emit "ppd_rss_mb=$(ps -eo rss,args --no-headers 2>/dev/null | awk '/power-profiles-daemon/ && !/awk/{s+=$1} END{printf "%d", s/1024}')"
 read -r mem_total mem_used mem_avail < <(free -m | awk '/^Mem:/{print $2, $3, $7}')
 emit "mem_total_mb=$mem_total"
 emit "mem_used_mb=$mem_used"
