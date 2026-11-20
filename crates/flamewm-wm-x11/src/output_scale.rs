@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
+use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
 use x11rb::protocol::render::{self, Fixed};
 use x11rb::protocol::xproto::Window;
-use x11rb::CURRENT_TIME;
 
 /// 16.16 fixed-point value for `1.0` (the third diagonal element of the matrix).
 const FIXED_ONE: Fixed = 1 << 16;

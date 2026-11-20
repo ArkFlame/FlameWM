@@ -103,7 +103,10 @@ struct TransientParent(crate::model::WindowId);
 /// Window id named as this surface's xdg parent, if `set_parent` was used at map time.
 fn transient_parent_of(surface: &WlSurface) -> Option<crate::model::WindowId> {
     with_states(surface, |states| {
-        states.data_map.get::<TransientParent>().map(|parent| parent.0)
+        states
+            .data_map
+            .get::<TransientParent>()
+            .map(|parent| parent.0)
     })
 }
 
@@ -326,7 +329,9 @@ impl XdgShellHandler for State {
         // `Normal`, so the dialog is floating. Focus raises it above the parent.
         self.model.move_to_workspace(child_id, parent.workspace);
         with_states(surface.wl_surface(), |states| {
-            states.data_map.insert_if_missing(|| TransientParent(parent_id));
+            states
+                .data_map
+                .insert_if_missing(|| TransientParent(parent_id));
         });
         self.set_surface_output(surface.wl_surface(), output);
         self.set_focus(Some(child_id));

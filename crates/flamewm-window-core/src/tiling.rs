@@ -113,7 +113,9 @@ pub fn master_stack(
     } else if masters == 0 {
         0
     } else {
-        ((work_area.width as f32) * factor).round().clamp(0.0, work_area.width as f32) as i32
+        ((work_area.width as f32) * factor)
+            .round()
+            .clamp(0.0, work_area.width as f32) as i32
     };
 
     let mut tiles = Vec::with_capacity(n);
@@ -236,7 +238,10 @@ mod tests {
         );
         for r in rects {
             assert!(
-                r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
+                r.x >= area.x
+                    && r.y >= area.y
+                    && r.right() <= area.right()
+                    && r.bottom() <= area.bottom(),
                 "tile {r:?} escapes {area:?}"
             );
         }

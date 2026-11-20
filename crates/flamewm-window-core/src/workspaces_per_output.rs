@@ -300,9 +300,16 @@ mod tests {
             "an output never seen reads as workspace 0"
         );
         assert!(m.switch("HDMI-1", 2));
-        assert_eq!(m.current_workspace(&"eDP-1"), 1, "switching HDMI leaves eDP alone");
+        assert_eq!(
+            m.current_workspace(&"eDP-1"),
+            1,
+            "switching HDMI leaves eDP alone"
+        );
         assert_eq!(m.current_workspace(&"HDMI-1"), 2);
-        assert!(!m.switch("HDMI-1", 2), "switching to its own current is a no-op");
+        assert!(
+            !m.switch("HDMI-1", 2),
+            "switching to its own current is a no-op"
+        );
     }
 
     #[test]
@@ -315,7 +322,11 @@ mod tests {
 
         m.switch("eDP-1", 1);
         assert!(m.windows_visible(&"eDP-1").is_empty());
-        assert_eq!(m.windows_visible(&"HDMI-1"), vec![2], "other output unchanged");
+        assert_eq!(
+            m.windows_visible(&"HDMI-1"),
+            vec![2],
+            "other output unchanged"
+        );
 
         m.move_window(1, 1);
         assert_eq!(m.windows_visible(&"eDP-1"), vec![1]);

@@ -503,19 +503,23 @@ mod tests {
         let config: RulesConfig = toml::from_str("").expect("empty document is valid");
         assert!(config.window_rules.is_empty());
         assert!(config.monitor_rules.is_empty());
-        assert!(config
-            .resolve_window(&WindowCandidate {
-                app_id: "x",
-                class: "x",
-                title: "x",
-            })
-            .is_none());
-        assert!(config
-            .resolve_monitor(&MonitorCandidate {
-                name: "x",
-                make: "x",
-                model: "x",
-            })
-            .is_none());
+        assert!(
+            config
+                .resolve_window(&WindowCandidate {
+                    app_id: "x",
+                    class: "x",
+                    title: "x",
+                })
+                .is_none()
+        );
+        assert!(
+            config
+                .resolve_monitor(&MonitorCandidate {
+                    name: "x",
+                    make: "x",
+                    model: "x",
+                })
+                .is_none()
+        );
     }
 }
