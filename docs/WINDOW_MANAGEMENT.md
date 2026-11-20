@@ -177,6 +177,26 @@ the whole session. On X11, focus is restored per workspace from `workspace_focus
 | Per-output scale? | Not applied | Applied to the driven output only (Partial) |
 | Panel per output? | Not verified in this pass | Not verified in this pass |
 
+## Added in the gap-closing pass (2026-11-19)
+
+Each item below compiles and has unit tests (`cargo test` for `flamewm-api`, `flamewm-window-core`,
+`flamewm-platform`, `flamewm-wm-x11`, `flamewm-wm-wayland`, all green). "Wired" means reachable from a
+running session; "Library" means a tested module that no backend calls yet.
+
+| Item | Path | Status |
+| --- | --- | --- |
+| Move window to next/prev monitor, focus next/prev monitor (X11) | `crates/flamewm-wm-x11/src/wm/monitor_actions.rs`, `crates/flamewm-window-core/src/monitor.rs`; keys Super+Shift+Alt+Left/Right and Super+Ctrl+Shift+Left/Right in `flamewm-platform/src/shortcuts.rs` | Wired in X11 dispatch (`wm/events.rs`); runtime Unproven; not on Wayland |
+| Wayland `xdg_toplevel.set_parent` placement | `crates/flamewm-wm-wayland/src/transient.rs`, `handlers.rs` | Wired; runtime Unproven |
+| Wayland lock surface per output | `lock_cover.rs`, `session_lock.rs`, `render/mod.rs` | Wired; runtime Unproven |
+| Virtual outputs in the nested backend (`FLAMEWM_VIRTUAL_OUTPUTS=N`) | `crates/flamewm-wm-wayland/src/virtual_output.rs` | Wired; outputs are protocol and layout only, not painted |
+| Window rules and monitor rules (`[[window_rule]]`, `[[monitor_rule]]`) | `crates/flamewm-api/src/rules.rs` | Library, not read from settings yet |
+| Tiling layouts (master-stack, columns, monocle, dwindle) | `crates/flamewm-window-core/src/tiling.rs` | Library, no backend uses it |
+| Opt-in per-output workspaces | `crates/flamewm-window-core/src/workspaces_per_output.rs` | Library, backends still use the global model |
+| X11 per-output scale (RandR transform plan and apply) | `crates/flamewm-wm-x11/src/output_scale.rs` | Library, not called from the topology path |
+
+The "No automatic tiling layouts", "per-monitor workspaces" and "per-output scale on X11" caveats above
+therefore still hold at runtime until the Library items are wired.
+
 ## Known caveats
 
 - **Multi-output placement is not applied by the Wayland compositor** (README, displays row).

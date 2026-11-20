@@ -157,7 +157,9 @@ use flamewm_api::shortcuts::{
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
-    ACTION_BRIGHTNESS_DOWN, ACTION_BRIGHTNESS_UP, ACTION_OPEN_ASSISTANT_CTRL_ALT,
+    ACTION_BRIGHTNESS_DOWN, ACTION_BRIGHTNESS_UP, ACTION_FOCUS_NEXT_MONITOR,
+    ACTION_FOCUS_PREV_MONITOR, ACTION_MOVE_WINDOW_NEXT_MONITOR,
+    ACTION_MOVE_WINDOW_PREV_MONITOR, ACTION_OPEN_ASSISTANT_CTRL_ALT,
     ACTION_OPEN_ASSISTANT_SUPER, ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER,
     ACTION_OPEN_FINDER, ACTION_OPEN_FINDER_CTRL_ALT, ACTION_OPEN_TERMINAL_CTRL_ALT,
     ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
@@ -571,6 +573,7 @@ mod icons;
 mod keyboard_grab;
 mod keyboard_tile;
 mod manage;
+mod monitor_actions;
 mod outputs;
 mod overlay;
 mod paint;

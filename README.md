@@ -75,14 +75,14 @@ Short summary. Every claim, its evidence and its runtime status is in [`docs/WIN
 
 | Topic | X11 (default session) | Wayland (native DRM/nested) |
 | --- | --- | --- |
-| Window styles | Shipped: floating, edge and corner snap previews, halves, quarters, maximize, Super+arrow keyboard tiling | Partial: floating, snap preview and Super+arrow tiling in source; runtime unproven. No xdg parent handling |
+| Window styles | Shipped: floating, edge and corner snap previews, halves, quarters, maximize, Super+arrow keyboard tiling | Partial: floating, snap preview and Super+arrow tiling in source; runtime unproven. xdg parent placement in source |
 | Workspaces | Shipped: one global set (up to 18), keyboard switching, move by key | Partial: same grid model in source, runtime unproven; not per-output |
 | Multiple displays | Partial: RandR topology tracked, windows rehomed when an output goes away; per-output scale not applied | Partial: per-output scale applied only to the output the compositor drives; multi-output placement not applied; hotplug rescans connectors |
 
 - There are no automatic tiling layouts (no master/stack or column tiling); "tiling" means explicit Super+arrow placement into halves and quarters.
 - Workspaces are global, not per monitor: one current workspace for the whole session. The count comes from `workspaces.count`.
 - Ctrl+Super+arrows move through the workspace grid (two rows) and do not wrap. Super+1 to Super+9 activate and Super+Shift+1 to Super+Shift+9 move a window; workspaces 10 to 18 have no default key.
-- X11 dialogs with `WM_TRANSIENT_FOR` are centred over their parent and follow its workspace. Wayland does not read the parent, so this is not implemented there.
+- X11 dialogs with `WM_TRANSIENT_FOR` are centred over their parent and follow its workspace. Wayland now centres `xdg_toplevel.set_parent` children over their parent (runtime unproven).
 - Sticky (on all workspaces) exists in the X11 model; no default key binds it, so it is effectively unproven for users.
 - Hotplug, per-output scale and multi-output placement have no runtime proof on any backend; the README status table above is the authority.
 - Lock: the X11 PAM lock is Shipped, but its coverage of a second monitor is unproven. On Wayland the session lock covers only the driven output; second-output lock surfaces are not rendered yet.

@@ -8,3 +8,9 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+toml = { version = "=0.8.23" }

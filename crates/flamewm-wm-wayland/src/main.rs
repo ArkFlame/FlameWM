@@ -101,6 +101,8 @@ mod snap_preview;
 // The native backend's first-frame gate; pure, so it is compiled (and tested) without a GPU.
 mod startup;
 mod state;
+mod transient;
+mod virtual_output;
 mod xwayland;
 
 use std::cell::RefCell;
@@ -651,6 +653,8 @@ fn run() -> Result<i32, Box<dyn Error>> {
     fill_backend_stages();
     // Debug-only virtual outputs (env-gated); needs the primary size the backend just set.
     debug_outputs::install_from_env(&mut state);
+    // Extra headless outputs for multi-head testing (env-gated, nested backend only).
+    virtual_output::install_from_env(&mut state);
 
     // The socket exists before XWayland connects back to this compositor.
     let listening = match ListeningSocketSource::with_name(&socket_name) {

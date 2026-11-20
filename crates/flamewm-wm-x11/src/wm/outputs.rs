@@ -106,6 +106,64 @@ pub(super) fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> 
         .or_else(|| outputs.iter().position(|output| output.primary))
 }
 
+/// Direction the monitor actions cycle outputs, in RandR output order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MonitorStep {
+    Next,
+    Prev,
+}
+
+/// Output `step` away from `from`, wrapping at the ends like mango's `monitor_from_cycle`.
+/// `None` when there is no other output to cycle to.
+pub(super) fn cycle_output_index(
+    outputs: &[OutputWorkArea],
+    from: usize,
+    step: MonitorStep,
+) -> Option<usize> {
+    if outputs.len() < 2 || from >= outputs.len() {
+        return None;
+    }
+    Some(match step {
+        MonitorStep::Next => (from + 1) % outputs.len(),
+        MonitorStep::Prev => (from + outputs.len() - 1) % outputs.len(),
+    })
+}
+
+#[cfg(test)]
+mod monitor_cycle_tests {
+    use super::*;
+
+    fn outputs(count: usize) -> Vec<OutputWorkArea> {
+        (0..count)
+            .map(|index| {
+                let offset = i32::try_from(index).expect("small test index") * 1280;
+                OutputWorkArea::from_host((
+                    flamewm_api::OutputId::new(format!("out{index}")),
+                    flamewm_api::Rect::new(offset, 0, 1280, 800),
+                    flamewm_api::Rect::new(offset, 0, 1280, 760),
+                    index == 0,
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cycles_forward_and_backward_with_wrap() {
+        let areas = outputs(3);
+        assert_eq!(cycle_output_index(&areas, 0, MonitorStep::Next), Some(1));
+        assert_eq!(cycle_output_index(&areas, 2, MonitorStep::Next), Some(0));
+        assert_eq!(cycle_output_index(&areas, 0, MonitorStep::Prev), Some(2));
+        assert_eq!(cycle_output_index(&areas, 1, MonitorStep::Prev), Some(0));
+    }
+
+    #[test]
+    fn zero_one_or_invalid_current_output_has_no_target() {
+        assert_eq!(cycle_output_index(&[], 0, MonitorStep::Next), None);
+        assert_eq!(cycle_output_index(&outputs(1), 0, MonitorStep::Prev), None);
+        assert_eq!(cycle_output_index(&outputs(2), 5, MonitorStep::Next), None);
+    }
+}
+
 impl<C: Connection> Wm<'_, C> {
     pub(super) fn screen(&self) -> &Screen {
         &self.conn.setup().roots[self.screen_num]

@@ -9,3 +9,5 @@
 pub mod lock_global;
 /// Pure policy for the external protocols (toplevel listing, gamma ramps).
 pub mod protocols;
+/// Pure xdg parent placement and transient close ordering (unit-tested without a compositor).
+pub mod transient;

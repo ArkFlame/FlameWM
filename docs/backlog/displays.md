@@ -35,8 +35,14 @@ evidence was captured, so nothing here is Shipped.
    only to the single output the compositor drives.
 2. Settings Displays UI: a per-output scale and position row with accessible
    names was not confirmed in the Settings pages. Treat as unverified.
-3. X11: RandR code exists in `crates/flamewm-wm-x11/src/wm/outputs.rs`, but
-   per-output scale is not hooked there. X11 is out of scope for this row.
+3. X11: RandR code exists in `crates/flamewm-wm-x11/src/wm/outputs.rs`. The
+   per-output scale math and apply step now live in
+   `crates/flamewm-wm-x11/src/output_scale.rs`: `plan_output_scale` /
+   `plan_scale` compute the scale-up transform and logical framebuffer from the
+   persisted `per_output_scale`, and `apply_scale` installs the transform,
+   framebuffer size and panning through `x11rb` RandR. Unit tests cover the
+   planning; wiring the helper into the live X11 topology path and runtime
+   proof remain separate.
 4. Runtime proof: none captured. The nested winit backend exposes one output,
    so multi-output placement cannot be proven there; it needs a headless or
    virtual multi-output path, which was not identified.

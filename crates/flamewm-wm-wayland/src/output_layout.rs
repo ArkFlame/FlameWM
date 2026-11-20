@@ -2,9 +2,9 @@
 //! of several outputs, and pointer crossing between them. No smithay or DRM types live here, so
 //! every rule is unit-tested without hardware.
 //!
-//! Only the mode policy is called from the live DRM path today. Scale, row layout and crossing
-//! wait for per-output rendering and window ownership; they are kept here so that work reuses the
-//! tested rules instead of re-deriving them.
+//! The mode policy, row placement, and pointer crossing are all called from the live paths: mode
+//! selection from DRM connector setup, `origin_after` (built on `arrange_row`) from output creation,
+//! and `clamp_point_to_layout`/`output_at` from input and hit testing.
 
 use crate::model::Rect;
 use std::collections::{BTreeMap, HashMap};

@@ -25,6 +25,7 @@ pub mod paths;
 pub mod ports;
 pub mod render_backend;
 pub mod repeat_log;
+pub mod rules;
 pub mod session;
 pub mod settings;
 pub mod settings_groups;

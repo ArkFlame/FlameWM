@@ -33,10 +33,10 @@ impl State {
         self.session_lock = Some(crate::lock_global::install::<State>(&self.display));
     }
 
-    /// Forgets every lock surface. Called on unlock, and when a locker dies mid-lock.
+    /// Forgets every lock surface. Called on unlock. Coverage starts over with nothing covered;
+    /// a new lock installs placeholders for every output in `lock`.
     pub fn clear_lock_surfaces(&mut self) {
         self.locked_outputs.clear();
-        // Coverage starts over: every output in the layout is uncovered until its surface arrives.
         // Precedent: smithay `session_lock/surface.rs` and cosmic-comp `handlers/session_lock.rs`
         // key lock surfaces per `Output`, so one surface per layout output is the protocol shape.
         self.lock_cover = LockCover::new(seed_outputs(&self.layout_outputs, &self.output.name()));
@@ -145,7 +145,10 @@ impl SessionLockHandler for State {
         // Confirm at once: this compositor paints the lock surfaces itself and has no separate
         // "frame ready" step. Dropping `confirmation` instead would refuse the request.
         confirmation.lock();
-        self.clear_lock_surfaces();
+        // Every output is opaque from the first locked frame: a placeholder until the client
+        // supplies a surface for it. Windows stay unreachable throughout, covered or not.
+        self.locked_outputs.clear();
+        self.lock_cover = seed_cover(&self.layout_outputs, &self.output.name());
         enter_lock(
             &mut self.session_locked,
             &mut self.grab,
@@ -241,6 +244,22 @@ pub fn seed_outputs(layout: &[String], primary: &str) -> Vec<String> {
     }
 }
 
+/// The cover a new lock starts with: every output gets an opaque placeholder until the client
+/// supplies a surface for it. Pure over output names, so the every-output rule is unit-tested.
+#[must_use]
+pub fn seed_cover(layout: &[String], primary: &str) -> LockCover {
+    let mut cover = LockCover::new(seed_outputs(layout, primary));
+    cover.cover_all_uncovered();
+    cover
+}
+
+/// A locker died: drop its surface and leave an opaque placeholder on its output instead. The
+/// session stays locked, so that output must never fall back to the desktop. Pure over names.
+pub fn cover_dead_locker(cover: &mut LockCover, output: &str) {
+    cover.uncover(output);
+    cover.cover_placeholder(output);
+}
+
 /// Drops every lock surface bound to `output`. Returns whether any was dropped. Pure over any entry
 /// type, so the removal rule is tested without a Wayland client.
 #[must_use]
@@ -256,13 +275,31 @@ pub fn drop_output_locks<S>(
 }
 
 /// Drops lock surfaces whose client is gone. The session stays locked (see `screen_for`), so a
-/// dead locker leaves a blank output rather than unlocking. Returns whether anything was removed.
+/// dead locker leaves an opaque placeholder on its output rather than unlocking. Returns whether
+/// anything was removed.
 pub fn prune_dead_locks(state: &mut State) -> bool {
     let before = state.locked_outputs.len();
-    for dead in state.locked_outputs.iter().filter(|l| !l.surface.alive()) {
-        state.lock_cover.uncover(&dead.output_name);
+    let dead_outputs: Vec<String> = state
+        .locked_outputs
+        .iter()
+        .filter(|l| !l.surface.alive())
+        .map(|l| l.output_name.clone())
+        .collect();
+    for output in &dead_outputs {
+        cover_dead_locker(&mut state.lock_cover, output);
     }
     state.locked_outputs.retain(|locked| locked.surface.alive());
+    // A newer live surface on the same output wins over a dead one's placeholder.
+    for output in &dead_outputs {
+        if let Some(locked) = newest_live_for(
+            &state.locked_outputs,
+            |l| l.output_name.as_str(),
+            |l| l.surface.alive(),
+            output,
+        ) {
+            state.lock_cover.cover(&locked.output_name);
+        }
+    }
     let pruned = before != state.locked_outputs.len();
     if pruned && state.lock_surface().is_none() {
         // Focus was on the dead locker's surface; move it back to a real window.
@@ -274,6 +311,7 @@ pub fn prune_dead_locks(state: &mut State) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock_cover::CoverKind;
 
     #[test]
     fn the_lock_surface_covers_the_whole_output() {
@@ -364,6 +402,65 @@ mod tests {
         assert!(!cover.is_complete());
         assert!(cover.cover("HDMI-A-1"));
         assert!(cover.is_complete());
+    }
+
+    #[test]
+    fn a_new_lock_covers_every_output_with_a_placeholder_from_the_start() {
+        let layout = ["DP-1".to_owned(), "HDMI-A-1".to_owned()];
+        let cover = seed_cover(&layout, "DP-1");
+        assert!(cover.is_complete());
+        assert!(!cover.all_surfaces());
+        assert!(cover.uncovered().is_empty());
+        assert_eq!(cover.placeholder_outputs(), ["DP-1", "HDMI-A-1"]);
+    }
+
+    #[test]
+    fn a_nested_lock_covers_its_only_output_with_a_placeholder() {
+        let cover = seed_cover(&[], "winit");
+        assert!(cover.is_complete());
+        assert_eq!(cover.cover_for("winit"), Some(CoverKind::Placeholder));
+    }
+
+    #[test]
+    fn each_arriving_surface_replaces_its_outputs_placeholder() {
+        let layout = ["DP-1".to_owned(), "HDMI-A-1".to_owned()];
+        let mut cover = seed_cover(&layout, "DP-1");
+        assert!(cover.cover("DP-1"));
+        assert!(cover.is_complete());
+        assert_eq!(cover.cover_for("DP-1"), Some(CoverKind::Surface));
+        assert_eq!(cover.cover_for("HDMI-A-1"), Some(CoverKind::Placeholder));
+        assert_eq!(cover.placeholder_outputs(), ["HDMI-A-1"]);
+        assert!(cover.cover("HDMI-A-1"));
+        assert!(cover.all_surfaces());
+        assert!(cover.placeholder_outputs().is_empty());
+    }
+
+    #[test]
+    fn a_dead_locker_leaves_an_opaque_placeholder_not_an_uncovered_output() {
+        let layout = ["DP-1".to_owned(), "HDMI-A-1".to_owned()];
+        let mut cover = seed_cover(&layout, "DP-1");
+        cover.cover("DP-1");
+        cover.cover("HDMI-A-1");
+        cover_dead_locker(&mut cover, "HDMI-A-1");
+        assert!(cover.is_complete());
+        assert!(!cover.all_surfaces());
+        assert_eq!(cover.placeholder_outputs(), ["HDMI-A-1"]);
+    }
+
+    #[test]
+    fn windows_stay_unreachable_until_every_output_is_covered() {
+        let layout = ["DP-1".to_owned(), "HDMI-A-1".to_owned()];
+        let mut cover = LockCover::new(seed_outputs(&layout, "DP-1"));
+        assert!(!cover.is_complete());
+        assert!(!windows_reachable(true));
+        assert!(cover.cover("DP-1"));
+        assert!(!cover.is_complete());
+        assert!(!windows_reachable(true));
+        cover.cover_all_uncovered();
+        assert!(cover.is_complete());
+        assert!(!windows_reachable(true));
+        // Coverage is a safety net, not an unlock: a full cover never opens the windows.
+        assert!(windows_reachable(false));
     }
 
     #[test]

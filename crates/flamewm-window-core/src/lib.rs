@@ -15,8 +15,11 @@ pub mod edge_resize;
 pub mod geometry_memory;
 pub mod keyboard_move_resize;
 pub mod keyboard_tile;
+pub mod monitor;
 pub mod strut;
+pub mod tiling;
 pub mod window_rules;
+pub mod workspaces_per_output;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum SnapTarget {

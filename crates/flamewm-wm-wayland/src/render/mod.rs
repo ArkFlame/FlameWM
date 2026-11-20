@@ -25,7 +25,7 @@ use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::desktop::utils::send_frames_surface_tree;
 use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::render_elements;
-use smithay::utils::{Buffer, Physical, Point, Rectangle, Size, Transform};
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
@@ -58,6 +58,47 @@ render_elements! {
 }
 
 pub(crate) const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
+/// Opaque colour of the compositor's stand-in lock cover. An output without a client surface
+/// clears to this tone, so no window behind the lock can show through.
+const LOCK_COVER: [f32; 4] = CLEAR;
+
+/// One opaque full-area element. Used for outputs the lock client did not give a surface for.
+fn solid_lock_cover(rect: Rectangle<i32, Physical>) -> Elem {
+    Elem::Solid(SolidColorRenderElement::new(
+        Id::new(),
+        rect,
+        CommitCounter::default(),
+        LOCK_COVER,
+        Kind::Unspecified,
+    ))
+}
+
+/// Physical rectangle an opaque cover fills on one output. Falls back to the compositor's output
+/// size until the output advertises a mode. Pure so the every-output rule is unit-tested.
+fn lock_placeholder_rect(
+    mode_size: Option<Size<i32, Physical>>,
+    fallback: Size<u32, Logical>,
+    scale: f64,
+) -> Rectangle<i32, Physical> {
+    let size: Size<i32, Physical> = mode_size.unwrap_or_else(|| {
+        Size::from((
+            (f64::from(fallback.w) * scale).round() as i32,
+            (f64::from(fallback.h) * scale).round() as i32,
+        ))
+    });
+    Rectangle::from_size(size)
+}
+
+/// The cover an output shows when no live lock surface is bound to it.
+fn lock_cover_placeholder(state: &State, output: &smithay::output::Output) -> Elem {
+    let scale = output.current_scale().fractional_scale();
+    solid_lock_cover(lock_placeholder_rect(
+        output.current_mode().map(|mode| mode.size),
+        state.lock_size(),
+        scale,
+    ))
+}
+
 // Shared Xephyr skin metrics and palette, never per-backend coloured-square placeholders.
 /// Titlebar fill from `surface::titlebar_fill`, packed as `alpha << 24 | rgb`. The default is the
 /// flat opaque solid (`reduceTransparency` defaults on), so nothing paints translucent before settings arrive.
@@ -173,6 +214,32 @@ mod physical_point_guard {
     }
 }
 
+#[cfg(test)]
+mod lock_cover_placeholder_tests {
+    use super::*;
+
+    #[test]
+    fn a_placeholder_fills_the_reported_output_mode() {
+        let mode = Size::<i32, Physical>::from((2560, 1440));
+        let rect = lock_placeholder_rect(Some(mode), Size::from((1280u32, 720u32)), 1.25);
+        assert_eq!(rect.size, mode);
+        assert_eq!(rect.loc, Point::from((0, 0)));
+    }
+
+    #[test]
+    fn a_placeholder_falls_back_to_the_scaled_output_size() {
+        let rect = lock_placeholder_rect(None, Size::from((1280u32, 720u32)), 1.5);
+        assert_eq!(rect.size, Size::<i32, Physical>::from((1920, 1080)));
+    }
+
+    #[test]
+    fn a_placeholder_is_an_opaque_solid_cover() {
+        let rect = Rectangle::from_size(Size::<i32, Physical>::from((640, 480)));
+        assert!(matches!(solid_lock_cover(rect), Elem::Solid(_)));
+        assert_eq!(LOCK_COVER[3], 1.0);
+    }
+}
+
 /// A logical corner radius in physical pixels at `scale`; identity at 1.0.
 fn physical_radius(radius: u8, scale: f64) -> u8 {
     (f64::from(radius) * scale).round().min(f64::from(u8::MAX)) as u8
@@ -221,8 +288,9 @@ fn surface_elements(
 /// Front-to-back element list: Smithay draws the first element on top. Input consumes the same
 /// `scene::front_to_back` traversal, so every surface that can visually cover another is tested
 /// before the covered owner receives pointer input.
-/// Elements for the live lock surface covering `output`, placed at the output's origin. Empty when
-/// no live lock surface covers it, so that output shows nothing rather than the desktop.
+/// Elements for the live lock surface covering `output`, placed at the output's origin. An output
+/// without a live surface still gets an opaque placeholder, so every output is covered and none
+/// falls back to the desktop while the lock is held.
 #[cfg_attr(not(feature = "drm"), allow(dead_code))]
 pub fn output_lock_elements(
     state: &State,
@@ -237,7 +305,7 @@ pub fn output_lock_elements(
             0,
             output.current_scale().fractional_scale(),
         ),
-        None => Vec::new(),
+        None => vec![lock_cover_placeholder(state, output)],
     }
 }
 
@@ -475,8 +543,8 @@ fn render_into(
         eprintln!("flamewm-wayland: dock backdrop failed: {error}");
     }
     // While locked, the lock client owns the screen: painting the desktop behind it would put
-    // other clients' content back on the output the lock exists to cover. A dead locker leaves
-    // the output blank (`screen_for`), it never reveals the desktop.
+    // other clients' content back on the output the lock exists to cover. A dead locker leaves an
+    // opaque cover (`screen_for`), it never reveals the desktop.
     crate::session_lock::prune_dead_locks(state);
     let elements = match crate::session_lock::screen_for(state.session_locked, state.lock_surface())
     {
@@ -487,7 +555,7 @@ fn render_into(
             0,
             state.output_scale(),
         ),
-        Screen::Blank => Vec::new(),
+        Screen::Blank => vec![solid_lock_cover(Rectangle::from_size(size))],
         Screen::Desktop => {
             // The host window draws a named pointer itself (see `State::sync_host_cursor`).
             let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {

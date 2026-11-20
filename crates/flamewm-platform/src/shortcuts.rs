@@ -50,8 +50,14 @@ pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 pub const ACTION_BRIGHTNESS_UP: &str = "BrightnessUp";
 pub const ACTION_BRIGHTNESS_DOWN: &str = "BrightnessDown";
+/// Monitor cycling. `Super+Alt+arrow` already owns directional focus, so focus-monitor uses the
+/// free `Super+Ctrl+Shift+arrow` chord; move-window-to-monitor keeps `Super+Shift+Alt+arrow`.
+pub const ACTION_FOCUS_NEXT_MONITOR: &str = "FocusNextMonitor";
+pub const ACTION_FOCUS_PREV_MONITOR: &str = "FocusPrevMonitor";
+pub const ACTION_MOVE_WINDOW_NEXT_MONITOR: &str = "MoveWindowNextMonitor";
+pub const ACTION_MOVE_WINDOW_PREV_MONITOR: &str = "MoveWindowPrevMonitor";
 
-pub const ACTIONS: [&str; 78] = [
+pub const ACTIONS: [&str; 82] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_LAUNCHER,
     ACTION_CLIPBOARD_HISTORY,
@@ -95,6 +101,10 @@ pub const ACTIONS: [&str; 78] = [
     ACTION_MOVE_WINDOW_RIGHT,
     ACTION_MOVE_WINDOW_UP,
     ACTION_MOVE_WINDOW_DOWN,
+    ACTION_MOVE_WINDOW_NEXT_MONITOR,
+    ACTION_MOVE_WINDOW_PREV_MONITOR,
+    ACTION_FOCUS_NEXT_MONITOR,
+    ACTION_FOCUS_PREV_MONITOR,
     ACTION_WINDOW_CLOSE,
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
@@ -303,6 +313,24 @@ impl Default for ShortcutRegistry {
             (
                 ACTION_MOVE_WINDOW_DOWN.to_owned(),
                 KeyBinding::assigned("Super+Shift+Down"),
+            ),
+            // `Super+Alt+arrow` is owned by directional focus, so focus-monitor uses the free
+            // `Super+Ctrl+Shift+arrow` chord while move-window-to-monitor uses Shift+Alt.
+            (
+                ACTION_MOVE_WINDOW_NEXT_MONITOR.to_owned(),
+                KeyBinding::assigned("Super+Shift+Alt+Right"),
+            ),
+            (
+                ACTION_MOVE_WINDOW_PREV_MONITOR.to_owned(),
+                KeyBinding::assigned("Super+Shift+Alt+Left"),
+            ),
+            (
+                ACTION_FOCUS_NEXT_MONITOR.to_owned(),
+                KeyBinding::assigned("Super+Ctrl+Shift+Right"),
+            ),
+            (
+                ACTION_FOCUS_PREV_MONITOR.to_owned(),
+                KeyBinding::assigned("Super+Ctrl+Shift+Left"),
             ),
             (
                 ACTION_WINDOW_CLOSE.to_owned(),
@@ -667,7 +695,7 @@ mod tests {
 
     #[test]
     fn launcher_is_a_registered_action_with_super_space_default() {
-        assert_eq!(ACTIONS.len(), 78);
+        assert_eq!(ACTIONS.len(), 82);
         assert!(ACTIONS.contains(&ACTION_LAUNCHER));
         assert_eq!(
             ShortcutRegistry::default().binding(ACTION_WINDOW_SWITCH_PREV),
@@ -861,6 +889,26 @@ mod tests {
         keys.sort();
         keys.dedup();
         assert_eq!(keys.len(), total, "default bindings must not collide");
+    }
+
+    #[test]
+    fn monitor_actions_have_distinct_non_conflicting_defaults() {
+        let registry = ShortcutRegistry::default();
+        for (action, key) in [
+            (ACTION_MOVE_WINDOW_NEXT_MONITOR, "Super+Shift+Alt+Right"),
+            (ACTION_MOVE_WINDOW_PREV_MONITOR, "Super+Shift+Alt+Left"),
+            (ACTION_FOCUS_NEXT_MONITOR, "Super+Ctrl+Shift+Right"),
+            (ACTION_FOCUS_PREV_MONITOR, "Super+Ctrl+Shift+Left"),
+        ] {
+            assert!(ACTIONS.contains(&action));
+            assert_eq!(registry.binding(action), Some(&KeyBinding::assigned(key)));
+            assert_eq!(registry.conflict_for(action, key), None);
+        }
+        // The requested focus-monitor chord is already owned by directional focus.
+        assert_eq!(
+            registry.binding(ACTION_FOCUS_RIGHT),
+            Some(&KeyBinding::assigned("Super+Alt+Right"))
+        );
     }
 
     #[test]

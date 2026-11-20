@@ -257,6 +257,14 @@ impl<C: Connection> Wm<'_, C> {
             ACTION_FOCUS_RIGHT => self.focus_direction(GridDirection::Right)?,
             ACTION_FOCUS_UP => self.focus_direction(GridDirection::Up)?,
             ACTION_FOCUS_DOWN => self.focus_direction(GridDirection::Down)?,
+            ACTION_MOVE_WINDOW_NEXT_MONITOR => {
+                self.move_window_to_monitor(MonitorStep::Next)?;
+            }
+            ACTION_MOVE_WINDOW_PREV_MONITOR => {
+                self.move_window_to_monitor(MonitorStep::Prev)?;
+            }
+            ACTION_FOCUS_NEXT_MONITOR => self.focus_monitor(MonitorStep::Next)?,
+            ACTION_FOCUS_PREV_MONITOR => self.focus_monitor(MonitorStep::Prev)?,
             other => {
                 if crate::zoom::dispatch(other) {
                     return Ok(());

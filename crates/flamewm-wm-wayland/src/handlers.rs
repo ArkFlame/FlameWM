@@ -95,6 +95,18 @@ fn model_edges(
     })
 }
 
+/// Parent window id recorded on a child toplevel when the client calls `xdg_toplevel.set_parent`.
+/// Kept on the surface so the parent's destruction can close its transients deterministically.
+#[derive(Clone, Copy)]
+struct TransientParent(crate::model::WindowId);
+
+/// Window id named as this surface's xdg parent, if `set_parent` was used at map time.
+fn transient_parent_of(surface: &WlSurface) -> Option<crate::model::WindowId> {
+    with_states(surface, |states| {
+        states.data_map.get::<TransientParent>().map(|parent| parent.0)
+    })
+}
+
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor
@@ -271,6 +283,55 @@ impl XdgShellHandler for State {
         self.set_focus(Some(id));
     }
 
+    fn parent_changed(&mut self, surface: ToplevelSurface) {
+        // `new_toplevel` fires during `get_toplevel`, before the client can send `set_parent`, so
+        // this callback is where an xdg parent becomes known. Both surfaces are already mapped.
+        let Some(parent_surface) = surface.parent() else {
+            return;
+        };
+        let Some(parent_id) = self.window_for_surface(&parent_surface) else {
+            return;
+        };
+        let Some(child_id) = self.window_for_surface(surface.wl_surface()) else {
+            return;
+        };
+        let Some((parent, child)) = self
+            .model
+            .get(parent_id)
+            .cloned()
+            .zip(self.model.get(child_id).cloned())
+        else {
+            return;
+        };
+
+        // Place the child's frame over the parent's frame, converting the pure result back to the
+        // client rect the model stores (the titlebar band sits above the client rect).
+        let output = self.output_name_of(&parent_surface);
+        let work = self.work_area_on(&output);
+        let as_api = |r: crate::model::Rect| flamewm_api::Rect::new(r.x, r.y, r.w, r.h);
+        let band = if child.decorated() {
+            crate::model::TITLEBAR_HEIGHT
+        } else {
+            0
+        };
+        let frame = crate::transient::center_over_parent(
+            as_api(parent.frame()),
+            child.rect.w,
+            child.rect.h + band,
+            as_api(work),
+        );
+        let rect = crate::model::Rect::new(frame.x, frame.y + band, child.rect.w, child.rect.h);
+        self.model.set_rect(child_id, rect);
+        // Inherit the parent's workspace and output, not the pointer's; the default mode stays
+        // `Normal`, so the dialog is floating. Focus raises it above the parent.
+        self.model.move_to_workspace(child_id, parent.workspace);
+        with_states(surface.wl_surface(), |states| {
+            states.data_map.insert_if_missing(|| TransientParent(parent_id));
+        });
+        self.set_surface_output(surface.wl_surface(), output);
+        self.set_focus(Some(child_id));
+    }
+
     fn title_changed(&mut self, surface: ToplevelSurface) {
         self.foreign_toplevel_refresh(&surface);
     }
@@ -390,6 +451,26 @@ impl XdgShellHandler for State {
         let Some(id) = self.window_for_surface(surface.wl_surface()) else {
             return;
         };
+        // Close xdg transients deepest-first so no dialog is orphaned when its parent goes away.
+        // Sending `close` lets each client destroy its own surface, which recurses through this
+        // callback for deeper children.
+        let edges: Vec<(u64, u64)> = self
+            .toplevels
+            .iter()
+            .filter_map(|(child_id, child)| {
+                if !child.alive() {
+                    return None;
+                }
+                transient_parent_of(child.wl_surface()).map(|parent_id| (*child_id, parent_id))
+            })
+            .collect();
+        let children: Vec<_> = crate::transient::descendant_close_order(id, &edges)
+            .into_iter()
+            .filter_map(|child_id| self.toplevel(child_id).cloned())
+            .collect();
+        for child in children {
+            child.send_close();
+        }
         self.forget_surface_output(surface.wl_surface());
         self.toplevels.retain(|(wid, _)| *wid != id);
         self.foreign_toplevel_close(id);
