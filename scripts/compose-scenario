@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# One-second ACTIVE-USE composition of the nested compositor: one terminal streaming 2000-line
-# bursts into its PTY, sampled by the compositor's own once-per-second COMPOSITION dump.
+# One-second ACTIVE-USE composition of the nested compositor: one terminal streaming continuous
+# output into its PTY, sampled by the compositor's own once-per-second COMPOSITION dump.
 #
-# Prints SHARES (which in-thread subsystem owns the active second), never total CPU. The busiest
-# one-second tick is the one whose non-wait rows sum highest, so startup ticks cannot win.
+# Prints SHARES (which in-thread subsystem owns the active second), never total CPU.
+# The busiest one-second tick is the one whose non-wait rows sum highest, so startup ticks cannot
+# win. Only genuine one-second windows are considered: the profiler's first report is anchored on
+# its default 60 s interval, so its shares are diluted by 60 and are not a usable sample.
+#
+# A run whose busiest tick still has < 5% non-wait work prints LOAD-NOT-REACHED and exits 3, so an
+# idle compositor is never reported as an active-use measurement.
 #
 # Usage: scripts/compose-scenario [--dry-run] [--help]
 # Env:   FLAMEWM_WAYLAND_BIN, FLAMEWM_TERMINAL_BIN, CARGO_TARGET_DIR
@@ -123,15 +128,26 @@ if [[ -z "$CLIENT_DISPLAY" ]]; then
   exit 1
 fi
 
-# One terminal client, one second of output into its PTY: 2000-line bursts (`yes | head -n 2000`)
-# until the SECONDS clock passes the start second. Bursts keep the PTY continuously readable and
-# land in whole lines so the terminal exercises its dirty-line path, not a partial-line redraw.
-FEED='end=$((SECONDS+1)); while (( SECONDS < end )); do yes | head -n 2000; done'
+# One terminal client streaming into its PTY until killed: 2000-line bursts (`yes | head -n 2000`)
+# repeated forever. Whole-line bursts exercise the terminal's dirty-line path and leave a short gap
+# between bursts for the UI to commit frames; a single unbounded `yes` kept the PTY permanently
+# readable and the client rendered almost nothing. The feed runs in the client process, so its CPU
+# never enters the compositor's own shares.
+FEED='while :; do yes | head -n 2000; done'
 WAYLAND_DISPLAY="$SOCKET" DISPLAY="$CLIENT_DISPLAY" timeout --signal=TERM --kill-after=1s 10s \
   "$TERM_BIN" -e bash -c "$FEED" >/dev/null 2>"$CLIENT_LOG" &
 client_pid=$!
 
-# Cover the streaming second plus the tick that reports it (the dump is once per second).
+# Wait until the client has finished its render-backend startup (those lines are logged once, before
+# the window loop), so the sampled ticks measure terminal paint work, not compositor bring-up.
+for _ in {1..100}; do
+  grep -q '^FLAMEWM_RENDER_TEXT_BACKEND' "$CLIENT_LOG" 2>/dev/null && break
+  kill -0 "$client_pid" 2>/dev/null || break
+  pause 0.05
+done
+# Warm-up: map the window and land its first frame outside the measured ticks.
+pause 1.0
+# Two full one-second ticks with continuous PTY output in flight.
 pause 2.2
 
 kill -TERM "$client_pid" 2>/dev/null || true
@@ -141,15 +157,23 @@ pause 1.2
 kill -TERM "$comp_pid" 2>/dev/null || true
 
 block="$(awk '
+  function eligible(t) { return (t in waitshare) && (waitwall[t] + 0 <= 2000) }
   function flush() {
-    if (n > 0 && cur != "" && sum[cur] > sum[best] + 0.0001) best = cur
+    if (n > 0 && cur != "" && eligible(cur) && (!bestset || sum[cur] > sum[best] + 0.0001)) {
+      best = cur
+      bestset = 1
+    }
   }
   /^FLAMEWM-WAYLAND-COMPOSE tick=/ {
     flush()
     n++
     cur = n
-    if (n == 1) best = 1
-    incomp = 0
+    if ($0 ~ /share=wait:100\.0/) {
+      # A fully parked tick prints one line: no COMPOSITION block, zero active work.
+      sum[cur] = 0
+      waitshare[cur] = "100.0"
+      waitwall[cur] = 0
+    }
     next
   }
   /^COMPOSITION:$/ { incomp = 1; next }
@@ -160,6 +184,10 @@ block="$(awk '
     sub(/%$/, "", share)
     if (label == "wait") {
       waitshare[cur] = share
+      wallv = $3
+      sub(/^wall=/, "", wallv)
+      sub(/ms$/, "", wallv)
+      waitwall[cur] = wallv
       incomp = 0
     } else {
       sum[cur] += share
@@ -170,15 +198,18 @@ block="$(awk '
   incomp && NF { incomp = 0 }
   END {
     flush()
+    if (!bestset) { print "NO_TICK"; exit }
     printf "%s", rows[best]
     if (best in waitshare) printf "wait share=%s\n", waitshare[best]
   }
 ' "$LOG")"
 
-if [[ -z "$block" ]]; then
-  echo 'FLAMEWM-COMPOSE-SCENARIO: no COMPOSITION tick captured (compositor did not stay up?)' >&2
+if [[ "$block" == NO_TICK || -z "$block" ]]; then
+  # Either the compositor died before one full one-second window, or every tick was parked with no
+  # COMPOSITION block: no active second was measured, so this must not be reported as a run.
+  echo 'FLAMEWM-COMPOSE-SCENARIO: LOAD-NOT-REACHED no one-second COMPOSITION tick captured (compositor did not stay up?)' >&2
   tail -n 20 "$LOG" >&2 || true
-  exit 1
+  exit 3
 fi
 
 largest="$(printf '%s\n' "$block" | awk 'NF && $1 != "wait" { print; exit }')"
@@ -186,9 +217,12 @@ printf 'FLAMEWM-COMPOSE-SCENARIO: scenario=terminal-1s log=%s client_log=%s\n' "
 printf 'FLAMEWM-COMPOSE-SCENARIO: shares (percent of the sampled second, self wall):\n'
 printf '%s\n' "$block" | sed 's/^ */  /'
 printf 'FLAMEWM-COMPOSE-SCENARIO: largest share: %s (drive this first)\n' "$largest"
-if ! printf '%s\n' "$block" | awk 'NF && $1 != "wait" {
-    v = $2; sub(/^share=/, "", v); sub(/%$/, "", v)
-    if (v + 0 > 0.05) seen = 1
-  } END { exit !seen }'; then
-  echo 'FLAMEWM-COMPOSE-SCENARIO: WARN no subsystem above 0.05%: the client likely never painted (check client_log)' >&2
+active="$(printf '%s\n' "$block" | awk 'NF && $1 != "wait" {
+    v = $2; sub(/^share=/, "", v); sub(/%$/, "", v); s += v
+  } END { printf "%.1f", s }')"
+if awk -v s="$active" 'BEGIN { exit !(s + 0 < 5.0) }'; then
+  printf 'FLAMEWM-COMPOSE-SCENARIO: LOAD-NOT-REACHED busiest tick active share=%s%% < 5%% (terminal never painted; check client_log=%s)\n' \
+    "$active" "$CLIENT_LOG" >&2
+  tail -n 20 "$CLIENT_LOG" >&2 || true
+  exit 3
 fi
