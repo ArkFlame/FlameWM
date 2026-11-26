@@ -106,9 +106,7 @@ impl Command {
                 let group = slot(parts.next()?, MAX_GROUP_SLOTS)?;
                 let item = slot(parts.next()?, MAX_ITEM_SLOTS)?;
                 match parts.next()? {
-                    "dismiss" if parts.next().is_none() => {
-                        Some(Self::DismissItem { group, item })
-                    }
+                    "dismiss" if parts.next().is_none() => Some(Self::DismissItem { group, item }),
                     "action" => {
                         let action = slot(parts.next()?, MAX_ITEM_ACTION_SLOTS)?;
                         parts.next().is_none().then_some(Self::InvokeItemAction {

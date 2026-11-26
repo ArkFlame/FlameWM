@@ -1,67 +1,67 @@
 # u69-startmenu-open log
 
-Batch ten over the top-center Launcher and the shared application catalog
-(`crates/flamewm-shell/src/**`, `crates/flamewm-applications/**`). `git` and `cargo` are forbidden in this
-shared checkout, so the review is source-based and no build was run here: the orchestrator builds, tests and
-commits.
+Batch ten over the top-center Launcher open path (`crates/flamewm-shell/src/**` and
+`flamewm-applications`). `git` and `cargo` are forbidden in this shared checkout, so the review is
+source-based and no build ran here: the orchestrator builds, tests and commits.
 
 ## Scenario and composition (1 s of normal use)
 
-Super+Space, a few typed characters, one arrow, Enter. Inside the owned code the sampled work splits into:
+Super+Space, a few typed characters, one arrow, Enter. Within the owned code the sample splits into:
 
-1. Application catalog work: the first open used to run the full XDG `.desktop` discovery (read + parse every
-   file) on the UI thread because `shared_application_catalog()` was first touched from
-   `refresh_launcher_applications`; `xdg_application_dirs()` also re-read the environment and allocated the
-   path vector on every open.
-2. Per-keystroke result rebuild: `LauncherState::refresh` re-filtered every indexed entry, allocated a new
-   order vector, cloned the query, and bumped the icon epoch.
-3. Projection: 24 `format!` id strings per projection, plus one transparent-placeholder paint per still-pending
-   row (fresh `vec![0; 20*20*4]` + document touch), on every keystroke.
-4. Icon worker: 8 requests per changed window; the launcher shared `START_EPOCH` with the Start submenu, so
-   typing in the launcher also staled Start's in-flight results.
+1. Application catalog: the first open initialized the process-wide catalog, parsing every XDG
+   `.desktop` file on the UI thread, and each open re-read the XDG application dirs from the environment.
+2. Result rebuild: each keystroke re-filtered every indexed entry, allocated a new order `Vec`,
+   cloned the query, and bumped the icon epoch.
+3. Projection writes: three `format!` ids per row per projection, plus a fresh transparent
+   placeholder image for every row whose worker request is still in flight.
+4. Icon worker/drain: eight requests per changed window; launcher slots shared `START_EPOCH` with
+   the Start submenu, so typing in the launcher also staled Start's in-flight results, and a stale
+   launcher reply had no cache fallback (placeholder stayed until the next projection).
 
-Render/raster of the popup itself is outside this unit (`flamewm-render-*`).
+Popup map/measure/raster stays in `flamewm-render-*`, outside this unit.
 
-## Changes
+## Review of the landed slices (regressions fixed)
 
-- **Catalog discovery moved off the first open (`flamewm-applications/src/app_catalog.rs`,
-  `flamewm-shell/src/main.rs`, `app/launcher_session.rs`).** `warm_application_catalog_in_background()` parses
-  the XDG dirs on one named worker at shell startup; `ready_shared_application_catalog()` is a non-blocking
-  `OnceLock::get`. The launcher open now only stats the dirs when the warm snapshot exists and otherwise keeps
-  the Start snapshot it already has from the session bus, instead of parsing hundreds of `.desktop` files on
-  the UI thread. Expected shift: first-open discovery I/O leaves the UI thread entirely.
-- **XDG dir list cached (`app_catalog.rs`).** `cached_application_dirs()` parses the environment once; the
-  shared-catalog init also reuses it instead of calling `discover()` (which re-read the env a second time), as
-  do the rescan/refresh/launch lookups. Expected shift: no env reads or `PathBuf` vector churn per open or
-  launch.
-- **Cached order reused across opens (`flamewm-shell/src/launcher.rs`).** `refresh` returns early when the
-  cached order already matches the model generation and query, so a reopen (or repeated `open`) reuses the
-  result indices instead of rescanning the index and reallocating the vector. It also no longer bumps the icon
-  epoch in that case, so reopens keep in-flight launcher icon results valid. Expected shift: reopen filtering
-  becomes O(1) instead of O(entries).
-- **Launcher owns its icon epoch (`async_projection/icon_binding.rs`, `launcher.rs`).** `LAUNCHER_EPOCH` +
-  `bump_launcher_view_epoch()` replace the shared `START_EPOCH` bump, so typing in the launcher no longer
-  stales Start submenu icon bindings (and vice versa). Expected shift: fewer stale icon drops and re-requests
-  while the Launcher is used.
-- **Projection stops allocating per row (`launcher.rs`).** Three cleared-and-reused `String` buffers replace
-  three `format!` allocations per row per projection, matching the `start_view` slot-projection precedent
-  (LOG-u09). Expected shift: 24 fewer heap allocations per keystroke projection.
-- **Pending-row placeholder is not repainted (`async_projection/icon_binding.rs`, `icon_loader.rs`).** When the
-  visible row kept the same key, the live binding already names it, and its request is still in flight
-  (`IconLoader::is_pending`), `schedule_visible` returns without allocating and rewriting the same transparent
-  placeholder. Expected shift: repeated projections of an awaiting row cost one binding probe instead of an
-  image buffer plus a document touch. A cached raster still takes the cache path, so no icon is delayed.
-- **Stale launcher completions repaint from cache (`app/icons.rs`).** The launcher now falls back to
-  `apply_cached_binding` like the panel path: a reply that lands after a query-change epoch bump paints the
-  bound row from the cache instead of leaving its placeholder until the next projection.
+- Launcher icon bindings were keyed on `START_EPOCH` (`refresh` called `bump_start_view_epoch` on
+  every open and keystroke), so launcher typing staled the Start submenu's pending icon results
+  and vice versa. Launcher slots now use their own `LAUNCHER_EPOCH`
+  (`bump_launcher_view_epoch`), matching the existing dock/task epoch split documented in
+  `icon_binding.rs`.
+- A launcher completion that landed after an epoch bump was dropped as stale and left the row on
+  its placeholder. The `DependentSurface::Launcher` drain arm now falls back to
+  `apply_cached_binding`, the recovery the panel task slots already had.
+
+## Optimizations
+
+- **Catalog discovery leaves the first open (`app_catalog.rs`, `main.rs`, `app/launcher_session.rs`).**
+  `warm_application_catalog_in_background` parses the dirs on one named worker at shell startup.
+  `ready_shared_application_catalog` is a non-blocking `OnceLock::get`; the launcher open uses it and,
+  while warm-up is still in flight, keeps the Start snapshot already received from the session bus
+  instead of blocking the UI thread on discovery. Composition shift: first-open read/parse/alloc
+  moves to startup idle; an open costs only the dir `stat` gate.
+- **XDG dir list cached (`app_catalog.rs`).** `cached_application_dirs` reads the environment once.
+  The shared-catalog init now uses `from_dirs` with that list (was: `discover()`, a second env read),
+  and the rescan/refresh/launch lookups all reuse it. Removes env reads and `PathBuf` vector
+  allocations from every open and launch lookup.
+- **Search index reuse on open (`launcher.rs`).** `refresh` returns early when the cached order
+  still matches the model generation and query, so a reopen reuses the result indices instead of
+  rescanning the index and allocating a new vector. It also keeps the launcher epoch in that case,
+  so in-flight launcher icons survive a reopen. Composition shift: reopen filtering O(entries) -> O(1).
+- **No per-row id allocations in projection (`launcher.rs`).** Three cleared-and-reused `String`
+  buffers replace three `format!` calls per row, matching the `start_view` slot precedent (LOG-u09).
+  Removes 24 heap allocations per keystroke projection.
+- **Pending-row placeholder not repainted (`async_projection/icon_binding.rs`, `icon_loader.rs`).**
+  `schedule_visible` now proves the node already shows this key (`IconLoader::is_pending` plus the
+  live binding key/generation) and returns without rebuilding the transparent image or touching the
+  document. Cache hits and fresh misses are unchanged, so no icon is delayed.
 
 ## Dead code deleted
 
-- `LauncherState::query()`: no caller in any crate (the state reads its own field directly).
+- `LauncherState::query()`: no caller in the workspace (the field is read directly).
 
-## Notes / not done here
+## Not done here / remaining
 
-- Incremental filtering on query append would need a subset-filter API in `flamewm-shell-core`'s `StartModel`
-  (the normalized `StartEntry` index lives there); out of this unit's owned paths.
-- The popup's first map/raster and the startup snapshot clone remain in `flamewm-render-*` and the session
-  bus bootstrap respectively.
+- Incremental prefix filtering needs a subset API on `StartModel` in `flamewm-shell-core` (outside
+  the owned paths).
+- Row label/visibility writes still run per projection; avoiding them needs change tracking in the
+  document layer, which is outside this unit.
