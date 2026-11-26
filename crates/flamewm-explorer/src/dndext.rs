@@ -137,18 +137,24 @@ pub fn run_with_timeout(
     // A refused drain thread must not panic the extraction worker: the pipe closes instead and
     // the child sees EPIPE, which the outcome already reports as a failed extraction.
     let mut out_reader = child.stdout.take().and_then(|mut pipe| {
-        thread::Builder::new().name("flamewm-explorer-ark-out".into()).spawn(move || {
-            let mut text = String::new();
-            let _ = pipe.read_to_string(&mut text);
-            text
-        }).ok()
+        thread::Builder::new()
+            .name("flamewm-explorer-ark-out".into())
+            .spawn(move || {
+                let mut text = String::new();
+                let _ = pipe.read_to_string(&mut text);
+                text
+            })
+            .ok()
     });
     let mut err_reader = child.stderr.take().and_then(|mut pipe| {
-        thread::Builder::new().name("flamewm-explorer-ark-err".into()).spawn(move || {
-            let mut text = String::new();
-            let _ = pipe.read_to_string(&mut text);
-            text
-        }).ok()
+        thread::Builder::new()
+            .name("flamewm-explorer-ark-err".into())
+            .spawn(move || {
+                let mut text = String::new();
+                let _ = pipe.read_to_string(&mut text);
+                text
+            })
+            .ok()
     });
     let deadline = Instant::now() + timeout;
     loop {

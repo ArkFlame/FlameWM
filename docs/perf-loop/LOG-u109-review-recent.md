@@ -1,140 +1,128 @@
-# u109-review-recent — regression review of the recent perf slices batch seventeen
+# LOG u109-review-recent — regression review of the last 40 perf commits
+
+Batch seventeen. Owned paths: `crates/**/src`. No `cargo`, no `git` in the shared checkout, so the
+reviewed diff is the unit LOG corpus for the 40 most recent commits (u69–u108, which the 40 newest
+`docs/perf-loop/LOG-u*.md` files describe one-to-one) plus the current sources they changed. Every
+statement below is a source read; the orchestrator builds and runs the tests.
 
 ## Method
 
-`git` (and `cargo`) are forbidden in this shared checkout, so `git log -40 -p on crates` could not be
-run. The review used the evidence that is available offline: the 40 most recent unit logs
-(`docs/perf-loop/LOG-u69-*.md` … `LOG-u108-*.md`, the perf-loop commit corpus, newest first) and then
-the current sources each of them describes, read line by line against the four regression classes in
-the brief: dropped wakeups, missed redraws after a state change, races on the new worker threads, and
-lost cancel paths. Where a claim depended on a dependency's behaviour, the dependency source was read
-(`~/.cargo/registry/src/.../smithay-0.7.0`, the exact version in `Cargo.lock`), not the vendored
-master copy.
+The four regression classes in the brief were checked per unit against the current code, not against
+the log's claim:
 
-All statements below are source reads. No build, no runtime sample: composition claims are reasoning
-about call paths, per `.agents/GOAL-PERF-LOOP.md`.
+- dropped wakeups (worker → UI notification paths),
+- missed redraws after state change (paint/invalidate predicates and restart paths),
+- races on the new worker threads (send/flip/drain ordering, channel capacity, non-blocking write),
+- lost cancel paths (in-flight cancellation, pending marks, stale-generation filters).
 
-## Two defects found and fixed
+Focused units (a mechanism in one of the four classes): u80, u82, u83, u84, u85, u86, u87, u88, u89,
+u91, u94, u95, u96, u97, u100, u101, u102, u103, u104, u106, u107, u108. The profiler/scenario units
+(u92, u93, u99) and the deletion unit (u98) were checked only for runtime effect (none).
 
-### 1. Missed redraw: a parent commit that only moves a subsurface (u95, `handlers.rs`)
+## Fixed
 
-`CompositorHandler::commit` (`crates/flamewm-wm-wayland/src/handlers.rs:181-185`) requests a paint
-only when `commit_changes_pixels` says the commit carries pixels. That predicate
-(`handlers.rs:226`) tested only `SurfaceAttributes`:
+### F1 — u95 commit gate skipped placement-only commits (missed redraw)
 
-```rust
-attrs.buffer.is_some() || !attrs.damage.is_empty() || !attrs.frame_callbacks.is_empty()
-```
+`crates/flamewm-wm-wayland/src/handlers.rs::commit_changes_pixels` treated a commit as paintable only
+when a surface in the tree carried a buffer attach/removal, damage, or a frame callback. Smithay 0.7
+makes those three the *only* visible attributes: `Cacheable::commit` for `SurfaceAttributes`
+(`wayland/compositor/handlers.rs:111`) takes `buffer`, `damage` and `frame_callbacks` out of the pending
+state, so `current()` inside the commit handler reports exactly what this commit attached and damaged.
+Placement is not in that set: `wl_subsurface.set_position` (and the whole synchronized child state) is
+applied by the transaction on the **parent's** commit and lives in `SubsurfaceCachedState`, so a parent
+commit that only repositions a subsurface carried none of the three and was dropped — the moved
+subsurface stayed at its old pixels until some unrelated damage. Same gap for a surface/subsurface
+`set_buffer_scale`/`set_buffer_transform` re-commit (`SurfaceAttributes::commit` copies the scale forward,
+so it is not a change signal either).
 
-u95's rationale was "a commit that carries no new buffer, no damage and no frame request changes
-nothing on screen". That premise is false for a **parent surface with subsurfaces**. smithay 0.7
-`impl Cacheable for SurfaceAttributes` (`wayland/compositor/handlers.rs:111`) *takes* the buffer,
-damage and frame callbacks out of the pending state when building the committed snapshot, so during
-the commit handler those three are exactly "what this commit attached/damaged/called back". A
-subsurface's placement is not part of `SurfaceAttributes` at all: for a synchronized subsurface
-(the protocol default, `SubsurfaceState.sync == true`) `wl_subsurface.set_position` is applied by
-`PrivateSurfaceData::commit_sync_surface_tree` **on the parent's commit**
-(`wayland/compositor/tree.rs:261-282`), i.e. the parent's commit is the one moment the moved child
-becomes visible — and that commit has none of the three attributes, so it was skipped and the child
-stayed at its old place until unrelated damage arrived.
+Fix: a surface whose commit tree contains a real child (subsurface) is now treated as paint-worthy,
+because child placement can change pixels with no buffer, damage or callback of its own. The
+`with_surface_tree_upward` traversal visits the surface as its own first child (smithay
+`PrivateSurfaceData::init` pushes the surface itself), so `child != surface` is false for the root and
+true only for real subsurfaces; the visit is one pointer compare per surface and does not change the
+damage-only gate for leaf surfaces (X11 windows, layer-surface panels, notifications — the traffic u95
+targeted).
 
-Fix (`handlers.rs:233-244`): when the traversal reaches any surface other than the commit's own root,
-the tree has a child, so treat the commit as pixel-changing. The self entry that smithay keeps at the
-front of `children` (`tree.rs:122`, `children.push(surface.clone())`) compares equal to `surface`, so
-leaf surfaces — layer panels, X11 toplevels, every surface without subsurfaces — keep the
-damage-only gate and u95's idle-wake win. No new imports: the change is one comparison on the
-`WlSurface` already in the signature, and `handlers.rs` was verified formatting-clean with
-`rustfmt --edition 2024 --check` (exit 0).
+### F2 — u104 conflict probe trusted a partial listing (unprompted overwrite)
 
-Residual (documented, not fixed): a *desynchronized* subsurface applies its own `set_position` on its
-own commit, where the tree root has no children; that commit is still skipped unless it carries a
-buffer. Covering it needs per-surface last-committed-placement shadow state, which is a larger change
-than this review unit should make without a build. `set_buffer_scale`/`set_buffer_transform`-only
-commits are in the same class: smithay carries those two fields forward in the pending state, so a
-commit handler cannot see that they changed.
+`crates/flamewm-explorer/src/app/transfers.rs::start_transfer_to` answers the overwrite question from
+the on-screen rows instead of stat'ing each source. The rows are only authoritative once the listing is
+complete: a tab that is `loading` shows streamed batches (`append_scan`), so a name missing from the
+partial list can still exist on disk, the conflict count came out low, and the transfer started without
+the conflicts dialog. The worker still re-checks targets and the default is `KeepBoth` (no data loss),
+but the user lost the prompt. Fix: the listing shortcut now requires `!current.loading`; an incomplete
+listing falls back to the existing per-source `symlink_metadata` path.
 
-### 2. Missed overwrite prompt: the conflict probe trusted a streaming listing (u104)
+## Residual risks (verified, not changed — no safe edit without a build)
 
-`crates/flamewm-explorer/src/app/transfers.rs` (u104) answers "does the target name exist?" from the
-rows on screen for a paste into the current folder, instead of one `symlink_metadata` per source.
-The condition was only `directory.as_path() == current.path()`. A tab whose listing is still
-`loading` paints streamed batches (`Explorer::append_scan`, `lib.rs:432`), so its rows are a prefix of
-the directory. A name that exists but is not in the streamed prefix at that moment counts as
-"no conflict", the batch starts with `Conflict::KeepBoth`, and the overwrite question is never asked
-(no data loss — the worker keeps both — but the prompt and the "Replace?" path are skipped).
+- **R1 (leaf-surface scale/transform).** With F1, a placement change on a surface that has no
+  subsurfaces is still skipped when it changes only `set_buffer_scale`/`set_buffer_transform` and no
+  buffer/damage/callback is attached. Both attributes are carried forward by `Cacheable::commit`, so the
+  current commit cannot be distinguished from an unchanged one. Closing it needs a per-surface shadow of
+  the last painted scale/transform; that is a larger change than this review unit's budget and needs a
+  runtime check.
+- **R2 (desynchronized subsurface `set_position`).** A desync child applies its position on its **own**
+  commit, where it is the traversal root and has no children, so F1 does not cover it. Same shadow-state
+  fix as R1.
+- **R3 (u96 abandoned decode).** `retain` cancels the in-flight key and clears its `pending` mark so the
+  row can be re-requested; if the row returns before the decoder reaches its next `wants` check, the key
+  is queued again and the same file decodes twice. One extra decode in a rare race, no stale cache (the
+  cancelled decode is not cached), so it was left as the cancellation contract describes.
+- **R4 (u104 case-insensitive alias).** The row-name probe is exact-match; on a case-insensitive
+  destination an existing `Foo` is not a conflict for a pasted `foo`. The worker re-checks and keeps
+  both, so no data loss; a case-folded compare needs the destination filesystem's folding rule, which the
+  explorer does not track.
+- **Doc only (outside owned paths).** `LOG-u108-alloc-hot.md` names
+  `projection/async_projection/task_slots.rs`; the file is `crates/flamewm-shell/src/async_projection/task_slots.rs`.
 
-Fix (`transfers.rs:151`): take the row shortcut only when `!current.loading`; otherwise fall back to
-the previous per-source `symlink_metadata` probe. The fast path is unchanged in the settled listing,
-which is the state a paste is normally issued from. Verified parse-valid with
-`rustfmt --edition 2024 --check` (formatting diffs only: the file is intentionally dense style).
+## Verified sound (the mechanism the unit changed holds)
 
-## Checked and sound (no change needed)
-
-- **u101 search wake coalescing** (`search.rs:336-447`): `wake_once` sends the event before flipping
-  `wake_pending`, and `poll` clears the flag *before* `try_iter`, so a batch is either drained by the
-  poll that cleared the flag or queues its own wake. No lost wake, no double-drain. The stale-filter
-  `id == self.next_id` is correct because `start` assigns `id = next_id` after `cancel()` bumped it
-  and never increments afterwards, so the live job's id equals `next_id` until the next cancel.
-- **u101 `search_running`** (`app/navigation.rs:23-47,49-69`): cleared on `Done` and `clear_search`;
-  a cancellable `Done{cancelled}` is always stale-filtered out, so the `continue` cannot leave a
-  stale "Searching…". A repeated Enter keeps the live walk; a changed query/folder still cancels.
-- **u96 thumbnail cancel path** (`thumbs.rs:464-580,608-671`, `workers.rs:57-75`): an abandoned
-  in-flight decode clears `in_flight` and the caller drops its `pending` mark, so the row can be
-  requested again; `wants` re-checks after the header probe and before the whole-file read, and a
-  cancelled decode sends no result and no wake byte. A scroll-back that lands before the abandoned
-  decode notices can decode the same file one extra time (the old decode then completes and caches,
-  the requeued job decodes again); that is one redundant decode, never a wrong or missing thumbnail.
-- **u97 pager publish / clock tick** (`app/panels.rs:230-238`, `app/timers.rs:126-177`): the publish
-  flag is retried on any later projection (`!published || changed.panels || changed.workspaces`), so
-  a panel that was not laid out yet cannot stay unpublished; the clock tick still writes the date
-  visibility on midnight and on a forced tick (`time_zone_changed`, settle, settings revision), and
-  `clock_projected_sec` still guards the once-per-second write.
-- **u107 startup settings workers** (explorer `main.rs:397-408` + wake at 507-554; task-manager
-  `lib.rs:1124-1131` + wake at 1258-1284; shell `main.rs:745-758` + fd source at 907-926): each
-  sends the snapshot into a one-slot channel *before* writing the wake byte, and the byte is buffered
-  by the socket if the loop is not yet parked on it, so the snapshot cannot be lost. No shared state
-  is touched off the UI thread; the theme and backdrop are applied on the wake turn, which also
-  projects/paints in the same turn.
-- **u86 occlusion culling / u94 redraw scheduling**: a culled window leaves the element list, and the
-  damage tracker damages the previous geometry of vanished elements, so the move-away case repaints;
-  opacity is only taken from the window's own opaque regions, and opaque memory chrome is excluded
-  from occluders. The two u94 pacing fixes (frame request during a paint, stale pacing clock) close
-  the only dropped-request paths found on that route.
-- **u82 switcher change detection** (`switcher.rs:53-68,125-132`): `same_content` compares `open`,
-  `immediate`, `selected` and the whole `entries` list (full `PartialEq`, so every label/metadata
-  field), plus preview count, size, generation and (legacy) pixel identity. No visible field is left
-  out of the dirty check.
-- **u108 id-buffer reuse** (`projection/panel.rs:383-403,438-457,750-810`,
-  `async_projection/task_slots.rs:167-191`): every reused `String` is `clear()`ed before its `write!`,
-  the progress id is built by the caller in its own buffer, and `project_task_progress` is the single
-  writer of `task-slot-<n>-progress`; the static battery-menu glyph table is byte-identical to the
-  template ids (checked against `ui/shell/battery.html`).
-- **u104 batched progress** (`flamewm-archiver/src/progress.rs:124-159`): a gated step keeps
-  `pending_bytes`/`pending_entries`, completion (`bytes_done >= total` and `entries_done >= total`)
-  bypasses the 100 ms interval, and the archiver window drops the progress model on `Reply::Done`
-  (`archiver-app/src/window.rs:439-458`), so a deferred intermediate snapshot cannot strand the bar.
-
-## Notes for the next reviewer
-
-- The u108 log cites `crates/flamewm-shell/src/projection/async_projection/task_slots.rs`; the file is
-  `crates/flamewm-shell/src/async_projection/task_slots.rs` (no `projection/` segment).
-- Recommended follow-up unit (needs a build): store the last rendered state per surface
-  (`buffer_scale`, `buffer_transform`, `SubsurfaceCachedState::location`) in `SurfaceData.data_map` and
-  compare it in the commit handler so the two residual cases above can also keep the damage-only gate
-  without risking a missed redraw.
-
-## Files changed
-
-- `crates/flamewm-wm-wayland/src/handlers.rs` — parent-with-children conservatism in
-  `commit_changes_pixels`.
-- `crates/flamewm-explorer/src/app/transfers.rs` — row-based conflict probe only for a complete
-  listing.
-- this log; unit marked DONE.
+- **u101 search coalescing — no lost wake.** The walker sends the batch/timeout event before
+  `wake_pending.swap(true)` (`search.rs:361-392`) and `poll` clears the flag before draining
+  (`search.rs:436-447`), so a batch is always in the channel when its wake is suppressed; a batch sent
+  during the drain schedules a fresh wake. The stale-id filter is consistent with `start`, which sends
+  `id = next_id` after `cancel()` bumped it, so a live job always matches `active`.
+- **u96 cancellation — every abandon path returns the key.** `retain` returns queued jobs plus a
+  dropped in-flight key; `start_pass_keeping` removes their `pending` marks and the worker's `wants`
+  check aborts between header, read and decode stages. `Cancelled` never caches a failure.
+- **u97 pager publish / clock tick — no missed projection.** `pager_cells_published` stays false until
+  every panel accepts, and the partial tick retries while it is false
+  (`app/panels.rs:230-238`). The clock defers the date string only when the local date did not change and
+  the tick is not forced; a settings/time-zone/date change takes the full `project_clock_at`
+  (`app/timers.rs:129-164`), which also re-applies the date visibility.
+- **u97 status views — one pass, same rules.** `status::views` applies the audio/media/network rules to
+  the base views and `tray_any_visible` reads those plus battery/weather/SNI, matching the popover
+  projection's predicates.
+- **u107 settings workers — send before wake, one-shot.** Explorer, task manager and shell all call
+  `try_send`/`send` and write the wake byte only after the snapshot is queued; the shell's self-pipe
+  drains then `try_recv`s in one reactor callback. A fresh socket pair cannot drop the single byte, and
+  a failed fetch leaves the defaults the first frame already painted.
+- **u86 occlusion culling — damaged by the tracker.** A culled window vanishes from the element list and
+  `OutputDamageTracker` damages its previous geometry; only opaque client bodies are trusted as
+  occluders, memory chrome never is.
+- **u82 switcher no-repaint guard — complete key.** `SwitcherFrame::same_content` compares open,
+  immediate, selection, every entry field (full `entries` equality) and every preview (size, WM
+  generation, legacy pixel identity).
+- **u108 id buffers — cleared per slot.** Both the sync panel pass and the async task-slot pass clear and
+  re-`write!` `slot/icon/label/line/progress` ids for each slot; the pager layout/cell ids and the battery
+  menu ids use one cleared buffer or a static table.
+- **u104 progress gate — completion still reports.** The 100 ms gate keeps pending byte/entry counters,
+  `complete` bypasses the interval, and the archiver window clears the bar on `Reply::Done`.
 
 ## Composition shift
 
-Both fixes restore work only on paths that were missing it: a parent commit with a subsurface now
-paints when it can have moved pixels (a commit rate well below the panel damage rate, and only for
-clients that use subsurfaces — layer panels and X11 windows are unaffected), and the explorer asks the
-kernel about target names only while its listing is incomplete (a few ms after a navigation or watcher
-event). The steady-state shares of u95/u104 are not given back.
+- F1 costs one pointer compare per visited surface in the commit walk and restores paints only for
+  commits of windows that own subsurfaces (video/embedded windows), which painted before u95; the
+  damage-only skip survives for the dominant leaf traffic (X11 windows always attach a buffer; shell
+  panels are layer surfaces and have no subsurfaces). No measurable change expected in the idle sample.
+- F2 replaces a set lookup with per-source stats only while a tab is streaming (a few milliseconds after
+  a navigation or watcher event), instead of answering from incomplete rows.
+
+## Verification
+
+- `rustfmt --edition 2024 --check crates/flamewm-wm-wayland/src/handlers.rs` → exit 0 (parses and is
+  format-clean).
+- `rustfmt --edition 2024 --check crates/flamewm-explorer/src/app/transfers.rs` → parses (no parser
+  errors); the file is not rustfmt-normalised repo-wide, so the check reports the pre-existing
+  differences, including the edited line.
+- No `cargo`, no `git`. Compile and tests are the orchestrator's build.
