@@ -33,8 +33,12 @@ pub(super) fn resolve_lock_program(
 
 /// Delay before a crashed lock screen is respawned.
 pub(super) const LOCK_RESPAWN_DELAY: Duration = Duration::from_millis(500);
-/// Respawns allowed inside [`LOCK_RESPAWN_WINDOW`] before supervision gives up.
+/// Respawns allowed inside [`LOCK_RESPAWN_WINDOW`] before the delay grows to
+/// [`LOCK_CRASH_LOOP_DELAY`].
 pub(super) const LOCK_RESPAWN_CAP: usize = 5;
+/// Delay between respawns once the crash-loop cap is reached. Supervision never
+/// gives up on a failed lock, so a crash loop cannot leave the session unlocked.
+pub(super) const LOCK_CRASH_LOOP_DELAY: Duration = Duration::from_secs(5);
 pub(super) const LOCK_RESPAWN_WINDOW: Duration = Duration::from_secs(30);
 
 /// What the lock supervisor does after the lock process exits.
@@ -46,10 +50,14 @@ pub(super) enum LockSupervision {
 
 /// A successful exit means the user unlocked, so supervision ends. Any other
 /// exit (non-zero status or a signal such as SIGKILL, which drops the grabs)
-/// respawns the lock until the crash-loop cap is reached.
+/// respawns the lock; past the crash-loop cap the respawn delay grows instead.
 pub(super) fn decide(exit_status: ExitStatus, recent_restarts: usize) -> LockSupervision {
-    if exit_status.success() || recent_restarts >= LOCK_RESPAWN_CAP {
+    if exit_status.success() {
         LockSupervision::Stop
+    } else if recent_restarts >= LOCK_RESPAWN_CAP {
+        LockSupervision::Respawn {
+            delay: LOCK_CRASH_LOOP_DELAY,
+        }
     } else {
         LockSupervision::Respawn {
             delay: LOCK_RESPAWN_DELAY,
@@ -87,21 +95,22 @@ pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
             restarts.pop_front();
         }
         match decide(status, restarts.len()) {
-            LockSupervision::Stop => {
-                if !status.success() {
+            LockSupervision::Stop => return,
+            LockSupervision::Respawn { delay } => {
+                if delay == LOCK_CRASH_LOOP_DELAY {
                     eprintln!(
-                        "flamewm: lock screen exited ({status}) and crash-loop cap reached; not respawning"
+                        "flamewm: lock screen exited ({status}) in a crash loop; respawning after {delay:?}"
                     );
                 }
-                return;
-            }
-            LockSupervision::Respawn { delay } => {
                 thread::sleep(delay);
                 restarts.push_back(Instant::now());
                 match spawn_lock_process(&program, &[]) {
                     Ok(next) => child = next,
                     Err(error) => {
-                        eprintln!("flamewm: lock screen respawn failed: {error}");
+                        eprintln!(
+                            "flamewm: lock screen respawn failed: {error}; falling back to loginctl"
+                        );
+                        let _ = Command::new("loginctl").arg("lock-session").status();
                         return;
                     }
                 }
@@ -420,11 +429,11 @@ mod lock_supervision_tests {
     }
 
     #[test]
-    fn crash_loop_cap_stops_supervision() {
-        assert_eq!(decide(killed(9), LOCK_RESPAWN_CAP), LockSupervision::Stop);
-        assert_eq!(
-            decide(exited(1), LOCK_RESPAWN_CAP + 3),
-            LockSupervision::Stop
-        );
+    fn crash_loop_keeps_respawning_after_longer_delay() {
+        let backoff = LockSupervision::Respawn {
+            delay: LOCK_CRASH_LOOP_DELAY,
+        };
+        assert_eq!(decide(killed(9), LOCK_RESPAWN_CAP), backoff);
+        assert_eq!(decide(exited(1), LOCK_RESPAWN_CAP + 3), backoff);
     }
 }
