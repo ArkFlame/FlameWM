@@ -111,3 +111,7 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## u154 (frame callbacks)
 - Already implemented: send_frame_callbacks skips hidden and off-output windows (render/mod.rs:984). Occluded-window skip deliberately not added: a covered window that stops getting callbacks stalls its commit. Composition shift: none.
+
+## u151, u153 (audits, no code change)
+- u151 terminal: dirty-line reuse and batched PTY reads already in place (view.rs, app/grid.rs, session.rs).
+- u153 explorer: transfers.rs stats only unknown paths plus one destination stat per user drop; left synchronous on purpose. Composition shift: none.
