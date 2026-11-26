@@ -308,6 +308,8 @@ struct ExplorerApp {
     scroll_drag:Option<(f32,usize)>,
     column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
     dialog:Option<Dialog>, dialog_focus:usize, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
+    /// True between a job's start and its `Done`, so re-committing the identical query does not restart the walk.
+    search_running:bool,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>, device_watch:Option<DeviceWatch>,
     context_place:Option<usize>, trash_base:PathBuf,
     /// Latest sidebar rebuild requested; a worker result with an older id is ignored.

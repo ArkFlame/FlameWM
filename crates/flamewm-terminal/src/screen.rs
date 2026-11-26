@@ -77,6 +77,9 @@ pub struct Screen {
     /// Live-grid rows written since the last `take_dirty`; `dirty_all` covers wholesale changes.
     dirty_rows: Vec<bool>,
     dirty_all: bool,
+    /// Lines captured into scrollback since the last `take_scroll_shift`: every visible row moved up by this many,
+    /// so a renderer reuses its previous rows instead of rebuilding them.
+    scroll_shift: usize,
     /// Last graphic character printed, the source for REP (`CSI b`).
     last_char: Option<char>,
 }
@@ -127,6 +130,7 @@ impl Screen {
             replies: Vec::new(),
             dirty_rows: vec![false; rows],
             dirty_all: true,
+            scroll_shift: 0,
             last_char: None,
         }
     }
@@ -191,11 +195,9 @@ impl Screen {
     /// changed. `out` is cleared first, so a renderer keeps one buffer and a frame allocates nothing for the list.
     pub fn take_dirty_into(&mut self, out: &mut Vec<usize>) -> bool {
         out.clear();
-        if std::mem::take(&mut self.dirty_all) {
-            // The per-row list is unused behind `All`, so skip the scan.
-            self.dirty_rows.fill(false);
-            return true;
-        }
+        let all = std::mem::take(&mut self.dirty_all);
+        // Collect the per-row list even behind `All`: a scroll reuses the shifted rows, and the rows edited in the
+        // same batch must still be rebuilt at their new positions.
         out.extend(
             self.dirty_rows
                 .iter()
@@ -203,10 +205,19 @@ impl Screen {
                 .filter_map(|(row, dirty)| dirty.then_some(row)),
         );
         self.dirty_rows.fill(false);
-        false
+        all
+    }
+
+    /// Lines captured into scrollback since the last take. The rows shown last frame moved up by this many, so only
+    /// the rows the scroll exposed at the bottom are new; taking it resets the count.
+    pub fn take_scroll_shift(&mut self) -> usize {
+        std::mem::take(&mut self.scroll_shift)
     }
 
     fn mark_all(&mut self) {
+        // A wholesale change (resize, mode switch, reset) may remap every line, so a pending scroll shift no longer
+        // describes the visible rows.
+        self.scroll_shift = 0;
         self.dirty_all = true;
     }
 
@@ -392,10 +403,13 @@ impl Screen {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let capture = self.full_region() && !self.alt_active;
         let blank = self.blank();
+        let moved = count.min(bottom - top + 1);
         // Rotate the region and blank the row that wrapped to the bottom in place: no per-line row allocation.
-        // A captured line shifts the window a scrolled-back view shows, so that case still rebuilds everything.
+        // A captured line shifts the window a scrolled-back view shows; record how far so the renderer moves its
+        // rows instead of rebuilding them.
         if capture {
             self.dirty_all = true;
+            self.scroll_shift = self.scroll_shift.saturating_add(moved);
         } else {
             // Only the scrolled region changed; rows outside it (a status line, a fixed header) stay clean.
             self.dirty_rows[top..=bottom].fill(true);
@@ -405,7 +419,7 @@ impl Screen {
         } else {
             &mut self.primary
         };
-        for _ in 0..count.min(bottom - top + 1) {
+        for _ in 0..moved {
             grid[top..=bottom].rotate_left(1);
             let row = &mut grid[bottom];
             let packed = capture.then(|| History::pack(&row[..history_len(row)]));
