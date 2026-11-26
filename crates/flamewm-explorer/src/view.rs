@@ -255,7 +255,11 @@ impl SpaceCache {
 
     /// Stores a worker's sample and clears the matching in-flight marker.
     pub fn store(&mut self, path: PathBuf, value: Option<(u64, u64)>, now: Instant) {
-        if self.pending.as_ref().is_some_and(|(asked, _)| asked == &path) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(asked, _)| asked == &path)
+        {
             self.pending = None;
         }
         self.sample = Some((path, now, value));
@@ -263,7 +267,11 @@ impl SpaceCache {
 
     /// Drops a failed request's in-flight marker so the next projection retries immediately.
     pub fn release(&mut self, path: &Path) {
-        if self.pending.as_ref().is_some_and(|(asked, _)| asked.as_path() == path) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(asked, _)| asked.as_path() == path)
+        {
             self.pending = None;
         }
     }
@@ -292,15 +300,19 @@ mod space_cache_tests {
         // A request is already in flight, so a second frame asks nothing.
         assert_eq!(cache.request(a, start + Duration::from_millis(500)), None);
         // The worker result fills the cache and clears the in-flight marker.
-        cache.store(a.to_path_buf(), Some((1, 2)), start + Duration::from_millis(600));
+        cache.store(
+            a.to_path_buf(),
+            Some((1, 2)),
+            start + Duration::from_millis(600),
+        );
         assert_eq!(cache.get(a), Some((1, 2)));
         assert_eq!(cache.get(Path::new("/b")), None);
-        // A fresh sample needs no request until the TTL expires.
+        // A fresh sample needs no request until the TTL expires after it was taken.
+        assert_eq!(cache.request(a, start + Duration::from_millis(700)), None);
         assert_eq!(
-            cache.request(a, start + Duration::from_millis(700)),
-            None
+            cache.request(a, start + Duration::from_millis(600) + SPACE_TTL),
+            Some(a.to_path_buf())
         );
-        assert_eq!(cache.request(a, start + SPACE_TTL), Some(a.to_path_buf()));
     }
 
     #[test]

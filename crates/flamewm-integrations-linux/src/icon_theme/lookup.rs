@@ -23,11 +23,7 @@ fn chain_indexes(index: &IconLookupIndex) -> Vec<Option<&IconThemeIndex>> {
         .collect()
 }
 
-fn entry_distance(
-    chain: &[Option<&IconThemeIndex>],
-    meta: IconDirMeta,
-    physical: u32,
-) -> u64 {
+fn entry_distance(chain: &[Option<&IconThemeIndex>], meta: IconDirMeta, physical: u32) -> u64 {
     chain
         .get(meta.theme_rank as usize)
         .copied()
@@ -392,9 +388,9 @@ impl IconLookupIndex {
     pub fn lookup(&self, name: &str, physical: u32) -> (Vec<PathBuf>, bool) {
         let (base, explicit) = normalize_parts(name);
         let files = self.files();
-        let Some(entries) = files.get(base.as_ref()) else {
+        let Some(entries) = files.get(&*base) else {
             let mut tail = Vec::new();
-            if let Some(found) = self.pixmaps().get(base.as_ref()) {
+            if let Some(found) = self.pixmaps().get(&*base) {
                 tail.extend(child_filter(found, explicit.as_deref()));
             }
             let hit = !tail.is_empty();
@@ -433,20 +429,18 @@ impl IconLookupIndex {
         // (distance 0) matches anywhere in the chain win in chain order,
         // remaining per-theme bests follow in theme-rank order.
         let mut ordered = Vec::with_capacity(best.len());
-        for slot in &best {
-            if let Some((file, 0, _)) = slot {
-                ordered.push(files.path(base.as_ref(), **file));
+        for entry in best.iter().flatten() {
+            if entry.1 == 0 {
+                ordered.push(files.path(&*base, *entry.0));
             }
         }
-        for slot in &best {
-            if let Some((file, distance, _)) = slot
-                && *distance != 0
-            {
-                ordered.push(files.path(base.as_ref(), **file));
+        for entry in best.iter().flatten() {
+            if entry.1 != 0 {
+                ordered.push(files.path(&*base, *entry.0));
             }
         }
         if ordered.is_empty()
-            && let Some(found) = self.pixmaps().get(base.as_ref())
+            && let Some(found) = self.pixmaps().get(&*base)
         {
             ordered.extend(child_filter(found, explicit.as_deref()));
         }

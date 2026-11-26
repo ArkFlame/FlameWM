@@ -1165,32 +1165,42 @@ pub fn project_battery_menu(
         progress_width(power.percent, track_width),
         BATTERY_PROGRESS_HEIGHT,
     )?;
-    project_glyph_nodes(document, "battery-icon-", glyph, charging)
+    project_glyph_nodes(document, glyph, charging)
 }
 
-/// Shows only `glyph` under `prefix`, using the charging variant while charging.
-/// The popup path may run per system change while open; the tray path uses
-/// static ids instead so an idle tray writes no formatted id.
+/// Shows only `glyph` in the battery menu, using the charging variant while charging.
+/// The popup path may run per system change while open; static menu ids keep a glyph pass
+/// allocation-free, matching the tray path.
 fn project_glyph_nodes(
     document: &mut impl UiDocumentAccess,
-    prefix: &str,
     glyph: crate::taskbar::status::battery::BatteryGlyph,
     charging: bool,
 ) -> Result<(), String> {
     use crate::taskbar::status::battery::BATTERY_GLYPHS;
-    for candidate in BATTERY_GLYPHS {
-        let shown = candidate == glyph;
-        document.visible(
-            &format!("{prefix}{}", candidate.id_suffix()),
-            shown && !charging,
-        )?;
-        document.visible(
-            &format!("{prefix}{}-charging", candidate.id_suffix()),
-            shown && charging,
-        )?;
+    for (candidate, (plain_id, charging_id)) in
+        BATTERY_GLYPHS.iter().zip(BATTERY_MENU_GLYPH_IDS)
+    {
+        let shown = *candidate == glyph;
+        document.visible(plain_id, shown && !charging)?;
+        document.visible(charging_id, shown && charging)?;
     }
     Ok(())
 }
+
+/// Battery menu glyph node ids in `BATTERY_GLYPHS` order: `(plain, charging)`.
+/// Static so an open menu does not format an id per candidate on every repaint.
+const BATTERY_MENU_GLYPH_IDS: [(&str, &str); 10] = [
+    ("battery-icon-caution", "battery-icon-caution-charging"),
+    ("battery-icon-020", "battery-icon-020-charging"),
+    ("battery-icon-030", "battery-icon-030-charging"),
+    ("battery-icon-040", "battery-icon-040-charging"),
+    ("battery-icon-050", "battery-icon-050-charging"),
+    ("battery-icon-060", "battery-icon-060-charging"),
+    ("battery-icon-070", "battery-icon-070-charging"),
+    ("battery-icon-080", "battery-icon-080-charging"),
+    ("battery-icon-090", "battery-icon-090-charging"),
+    ("battery-icon-100", "battery-icon-100-charging"),
+];
 
 /// Height of the battery menu progress fill (matches ui/shell/battery.html).
 pub const BATTERY_PROGRESS_HEIGHT: f32 = 8.0;

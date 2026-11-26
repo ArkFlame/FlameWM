@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::error::{ArchiveError, Result};
 
@@ -54,6 +55,8 @@ pub struct Summary {
 const MIN_BYTE_STEP: u64 = 64 * 1024;
 /// Emissions per operation when the totals are known (the bar moves in 1% steps).
 const EMISSIONS_PER_OPERATION: u64 = 100;
+/// Minimum spacing between two emissions; a fast archive is capped at ten updates a second.
+const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Running totals plus cancel check for one operation.
 ///
@@ -72,6 +75,8 @@ pub struct Reporter<'a> {
     byte_step: u64,
     /// Entry step between emissions; never zero.
     entry_step: usize,
+    /// When the sink last received a snapshot; the constructor's initial one counts.
+    last_emit: Option<Instant>,
 }
 
 impl<'a> Reporter<'a> {
@@ -95,6 +100,7 @@ impl<'a> Reporter<'a> {
             pending_entries: 0,
             byte_step: (bytes_total / EMISSIONS_PER_OPERATION).max(MIN_BYTE_STEP),
             entry_step: (entries_total / EMISSIONS_PER_OPERATION as usize).max(1),
+            last_emit: Some(Instant::now()),
         }
     }
 
@@ -131,14 +137,25 @@ impl<'a> Reporter<'a> {
     fn maybe_emit(&mut self) {
         let complete = self.state.bytes_done >= self.state.bytes_total
             && self.state.entries_done >= self.state.entries_total;
-        if complete
-            || self.pending_bytes >= self.byte_step
-            || self.pending_entries >= self.entry_step
-        {
-            self.pending_bytes = 0;
-            self.pending_entries = 0;
-            (self.sink)(self.state);
+        let stepped =
+            self.pending_bytes >= self.byte_step || self.pending_entries >= self.entry_step;
+        if !complete && !stepped {
+            return;
         }
+        let now = Instant::now();
+        // Completion always reports; an intermediate step waits out the interval, so a fast
+        // archive cannot wake the window more than ten times a second.
+        if !complete
+            && self
+                .last_emit
+                .is_some_and(|last| now.duration_since(last) < MIN_INTERVAL)
+        {
+            return;
+        }
+        self.last_emit = Some(now);
+        self.pending_bytes = 0;
+        self.pending_entries = 0;
+        (self.sink)(self.state);
     }
 }
 

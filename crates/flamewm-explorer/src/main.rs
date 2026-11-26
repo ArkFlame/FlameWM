@@ -205,8 +205,6 @@ enum WorkerResult {
     Space{path:PathBuf,value:Option<(u64,u64)>},
     /// A block device or mount-table change arrived from the kernel; the sidebar reloads.
     DevicesChanged,
-    /// Free/total bytes of one filesystem, sampled on a worker so no projection blocks on statvfs.
-    Space{path:PathBuf,value:Option<(u64,u64)>},
     /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
     DeviceDone(Result<String,String>),
     /// Paste decision from the system clipboard read; `None` means nothing to paste.
@@ -322,9 +320,6 @@ struct ExplorerApp {
     unmounted:Vec<bookmarks::BlockDevice>,
     /// UI-side free-space sample for the status strip. The projection only reads it; `statvfs`
     /// runs on a background lane, so a stale network mount can never stall a frame.
-    space:RefCell<view::SpaceCache>,
-    /// Last free-space sample per visible path; the UI only reads it and asks a worker to refresh it,
-    /// so `statvfs` on a slow network mount never runs on the UI thread.
     space:RefCell<view::SpaceCache>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
     events:Option<(Sender<WorkerResult>,UnixStream)>,

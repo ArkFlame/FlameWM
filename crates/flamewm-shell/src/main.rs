@@ -4,6 +4,8 @@ mod launch_feedback;
 use flamewm_shell::settings_projection;
 
 use std::cell::RefCell;
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -727,17 +729,33 @@ fn execute() -> Result<(), String> {
     let total = flamewm_profiler::ProfilePoint::new("shell.startup.total");
     let total_guard = total.start();
     let root = flamewm_ui_x11::root_geometry().unwrap_or((0, 0));
-    let (snapshot, startup_settings, signal_client, bus_offline) = match load_bus_bootstrap() {
-        Ok((snapshot, settings, signal_client)) => (snapshot, settings, Some(signal_client), false),
+    let (snapshot, signal_client, bus_offline) = match load_panels_bootstrap() {
+        Ok((snapshot, signal_client)) => (snapshot, Some(signal_client), false),
         Err(error) => {
             // Logged once. The retry timer below attaches the bus if it appears later.
             eprintln!(
                 "flamewm-shell: session control bus unavailable, running without it (retry every {}s): {error}",
                 BUS_RETRY_INTERVAL.as_secs()
             );
-            (bus_offline::offline_snapshot(root), None, None, true)
+            (bus_offline::offline_snapshot(root), None, true)
         }
     };
+    // The panel's first frame needs the bootstrap, not the settings snapshot: fetch the live
+    // snapshot on a worker and apply it through one reactor wake once the panel is up.
+    let (startup_settings_tx, startup_settings_rx) =
+        std::sync::mpsc::sync_channel::<SettingsSnapshot>(1);
+    let (mut settings_ready, mut settings_done) = std::os::unix::net::UnixStream::pair()
+        .map_err(|error| format!("create settings wake: {error}"))?;
+    settings_ready
+        .set_nonblocking(true)
+        .map_err(|error| format!("settings wake nonblocking: {error}"))?;
+    std::thread::spawn(move || {
+        if let Some(snapshot) = load_startup_settings() {
+            if startup_settings_tx.try_send(snapshot).is_ok() {
+                let _ = settings_done.write(&[1]);
+            }
+        }
+    });
     flamewm_ui_x11::install_default_layout_measure();
     let mut runtime = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.runtime_create");
@@ -754,11 +772,8 @@ fn execute() -> Result<(), String> {
         ShellSurfaces::create(&mut runtime, &snapshot)?
     };
     let mut start_model = start::state(snapshot.applications.clone());
-    start_model.show_all_by_default =
-        settings_projection::start_show_all_by_default(startup_settings.as_ref());
-    start_model.set_favorites(settings_projection::start_favorites(
-        startup_settings.as_ref(),
-    ));
+    start_model.show_all_by_default = settings_projection::start_show_all_by_default(None);
+    start_model.set_favorites(settings_projection::start_favorites(None));
     {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.panel_project");
         let _s = scope.start();
@@ -767,7 +782,7 @@ fn execute() -> Result<(), String> {
             &surfaces,
             &snapshot,
             &start_model,
-            settings_projection::taskbar_items(startup_settings.as_ref()),
+            settings_projection::taskbar_items(None),
         )?;
     }
     {
@@ -889,10 +904,26 @@ fn execute() -> Result<(), String> {
     let tray_host =
         flamewm_shell::tray_host::TrayHost::connect().map(|host| Rc::new(RefCell::new(host)));
     state.borrow_mut().tray.clone_from(&tray_host);
-    if let Some(snapshot) = startup_settings {
-        // Same entry point as the live SettingsSnapshotChanged path.
-        state.borrow_mut().apply_settings_snapshot(snapshot);
-    }
+    // The worker's answer: drain the wake socket, then install the snapshot exactly like a live
+    // SettingsSnapshotChanged signal. The stream is captured so the registered fd stays open.
+    let settings_state = Rc::clone(&state);
+    let settings_fd = settings_ready.as_raw_fd();
+    reactor
+        .register_raw_fd_with_action(settings_fd, calloop::Interest::READ, move |_, _| {
+            let mut buffer = [0_u8; 8];
+            while let Ok(n) = settings_ready.read(&mut buffer) {
+                if n < buffer.len() {
+                    break;
+                }
+            }
+            if let Ok(snapshot) = startup_settings_rx.try_recv() {
+                settings_state
+                    .borrow_mut()
+                    .apply_settings_snapshot(snapshot);
+            }
+            flamewm_reactor::FdAction::Continue
+        })
+        .map_err(|error| format!("register settings source: {error}"))?;
     if let Some(dispatcher) = state.borrow().dispatcher.as_ref() {
         let watch_fd = dispatcher.wake_fd();
         let wake_dispatcher = Arc::clone(dispatcher);
@@ -1265,21 +1296,51 @@ mod bootstrap_order_tests {
     }
 }
 
+fn connect_control() -> Result<ControlClient, String> {
+    let scope = flamewm_profiler::ProfilePoint::new("shell.startup.control_connect");
+    let _s = scope.start();
+    ControlClient::connect(BusKind::Session)
+        .map_err(|error| format!("connect control session: {}", error.message))
+}
+
+fn load_shell_snapshot(client: &ControlClient) -> Result<ShellSnapshot, String> {
+    let scope = flamewm_profiler::ProfilePoint::new("shell.startup.bootstrap_call");
+    let _s = scope.start();
+    ShellSnapshot::load(client)
+}
+
+/// Startup bootstrap: control signal subscription, then only the panel snapshot. Settings are
+/// fetched afterwards on a worker, so the first panel frame never waits for them.
+fn load_panels_bootstrap() -> Result<(ShellSnapshot, ControlSignalClient), String> {
+    subscribe_then_load(
+        || {
+            ControlSignalClient::connect(BusKind::Session)
+                .map_err(|error| format!("subscribe control signals: {error}"))
+        },
+        || {
+            let client = connect_control()?;
+            load_shell_snapshot(&client)
+        },
+    )
+}
+
+/// The live snapshot installed after the first frame. A failed fetch is nonfatal: the defaults
+/// already projected stay in effect.
+fn load_startup_settings() -> Option<SettingsSnapshot> {
+    let client = connect_control().ok()?;
+    fetch_settings(&client)
+}
+
 /// Control bootstrap and startup settings. Settings are not part of the bootstrap aggregate; a
 /// failed settings fetch is nonfatal and leaves defaults in effect.
 fn load_bootstrap_and_settings() -> Result<(ShellSnapshot, Option<SettingsSnapshot>), String> {
-    let client = {
-        let scope = flamewm_profiler::ProfilePoint::new("shell.startup.control_connect");
-        let _s = scope.start();
-        ControlClient::connect(BusKind::Session)
-            .map_err(|error| format!("connect control session: {}", error.message))?
-    };
-    let snapshot = {
-        let scope = flamewm_profiler::ProfilePoint::new("shell.startup.bootstrap_call");
-        let _s = scope.start();
-        ShellSnapshot::load(&client)?
-    };
-    let settings = match client.call(&flamewm_control_core::ControlRequest::GetSettings) {
+    let client = connect_control()?;
+    let snapshot = load_shell_snapshot(&client)?;
+    Ok((snapshot, fetch_settings(&client)))
+}
+
+fn fetch_settings(client: &ControlClient) -> Option<SettingsSnapshot> {
+    match client.call(&flamewm_control_core::ControlRequest::GetSettings) {
         Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => Some(snapshot),
         Ok(response) => {
             eprintln!("flamewm-shell: GetSettings returned {response:?} (nonfatal)");
@@ -1292,8 +1353,7 @@ fn load_bootstrap_and_settings() -> Result<(ShellSnapshot, Option<SettingsSnapsh
             );
             None
         }
-    };
-    Ok((snapshot, settings))
+    }
 }
 
 /// Late attach for a shell that started without the bus: bootstrap, signal source, then state.

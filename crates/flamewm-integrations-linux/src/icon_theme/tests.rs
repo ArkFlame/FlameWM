@@ -47,6 +47,54 @@ fn parses_directories_and_inherits() {
 }
 
 #[test]
+fn dir_entries_follow_declared_directory_order() {
+    let text = "[Icon Theme]\nDirectories=16x16/apps,missing,scalable/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n\n[scalable/apps]\nSize=48\nType=Scalable\nMinSize=16\nMaxSize=512\n";
+    let index = IconThemeIndex::parse("Test", text);
+    assert_eq!(index.dir_entries.len(), index.directories.len());
+    assert_eq!(index.dir_entries[0].as_ref().map(|dir| dir.size), Some(16));
+    assert!(
+        index.dir_entries[1].is_none(),
+        "declared dir without a section stays a hole, not a shifted entry"
+    );
+    assert_eq!(
+        index.dir_entries[2].as_ref().map(|dir| dir.max_size),
+        Some(512)
+    );
+}
+
+#[test]
+fn full_cache_frees_stale_generations_before_live_entries() {
+    let mut caches = IconThemeCaches::default();
+    let stale: Vec<PathBuf> = (0..EXISTS_CAP)
+        .map(|i| PathBuf::from(format!("/icons/old-{i}.png")))
+        .collect();
+    for path in &stale {
+        caches.store_exists(path, 1, true);
+    }
+    assert_eq!(caches.len(), EXISTS_CAP);
+    let live = Path::new("/icons/new.png");
+    caches.store_exists(live, 2, true);
+    assert_eq!(caches.len(), 1, "stale generation freed whole");
+    assert_eq!(caches.cached_exists(live, 2), Some(true));
+    assert_eq!(caches.cached_exists(&stale[0], 1), None);
+}
+
+#[test]
+fn dir_entries_align_with_directories_by_rank() {
+    let text = "[Icon Theme]\nDirectories=16x16/apps,24x24/apps,scalable/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n\n[scalable/apps]\nSize=48\nType=Scalable\nMinSize=16\nMaxSize=512\n";
+    let index = IconThemeIndex::parse("Test", text);
+    assert_eq!(index.dir_entries.len(), index.directories.len());
+    assert_eq!(index.dir_entries[0].as_ref().map(|d| d.size), Some(16));
+    assert!(
+        index.dir_entries[1].is_none(),
+        "declared without a section, so rank lookup must not fabricate metadata"
+    );
+    let scalable = index.dir_entries[2].as_ref().expect("scalable section");
+    assert_eq!(scalable.max_size, 512);
+    assert_eq!(scalable.distance(48), 0);
+}
+
+#[test]
 fn cycle_terminates() {
     let loader = |name: &str| {
         let inherits = match name {
@@ -100,6 +148,22 @@ fn exists_cache_is_generation_scoped_and_bounded() {
     }
     assert!(caches.len() <= EXISTS_CAP);
     assert_eq!(caches.len(), caches.exists.values().map(HashMap::len).sum());
+}
+
+#[test]
+fn exists_cache_frees_a_dead_generation_before_live_entries() {
+    let mut caches = IconThemeCaches::default();
+    let old = Path::new("/icons/dead-generation.png");
+    caches.store_exists(old, 1, true);
+    for i in 0..EXISTS_CAP {
+        let p = PathBuf::from(format!("/icons/live/{i}.png"));
+        caches.store_exists(&p, 2, true);
+    }
+    // The bumped generation's entries survive; the dead generation is not
+    // keeping stale keys at the cost of live ones.
+    assert!(caches.exists.get(&1).is_none(), "dead generation is freed");
+    assert_eq!(caches.len(), EXISTS_CAP);
+    assert_eq!(caches.cached_exists(old, 2), None);
 }
 
 #[test]
