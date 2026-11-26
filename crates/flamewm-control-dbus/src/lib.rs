@@ -288,19 +288,15 @@ fn name_owner_lost(message: &Message) -> Option<String> {
 
 /// Snapshot revisions already written on this bus connection, per signal family.
 ///
-/// Every snapshot signal carries the snapshot's own compare-and-swap revision (displays carry the
-/// topology generation), which moves exactly when the snapshot content changes. The WM already
-/// coalesces some duplicates per turn, but the same revision can still be published again from a
-/// later turn (a display and a panel publish in one flush, a workspace snapshot in two). Writing it
-/// again re-marshals the whole dictionary for every subscriber for no state change, so an unchanged
-/// revision is dropped before encoding. State lives per connection: a fresh connection always
-/// publishes its first snapshot, and clients fetch their initial state on connect.
+/// A snapshot signal carries the snapshot's compare-and-swap revision, which moves exactly when the
+/// content changes. Duplicates still reach this layer more than once (a panel snapshot queued by
+/// the window flush and again by the panel flush, a system snapshot from two provider updates in one
+/// turn). Writing it again re-marshals the whole dictionary for every subscriber with no state
+/// change, so a repeated revision is dropped before encoding. State lives per connection: a fresh
+/// connection publishes its first snapshot, and clients fetch their initial state on connect.
 #[derive(Debug, Default)]
 struct PublishedRevisions {
-    settings: Option<u64>,
-    workspaces: Option<u64>,
     panels: Option<u64>,
-    displays: Option<u64>,
     topology: Option<u64>,
     system: Option<u64>,
     weather: Option<u64>,
@@ -317,20 +313,15 @@ impl PublishedRevisions {
     }
 
     /// `true` when this signal repeats a snapshot revision already published on this connection.
-    /// Signals without a content revision (windows, shortcuts, switcher, requests) always send.
+    ///
+    /// Only snapshots whose revision is proven to cover the whole payload are coalesced. Window
+    /// snapshots carry a max `state_generation` and workspace snapshots derive `occupancy` from the
+    /// cached windows, so equal revisions can still mean new content; settings snapshots have
+    /// derived keys that are published without a revision bump. Those always send.
     fn already_published(&mut self, signal: &ControlSignal) -> bool {
         match signal {
-            ControlSignal::SettingsSnapshotChanged { snapshot } => {
-                Self::seen(&mut self.settings, snapshot.revision)
-            }
-            ControlSignal::WorkspacesSnapshotChanged { snapshot } => {
-                Self::seen(&mut self.workspaces, snapshot.revision)
-            }
             ControlSignal::PanelsSnapshotChanged { snapshot } => {
                 Self::seen(&mut self.panels, snapshot.revision)
-            }
-            ControlSignal::DisplaysSnapshotChanged { snapshot } => {
-                Self::seen(&mut self.displays, snapshot.generation)
             }
             ControlSignal::TopologyChanged { generation } => {
                 Self::seen(&mut self.topology, *generation)
@@ -685,16 +676,18 @@ mod tests {
     #[test]
     fn repeated_snapshot_revision_is_coalesced_before_encoding() {
         let mut published = PublishedRevisions::default();
-        let snapshot = ControlSignal::SettingsSnapshotChanged {
-            snapshot: flamewm_api::settings::SettingsSnapshot::new(3),
+        let panels = |revision| ControlSignal::PanelsSnapshotChanged {
+            snapshot: flamewm_api::panels::PanelsSnapshot {
+                revision,
+                panels: Vec::new(),
+                tasks: Vec::new(),
+                pinned_apps: Vec::new(),
+            },
         };
-        assert!(!published.already_published(&snapshot));
-        assert!(published.already_published(&snapshot));
+        assert!(!published.already_published(&panels(3)));
+        assert!(published.already_published(&panels(3)));
         // A newer revision is a real state change and is published again.
-        let newer = ControlSignal::SettingsSnapshotChanged {
-            snapshot: flamewm_api::settings::SettingsSnapshot::new(4),
-        };
-        assert!(!published.already_published(&newer));
+        assert!(!published.already_published(&panels(4)));
         // Requests and request-style signals carry no content revision, so they always send.
         let request = ControlSignal::LauncherToggleRequested;
         assert!(!published.already_published(&request));
