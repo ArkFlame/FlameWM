@@ -14,6 +14,16 @@ use flamewm_shell_core::dock::{
 use flamewm_ui_document::UiDocumentAccess;
 use flamewm_ui_x11::{ActionPhase, DockEdge, SurfaceEvent};
 
+/// Metadata the dock needs from the desktop catalog fallback: the label and icon of an app a
+/// pinned slot names but the shell snapshot does not list. The rest of a
+/// `DesktopApplication` (argv, keywords, categories, comment, generic name, startup class) has
+/// no dock consumer, so it is parsed once and dropped instead of retained for the process life.
+pub(crate) struct CatalogEntry {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) icon_name: String,
+}
+
 /// Pointer distance (surface px) before a pressed pinned slot becomes a drag.
 const DRAG_START_PX: f32 = 6.0;
 /// Pointer distance off the bar (surface px) that unpins a dragged slot.
@@ -196,18 +206,33 @@ impl ShellLoop {
         if self.dock_catalog.is_none() {
             self.dock_catalog = Some(
                 flamewm_applications::ApplicationCatalog::discover()
-                    .map(|catalog| catalog.all())
+                    .map(|catalog| {
+                        catalog
+                            .all()
+                            .into_iter()
+                            .map(|app| CatalogEntry {
+                                id: app.id.as_str().to_owned(),
+                                name: app.name,
+                                icon_name: app.icon_name,
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default(),
             );
         }
-        let catalog: &[flamewm_api::applications::DesktopApplication] =
-            self.dock_catalog.as_deref().unwrap_or(&[]);
-        let lookup = |id: &str| {
+        let catalog: &[CatalogEntry] = self.dock_catalog.as_deref().unwrap_or(&[]);
+        let lookup = |id: &str| -> Option<(&str, &str)> {
             snapshot
                 .applications
                 .iter()
-                .chain(catalog.iter())
                 .find(|app| app.id.as_str() == id)
+                .map(|app| (app.name.as_str(), app.icon_name.as_str()))
+                .or_else(|| {
+                    catalog
+                        .iter()
+                        .find(|app| app.id == id)
+                        .map(|app| (app.name.as_str(), app.icon_name.as_str()))
+                })
         };
         let running: Vec<bool> = layout.entries.iter().map(|entry| entry.running).collect();
         let frame = dock::dock_frame(
@@ -312,7 +337,8 @@ impl ShellLoop {
                 if entry.app_id == TRASH_SLOT_ID {
                     return "Trash".to_owned();
                 }
-                lookup(&entry.app_id).map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
+                lookup(&entry.app_id)
+                    .map_or_else(|| entry.app_id.clone(), |(name, _)| name.to_owned())
             })
             .collect();
         // Compare against the last published dock frame by reference, so an idle tick does not
@@ -335,14 +361,14 @@ impl ShellLoop {
                         return flamewm_shell_core::dock::trash_icon_name(self.dock_trash_full)
                             .to_owned();
                     }
-                    lookup(&entry.app_id).map_or_else(String::new, |app| app.icon_name.clone())
+                    lookup(&entry.app_id).map_or_else(String::new, |(_, icon)| icon.to_owned())
                 })
                 .collect();
             let app_labels: Vec<String> = layout
                 .entries
                 .iter()
                 .map(|entry| {
-                    let app_name = lookup(&entry.app_id).map(|app| app.name.as_str());
+                    let app_name = lookup(&entry.app_id).map(|(name, _)| name);
                     dock_slot_label(app_name, &entry.app_id, entry.app_id == TRASH_SLOT_ID)
                 })
                 .collect();

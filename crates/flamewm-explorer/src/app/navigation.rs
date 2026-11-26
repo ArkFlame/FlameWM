@@ -273,7 +273,7 @@ impl ExplorerApp {
                     return;
                 };
                 let fs=self.remote.clone();
-                std::thread::spawn(move||{
+                remote_pool().submit(move||{
                     let result=fs.probe_host_key(&url).wait().map_err(|e|remote::describe(&e));
                     if tx.send(WorkerResult::HostKeyProbed{url,result}).is_ok() {let _=wake.write_all(&[1]);}
                 });
@@ -294,7 +294,7 @@ impl ExplorerApp {
         };
         self.model.status="Saving host key…".into();
         let fs=self.remote.clone();
-        std::thread::spawn(move||{
+        remote_pool().submit(move||{
             let result=fs.trust_host_key(&prompt).wait().map_err(|e|remote::describe(&e));
             if tx.send(WorkerResult::HostKeyTrusted{url,result}).is_ok() {let _=wake.write_all(&[1]);}
         });
@@ -335,7 +335,7 @@ impl ExplorerApp {
             return;
         };
         self.model.status="Opening…".into();
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             let result=mime::open_with_default(&path);
             if tx.send(WorkerResult::OpenResolved{path,result}).is_ok() {let _=wake.write_all(&[1]);}
         });

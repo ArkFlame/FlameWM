@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn truncate_chars_keeps_short_text_and_ellipsises_the_rest() {
+    fn truncate_chars_keeps_short_text_and_truncates_the_rest() {
         assert_eq!(truncate_chars("abc", 8), "abc");
         assert_eq!(truncate_chars("abcdefghij", 3), "abc…");
         assert_eq!(truncate_chars("éééé", 2), "éé…");

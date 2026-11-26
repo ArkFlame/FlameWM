@@ -1,7 +1,7 @@
 //! Background worker loops for the explorer: thumbnails, directory scans and file jobs.
 //! Pure move out of main.rs; each loop talks to the UI through the shared wake socket.
 use super::*;
-use std::sync::{Mutex,OnceLock,PoisonError};
+use std::sync::{Mutex,OnceLock};
 
 /// Longest a decoded thumbnail waits before its result is announced while more jobs are queued. A
 /// fast burst (icons, small SVGs) used to wake the UI and run a full projection per decode; now at
@@ -23,7 +23,7 @@ impl JobPool {
                 .name(format!("{name}-{index}"))
                 .spawn(move||{
                     loop {
-                        let next={queue.lock().unwrap_or_else(PoisonError::into_inner).recv()};
+                        let next={queue.lock().unwrap_or_else(|poisoned|poisoned.into_inner()).recv()};
                         match next {Ok(job)=>job(),Err(_)=>return}
                     }
                 });

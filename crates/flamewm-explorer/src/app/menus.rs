@@ -10,7 +10,7 @@ impl ExplorerApp {
             fn call(&mut self,r:flamewm_control_core::ControlRequest)->Result<flamewm_control_core::ControlResponse,flamewm_control_core::ControlError> {self.0.call(&r)}
         }
         self.model.status="Setting wallpaper…".into();
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             let run=||->Result<(),String>{
                 let desktop=import_for_setting(MediaKind::DesktopWallpaper,&path)?;
                 let lock=import_for_setting(MediaKind::LockWallpaper,&path)?;
@@ -233,7 +233,7 @@ impl ExplorerApp {
         if let Some((tx,wake))=self.events.as_ref()
             && let Ok(mut wake)=wake.try_clone() {
             let tx=tx.clone();
-            std::thread::spawn(move||{
+            aux_pool().submit(move||{
                 let result=properties::read(&path).map_err(|e|e.to_string());
                 if tx.send(WorkerResult::Properties(result)).is_ok() {let _=wake.write_all(&[1]);}
             });
@@ -258,7 +258,7 @@ impl ExplorerApp {
             let events=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?)));
             if let Some((tx,mut wake))=events {
                 let (flag,target)=(Arc::clone(&cancel),props.path.clone());
-                std::thread::spawn(move||{
+                aux_pool().submit(move||{
                     let bytes=properties::recursive_size(&target,&flag);
                     if tx.send(WorkerResult::SizeReady{path:target,bytes}).is_ok() {let _=wake.write_all(&[1]);}
                 });

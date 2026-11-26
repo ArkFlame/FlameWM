@@ -6,8 +6,8 @@
 
 use std::io;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
+use std::sync::mpsc::{self, Sender};
 
 const SCHEMES: [&str; 3] = ["https://", "http://", "file://"];
 

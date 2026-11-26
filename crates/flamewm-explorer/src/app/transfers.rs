@@ -189,7 +189,7 @@ impl ExplorerApp {
     /// Publishes a file list to the system CLIPBOARD on a detached thread, so the UI never waits on it.
     pub(crate) fn publish_system_clipboard(&mut self,paths:Vec<PathBuf>,cut:bool) {
         self.system_spent=None;
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             let op=if cut {FileOp::Cut} else {FileOp::Copy};
             match Clipboard::connect() {
                 Ok(clipboard)=>{let _=clipboard.set_files(&paths,op);},
@@ -207,7 +207,7 @@ impl ExplorerApp {
             return;
         };
         self.model.status="Reading clipboard…".into();
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             // Connect failures and a silent owner (500 ms timeout) both fall back to the in-app clipboard.
             let system=Clipboard::connect().ok().and_then(|clipboard|clipboard.get_files().ok().flatten())
                 .map(|(paths,op)|(paths,op==FileOp::Cut));
