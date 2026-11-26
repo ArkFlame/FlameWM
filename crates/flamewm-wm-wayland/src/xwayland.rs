@@ -939,6 +939,7 @@ mod stacking_tests {
     use flamewm_window_core::SnapTarget;
 
     #[test]
+    #[allow(clippy::assert_is_empty)]
     fn adding_and_removing_dock_strut_reflows_snapped_geometry() {
         let output = Rect::new(0, 0, 1350, 641);
         let floating = Rect::new(80, 80, 600, 400);

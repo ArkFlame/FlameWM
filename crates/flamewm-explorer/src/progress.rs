@@ -42,11 +42,9 @@ impl Snapshot {
         } else {
             (self.items_done, self.items_total)
         };
-        if total == 0 {
-            0
-        } else {
-            (done.min(total) * 100 / total) as u8
-        }
+        (done.min(total) * 100)
+            .checked_div(total)
+            .map_or(0, |share| share as u8)
     }
 
     /// True when the denominator is known, so the bar can show a real share.

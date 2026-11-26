@@ -451,7 +451,7 @@ mod tests {
             &["report".to_owned(), "2024".to_owned()],
         );
         assert_eq!(ranges, vec![(0, 6), (7, 11), (12, 18)]);
-        assert!(highlight_ranges("abc", &["zz".to_owned()]).is_empty());
+        assert_eq!(highlight_ranges("abc", &["zz".to_owned()]).len(), 0);
     }
 
     #[test]

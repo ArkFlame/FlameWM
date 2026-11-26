@@ -176,7 +176,9 @@ impl X11App {
         // SAFETY: matches the XGetImage above.
         unsafe { XDestroyImage(image) };
         Ok(bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|px| u32::from_ne_bytes([px[0], px[1], px[2], px[3]]))
             .collect())
     }

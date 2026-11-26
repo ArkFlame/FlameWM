@@ -133,7 +133,7 @@ fn a_software_glyph_run_paints_real_text() {
         .expect("paint");
 
     assert!(
-        frame.chunks_exact(4).any(|pixel| pixel[3] > 0),
+        frame.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0),
         "the glyph run must ink at least one pixel"
     );
 }

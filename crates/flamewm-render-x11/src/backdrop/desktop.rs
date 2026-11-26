@@ -56,7 +56,9 @@ pub(super) const WALLPAPER_OUTPUTS_MAX: usize = 16;
 /// dropped.
 pub(super) fn wallpaper_outputs_from_words(words: &[u32]) -> Vec<(i32, i32, u32, u32)> {
     words
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rect| rect[2] > 0 && rect[3] > 0)
         .map(|rect| (rect[0] as i32, rect[1] as i32, rect[2], rect[3]))
         .collect()

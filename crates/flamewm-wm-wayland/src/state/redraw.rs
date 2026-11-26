@@ -146,7 +146,7 @@ impl State {
         }
         let armed = self.loop_handle.insert_source(
             smithay::reexports::calloop::timer::Timer::from_duration(
-                WINIT_FRAME_INTERVAL - elapsed,
+                WINIT_FRAME_INTERVAL.saturating_sub(elapsed),
             ),
             |_, (), state| {
                 let _span = crate::profile::timer();

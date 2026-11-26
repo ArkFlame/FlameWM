@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(calendar.cells[1].day, 1);
         assert_eq!(calendar.cells[5].day, 5);
         assert!(calendar.cells[5].today);
-        assert!(calendar.cells[41].month_kind == CalendarMonth::Next);
+        assert_eq!(calendar.cells[41].month_kind, CalendarMonth::Next);
     }
 
     #[test]
@@ -925,9 +925,15 @@ mod tests {
                 ids(&task_visual_states_on_output(&tasks, &on_a, &[], Some(&a))).len(),
                 1
             );
-            assert!(task_visual_states_on_output(&tasks, &on_a, &[], Some(&b)).is_empty());
+            assert_eq!(
+                task_visual_states_on_output(&tasks, &on_a, &[], Some(&b)),
+                []
+            );
             let on_b = [window(1, "B", WindowState::Normal)];
-            assert!(task_visual_states_on_output(&tasks, &on_b, &[], Some(&a)).is_empty());
+            assert_eq!(
+                task_visual_states_on_output(&tasks, &on_b, &[], Some(&a)),
+                []
+            );
             assert_eq!(
                 ids(&task_visual_states_on_output(&tasks, &on_b, &[], Some(&b))).len(),
                 1
@@ -942,9 +948,10 @@ mod tests {
             let on_a = task_visual_states_on_output(&tasks, &windows, &[], Some(&a));
             assert_eq!(on_a.len(), 1);
             assert!(on_a[0].minimized);
-            assert!(
+            assert_eq!(
                 task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")))
-                    .is_empty()
+                    .len(),
+                0
             );
         }
 

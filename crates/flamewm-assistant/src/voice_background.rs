@@ -225,7 +225,7 @@ mod tests {
             Err(AssistantError::Io(SETUP_BUSY.into()))
         });
         assert_eq!(result, Ok(()));
-        assert!(status(&dir).is_empty());
+        assert_eq!(status(&dir).len(), 0);
         let _ = fs::remove_dir_all(&dir);
     }
 

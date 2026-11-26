@@ -61,7 +61,7 @@ pub(crate) fn select_mode(modes: &[ModeCandidate]) -> Option<usize> {
 /// Whether `percent` is an accepted scale: 100..=200 in 5% steps.
 pub(crate) fn is_valid_scale_percent(percent: u16) -> bool {
     (SCALE_MIN_PERCENT..=SCALE_MAX_PERCENT).contains(&percent)
-        && (percent - SCALE_MIN_PERCENT) % SCALE_STEP_PERCENT == 0
+        && (percent - SCALE_MIN_PERCENT).is_multiple_of(SCALE_STEP_PERCENT)
 }
 
 /// The configured scale for `output`, or 100 when it has none or the stored value is invalid.
@@ -312,7 +312,7 @@ pub(crate) fn zone_in_layout(output: Rect, zone: Rect) -> Rect {
 }
 
 /// Unmanaged struts that reserve space on output `name`. A strut belongs to the output its X11
-/// window sits on, the primary when it overlaps none (the rule windows use). Precedent: KWin
+/// window sits on, the primary when it overlaps none (the rule windows use). Precedent: `KWin`
 /// computes a client area per screen by intersecting each strut with the screen it touches.
 pub(crate) fn struts_on_output(
     outputs: &[Rect],
@@ -378,7 +378,10 @@ mod strut_owner_tests {
             struts_on_output(&outputs, &names, "DP-1", &owned, "DP-1"),
             vec![[0, 0, 0, 44]]
         );
-        assert!(struts_on_output(&outputs, &names, "DP-1", &owned, "DP-2").is_empty());
+        assert_eq!(
+            struts_on_output(&outputs, &names, "DP-1", &owned, "DP-2").len(),
+            0
+        );
         assert_eq!(
             struts_on_output(&[], &[], "DP-1", &owned, "DP-1"),
             vec![[0, 0, 0, 44]]
@@ -564,7 +567,7 @@ mod tests {
         assert_eq!(rects[0], Rect::new(0, 0, 1920, 1080));
         assert_eq!(rects[1], Rect::new(1920, 0, 2560, 1440));
         assert_eq!(rects[2], Rect::new(4480, 0, 1280, 1024));
-        assert!(arrange_row(&[]).is_empty());
+        assert_eq!(arrange_row(&[]).len(), 0);
     }
 
     #[test]
@@ -726,7 +729,7 @@ mod tests {
             (3, "DP-2".to_owned()),
         ];
         assert_eq!(homed_on(&homes, "DP-2"), vec![2, 3]);
-        assert!(homed_on(&homes, "HDMI-9").is_empty());
+        assert_eq!(homed_on(&homes, "HDMI-9").len(), 0);
     }
 
     #[test]
@@ -763,6 +766,6 @@ mod tests {
         let dismissed = popups_to_dismiss(popups, "DP-2");
         assert_eq!(dismissed, ["stale-tag", "layer-menu"]);
         let none = popups_to_dismiss(vec![("p", "DP-1".to_owned(), "DP-1".to_owned())], "DP-2");
-        assert!(none.is_empty());
+        assert_eq!(none.len(), 0);
     }
 }

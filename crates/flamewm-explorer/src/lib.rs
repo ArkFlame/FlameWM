@@ -134,8 +134,7 @@ pub fn list_directory_streamed_cancellable(dir: &Path, show_hidden: bool, mut em
             && !emit(std::mem::replace(&mut batch, Vec::with_capacity(LATER_BATCH))) { return Ok(false); }
         if total >= MAX_LISTED_ENTRIES { break; }
     }
-    if !batch.is_empty() && !emit(batch) { return Ok(false); }
-    Ok(true)
+    Ok(!(!batch.is_empty() && !emit(batch)))
 }
 
 pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result<Vec<Entry>> {
@@ -496,6 +495,7 @@ impl Place {
 pub enum SidebarRow { Heading(&'static str), Place(usize) }
 
 /// Groups places into sidebar rows. A heading is emitted only for a non-empty group.
+#[must_use]
 pub fn sidebar_rows(places:&[Place]) -> Vec<SidebarRow> {
     let mut rows=Vec::with_capacity(places.len()+4);
     fill_sidebar_rows(&mut rows,places);
@@ -515,6 +515,7 @@ pub fn fill_sidebar_rows(rows:&mut Vec<SidebarRow>, places:&[Place]) {
         }
     }
 }
+#[must_use]
 pub fn home_dir() -> PathBuf {flamewm_api::paths::home_dir().filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
 /// XDG config root (`XDG_CONFIG_HOME`, else `~/.config`).
 fn config_base(home:&Path) -> PathBuf {

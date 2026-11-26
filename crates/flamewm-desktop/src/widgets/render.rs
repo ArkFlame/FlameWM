@@ -35,6 +35,7 @@ fn surface_key(settings: &SettingsSnapshot) -> SurfaceKey {
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn widget_surface_from(widget: &Widget, surface: &SurfaceKey) -> WidgetSurface {
     let radius = WIDGET_RADIUS;
     if !widget.has_surface() {
@@ -305,6 +306,7 @@ fn sync_card_chrome(
 
 /// Writes the kind-specific content of `widget`. `accent` is resolved once per sync so the
 /// per-slot loop does not re-parse the settings accent colour for every card.
+#[allow(clippy::too_many_arguments)]
 fn sync_card_content(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,

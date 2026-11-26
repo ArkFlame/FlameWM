@@ -15,9 +15,7 @@ fn median(mut samples: Vec<f64>) -> f64 {
 
 fn ensure_fixture(dir: &PathBuf, count: usize) {
     fs::create_dir_all(dir).expect("create fixture dir");
-    let existing = fs::read_dir(dir)
-        .map(std::iter::Iterator::count)
-        .unwrap_or(0);
+    let existing = fs::read_dir(dir).map_or(0, std::iter::Iterator::count);
     if existing >= count {
         return;
     }

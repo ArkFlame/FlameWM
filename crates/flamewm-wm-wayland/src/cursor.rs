@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(FALLBACK_ARROW.len(), height as usize);
         assert!(FALLBACK_ARROW.iter().all(|row| row.len() == width as usize));
         assert_eq!(pixels.len(), (width * height * 4) as usize);
-        for pixel in pixels.chunks_exact(4) {
+        for pixel in pixels.as_chunks::<4>().0 {
             assert!(pixel[..3].iter().all(|channel| *channel <= pixel[3]));
         }
         assert_eq!(
@@ -392,7 +392,7 @@ mod tests {
                 (frame.width * frame.height * 4) as usize
             );
             let mut clear = 0usize;
-            for pixel in frame.pixels.chunks_exact(4) {
+            for pixel in frame.pixels.as_chunks::<4>().0 {
                 // Argb8888 memory order is B, G, R, A.
                 let (b, g, r, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
                 assert!(

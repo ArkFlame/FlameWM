@@ -87,7 +87,9 @@ pub fn unhex(
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = nibble(pair[0]).ok_or_else(|| FlameError::invalid(invalid_digit_error))?;
             let low = nibble(pair[1]).ok_or_else(|| FlameError::invalid(invalid_digit_error))?;

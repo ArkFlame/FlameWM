@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(message.interface().as_deref(), Some(DEVICE_INTERFACE));
         assert_eq!(message.member().as_deref(), Some("Pair"));
         assert_eq!(message.msg_type(), MessageType::MethodCall);
-        assert!(message.get_items().is_empty());
+        assert_eq!(message.get_items().len(), 0);
     }
 
     #[test]

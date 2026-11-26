@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(snapshot.names, vec!["one".to_owned(), "two�".to_owned()]);
         let snapshot = workspace_snapshot(4, 8, b"", 9);
         assert_eq!(snapshot.active_index, 3);
-        assert!(snapshot.names.is_empty());
+        assert_eq!(snapshot.names.len(), 0);
     }
 
     #[test]

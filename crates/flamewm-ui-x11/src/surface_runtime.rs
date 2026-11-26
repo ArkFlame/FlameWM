@@ -299,8 +299,7 @@ impl SurfaceRuntime {
         let role_label = self
             .controller
             .surface_role(surface.0)
-            .map(flamewm_render_x11::surface_role_label)
-            .unwrap_or("unknown");
+            .map_or("unknown", flamewm_render_x11::surface_role_label);
         let span = trace.map_or_else(
             || GeometryTrace::begin(role_label).for_surface(surface.0.get()),
             |t| GeometryTrace {
@@ -536,14 +535,13 @@ impl SurfaceRuntime {
         max_x: f32,
         max_y: f32,
     ) -> flamewm_render_core::ScrollState {
-        let next = self
-            .controller
-            .document_mut(surface.0)
-            .map(|document| document.apply_scroll_delta(node, delta, (max_x, max_y)))
-            .unwrap_or(flamewm_render_core::ScrollState {
+        let next = self.controller.document_mut(surface.0).map_or(
+            flamewm_render_core::ScrollState {
                 offset_x: delta.dx.clamp(0.0, max_x.max(0.0)),
                 offset_y: delta.dy.clamp(0.0, max_y.max(0.0)),
-            });
+            },
+            |document| document.apply_scroll_delta(node, delta, (max_x, max_y)),
+        );
         let key = (surface.0.get(), node);
         if self.scroll_offsets.get(&key).copied().unwrap_or_default() != next {
             self.scroll_offsets.insert(key, next);

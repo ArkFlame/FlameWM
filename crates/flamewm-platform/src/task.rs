@@ -501,7 +501,7 @@ mod tests {
         for snap in &snapshots {
             assert!(strip.remove_window(snap.reference));
         }
-        assert!(strip.entries().is_empty());
+        assert_eq!(strip.entries(), []);
     }
 }
 

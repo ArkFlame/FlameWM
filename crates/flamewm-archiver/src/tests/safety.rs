@@ -223,11 +223,7 @@ fn zip_symlink_entry_cannot_redirect_a_later_write() {
         !outside.join("pwned.txt").exists(),
         "write escaped via zip symlink"
     );
-    assert!(
-        !fs::symlink_metadata(out.join("esc"))
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-    );
+    assert!(!fs::symlink_metadata(out.join("esc")).is_ok_and(|m| m.file_type().is_symlink()));
 }
 
 #[test]

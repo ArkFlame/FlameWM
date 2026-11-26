@@ -574,15 +574,14 @@ impl ShellSurfaces {
             let target = record.placement.panel.geometry;
             let current = runtime
                 .surface_device_rect(record.panel)
-                .map(|rect| {
+                .map_or(target, |rect| {
                     flamewm_api::Rect::new(
                         rect.x as i32,
                         rect.y as i32,
                         rect.width as i32,
                         rect.height as i32,
                     )
-                })
-                .unwrap_or(target);
+                });
             if current == target {
                 continue;
             }
@@ -612,13 +611,13 @@ impl ShellSurfaces {
     /// layout exists (pre-map).
     #[must_use]
     pub fn root_pointer(&self, runtime: &SurfaceRuntime, x: f32, y: f32) -> flamewm_api::Point {
-        let origin = runtime
-            .surface_device_rect(self.selected().panel)
-            .map(|rect| (rect.x as i32, rect.y as i32))
-            .unwrap_or((
+        let origin = runtime.surface_device_rect(self.selected().panel).map_or(
+            (
                 self.selected().placement.panel.geometry.x,
                 self.selected().placement.panel.geometry.y,
-            ));
+            ),
+            |rect| (rect.x as i32, rect.y as i32),
+        );
         flamewm_api::Point::new(origin.0 + x as i32, origin.1 + y as i32)
     }
 
@@ -630,13 +629,13 @@ impl ShellSurfaces {
         y: f32,
     ) -> Option<flamewm_api::Point> {
         let panel = self.for_output(output)?;
-        let origin = runtime
-            .surface_device_rect(panel.panel)
-            .map(|rect| (rect.x as i32, rect.y as i32))
-            .unwrap_or((
+        let origin = runtime.surface_device_rect(panel.panel).map_or(
+            (
                 panel.placement.panel.geometry.x,
                 panel.placement.panel.geometry.y,
-            ));
+            ),
+            |rect| (rect.x as i32, rect.y as i32),
+        );
         Some(flamewm_api::Point::new(
             origin.0 + x as i32,
             origin.1 + y as i32,

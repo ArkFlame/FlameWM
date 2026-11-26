@@ -191,7 +191,7 @@ pub(crate) const COPY_BUFFER: usize = 64 * 1024;
 thread_local! {
     /// Reused copy buffer. An archive of many small files used to allocate and zero a 64 KiB
     /// buffer for every entry; one scratch buffer per worker thread removes that per-entry churn.
-    static COPY_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    static COPY_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Copies `src` into `dst` through the reporter. Returns the bytes copied.
@@ -218,7 +218,7 @@ fn copy_chunks(
     src: &mut dyn Read,
     dst: &mut dyn Write,
     rep: &mut Reporter<'_>,
-    buffer: &mut Vec<u8>,
+    buffer: &mut [u8],
 ) -> Result<u64> {
     let mut total = 0_u64;
     loop {
@@ -299,7 +299,7 @@ mod tests {
     fn cancel_is_visible_to_the_reporter_and_maps_io_failures_to_cancelled() {
         let cancel = CancelToken::new();
         let mut sink = |_progress: Progress| {};
-        let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
+        let reporter = Reporter::new(0, 0, &cancel, &mut sink);
         assert!(reporter.check().is_ok());
         assert!(matches!(
             reporter.fail(io::Error::other("disk")),

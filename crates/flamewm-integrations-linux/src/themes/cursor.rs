@@ -128,7 +128,7 @@ pub fn parse_xcursor_preview(bytes: &[u8]) -> Result<CursorPreview, CursorError>
     let pixels = bytes.get(start..end).ok_or(CursorError::Truncated)?;
     // File pixels are little-endian ARGB words, i.e. bytes B, G, R, A.
     let mut rgba = Vec::with_capacity(need);
-    for px in pixels.chunks_exact(4) {
+    for px in pixels.as_chunks::<4>().0 {
         rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
     }
     Ok(CursorPreview {

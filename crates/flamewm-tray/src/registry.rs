@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(registry.remove_for_name(":1.7"), vec![wellknown]);
         assert_eq!(registry.remove_for_name(":1.5"), vec![key(":1.5")]);
         assert_eq!(registry.registered_strings(), [":1.6/StatusNotifierItem"]);
-        assert!(registry.remove_for_name(":9.9").is_empty());
+        assert_eq!(registry.remove_for_name(":9.9"), []);
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
             registry.keys_for_sender("org.example.Tray", "/StatusNotifierItem"),
             vec![wellknown]
         );
-        assert!(registry.keys_for_sender(":1.20", "/Other").is_empty());
+        assert_eq!(registry.keys_for_sender(":1.20", "/Other"), []);
     }
 
     #[test]

@@ -169,7 +169,12 @@ impl RgbaImage {
             return None;
         }
         let mut pixels = Vec::with_capacity(pixel_count * 4);
-        pixels.extend(rgb.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]));
+        pixels.extend(
+            rgb.as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|c| [c[0], c[1], c[2], 255]),
+        );
         Some(Self {
             width,
             height,
@@ -205,7 +210,11 @@ impl RgbaImage {
 /// True when every RGBA8 pixel in `pixels` has alpha 255.
 #[must_use]
 pub fn rgba8_fully_opaque(pixels: &[u8]) -> bool {
-    pixels.chunks_exact(4).all(|pixel| pixel[3] == 255)
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| pixel[3] == 255)
 }
 
 /// Alpha of the pixel at (`x`, `y`) in a `width` x `height` RGBA8 buffer, or `None` when out of bounds.
@@ -281,7 +290,7 @@ pub fn decode_bytes_at(
 /// (0,0,0,0); no color-key substitution. Working in place avoids a second
 /// full-size buffer for every decoded PNG and SVG raster.
 pub fn unpremultiply_swapped_in_place(pixels: &mut [u8]) {
-    for rgba in pixels.chunks_exact_mut(4) {
+    for rgba in pixels.as_chunks_mut::<4>().0 {
         let a = u16::from(rgba[3]);
         if a == 0 {
             rgba.copy_from_slice(&[0, 0, 0, 0]);

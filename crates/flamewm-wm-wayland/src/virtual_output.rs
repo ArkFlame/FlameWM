@@ -4,8 +4,8 @@
 //! multi-head behavior (`docs/backlog/displays.md`: "the nested winit backend exposes one output").
 //! Setting `FLAMEWM_VIRTUAL_OUTPUTS=<N>` adds `N` extra smithay [`Output`] objects with a fixed mode,
 //! placed side by side after the primary output through [`crate::output_layout::origin_after`]. Each
-//! one gets its own wl_output global, and because the compositor installs
-//! `OutputManagerState::new_with_xdg_output`, each wl_output automatically advertises an xdg-output
+//! one gets its own `wl_output` global, and because the compositor installs
+//! `OutputManagerState::new_with_xdg_output`, each `wl_output` automatically advertises an xdg-output
 //! too (`.vendor/smithay-master/src/wayland/output/xdg.rs:58`). No client changes are needed: a
 //! multi-head client sees the extra outputs with distinct names, modes and logical positions.
 //!
@@ -43,7 +43,7 @@ const MAX_VIRTUAL_OUTPUTS: usize = 16;
 // (its state uses `Rc`/`RefCell`), so a thread-local keeps them alive without adding a field to
 // `State`; the module owns them, and they are released when the loop thread ends.
 thread_local! {
-    static VIRTUAL: RefCell<Vec<(Output, GlobalId)>> = RefCell::new(Vec::new());
+    static VIRTUAL: RefCell<Vec<(Output, GlobalId)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Parses the env value as a count of extra outputs. Empty/whitespace means none; a negative,

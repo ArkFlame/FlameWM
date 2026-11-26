@@ -17,19 +17,19 @@ mod cases {
             let (head, rest) = line.split_at_mut(pad);
             let (body, tail) = rest.split_at_mut(stride);
             body.copy_from_slice(row);
-            for chunk in head.chunks_exact_mut(4) {
+            for chunk in head.as_chunks_mut::<4>().0.iter_mut() {
                 chunk.copy_from_slice(&row[..4]);
             }
-            for chunk in tail.chunks_exact_mut(4) {
+            for chunk in tail.as_chunks_mut::<4>().0.iter_mut() {
                 chunk.copy_from_slice(&row[stride - 4..]);
             }
             let mut sum = [0.0f32; 4];
-            for window in line[..(2 * r + 1) * 4].chunks_exact(4) {
+            for window in line[..(2 * r + 1) * 4].as_chunks::<4>().0 {
                 for c in 0..4 {
                     sum[c] += window[c];
                 }
             }
-            for (x, out) in row.chunks_exact_mut(4).enumerate() {
+            for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 for c in 0..4 {
                     out[c] = sum[c] * inv;
                 }

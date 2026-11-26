@@ -666,7 +666,7 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert_eq!(service.current().revision, 1);
-        assert!(service.current().wallpaper.is_empty());
+        assert_eq!(service.current().wallpaper.len(), 0);
         assert!(!path.exists());
     }
 }

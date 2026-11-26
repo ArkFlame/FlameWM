@@ -19,7 +19,8 @@ impl BatchScratch {
     /// Drops a buffer that grew past the retention cap; smaller ones keep their capacity.
     fn retain(buffer: &mut Vec<u8>) {
         if buffer.capacity() > SCRATCH_RETAIN_BYTES {
-            *buffer = Vec::new();
+            // Reassigning frees the allocation; `clear()` would keep the oversized capacity.
+            drop(std::mem::take(buffer));
         }
     }
 }
@@ -30,7 +31,7 @@ thread_local! {
     static BATCH_SCRATCH: RefCell<BatchScratch> = RefCell::new(BatchScratch::default());
     /// Clip-sized buffer for in-place clipped fills, so they do not force the whole-frame scratch
     /// copy that the blur and backdrop ops need.
-    static INPLACE_REGION: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    static INPLACE_REGION: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Which pixel backend the `renderAcceleration` setting requests. `Cpu` is the default; `Gpu` is
@@ -513,7 +514,7 @@ fn blend_mask_span_with(dst: &mut [u8], mask: &[u8], color: [u8; 4], alpha_of: &
         return;
     }
     let solid = [color[0], color[1], color[2], 255];
-    for (pixel, &coverage) in dst.chunks_exact_mut(4).zip(mask) {
+    for (pixel, &coverage) in dst.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
         match alpha_of[usize::from(coverage)] {
             0 => {}
             255 => pixel.copy_from_slice(&solid),
@@ -534,7 +535,12 @@ fn blend_mask_span_with(dst: &mut [u8], mask: &[u8], color: [u8; 4], alpha_of: &
 /// Premultiplied source-over of `rgba` onto RGBA8 `dst`. Transparent source pixels leave the
 /// destination, opaque ones copy.
 fn blend_image_span(dst: &mut [u8], rgba: &[u8]) {
-    for (pixel, src) in dst.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+    for (pixel, src) in dst
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(rgba.as_chunks::<4>().0.iter())
+    {
         match src[3] {
             0 => {}
             255 => pixel.copy_from_slice(src),
@@ -646,7 +652,7 @@ pub(crate) fn apply_ops_in_place<B: PixelBackend + ?Sized>(
                     let mut region = cell.borrow_mut();
                     let result = fill_clipped_cpu(
                         backend,
-                        &mut *region,
+                        &mut region,
                         pixels,
                         width,
                         height,

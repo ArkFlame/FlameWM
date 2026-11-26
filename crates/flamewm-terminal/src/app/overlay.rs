@@ -82,7 +82,7 @@ impl App {
         let fg = blend(self.palette.foreground, self.palette.background, 2, 5);
         let cells = text.chars().count();
         let overlaid = Row::from(overlay(
-            &**line,
+            line,
             start,
             cells,
             text_run(start, &text, fg, None, false),
@@ -182,14 +182,13 @@ impl App {
                 continue;
             };
             // A live row is borrowed; only a scrollback line is decoded into the reused buffer.
-            let cells: &[crate::screen::Cell] = match screen.live_line(found.line) {
-                Some(line) => line,
-                None => {
-                    if !screen.line_abs_into(found.line, &mut decoded) {
-                        continue;
-                    }
-                    decoded.as_slice()
+            let cells: &[crate::screen::Cell] = if let Some(line) = screen.live_line(found.line) {
+                line
+            } else {
+                if !screen.line_abs_into(found.line, &mut decoded) {
+                    continue;
                 }
+                decoded.as_slice()
             };
             if found.col + found.len > cells.len() {
                 continue;
@@ -208,7 +207,7 @@ impl App {
                 (palette.foreground, palette.selection)
             };
             let run = text_run(col, &text, fg, Some(bg), false);
-            let overlaid = Row::from(overlay(&**row, col, found.len, run));
+            let overlaid = Row::from(overlay(row, col, found.len, run));
             *row = overlaid;
         }
         let position = if search.matches.is_empty() {
@@ -244,7 +243,7 @@ impl App {
                 Some(self.palette.selection),
                 false,
             );
-            let overlaid = Row::from(overlay(&**line, col, width, run));
+            let overlaid = Row::from(overlay(line, col, width, run));
             *line = overlaid;
         }
     }

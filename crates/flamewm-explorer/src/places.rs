@@ -39,11 +39,11 @@ pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
             }
             if field == "-" {
                 separator = Some(index);
-            } else if let Some(at) = separator {
-                if index == at + 2 {
-                    source = Some(field);
-                    break;
-                }
+            } else if let Some(at) = separator
+                && index == at + 2
+            {
+                source = Some(field);
+                break;
             }
         }
         let (Some(mount), Some(source)) = (mount, source) else {
@@ -115,11 +115,11 @@ pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
             }
             if field == "-" {
                 separator = Some(index);
-            } else if let Some(at) = separator {
-                if index == at + 1 {
-                    fstype = Some(field);
-                    break;
-                }
+            } else if let Some(at) = separator
+                && index == at + 1
+            {
+                fstype = Some(field);
+                break;
             }
         }
         let (Some(mount), Some(fstype)) = (mount, fstype) else {
@@ -150,11 +150,7 @@ pub fn gvfs_root() -> PathBuf {
     // The process uid never changes: resolve `/proc/self` once instead of stat-ing it on every
     // sidebar rebuild (mountinfo, block-device and watch events each trigger one).
     static UID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    let uid = *UID.get_or_init(|| {
-        fs::metadata("/proc/self")
-            .map(|meta| meta.uid())
-            .unwrap_or(0)
-    });
+    let uid = *UID.get_or_init(|| fs::metadata("/proc/self").map_or(0, |meta| meta.uid()));
     PathBuf::from(format!("/run/user/{uid}/gvfs"))
 }
 
@@ -538,7 +534,7 @@ fn is_system_partition(node: &Json) -> bool {
     if SYSTEM_PART_TYPES
         .iter()
         .chain(SYSTEM_PART_TYPES_MBR.iter())
-        .any(|known| part_type.eq_ignore_ascii_case(*known))
+        .any(|known| part_type.eq_ignore_ascii_case(known))
     {
         return true;
     }
@@ -549,7 +545,7 @@ fn is_system_partition(node: &Json) -> bool {
     }
     SYSTEM_PART_LABELS
         .iter()
-        .any(|label| node_text(node, "label").eq_ignore_ascii_case(*label))
+        .any(|label| node_text(node, "label").eq_ignore_ascii_case(label))
 }
 
 /// Block devices that are not one ejectable filesystem: device-mapper, MD RAID, network block

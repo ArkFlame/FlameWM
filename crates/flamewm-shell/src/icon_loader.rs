@@ -159,7 +159,7 @@ struct PendingSet {
 }
 
 /// FNV-1a hasher for the five-variant [`IconTarget`] key. The map holds a handful of one-byte
-/// keys, so the default SipHash costs more than the single-entry compare it guards.
+/// keys, so the default `SipHash` costs more than the single-entry compare it guards.
 struct TargetHasher(u64);
 
 impl Default for TargetHasher {
@@ -324,6 +324,7 @@ impl IconLoader {
                 }
             });
         if spawned.is_err() {
+            #[allow(clippy::items_after_statements)]
             static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
             if WARNED.set(()).is_ok() {
                 eprintln!("flamewm-shell: icon worker could not start; the shell runs without themed icons");
@@ -483,7 +484,7 @@ impl IconLoader {
             return Vec::new();
         }
         let mut out = Vec::new();
-        self.wake_drain();
+        let _ = self.wake_drain();
         self.flush_retries();
         loop {
             match self.res_rx.try_recv() {
@@ -511,6 +512,7 @@ impl IconLoader {
                     self.replies_outstanding = 0;
                     self.pending.clear();
                     self.retry.clear();
+                    #[allow(clippy::items_after_statements)]
                     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
                     if WARNED.set(()).is_ok() {
                         eprintln!(
@@ -534,6 +536,7 @@ impl IconLoader {
 
     /// Drains wake bytes. Returns `false` when the writer side is gone: EOF is the only signal a
     /// dead worker gives, and the reactor must stop watching the fd instead of spinning on it.
+    #[must_use]
     pub fn wake_drain(&self) -> bool {
         use std::io::Read;
         // The reader is set nonblocking once in `spawn`; re-arming it per tick was one fcntl

@@ -138,7 +138,7 @@ impl ChatStore {
 
         let entries = scan(&log_path)?;
         let valid_len = entries.last().map_or(0, |e| e.offset + u64::from(e.len));
-        if fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0) != valid_len {
+        if fs::metadata(&log_path).map_or(0, |m| m.len()) != valid_len {
             let file = OpenOptions::new().write(true).open(&log_path)?;
             file.set_len(valid_len)?;
             file.sync_all()?;

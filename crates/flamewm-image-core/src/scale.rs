@@ -60,7 +60,7 @@ fn scale_nearest(source: &RgbaImage, width: u32, height: u32, output: &mut [u8])
     for (y, &source_y) in rows.iter().enumerate() {
         let row = &source.pixels[source_y * src_w * 4..][..src_w * 4];
         let out_row = &mut output[y * target_w * 4..][..target_w * 4];
-        for (pixel, &source_x) in out_row.chunks_exact_mut(4).zip(&columns) {
+        for (pixel, &source_x) in out_row.as_chunks_mut::<4>().0.iter_mut().zip(&columns) {
             pixel.copy_from_slice(&row[source_x * 4..source_x * 4 + 4]);
         }
     }
@@ -230,8 +230,10 @@ mod tests {
         assert!(
             scaled
                 .pixels
-                .chunks_exact(4)
-                .all(|pixel| pixel == [10, 20, 30, 200])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [10, 20, 30, 200])
         );
     }
 
@@ -253,8 +255,10 @@ mod tests {
         assert!(
             scaled
                 .pixels
-                .chunks_exact(4)
-                .all(|p| p == [7, 99, 201, 180])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [7, 99, 201, 180])
         );
     }
 
@@ -265,19 +269,25 @@ mod tests {
         let scaled = scale_rgba(&checker_4x4(), 2, 2, ScaleFilter::Area).unwrap();
         let source_sum: u32 = checker_4x4()
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| u32::from(p[0]))
             .sum();
         let output_sum: u32 = scaled
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| u32::from(p[0]) * 4)
             .sum();
         assert!(source_sum.abs_diff(output_sum) <= 4 * 4);
         assert!(
             scaled
                 .pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| (127..=128).contains(&p[0]))
         );
     }

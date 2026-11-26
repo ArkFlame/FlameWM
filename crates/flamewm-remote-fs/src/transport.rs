@@ -213,7 +213,7 @@ impl Transport {
                 ReadEvent::Idle => {
                     if last.elapsed() > idle {
                         p.kill();
-                        return Err(Error::Timeout(key.host.to_string()));
+                        return Err(Error::Timeout(key.host.clone()));
                     }
                 }
                 ReadEvent::Eof => break,
@@ -338,7 +338,7 @@ impl Connector for SshConnector {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        cmd.status().map(|s| s.success()).unwrap_or(false)
+        cmd.status().is_ok_and(|s| s.success())
     }
 
     fn close(&self, key: &ConnKey) {
@@ -441,9 +441,12 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert!(args.contains(&"BatchMode=yes".to_string()));
-        assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
-        assert!(args.contains(&"ControlPath=/run/u/flamewm-rfs/%C".to_string()));
+        assert!(args.iter().any(|a| a == "BatchMode=yes"));
+        assert!(args.iter().any(|a| a == "StrictHostKeyChecking=yes"));
+        assert!(
+            args.iter()
+                .any(|a| a == "ControlPath=/run/u/flamewm-rfs/%C")
+        );
         assert!(!args.iter().any(|a| a.contains("StrictHostKeyChecking=no")));
         let host_pos = args.iter().position(|a| a == "h.example").unwrap();
         assert_eq!(args[host_pos + 1], "true");

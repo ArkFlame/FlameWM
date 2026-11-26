@@ -22,7 +22,7 @@ fn last_taskbar_or_dock_cannot_be_disabled() {
             )
             .expect_err("the last navigation surface must stay enabled");
         assert!(error.contains("At least one"), "{error}");
-        assert!(written_values(&requests, key).is_empty());
+        assert_eq!(written_values(&requests, key).len(), 0);
     }
 }
 

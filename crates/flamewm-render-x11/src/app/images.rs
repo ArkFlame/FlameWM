@@ -158,7 +158,7 @@ pub(crate) unsafe fn upload_words_image_at(
         unsafe { create_zeroed_ximage(display, visual, depth, what, width, height)? };
     let head = unsafe { &*(ximage as *const XImageHead) };
     let bytes_per_line = head.bytes_per_line as usize;
-    if bytes_per_line % std::mem::size_of::<u32>() != 0 {
+    if !bytes_per_line.is_multiple_of(std::mem::size_of::<u32>()) {
         unsafe { XDestroyImage(ximage) };
         return Err(format!("{what}: XImage row stride is not word-aligned"));
     }

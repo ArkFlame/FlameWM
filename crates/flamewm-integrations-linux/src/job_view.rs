@@ -669,6 +669,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assert_is_empty)]
     fn task_progress_averages_jobs_and_suppresses_unknown_or_ambiguous_identity() {
         let mut jobs = BTreeMap::new();
         jobs.insert("/job/1".to_owned(), job(Some("org.kde.dolphin"), Some(20)));
@@ -679,7 +680,7 @@ mod tests {
         assert_eq!(progress[0].progress.percent(), 50);
 
         jobs.insert("/job/3".to_owned(), job(Some("org.kde.dolphin"), None));
-        assert!(task_progress_for_jobs(&jobs, &one_task).is_empty());
+        assert_eq!(task_progress_for_jobs(&jobs, &one_task).len(), 0);
         jobs.remove("/job/3");
         assert!(
             task_progress_for_jobs(

@@ -547,7 +547,7 @@ mod tests {
         assert!(!outcome.truncated && !outcome.cancelled);
         let with_hidden = search_tree(&root, "secret", true, &cancel);
         assert_eq!(with_hidden.hits.len(), 1);
-        assert!(search_tree(&root, "secret", false, &cancel).hits.is_empty());
+        assert_eq!(search_tree(&root, "secret", false, &cancel).hits.len(), 0);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -557,7 +557,7 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let outcome = search_tree(&root, "report", false, &cancel);
         assert!(outcome.cancelled);
-        assert!(outcome.hits.is_empty());
+        assert_eq!(outcome.hits.len(), 0);
         let _ = fs::remove_dir_all(&root);
     }
 

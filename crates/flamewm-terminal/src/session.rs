@@ -196,7 +196,7 @@ fn read_loop(
         };
         let timespec = timeout.map(|wait| Timespec {
             tv_sec: wait.as_secs() as _,
-            tv_nsec: wait.subsec_nanos() as _,
+            tv_nsec: wait.subsec_nanos().into(),
         });
         let ready = {
             let fd = reader.as_fd();

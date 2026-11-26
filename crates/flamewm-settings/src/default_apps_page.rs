@@ -62,20 +62,9 @@ fn label_for(handlers: &[InstalledHandler], id: Option<&str>) -> String {
     }
 }
 
-/// Current default label for every [`GROUPS`] row, resolved in one pass.
-///
-/// The page projects all rows on each refresh, so the environment, the installed handlers and
-/// the `mimeapps.list` defaults are read once for the whole page instead of once per row.
-/// A failed read leaves every row at "Unavailable" without failing the rest of the paint.
-pub fn labels() -> Vec<String> {
-    let unavailable = || vec!["Unavailable".to_owned(); GROUPS.len()];
-    let Ok(settings) = ApplicationSettings::from_environment() else {
-        return unavailable();
-    };
-    labels_with(&settings)
-}
-
-/// [`labels`] for a facade the caller already opened, so the pages share one environment read.
+/// Current default label for every [`GROUPS`] row, resolved in one pass from a facade the caller
+/// already opened, so the pages share one environment read. A failed read leaves every row at
+/// "Unavailable".
 pub fn labels_with(settings: &ApplicationSettings) -> Vec<String> {
     let unavailable = || vec!["Unavailable".to_owned(); GROUPS.len()];
     let Ok(index) = settings.handler_index() else {
@@ -93,6 +82,7 @@ pub fn labels_with(settings: &ApplicationSettings) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn current_label_with(settings: &ApplicationSettings, slot: usize) -> Result<String, String> {
     let group = GROUPS.get(slot).ok_or("unknown defaults row")?;
     let primary = group.mimes[0];

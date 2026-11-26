@@ -394,7 +394,9 @@ mod tests {
         let mut out = vec![9u8; 1280 * 720 * 4];
         Rasterizer::new(Quality::Half).render(&state, &mut out);
         assert!(
-            out.chunks_exact(4)
+            out.as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 255)
         );
     }
@@ -427,7 +429,7 @@ mod tests {
                     let mut rgba = vec![0u8; 640 * 360 * 4];
                     rast.render(&state, &mut bgra);
                     rast.render_rgba(&state, &mut rgba);
-                    for px in bgra.chunks_exact_mut(4) {
+                    for px in bgra.as_chunks_mut::<4>().0.iter_mut() {
                         px.swap(0, 2);
                     }
                     assert!(bgra == rgba, "quality {quality:?} seed {seed} t {t}s");

@@ -374,7 +374,7 @@ const OPEN_START_SCALE: f64 = 0.6;
 /// painted yet captures as one solid colour (its frame background), so it is not worth animating.
 #[must_use]
 pub fn is_blank_capture(argb: &[u8]) -> bool {
-    let mut pixels = argb.chunks_exact(4);
+    let mut pixels = argb.as_chunks::<4>().0.iter();
     let Some(first) = pixels.next() else {
         return true;
     };
@@ -408,7 +408,9 @@ pub fn is_unpainted_client_capture(
     // merely because the titlebar buttons already differ from its background.
     let stride = (area.len() / 4 / 4096).max(1);
     !area
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .step_by(stride)
         .any(|pixel| pixel != first)
 }
@@ -746,7 +748,7 @@ mod tests {
         a.start(7, Effect::Minimize, t0);
         assert_eq!(a.cancel(7), Some(Effect::Minimize));
         assert_eq!(a.cancel(7), None);
-        assert!(completes(&a.tick(t0 + Duration::from_secs(5))).is_empty());
+        assert_eq!(completes(&a.tick(t0 + Duration::from_secs(5))).len(), 0);
         assert!(!a.is_active());
     }
 
@@ -765,7 +767,7 @@ mod tests {
         let mut drained = a.cancel_all();
         drained.sort_by_key(|(c, _)| *c);
         assert_eq!(drained, vec![(1, Effect::Minimize), (2, Effect::Open)]);
-        assert!(a.cancel_all().is_empty());
+        assert_eq!(a.cancel_all().len(), 0);
         assert!(!a.is_active());
     }
 
@@ -781,7 +783,7 @@ mod tests {
         );
         assert_eq!(a.start(7, Effect::Minimize, t0), Begin::Immediate);
         assert!(!a.is_active());
-        assert!(a.tick(t0).is_empty());
+        assert_eq!(a.tick(t0).len(), 0);
     }
 
     #[test]
@@ -818,7 +820,7 @@ mod tests {
         assert_eq!(a.start(7, Effect::Restore, mid), Begin::Reversed);
         let end = t0 + Duration::from_secs(5);
         assert_eq!(completes(&a.tick(end)), vec![(7, Effect::Restore)]);
-        assert!(completes(&a.tick(end)).is_empty());
+        assert_eq!(completes(&a.tick(end)).len(), 0);
     }
 
     #[test]

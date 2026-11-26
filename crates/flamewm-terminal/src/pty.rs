@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn launch_shell_defaults_to_env_or_sh() {
         let launch = Launch::shell(None);
-        assert!(!launch.program.is_empty());
+        assert_ne!(launch.program, "");
         assert_eq!(launch.args, vec!["-i"]);
     }
 

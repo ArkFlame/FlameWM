@@ -130,7 +130,12 @@ pub(crate) fn capture_drawable_rect(
     if plain_bgrx {
         for (row, out_row) in pixels.chunks_exact_mut(row_out_len).enumerate() {
             let source = &data[row * bytes_per_line..row * bytes_per_line + row_out_len];
-            for (out, pixel) in out_row.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            for (out, pixel) in out_row
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(source.as_chunks::<4>().0.iter())
+            {
                 out.copy_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
             }
         }
@@ -143,7 +148,7 @@ pub(crate) fn capture_drawable_rect(
     }
     for (row, out_row) in pixels.chunks_exact_mut(row_out_len).enumerate() {
         let row_base = row.saturating_mul(bytes_per_line);
-        for (col, out) in out_row.chunks_exact_mut(4).enumerate() {
+        for (col, out) in out_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let off = row_base.saturating_add(col.saturating_mul(bytes_per_pixel));
             if off + bytes_per_pixel > data.len() {
                 unsafe { XDestroyImage(image) };

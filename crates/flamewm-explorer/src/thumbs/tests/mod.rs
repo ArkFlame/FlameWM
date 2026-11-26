@@ -69,7 +69,7 @@ fn entry_of(path: &Path) -> Entry {
             .into_owned(),
         false,
         false,
-        fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+        fs::metadata(path).map_or(0, |m| m.len()),
         None,
     )
 }
@@ -181,7 +181,9 @@ fn decoded_png_is_centred_on_transparent_square() {
     // A 1x1 image is not upscaled: exactly one opaque pixel at the centre, everything else transparent.
     let edge = THUMB_SIZE as usize;
     let opaque: Vec<usize> = thumb
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter(|(_, p)| p[3] == 255)
         .map(|(i, _)| i)
@@ -201,7 +203,12 @@ fn svg_row_renders_at_thumbnail_size() {
     fs::remove_dir_all(&dir).unwrap();
     assert_eq!(thumb.len() as u32, THUMB_SIZE * THUMB_SIZE * 4);
     // An 8x8 source fits inside the box without upscaling: 8*8 opaque pixels, the rest transparent.
-    let opaque = thumb.chunks_exact(4).filter(|p| p[3] == 255).count();
+    let opaque = thumb
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] == 255)
+        .count();
     assert_eq!(opaque, 8 * 8);
 }
 
@@ -213,11 +220,18 @@ fn ico_row_decodes_its_largest_entry() {
     let thumb = render_thumbnail(&ThumbKey::of(&entry_of(&path)).unwrap()).expect("decodes");
     fs::remove_dir_all(&dir).unwrap();
     assert_eq!(thumb.len() as u32, THUMB_SIZE * THUMB_SIZE * 4);
-    let opaque = thumb.chunks_exact(4).filter(|p| p[3] == 255).count();
+    let opaque = thumb
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] == 255)
+        .count();
     assert_eq!(opaque, 4, "a 2x2 icon is never upscaled");
     assert!(
         thumb
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[3] == 255 && p[0] == 255 && p[1] == 255)
     );
 }

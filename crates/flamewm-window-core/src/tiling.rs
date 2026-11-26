@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn master_stack_handles_degenerate_counts_and_factors() {
         let area = Rect::new(0, 0, 101, 51);
-        assert!(master_stack(area, 0, 1, 0.5, 0).is_empty());
+        assert_eq!(master_stack(area, 0, 1, 0.5, 0), []);
         // master_count beyond n means every window is a master (full-width stack of rows).
         let all_masters = master_stack(area, 3, 9, 0.5, 0);
         assert_eq!(all_masters.len(), 3);
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn columns_clamps_column_count_and_empty_input() {
         let area = Rect::new(0, 0, 100, 100);
-        assert!(columns(area, 0, 3, 0).is_empty());
+        assert_eq!(columns(area, 0, 3, 0), []);
         // More columns than windows degenerates to one window per column.
         let wide = columns(area, 2, 7, 0);
         assert_eq!(wide.len(), 2);
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn monocle_zero_windows_is_empty() {
-        assert!(monocle(Rect::new(0, 0, 100, 100), 0, 0).is_empty());
+        assert_eq!(monocle(Rect::new(0, 0, 100, 100), 0, 0), []);
     }
 
     // ------------------------------------------------------------------------ dwindle
@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn dwindle_clamps_ratio_and_empty_input() {
         let area = Rect::new(0, 0, 200, 200);
-        assert!(dwindle(area, 0, 0.5, 0).is_empty());
+        assert_eq!(dwindle(area, 0, 0.5, 0), []);
         for ratio in [-1.0_f32, 0.0, 1.0, 50.0] {
             let tiles = dwindle(area, 3, ratio, 0);
             assert_eq!(tiles.len(), 3);

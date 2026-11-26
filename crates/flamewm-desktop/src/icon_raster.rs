@@ -6,7 +6,7 @@ pub(crate) const ICON_TILE_PX: u32 = 44;
 /// original icon cache. This keeps the drag preview visually consistent with
 /// the 50% label and independent of renderer node-group alpha support.
 pub(crate) fn fade_ghost_pixels(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = u16::from(pixel[3]).div_ceil(2) as u8;
     }
 }

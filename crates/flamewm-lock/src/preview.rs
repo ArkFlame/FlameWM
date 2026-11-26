@@ -66,7 +66,7 @@ mod tests {
         let moved = at(200, 10);
         assert!(!dismisses(Duration::ZERO, &before, &moved));
         assert!(!dismisses(
-            PREVIEW_GRACE - Duration::from_millis(1),
+            PREVIEW_GRACE.checked_sub(Duration::from_millis(1)).unwrap(),
             &before,
             &moved
         ));
@@ -120,7 +120,7 @@ mod tests {
         escape[1] = 1 << 1;
         let idle = at(0, 0);
         assert!(!dismisses(
-            PREVIEW_GRACE - Duration::from_millis(1),
+            PREVIEW_GRACE.checked_sub(Duration::from_millis(1)).unwrap(),
             &idle,
             &PreviewInput::new(0, 0, 0, escape)
         ));

@@ -152,7 +152,7 @@ mod tests {
         assert_eq!(cover.uncovered(), ["HDMI-A-1"]);
         assert!(cover.cover("HDMI-A-1"));
         assert!(cover.is_complete());
-        assert!(cover.uncovered().is_empty());
+        assert_eq!(cover.uncovered().len(), 0);
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(cover.placeholder_outputs(), ["HDMI-A-1"]);
         cover.cover("HDMI-A-1");
         assert!(cover.all_surfaces());
-        assert!(cover.placeholder_outputs().is_empty());
+        assert_eq!(cover.placeholder_outputs().len(), 0);
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         cover.cover_all_uncovered();
         assert!(cover.is_complete());
         assert!(!cover.all_surfaces());
-        assert!(cover.uncovered().is_empty());
+        assert_eq!(cover.uncovered().len(), 0);
         assert_eq!(cover.placeholder_outputs(), ["HDMI-A-1", "eDP-1"]);
         assert_eq!(cover.cover_for("DP-1"), Some(CoverKind::Surface));
     }

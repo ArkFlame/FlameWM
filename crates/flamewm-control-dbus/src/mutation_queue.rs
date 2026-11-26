@@ -99,10 +99,7 @@ impl MutationDispatcher {
     fn spawn_worker(queue: Arc<ControlMutationQueue>, bus: BusKind) -> JoinHandle<()> {
         std::thread::spawn(move || {
             let client = ControlClient::connect(bus).ok();
-            loop {
-                let Some(mutation) = queue.take_pending() else {
-                    break;
-                };
+            while let Some(mutation) = queue.take_pending() {
                 let outcome = match &client {
                     Some(client) => execute_mutation(client, &mutation.request),
                     None => Err(ControlError {

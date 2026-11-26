@@ -251,7 +251,9 @@ mod tests {
         flamewm_image_core::blur::gaussian_blur_rgba(&mut full, width, height, 24.0).unwrap();
         let fast = blurred_argb_words(width, height, rgba, 40, 100);
         let total: u32 = full
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(&fast)
             .map(|(p, w)| {
                 let got = [(w >> 16) & 0xff, (w >> 8) & 0xff, w & 0xff];
@@ -274,7 +276,9 @@ mod tests {
                     .unwrap();
             }
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| {
                     0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2])
                 })
@@ -536,7 +540,7 @@ mod edge_extend_tests {
         assert_eq!(px(0, 0), &[10, 20, 0, 255]); // clamped to source (0,0)
         assert_eq!(px(1, 1), &[10, 20, 0, 255]); // source (0,0)
         assert_eq!(px(3, 2), &[11, 21, 0, 255]); // clamped to source (1,1)
-        assert!(out.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(out.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
 
     #[test]
@@ -545,7 +549,7 @@ mod edge_extend_tests {
         let anchor = root_anchor_rect((-300, -300, 64, 64), (1350, 641));
         let shift = (-300 - i64::from(anchor.0), -300 - i64::from(anchor.1));
         let out = edge_extend_rgba(&src, 1, 1, shift, (64, 64));
-        assert!(out.chunks_exact(4).all(|p| p == [9, 8, 7, 255]));
+        assert!(out.as_chunks::<4>().0.iter().all(|p| *p == [9, 8, 7, 255]));
     }
 
     #[test]

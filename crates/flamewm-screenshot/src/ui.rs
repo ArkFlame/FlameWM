@@ -78,7 +78,7 @@ fn pack_rows(
         .map(|channel| masks[channel] != 0 && (masks[channel] >> shifts[channel]) == 0xff);
     for (row, pixels) in source.chunks_exact(source_stride).enumerate() {
         let row_offset = row * stride;
-        for (column, pixel) in pixels.chunks_exact(4).enumerate() {
+        for (column, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             let red = if exact[0] {
                 u32::from(pixel[0]) << shifts[0]
             } else {
@@ -762,7 +762,12 @@ mod memory_tests {
                 batched.extend(buffer);
             }
             assert_eq!(all, batched);
-            assert!(all.chunks_exact(12).all(|row| row[8..] == [0, 0, 0, 0]));
+            assert!(
+                all.as_chunks::<12>()
+                    .0
+                    .iter()
+                    .all(|row| row[8..] == [0, 0, 0, 0])
+            );
             let red = if little {
                 [0, 0, 255, 0]
             } else {

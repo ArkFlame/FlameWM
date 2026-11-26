@@ -75,7 +75,9 @@ impl OutlineRing {
 
 /// Opaque ARGB8888 bytes (little-endian B, G, R, A) from straight RGBA pixels.
 pub(super) fn opaque_argb_bytes(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|px| [px[2], px[1], px[0], 255])
         .collect()
 }
@@ -84,7 +86,9 @@ pub(super) fn opaque_argb_bytes(rgba: &[u8]) -> Vec<u8> {
 /// element's texture is premultiplied, so a straight-alpha outline would show a bright fringe on
 /// its antialiased arc.
 pub(crate) fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|px| {
             let alpha = u32::from(px[3]);
             let scale = |channel: u8| ((u32::from(channel) * alpha + 127) / 255) as u8;

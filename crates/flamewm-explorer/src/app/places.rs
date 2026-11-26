@@ -10,7 +10,7 @@ impl ExplorerApp {
     }
 
     /// True when `path` is the current Trash `files` folder. Compared by parent and file name so the
-    /// projection (which asks on every full pass) does not build a `trash_base.join("files")` PathBuf.
+    /// projection (which asks on every full pass) does not build a `trash_base.join("files")` `PathBuf`.
     pub(crate) fn is_trash_files(&self,path:&Path)->bool {
         path.parent()==Some(self.trash_base.as_path()) && path.file_name().is_some_and(|name|name.to_str()==Some("files"))
     }

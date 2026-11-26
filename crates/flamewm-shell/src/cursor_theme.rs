@@ -79,6 +79,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assert_is_empty)]
     fn failed_cursor_apply_keeps_old_theme_and_retries() {
         let root =
             std::env::temp_dir().join(format!("flamewm-shell-cursor-retry-{}", std::process::id()));
@@ -101,7 +102,7 @@ mod tests {
             attempts += 1;
             Vec::new()
         });
-        assert!(errors.is_empty());
+        assert_eq!(errors.len(), 0);
         assert_eq!(sync.applied.as_deref(), Some("New"));
         assert_eq!(attempts, 2);
         assert!(sync

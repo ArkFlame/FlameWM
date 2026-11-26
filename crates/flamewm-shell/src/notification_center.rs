@@ -639,7 +639,7 @@ mod tests {
         assert!(projected.contains(&visible("nc-item-1-2-action-1", false)));
 
         hide_inactive_actions(&mut center, |_| false);
-        assert!(center.groups[0].items[0].actions.is_empty());
+        assert_eq!(center.groups[0].items[0].actions.len(), 0);
         assert!(nodes_with_focus(&center, None).contains(&visible("nc-item-1-1-action-1", false)));
         assert!(nodes_with_focus(&center, None).contains(&visible("nc-item-1-1-actions", false)));
     }
@@ -654,7 +654,7 @@ mod tests {
                 Node::Text { id, .. } | Node::Visible { id, .. } | Node::Meter { id, .. } => id,
             })
             .collect();
-        ids.sort();
+        ids.sort_unstable();
         ids.dedup();
         for id in ids {
             assert!(

@@ -57,12 +57,12 @@ mod tests {
             "taskbar panel must exist without a bus"
         );
         assert!(snapshot.workspaces.is_none());
-        assert!(snapshot.applications.is_empty());
+        assert_eq!(snapshot.applications.len(), 0);
     }
 
     #[test]
     fn offline_snapshot_without_root_geometry_creates_no_panel() {
         let snapshot = offline_snapshot((0, 0));
-        assert!(snapshot.panels.panels.is_empty());
+        assert_eq!(snapshot.panels.panels.len(), 0);
     }
 }

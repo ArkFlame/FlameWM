@@ -29,7 +29,9 @@ fn lock_canvas_frames_show_ribbons_at_1s_and_3s() {
     let a = lock_frame(&mut r, 1.0);
     let b = lock_frame(&mut r, 3.0);
     let lit = |buf: &[u8]| {
-        buf.chunks_exact(4)
+        buf.as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0].max(p[1]).max(p[2]) > 0)
             .count()
     };

@@ -91,7 +91,7 @@ impl PixelBackend for CpuPixels {
 fn blend_span(span: &mut [u8], color: [u8; 4], alpha: f32) {
     let inverse = 1.0 - alpha;
     let [cr, cg, cb, ca] = color.map(f32::from);
-    for pixel in span.chunks_exact_mut(4) {
+    for pixel in span.as_chunks_mut::<4>().0 {
         pixel[0] = (cr * alpha + f32::from(pixel[0]) * inverse).round() as u8;
         pixel[1] = (cg * alpha + f32::from(pixel[1]) * inverse).round() as u8;
         pixel[2] = (cb * alpha + f32::from(pixel[2]) * inverse).round() as u8;
@@ -727,7 +727,7 @@ mod tests {
     fn cpu_fill_is_hard_edged_and_composites_source_over() {
         let (width, height) = (16_u32, 16_u32);
         let mut pixels = vec![0_u8; (width * height * 4) as usize];
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0.iter_mut() {
             pixel[3] = 255;
         }
         let rect = RoundedRect {

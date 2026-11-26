@@ -78,9 +78,15 @@ fn named(id: &str, name: &str) -> DesktopApplication {
 #[test]
 fn favorites_entry_is_empty_without_favorites_and_ignores_unknown_ids() {
     let mut model = StartModel::new(vec![named("calc.desktop", "Calculator")]);
-    assert!(start_visible_results(&model, StartCategory::Favorites, "").is_empty());
+    assert_eq!(
+        start_visible_results(&model, StartCategory::Favorites, "").len(),
+        0
+    );
     model.set_favorites(vec!["ghost.desktop".to_owned()]);
-    assert!(start_visible_results(&model, StartCategory::Favorites, "").is_empty());
+    assert_eq!(
+        start_visible_results(&model, StartCategory::Favorites, "").len(),
+        0
+    );
     model.set_favorites(vec!["ghost.desktop".to_owned(), "calc.desktop".to_owned()]);
     let names: Vec<&str> = start_visible_results(&model, StartCategory::Favorites, "")
         .iter()
@@ -90,6 +96,7 @@ fn favorites_entry_is_empty_without_favorites_and_ignores_unknown_ids() {
 }
 
 #[test]
+#[allow(clippy::assert_is_empty)]
 fn favorites_round_trip_through_settings_snapshot() {
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
     let ids = vec!["gimp.desktop".to_owned(), "calc.desktop".to_owned()];
@@ -100,7 +107,7 @@ fn favorites_round_trip_through_settings_snapshot() {
     );
     let read = crate::settings_projection::start_favorites(Some(&snapshot));
     assert_eq!(read, ids);
-    assert!(crate::settings_projection::start_favorites(None).is_empty());
+    assert_eq!(crate::settings_projection::start_favorites(None).len(), 0);
     assert!(
         crate::settings_projection::start_favorites(Some(&SettingsSnapshot::new(1))).is_empty()
     );

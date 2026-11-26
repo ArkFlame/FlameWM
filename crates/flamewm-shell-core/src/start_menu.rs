@@ -627,8 +627,8 @@ mod tests {
         ]);
         assert_eq!(model.favorites(), ["gimp.desktop", "calc.desktop"]);
         model.set_favorites(vec!["ghost.desktop".into()]);
-        assert!(model.favorites().is_empty());
-        assert!(model.category_view(StartCategory::Favorites).is_empty());
+        assert_eq!(model.favorites().len(), 0);
+        assert_eq!(model.category_view(StartCategory::Favorites).len(), 0);
     }
 
     #[test]

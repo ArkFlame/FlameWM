@@ -1204,7 +1204,7 @@ mod tests {
         for id in TRANSIENT_HIDDEN_IDS {
             assert!(probe.hidden.contains(&id.to_owned()), "hides {id}");
         }
-        assert!(probe.shown.is_empty());
+        assert_eq!(probe.shown, [] as [std::string::String; 0]);
         // Showing one restores its authored display; unrelated nodes untouched.
         probe
             .visible("desktop-menu", true)

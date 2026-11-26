@@ -70,7 +70,7 @@ fn escape_clears_the_focused_sidebar_search() {
     application
         .handle_key_event(&release, &mut document)
         .expect("escape");
-    assert!(application.nav_query.is_empty());
+    assert_eq!(application.nav_query.len(), 0);
     assert!(!application.nav_search_focused);
     assert_eq!(document.close_requests, 0);
 }

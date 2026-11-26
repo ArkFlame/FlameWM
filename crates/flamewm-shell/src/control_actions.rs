@@ -144,19 +144,16 @@ pub fn take_network_action_outcomes() -> Vec<NetworkActionOutcome> {
 /// a bus round trip. A refused enqueue becomes an immediate error outcome. Never blocks.
 #[must_use]
 pub fn enqueue_clipboard_list(dispatcher: Option<&Arc<MutationDispatcher>>) -> Option<u64> {
-    match enqueue_action(dispatcher, ControlRequest::ListClipboardHistory) {
-        Some(id) => {
-            PENDING_CLIPBOARD_LISTS.with(|pending| pending.borrow_mut().push(id));
-            Some(id)
-        }
-        None => {
-            CLIPBOARD_LIST_OUTCOMES.with(|outcomes| {
-                outcomes
-                    .borrow_mut()
-                    .push_back(Err("clipboard history query was not submitted".to_owned()));
-            });
-            None
-        }
+    if let Some(id) = enqueue_action(dispatcher, ControlRequest::ListClipboardHistory) {
+        PENDING_CLIPBOARD_LISTS.with(|pending| pending.borrow_mut().push(id));
+        Some(id)
+    } else {
+        CLIPBOARD_LIST_OUTCOMES.with(|outcomes| {
+            outcomes
+                .borrow_mut()
+                .push_back(Err("clipboard history query was not submitted".to_owned()));
+        });
+        None
     }
 }
 

@@ -251,7 +251,6 @@ pub struct RunCache {
     decoded: Line,
     /// Rows rebuilt by the last `update`.
     pub rebuilt: usize,
-    pub dbg: (bool, usize, usize, usize, usize),
 }
 
 impl RunCache {
@@ -331,6 +330,7 @@ impl RunCache {
             if shift > 0
                 && shift < rows
                 && options.view_offset == 0
+                && self.changed.is_empty()
                 && self
                     .top
                     .is_some_and(|old| old.checked_add(shift) == Some(top))
@@ -385,28 +385,20 @@ impl RunCache {
             self.key = Some((palette.clone(), options.view_offset, options.cursor_shape));
         }
         self.rebuilt = stale.iter().filter(|slot| **slot).count();
-        self.dbg = (
-            all_dirty,
-            shift,
-            self.changed.len(),
-            reused,
-            self.changed.first().copied().unwrap_or(usize::MAX),
-        );
         // One decoded-line buffer for the whole update: a scrollback view no longer allocates a `Line` per rebuilt
         // row on top of the runs it produces.
         let mut decoded = std::mem::take(&mut self.decoded);
         for row in (0..rows).filter(|&row| stale[row]) {
             let index = top + row;
             // A live row is handed over borrowed; only a scrollback line is decoded, into the reused buffer.
-            let line: &[Cell] = match screen.live_line(index) {
-                Some(line) => line,
-                None => {
-                    if !screen.line_abs_into(index, &mut decoded) {
-                        self.rows[row] = Row::from(Vec::new());
-                        continue;
-                    }
-                    &decoded
+            let line: &[Cell] = if let Some(line) = screen.live_line(index) {
+                line
+            } else {
+                if !screen.line_abs_into(index, &mut decoded) {
+                    self.rows[row] = Row::from(Vec::new());
+                    continue;
                 }
+                &decoded
             };
             self.rows[row] = Row::from(runs_for_line(line, screen, palette, options, index, row));
         }
@@ -927,32 +919,16 @@ mod tests {
                 cursor_shape: shape,
             };
             let palette = &themes[theme].palette;
-            let before = (
-                cache.key.clone(),
-                cache.top,
-                cache.drops,
-                screen.scrollback_len(),
-                screen.scrollback_drops(),
-                screen.alt_active(),
-            );
             let cached: Vec<Vec<Run>> = cache
                 .update(&mut screen, palette, &options)
                 .iter()
                 .map(|row| row.to_vec())
                 .collect();
-            let direct = grid_runs(&screen, palette, &options);
-            if cached != direct {
-                eprintln!(
-                    "DIVERGE options={options:?} before={before:?} after_top={:?} rebuilt={} sb={} drops={} rows={} dbg={:?}",
-                    cache.top,
-                    cache.rebuilt,
-                    screen.scrollback_len(),
-                    screen.scrollback_drops(),
-                    screen.rows(),
-                    cache.dbg
-                );
-            }
-            assert_eq!(cached, direct, "cache diverged from a full rebuild");
+            assert_eq!(
+                cached,
+                grid_runs(&screen, palette, &options),
+                "cache diverged from a full rebuild"
+            );
             assert!(cache.rebuilt <= screen.rows());
         }
     }

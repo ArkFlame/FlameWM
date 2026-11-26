@@ -87,7 +87,7 @@ fn shadow_image_from_coverage(
 ) -> Result<ShadowImage, String> {
     rgba.clear();
     rgba.resize(w as usize * h as usize * 4, 0);
-    for (out, &coverage) in rgba.chunks_exact_mut(4).zip(mask.iter()) {
+    for (out, &coverage) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(mask.iter()) {
         out.copy_from_slice(&[
             color.r,
             color.g,

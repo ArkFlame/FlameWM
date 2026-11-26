@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-
 use super::*;
 
 // Today: neutral translucent white circle on its marker (or Months/Years tile). Only the active

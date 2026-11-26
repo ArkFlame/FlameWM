@@ -242,7 +242,7 @@ mod tests {
     fn non_display_requests_fall_through_to_the_live_bus() {
         let mut fixture = FixtureDisplays::parse(BODY).expect("fixture parses");
         assert!(fixture.answer(&ControlRequest::GetSettings).is_none());
-        assert!(fixture.records().is_empty());
+        assert_eq!(fixture.records().len(), 0);
     }
 
     #[test]

@@ -284,9 +284,9 @@ Icon=should-not-be-used
         )));
         assert!(candidates.len() <= MAX_ICON_CANDIDATES);
         // Traversal and relative names resolve to nothing at all.
-        assert!(icon_candidates("../secret", &dirs).is_empty());
-        assert!(icon_candidates("sub/dir/icon", &dirs).is_empty());
-        assert!(icon_candidates("", &dirs).is_empty());
+        assert_eq!(icon_candidates("../secret", &dirs).len(), 0);
+        assert_eq!(icon_candidates("sub/dir/icon", &dirs).len(), 0);
+        assert_eq!(icon_candidates("", &dirs).len(), 0);
         assert_eq!(
             icon_candidates("/opt/app/icon.png", &dirs),
             vec![PathBuf::from("/opt/app/icon.png")]

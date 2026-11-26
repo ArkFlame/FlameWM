@@ -40,7 +40,7 @@ impl ExplorerApp {
     pub(crate) fn commit_rename(&mut self,path:PathBuf,content:&str) {
         match flamewm_desktop_core::file_actions::validate_rename_name(content) {
             Ok(name)=>{
-                if path.file_name().map(|n|n.to_string_lossy().into_owned())==Some(name.to_string()) {return;}
+                if path.file_name().map(|n|n.to_string_lossy().into_owned())==Some(name.clone()) {return;}
                 if self.refuse_if_busy() {return;}
                 if let Some(from)=remote::url_of(&path) {
                     match from.parent() {

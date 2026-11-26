@@ -62,8 +62,7 @@ fn xtest_input(canary: &crate::Canary, type_: u8, detail: u8, root_x: i16, root_
             root_y,
             XTEST_DEVICE_ID,
         )
-        .map(|cookie| cookie.check().is_ok())
-        .unwrap_or(false)
+        .is_ok_and(|cookie| cookie.check().is_ok())
 }
 
 /// Deliver real pointer motion through XTEST, never through `SendEvent`.

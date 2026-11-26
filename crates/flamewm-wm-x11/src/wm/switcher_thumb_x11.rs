@@ -146,7 +146,7 @@ mod tests {
         assert_eq!((cap.width, cap.height), (200, 120));
         // 32-bit ZPixmap, little-endian BGRX: green is [B=0, G=255, R=0].
         for row in cap.data.chunks_exact(cap.stride).take(cap.height as usize) {
-            for px in row[..cap.width as usize * 4].chunks_exact(4) {
+            for px in row[..cap.width as usize * 4].as_chunks::<4>().0 {
                 assert_eq!(
                     &px[..3],
                     &[0x00, 0xff, 0x00],
@@ -253,7 +253,11 @@ mod tests {
         };
         let solid = |px: &[u8]| -> Option<[u8; 3]> {
             let first = [px[0], px[1], px[2]];
-            px.chunks_exact(4).all(|p| p[..3] == first).then_some(first)
+            px.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[..3] == first)
+                .then_some(first)
         };
 
         provider.request(key);

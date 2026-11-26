@@ -42,7 +42,14 @@ fn p6_is_scaled_to_requested_physical_size() {
             255, 0, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255
         ]
     );
-    assert!(raster.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+    assert!(
+        raster
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 255)
+    );
 }
 
 #[test]
@@ -54,7 +61,9 @@ fn svg_fixture_preserves_alpha_with_nonblack_pixel() {
     assert!(
         raster
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[3] > 0 && pixel[..3] != [0, 0, 0])
     );
 }
@@ -68,7 +77,9 @@ fn png_fixture_preserves_alpha_with_nonblack_pixel() {
     assert!(
         raster
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[3] > 0 && pixel[..3] != [0, 0, 0])
     );
 }
@@ -79,7 +90,14 @@ fn webp_fixture_uses_shared_image_core_raster_contract() {
     let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("WebP fixture");
     assert_eq!((raster.width, raster.height), (8, 8));
     assert_eq!(raster.pixels.len(), 8 * 8 * 4);
-    assert!(raster.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+    assert!(
+        raster
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 255)
+    );
 }
 
 #[test]
@@ -106,10 +124,18 @@ fn rgba_icons_carry_no_magenta_color_key_dependency() {
     let svg_raster = rasterize_path(&svg, IconSize::new(16, 8)).expect("SVG fixture");
     let transparent_nonmagenta = svg_raster
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|pixel| pixel[3] == 0 && pixel[..3] != [255, 0, 255]);
     assert!(
-        transparent_nonmagenta || svg_raster.pixels.chunks_exact(4).all(|p| p[3] == 255),
+        transparent_nonmagenta
+            || svg_raster
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[3] == 255),
         "alpha channel, not magenta, decides transparency"
     );
 }
@@ -137,8 +163,7 @@ fn test_dir(name: &str) -> PathBuf {
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |value| value.as_nanos())
     ));
     fs::create_dir_all(&dir).expect("temp dir");
     dir
@@ -733,7 +758,9 @@ fn ark_ai_svg_rasterises_at_taskbar_sizes() {
         assert_eq!((raster.width, raster.height), (size, size));
         let opaque_white = raster
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[3] == 255 && pixel[..3] == [255, 255, 255])
             .count();
         assert!(opaque_white > 0, "ARK AI glyph is empty at {size}px");

@@ -78,6 +78,6 @@ mod tests {
 
     #[test]
     fn zero_workspaces_yield_no_cells() {
-        assert!(thumbnail_rects(0, AREA, 10).is_empty());
+        assert_eq!(thumbnail_rects(0, AREA, 10), []);
     }
 }

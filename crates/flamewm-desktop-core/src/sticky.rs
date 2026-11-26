@@ -312,7 +312,7 @@ mod tests {
         store.request_disable();
         assert_eq!(store.notes().len(), 1);
         assert!(store.confirm_disable());
-        assert!(store.notes().is_empty());
+        assert_eq!(store.notes(), []);
         assert!(!store.enabled());
     }
 

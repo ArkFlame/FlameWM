@@ -153,8 +153,7 @@ impl StartupX11Observer {
             .get_window_attributes(window)
             .ok()?
             .reply()
-            .ok()
-            .is_some_and(|attributes| window_is_ready(attributes.map_state));
+            .is_ok_and(|attributes| window_is_ready(attributes.map_state));
         if !ready {
             return None;
         }

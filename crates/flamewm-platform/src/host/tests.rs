@@ -207,7 +207,7 @@ fn unconfirmed_display_mode_reverts_only_after_deadline_tick() {
 
     // Before the 15s confirmation deadline the tick must not revert.
     assert!(!host.tick_display_transactions(14_999).expect("tick"));
-    assert!(host.engine().reverted.is_empty());
+    assert_eq!(host.engine().reverted, []);
 
     // At the deadline the pending transaction is reverted and cleared.
     assert!(host.tick_display_transactions(15_000).expect("tick"));
@@ -529,7 +529,7 @@ fn panel_edge_persists_across_output_disconnect_reconnect() {
         host.resync_panels_for_displays(&disconnected)
             .expect("detach")
     );
-    assert!(host.panels_snapshot().panels.is_empty());
+    assert_eq!(host.panels_snapshot().panels, []);
     assert!(
         host.resync_panels_for_displays(&original)
             .expect("reattach")

@@ -143,7 +143,12 @@ pub fn highlight_pixels(sector: usize, accent: [u8; 3]) -> Vec<u8> {
     if sector >= 8 {
         return pixels;
     }
-    for (out, hits) in pixels.chunks_exact_mut(4).zip(sector_samples()) {
+    for (out, hits) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(sector_samples())
+    {
         let count = hits
             .iter()
             .filter(|hit| usize::from(**hit) == sector)
@@ -154,7 +159,7 @@ pub fn highlight_pixels(sector: usize, accent: [u8; 3]) -> Vec<u8> {
         }
     }
     // Soft accent halo just outside the wedge; never painted under the wedge.
-    for (index, out) in pixels.chunks_exact_mut(4).enumerate() {
+    for (index, out) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         if out[3] != 0 {
             continue;
         }

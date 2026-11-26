@@ -335,7 +335,7 @@ fn platform_start_projects_panel_without_mutating_native_reservations() {
     assert_eq!(snapshot.panels[0].output, OutputId::new("eDP-1"));
     // The default taskbar is classic: flush with the output, no floating gap.
     assert_eq!(snapshot.panels[0].geometry, Rect::new(0, 1036, 1920, 44));
-    assert!(host.engine().reservations.is_empty());
+    assert_eq!(host.engine().reservations, []);
 }
 
 #[test]

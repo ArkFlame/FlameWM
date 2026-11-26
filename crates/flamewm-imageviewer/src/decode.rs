@@ -530,7 +530,12 @@ mod tests {
             },
         );
         assert_eq!(out.len(), 3 * 3 * 4);
-        assert!(out.chunks_exact(4).all(|px| px == [9, 8, 7, 255]));
+        assert!(
+            out.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| *px == [9, 8, 7, 255])
+        );
     }
 
     #[test]

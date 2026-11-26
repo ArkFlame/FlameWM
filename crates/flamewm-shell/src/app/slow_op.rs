@@ -28,8 +28,7 @@ pub(crate) fn shell_slow_note(op: &'static str, started: Instant) {
     }
     let wall_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_millis() as u64);
     if let Some(last) = last_for(op) {
         let prev = last.load(std::sync::atomic::Ordering::Relaxed);
         if wall_ms.saturating_sub(prev) < SHELL_SLOW_COOLDOWN_MS {

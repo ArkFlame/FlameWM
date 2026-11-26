@@ -1306,7 +1306,7 @@ pub fn run() -> Result<(), String> {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         const STOPPED: &str = "Process sampling stopped; showing the last sample";
                         if app.message != STOPPED {
-                            app.message = STOPPED.to_owned();
+                            STOPPED.clone_into(&mut app.message);
                             changed = true;
                         }
                         break;

@@ -72,7 +72,7 @@ pub fn frosted_backdrop(
         out[y * cw * 4..(y + 1) * cw * 4].copy_from_slice(&padded[row..row + cw * 4]);
     }
     if let Some(tint) = tint {
-        for pixel in out.chunks_exact_mut(4) {
+        for pixel in out.as_chunks_mut::<4>().0.iter_mut() {
             composite_over(pixel, tint);
         }
     }
@@ -89,11 +89,21 @@ fn blur_straight(pixels: &mut [u8], w: usize, h: usize, radius: f32) {
     let mut acc = Vec::new();
     if radius <= DOWNSCALE_RADIUS {
         let mut work = vec![0.0f32; w * h * 4];
-        for (src, dst) in pixels.chunks_exact(4).zip(work.chunks_exact_mut(4)) {
+        for (src, dst) in pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(work.as_chunks_mut::<4>().0.iter_mut())
+        {
             premultiply_pixel(src, dst);
         }
         blur_boxes(&mut work, &mut tmp, &mut acc, w, h, sigma);
-        for (src, dst) in work.chunks_exact(4).zip(pixels.chunks_exact_mut(4)) {
+        for (src, dst) in work
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(pixels.as_chunks_mut::<4>().0.iter_mut())
+        {
             unpremultiply_pixel(src, dst);
         }
         return;
@@ -240,7 +250,7 @@ fn bilinear_upscale_straight(
         let row0 = &src[y0 * sw * 4..(y0 + 1) * sw * 4];
         let row1 = &src[y1 * sw * 4..(y1 + 1) * sw * 4];
         let out = &mut dst[y * dw * 4..(y + 1) * dw * 4];
-        for (o, &(x0, x1, tx)) in out.chunks_exact_mut(4).zip(taps.iter()) {
+        for (o, &(x0, x1, tx)) in out.as_chunks_mut::<4>().0.iter_mut().zip(taps.iter()) {
             let a = pixel_f32(row0, x0);
             let b = pixel_f32(row0, x1);
             let c = pixel_f32(row1, x0);

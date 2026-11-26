@@ -242,7 +242,9 @@ pub(crate) fn cmd_j13(canary: &Canary, args: &[String]) {
         let cur: u32 = ws_atom.map_or(0, |a| {
             canary
                 .prop_bytes(canary.root, a)
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .next()
                 .map_or(0, |c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         });
@@ -253,7 +255,9 @@ pub(crate) fn cmd_j13(canary: &Canary, args: &[String]) {
             if let Some(a) = sticky_atom {
                 let bytes = canary.prop_bytes(w.id, canary.intern("_NET_WM_STATE").unwrap_or(a));
                 let cards: Vec<u32> = bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 if cards.contains(&a) {

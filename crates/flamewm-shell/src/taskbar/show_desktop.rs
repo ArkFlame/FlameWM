@@ -74,6 +74,6 @@ mod tests {
             requests,
             vec![ControlRequest::RestoreWindow(WindowRef::new(1, 1))]
         );
-        assert!(saved.is_empty());
+        assert_eq!(saved.len(), 0);
     }
 }

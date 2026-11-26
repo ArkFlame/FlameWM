@@ -169,10 +169,7 @@ fn filesystem_top(path: &Path, device: u64) -> FlameResult<PathBuf> {
             .ok_or_else(|| FlameError::invalid("trash source has no parent"))?
             .to_path_buf()
     };
-    loop {
-        let Some(parent) = current.parent() else {
-            break;
-        };
+    while let Some(parent) = current.parent() {
         if parent == current {
             break;
         }

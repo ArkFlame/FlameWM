@@ -48,7 +48,7 @@ mod cases {
                 let mut pixels = solid(37, 29, rgba);
                 gaussian_blur_rgba(&mut pixels, 37, 29, radius).unwrap();
                 assert!(
-                    pixels.chunks_exact(4).all(|p| p == rgba),
+                    pixels.as_chunks::<4>().0.iter().all(|p| *p == rgba),
                     "rgba {rgba:?} radius {radius}"
                 );
             }
@@ -244,8 +244,10 @@ mod cases {
         assert_eq!((out.width, out.height), (6, 6));
         assert!(
             out.pixels
-                .chunks_exact(4)
-                .all(|p| p == [255, 255, 255, 255])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 255, 255, 255])
         );
     }
 
@@ -266,7 +268,7 @@ mod cases {
     fn frosted_backdrop_tint_composites_over() {
         let src = RgbaImage::from_rgba8(2, 2, solid(2, 2, [255, 255, 255, 255])).unwrap();
         let out = frosted_backdrop(&src, rect(0, 0, 2, 2), 0.0, Some([0, 0, 0, 128]));
-        for p in out.pixels.chunks_exact(4) {
+        for p in out.pixels.as_chunks::<4>().0 {
             assert!((i32::from(p[0]) - 127).abs() <= 1, "{p:?}");
             assert_eq!(p[3], 255);
         }
@@ -355,11 +357,21 @@ mod cases {
                 pixels[i..i + 3].fill(255);
             }
         }
-        let total: u64 = pixels.chunks_exact(4).map(|p| u64::from(p[0])).sum();
+        let total: u64 = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u64::from(p[0]))
+            .sum();
         for radius in [8.0f32, 12.0, 20.0] {
             let mut blurred = pixels.clone();
             gaussian_blur_rgba(&mut blurred, N, N, radius).unwrap();
-            let after: u64 = blurred.chunks_exact(4).map(|p| u64::from(p[0])).sum();
+            let after: u64 = blurred
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| u64::from(p[0]))
+                .sum();
             let error = (after as f64 - total as f64).abs() / total as f64;
             assert!(error < 0.01, "radius {radius}: energy error {error}");
         }

@@ -582,7 +582,7 @@ mod tests {
         search.submit(search_fixture(Ok(Vec::new())));
         search.poll();
         assert_eq!(search.status, SearchStatus::NoMatches);
-        assert!(search.results.is_empty());
+        assert_eq!(search.results.len(), 0);
 
         search.submit(search_fixture(Err(WeatherError::Transport)));
         search.poll();
@@ -610,8 +610,8 @@ mod tests {
         search.submit(search_fixture(Ok(vec![location()])));
         search.poll();
         search.reset();
-        assert!(search.query.is_empty());
-        assert!(search.results.is_empty());
+        assert_eq!(search.query.len(), 0);
+        assert_eq!(search.results.len(), 0);
         assert_eq!(search.status, SearchStatus::Idle);
     }
 }

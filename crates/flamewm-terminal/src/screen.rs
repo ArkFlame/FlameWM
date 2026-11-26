@@ -435,9 +435,10 @@ impl Screen {
             grid[top..=bottom].rotate_left(1);
             if capture {
                 // The damage bitmap follows the content: a row written before the scroll must be rebuilt where it
-                // moved to, and the row the scroll blanked is new.
+                // moved to. The row the scroll blanked is not marked here: `RunCache` rebuilds the rows a reused
+                // window exposes itself, and leaving the bitmap free of that mark lets it tell a pure scroll from a
+                // batch that also edited rows (which rebuilds instead of rotating).
                 self.dirty_rows[top..=bottom].rotate_left(1);
-                self.dirty_rows[bottom] = true;
             }
             let row = &mut grid[bottom];
             let packed = capture.then(|| History::pack(&row[..history_len(row)]));

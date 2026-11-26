@@ -229,10 +229,10 @@ impl SystemService {
             }
             SystemAction::ConnectWifi { generation, .. }
             | SystemAction::SubmitNetworkSecret { generation, .. }
-            | SystemAction::CancelNetworkSecret { generation, .. } => {
-                if *generation != self.snapshot.network.generation {
-                    return Err(FlameError::stale("stale NetworkManager service generation"));
-                }
+            | SystemAction::CancelNetworkSecret { generation, .. }
+                if *generation != self.snapshot.network.generation =>
+            {
+                return Err(FlameError::stale("stale NetworkManager service generation"));
             }
             _ => {}
         }

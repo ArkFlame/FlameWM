@@ -172,7 +172,9 @@ mod tests {
     fn alpha_coverage(image: &RgbaImage) -> u32 {
         image
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[3] > 8)
             .count() as u32
     }
@@ -180,7 +182,7 @@ mod tests {
     fn mean_rgb(image: &RgbaImage) -> (f32, f32, f32, u32) {
         let mut sum = [0u64; 4];
         let mut count = 0u32;
-        for pixel in image.pixels.chunks_exact(4) {
+        for pixel in image.pixels.as_chunks::<4>().0 {
             if pixel[3] > 8 {
                 sum[0] += u64::from(pixel[0]);
                 sum[1] += u64::from(pixel[1]);
@@ -207,7 +209,9 @@ mod tests {
         assert!(
             image
                 .pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| pixel[3] > 0 && pixel[..3] != [0, 0, 0])
         );
     }
@@ -264,7 +268,9 @@ mod tests {
         let count_near = |image: &RgbaImage, target: [u8; 3], tol: i16| {
             image
                 .pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[3] > 8 && near([pixel[0], pixel[1], pixel[2]], target, tol))
                 .count()
         };

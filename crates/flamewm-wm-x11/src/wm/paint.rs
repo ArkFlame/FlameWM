@@ -587,7 +587,9 @@ mod chrome_pacing_tests {
 /// Server `ZPixmap` bytes (BGRX on a little-endian server) to straight RGB triples kept in RGBA
 /// stride so the frame-band ring can index a pixel uniformly.
 fn bgrx_to_rgb(data: &[u8]) -> Vec<u8> {
-    data.chunks_exact(4)
+    data.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|px| [px[2], px[1], px[0], 255])
         .collect()
 }

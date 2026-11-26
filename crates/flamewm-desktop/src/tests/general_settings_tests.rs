@@ -4,7 +4,7 @@ use super::general_settings;
 fn general_settings_intent_has_no_page_deep_link() {
     let intent = general_settings();
     assert_eq!(intent.program, "flamewm-settings");
-    assert!(intent.argv.is_empty());
+    assert_eq!(intent.argv, [] as [std::string::String; 0]);
     assert!(intent.cwd.is_none());
 }
 

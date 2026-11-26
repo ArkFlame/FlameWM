@@ -86,7 +86,7 @@ pub(crate) fn downscale_box(
             let mut acc = [0u32; 4];
             for sy in y0..y1 {
                 let row = &src[sy * stride..sy * stride + row_bytes];
-                for px in row[x0 * 4..x1 * 4].chunks_exact(4) {
+                for px in row[x0 * 4..x1 * 4].as_chunks::<4>().0 {
                     for (a, c) in acc.iter_mut().zip(px) {
                         *a += u32::from(*c);
                     }

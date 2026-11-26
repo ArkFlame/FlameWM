@@ -311,7 +311,10 @@ fn other_group_opener_is_not_consumed_and_latch_survives() {
 #[test]
 fn latch_expires_so_a_later_genuine_click_reopens() {
     let now = Instant::now();
-    let inside = now + (DISMISS_LATCH_TTL - Duration::from_millis(1));
+    let inside = now
+        + (DISMISS_LATCH_TTL
+            .checked_sub(Duration::from_millis(1))
+            .unwrap());
     let expired = now + DISMISS_LATCH_TTL + Duration::from_millis(1);
     let mut latch = latch_for("start", now);
     assert!(latch_consumes_opener(&mut latch, "start.toggle", inside));

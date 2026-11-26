@@ -67,7 +67,7 @@ impl ControlServer {
             // Compare the borrowed path in place: this runs for every bus message the WM
             // connection receives, so formatting two `String`s per message was pure churn.
             if message.msg_type() != MessageType::MethodCall
-                || !message.path().is_some_and(|path| path == OBJECT_PATH)
+                || message.path().is_none_or(|path| path != OBJECT_PATH)
             {
                 return MessageDisposition::Unhandled;
             }
@@ -269,12 +269,12 @@ const OWNER_CHANGED_RULE: &str = "type='signal',sender='org.freedesktop.DBus',in
 /// Returns the unique name when a `NameOwnerChanged` signal reports that name lost its owner.
 fn name_owner_lost(message: &Message) -> Option<String> {
     if message.msg_type() != MessageType::Signal
-        || !message
+        || message
             .interface()
-            .is_some_and(|interface| interface == "org.freedesktop.DBus")
-        || !message
+            .is_none_or(|interface| interface != "org.freedesktop.DBus")
+        || message
             .member()
-            .is_some_and(|member| member == "NameOwnerChanged")
+            .is_none_or(|member| member != "NameOwnerChanged")
     {
         return None;
     }
@@ -475,7 +475,7 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     if message.msg_type() != MessageType::Signal {
         return None;
     }
-    if !message.path().is_some_and(|path| path == OBJECT_PATH) {
+    if message.path().is_none_or(|path| path != OBJECT_PATH) {
         return None;
     }
     let interface = message.interface()?.to_string();
@@ -520,7 +520,7 @@ fn to_item(value: WireValue) -> Result<MessageItem, String> {
         }
         WireValue::Dict(v) => {
             MessageItem::from_dict(v.into_iter().map(|(k, v)| to_item(v).map(|v| (k, v))))
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.clone())
         }
     }
 }
@@ -528,7 +528,7 @@ fn to_item(value: WireValue) -> Result<MessageItem, String> {
 fn array(values: Vec<MessageItem>, signature: &str) -> Result<MessageItem, String> {
     MessageItemArray::new(
         values,
-        Signature::new(signature).map_err(|error| error.to_string())?,
+        Signature::new(signature).map_err(|error| error.clone())?,
     )
     .map(MessageItem::Array)
     .map_err(|error| format!("{error:?}"))
@@ -970,7 +970,7 @@ mod tests {
             Ok(other) => panic!("unexpected successful response: {other:?}"),
             Err(_) => Vec::<WireSignal>::new(),
         };
-        assert!(signals.is_empty());
+        assert_eq!(signals, []);
     }
 
     // CONTRACT-REGRESSION: every committed shortcut mutation publishes ShortcutsChanged with the

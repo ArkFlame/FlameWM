@@ -533,7 +533,7 @@ fn compose_per_monitor(
         height,
         pixels: vec![0; usize::try_from(width.checked_mul(height)?.checked_mul(4)?).ok()?],
     };
-    for pixel in canvas.pixels.chunks_exact_mut(4) {
+    for pixel in canvas.pixels.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&BACKGROUND);
     }
     let mut composed = false;

@@ -433,7 +433,9 @@ fn t07_client_pixels(canary: &crate::Canary, client: &crate::WinInfo) -> Result<
     }
     Ok(reply
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .take(w * h)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]) & 0x00ff_ffff)
         .collect())

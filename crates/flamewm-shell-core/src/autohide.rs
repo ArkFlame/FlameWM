@@ -256,7 +256,11 @@ mod tests {
         let t = settle(&mut m, t, SLIDE);
         assert_eq!(m.offset(), 0.0);
         m.set_pointer(PointerSurface::Reveal, false, t);
-        let t = settle(&mut m, t, HIDE_DELAY - Duration::from_millis(50));
+        let t = settle(
+            &mut m,
+            t,
+            HIDE_DELAY.checked_sub(Duration::from_millis(50)).unwrap(),
+        );
         assert!(!m.wants_hidden(t), "still inside the grace period");
         assert_eq!(m.offset(), 0.0);
         settle(&mut m, t, Duration::from_millis(100) + SLIDE);

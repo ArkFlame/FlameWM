@@ -79,7 +79,7 @@ fn diff_rubber_hits(
         } else {
             selection.deselect(&item.id);
         }
-        on_toggle(&item.slot, hit)?;
+        on_toggle(item.slot, hit)?;
     }
     Ok(())
 }
@@ -140,9 +140,9 @@ pub(super) fn sync_selection_visuals(
 ) -> Result<(), String> {
     let (fill_alpha, accent) = selection_style(&state.settings);
     let previous = std::mem::take(&mut state.selection_visuals);
-    let style_changed = previous.as_ref().map_or(true, |projected| {
-        projected.fill_alpha != fill_alpha || projected.accent != accent
-    });
+    let style_changed = previous
+        .as_ref()
+        .is_none_or(|projected| projected.fill_alpha != fill_alpha || projected.accent != accent);
     if !style_changed
         && previous
             .as_ref()

@@ -171,8 +171,8 @@ impl UiCache {
                 continue;
             }
             run_id_into(&mut id, row, slot);
-            match fitted.get(slot) {
-                Some(run) => Self::write_run(
+            if let Some(run) = fitted.get(slot) {
+                Self::write_run(
                     doc,
                     cell,
                     &id,
@@ -180,12 +180,11 @@ impl UiCache {
                     row,
                     &mut self.text,
                     &mut self.slots[base + slot],
-                )?,
-                None => {
-                    doc.visible(&id, false)?;
-                    // Forget the written attributes, so showing this node again sets all of them.
-                    self.slots[base + slot] = SlotState::default();
-                }
+                )?;
+            } else {
+                doc.visible(&id, false)?;
+                // Forget the written attributes, so showing this node again sets all of them.
+                self.slots[base + slot] = SlotState::default();
             }
         }
         self.rows[row] = Some(runs.clone());

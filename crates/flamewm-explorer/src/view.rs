@@ -216,6 +216,7 @@ pub const SPACE_TTL: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub struct SpaceCache {
     /// Last sample: the path it describes, when it was taken, and its result.
+    #[allow(clippy::type_complexity)]
     sample: Option<(PathBuf, Instant, Option<(u64, u64)>)>,
     /// The path a worker is sampling, with the instant of the request: a lost result self-heals
     /// after `SPACE_TTL` instead of blocking refreshes forever.

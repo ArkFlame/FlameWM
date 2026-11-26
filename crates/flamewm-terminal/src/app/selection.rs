@@ -61,14 +61,13 @@ impl App {
         for index in span.start.0..=span.end.0 {
             // A live row is borrowed straight from the grid; only a scrollback line is decoded into the reused buffer,
             // so copying the visible screen no longer duplicates its cells first.
-            let line: &[crate::screen::Cell] = match screen.live_line(index) {
-                Some(line) => line,
-                None => {
-                    if !screen.line_abs_into(index, &mut decoded) {
-                        continue;
-                    }
-                    decoded.as_slice()
+            let line: &[crate::screen::Cell] = if let Some(line) = screen.live_line(index) {
+                line
+            } else {
+                if !screen.line_abs_into(index, &mut decoded) {
+                    continue;
                 }
+                decoded.as_slice()
             };
             if !first {
                 out.push('\n');

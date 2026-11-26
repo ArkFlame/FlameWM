@@ -11,7 +11,7 @@ mod tests {
         let formats = offered_formats(Path::new("A.PNG"));
         assert!(!formats.contains(&"png"));
         assert!(formats.contains(&"webp"));
-        assert!(offered_formats(Path::new("folder")).is_empty());
+        assert_eq!(offered_formats(Path::new("folder")).len(), 0);
         assert!(!offered_formats(Path::new("readme.txt")).contains(&"webp"));
         assert!(!offered_formats(Path::new("photo.JPEG")).contains(&"jpg"));
         assert!(is_temporary_convert_name(std::ffi::OsStr::new(
@@ -99,7 +99,7 @@ mod document_format_contracts {
     }
     #[test]
     fn unknown_binary_never_offers_document_conversion() {
-        assert!(offered_formats(Path::new("program.bin")).is_empty());
+        assert_eq!(offered_formats(Path::new("program.bin")).len(), 0);
     }
 }
 
@@ -114,7 +114,7 @@ mod media_format_contracts {
             assert!(!targets.contains(source), "{source} offers itself");
             assert!(!targets.is_empty() && targets.len() <= 8, "{source}");
         }
-        assert!(media_targets("png").is_empty());
+        assert_eq!(media_targets("png").len(), 0);
         assert_eq!(media_targets("srt"), vec!["vtt"]);
         assert_eq!(media_targets("vtt"), vec!["srt"]);
         assert!(media_source(Path::new("cues.SRT")));
@@ -132,7 +132,7 @@ mod media_format_contracts {
             assert!(media_codec_args(target).contains(&"-vn"), "{target}");
         }
         assert!(media_codec_args("gif").contains(&"-an"));
-        assert!(media_codec_args("unknown").is_empty());
+        assert_eq!(media_codec_args("unknown").len(), 0);
     }
     #[test]
     fn ffmpeg_converts_audio_beside_the_source_without_overwriting() {
@@ -177,7 +177,7 @@ mod media_format_contracts {
             Tool::Zip,
             Tool::Sha256,
         ] {
-            assert!(!tool.label().is_empty());
+            assert_ne!(tool.label().len(), 0);
         }
         assert!(
             offered_tools(Path::new("folder")).is_empty() || available_program("zip").is_some()

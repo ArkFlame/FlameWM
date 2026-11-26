@@ -542,7 +542,7 @@ mod tests {
         )
         .expect_err("spaces");
         assert!(matches!(error, AssistantError::Config(_)));
-        assert!(runner.calls.is_empty());
+        assert_eq!(runner.calls.len(), 0);
     }
 
     #[test]

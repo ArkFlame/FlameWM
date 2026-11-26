@@ -86,15 +86,12 @@ fn external_content_hash(rgba8: &[u8]) -> u64 {
     // Word-at-a-time FNV-style mix: one multiply per 8 bytes instead of per byte.
     const PRIME: u64 = 0x100000001b3;
     let mut hash: u64 = 0xcbf29ce484222325 ^ rgba8.len() as u64;
-    let mut chunks = rgba8.chunks_exact(8);
-    for chunk in &mut chunks {
-        let Ok(bytes) = <[u8; 8]>::try_from(chunk) else {
-            continue;
-        };
-        let word = u64::from_le_bytes(bytes);
+    let (blocks, rest) = rgba8.as_chunks::<8>();
+    for chunk in blocks {
+        let word = u64::from_le_bytes(*chunk);
         hash = (hash ^ word).wrapping_mul(PRIME);
     }
-    for &byte in chunks.remainder() {
+    for &byte in rest {
         hash = (hash ^ u64::from(byte)).wrapping_mul(PRIME);
     }
     hash

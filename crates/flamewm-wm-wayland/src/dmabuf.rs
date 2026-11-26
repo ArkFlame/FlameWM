@@ -176,7 +176,10 @@ mod tests {
 
     #[test]
     fn filter_of_only_unsupported_codes_is_empty() {
-        assert!(filter_formats([format(Fourcc::Nv12, Modifier::Linear)]).is_empty());
+        assert_eq!(
+            filter_formats([format(Fourcc::Nv12, Modifier::Linear)]).len(),
+            0
+        );
     }
 
     #[test]

@@ -126,7 +126,7 @@ pub struct Stopper(Arc<Mutex<Option<CancelToken>>>);
 
 impl Stopper {
     pub fn stop(&self) {
-        if let Some(token) = self.0.lock().map(|slot| slot.clone()).unwrap_or(None) {
+        if let Some(token) = self.0.lock().map_or(None, |slot| slot.clone()) {
             token.cancel();
         }
     }

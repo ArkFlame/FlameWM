@@ -388,7 +388,7 @@ impl IconLookupIndex {
     pub fn lookup(&self, name: &str, physical: u32) -> (Vec<PathBuf>, bool) {
         let (base, explicit) = normalize_parts(name);
         let files = self.files();
-        let Some(entries) = files.get(&*base) else {
+        let Some(entries) = files.get(&base) else {
             let mut tail = Vec::new();
             if let Some(found) = self.pixmaps().get(&*base) {
                 tail.extend(child_filter(found, explicit.as_deref()));
@@ -431,12 +431,12 @@ impl IconLookupIndex {
         let mut ordered = Vec::with_capacity(best.len());
         for entry in best.iter().flatten() {
             if entry.1 == 0 {
-                ordered.push(files.path(&*base, *entry.0));
+                ordered.push(files.path(&base, *entry.0));
             }
         }
         for entry in best.iter().flatten() {
             if entry.1 != 0 {
-                ordered.push(files.path(&*base, *entry.0));
+                ordered.push(files.path(&base, *entry.0));
             }
         }
         if ordered.is_empty()
@@ -487,7 +487,7 @@ impl IconLookupIndex {
 
     #[must_use]
     pub fn memo_len(&self) -> usize {
-        self.memo.lock().map(|m| m.len).unwrap_or(0)
+        self.memo.lock().map_or(0, |m| m.len)
     }
 
     pub(super) fn memo_get(&self, name: &str, physical: u32) -> Option<Vec<PathBuf>> {

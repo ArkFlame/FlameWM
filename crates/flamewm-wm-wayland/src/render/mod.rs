@@ -903,8 +903,7 @@ pub fn serve_screencopy(
 fn send_frame_callbacks(state: &State) {
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u32)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_millis() as u32);
     let throttle = Some(Duration::from_millis(16));
     let time = Duration::from_millis(u64::from(time));
     let output = &state.output;
@@ -979,7 +978,7 @@ fn write_ppm(
         lines.reverse();
     }
     for line in lines {
-        for px in line.chunks_exact(4) {
+        for px in line.as_chunks::<4>().0 {
             out.extend_from_slice(&px[..3]);
         }
     }

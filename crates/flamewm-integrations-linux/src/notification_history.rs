@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(history.len(), 1);
         history.clear();
         assert!(history.is_empty());
-        assert!(history.groups().is_empty());
+        assert_eq!(history.groups().len(), 0);
     }
 
     #[test]

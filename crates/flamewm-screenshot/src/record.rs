@@ -321,7 +321,7 @@ mod tests {
         )
         .expect("stop");
         assert_eq!(stats, Stats::default());
-        assert!(sink.seen.is_empty());
+        assert_eq!(sink.seen, []);
     }
 
     #[test]

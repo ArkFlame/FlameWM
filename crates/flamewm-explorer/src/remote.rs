@@ -190,6 +190,7 @@ impl std::fmt::Display for CopyError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_one(
     fs: &impl RemoteOps,
     source: &Path,

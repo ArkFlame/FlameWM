@@ -298,7 +298,7 @@ exec sleep 30
         let mut seen = Vec::new();
         assert!(!cancel_with(&dialog, |cookie, outcome| seen
             .push((cookie.to_owned(), outcome))));
-        assert!(seen.is_empty());
+        assert_eq!(seen.len(), 0);
     }
 
     /// Submit path: the typed bytes leave the dialog, the field is empty afterwards, and no Debug

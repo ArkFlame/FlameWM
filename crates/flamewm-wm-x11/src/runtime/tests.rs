@@ -256,7 +256,7 @@ fn members(signals: &[flamewm_control_wire::ControlSignal]) -> Vec<&'static str>
 fn empty_changeset_emits_no_signals() {
     let mut host = FakeEngine::new().host();
     let signals = collect_wm_signals(&mut host, change(false, false, false)).expect("collect");
-    assert!(signals.is_empty());
+    assert_eq!(signals.len(), 0);
 }
 
 // REGRESSION: a managed window changes its workspace occupancy, so the workspace snapshot is
@@ -283,7 +283,7 @@ fn unchanged_windows_emit_no_window_signals() {
     let mut host = FakeEngine::new().host();
     let _ = collect_wm_signals(&mut host, change(true, false, false)).expect("seed");
     let signals = collect_wm_signals(&mut host, change(true, false, false)).expect("collect");
-    assert!(signals.is_empty());
+    assert_eq!(signals.len(), 0);
 }
 
 #[test]
@@ -321,5 +321,5 @@ fn work_area_only_emits_nothing() {
         ..change(false, false, false)
     };
     let signals = collect_wm_signals(&mut host, only_area).expect("collect");
-    assert!(signals.is_empty());
+    assert_eq!(signals.len(), 0);
 }

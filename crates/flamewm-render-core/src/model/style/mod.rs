@@ -14,17 +14,12 @@ impl Default for ColorValue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Length {
+    #[default]
     Auto,
     Px(f32),
     Percent(f32),
-}
-
-impl Default for Length {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl Length {
@@ -44,19 +39,6 @@ impl Length {
             Self::Px(value) => Some(value),
             Self::Percent(value) => Some(available * value),
         }
-    }
-}
-
-#[cfg(test)]
-mod length_tests {
-    use super::Length;
-
-    #[test]
-    fn negative_offsets_survive_while_sizes_clamp() {
-        assert_eq!(Length::Px(-15.0).resolve_offset(200.0), Some(-15.0));
-        assert_eq!(Length::Percent(-0.5).resolve_offset(200.0), Some(-100.0));
-        assert_eq!(Length::Px(-15.0).resolve(200.0), Some(0.0));
-        assert_eq!(Length::Auto.resolve_offset(200.0), None);
     }
 }
 
@@ -286,5 +268,18 @@ impl Default for Style {
             hide_scrollbars: false,
             image_treatment: ImageTreatment::Original,
         }
+    }
+}
+
+#[cfg(test)]
+mod length_tests {
+    use super::Length;
+
+    #[test]
+    fn negative_offsets_survive_while_sizes_clamp() {
+        assert_eq!(Length::Px(-15.0).resolve_offset(200.0), Some(-15.0));
+        assert_eq!(Length::Percent(-0.5).resolve_offset(200.0), Some(-100.0));
+        assert_eq!(Length::Px(-15.0).resolve(200.0), Some(0.0));
+        assert_eq!(Length::Auto.resolve_offset(200.0), None);
     }
 }

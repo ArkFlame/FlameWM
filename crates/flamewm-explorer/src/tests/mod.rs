@@ -209,7 +209,7 @@
         assert_eq!(tab.selected_paths.len(),3);
         tab.search="file7".into();tab.select_all_filtered();
         assert_eq!(tab.ordered_selection(),vec![PathBuf::from("/tmp/file7")]);
-        tab.clear_selection();assert!(tab.ordered_selection().is_empty());
+        tab.clear_selection();assert_eq!(tab.ordered_selection().len(), 0);
     }
     #[test] fn batch_copy_continues_after_conflict_without_overwriting() {
         let base=std::env::temp_dir().join(format!("flamewm-explorer-batch-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
@@ -341,5 +341,5 @@
         );
         let without_pins: Vec<Place> = places.iter().filter(|p| p.group != PlaceGroup::Pinned).cloned().collect();
         assert!(!sidebar_rows(&without_pins).contains(&SidebarRow::Heading("Pinned Folders")));
-        assert!(sidebar_rows(&[]).is_empty());
+        assert_eq!(sidebar_rows(&[]).len(), 0);
     }

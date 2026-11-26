@@ -316,7 +316,7 @@ mod network_template_tests {
         );
         let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
-        assert!(!recorder.texts["network-connected"].is_empty());
+        assert_ne!(recorder.texts["network-connected"].len(), 0);
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
         assert_eq!(recorder.visible.get("network-connected"), Some(&true));
     }

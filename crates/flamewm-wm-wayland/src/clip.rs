@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn corner_squares_cover_only_rounded_corners() {
         let geo = Size::from((100, 80));
-        assert!(corner_squares(geo, [0, 0, 0, 0]).is_empty());
+        assert_eq!(corner_squares(geo, [0, 0, 0, 0]).len(), 0);
         assert_eq!(
             corner_squares(geo, [0, 24, 0, 24]),
             vec![
@@ -524,6 +524,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assert_is_empty)]
     fn clipped_opaque_regions_drop_the_corner_squares() {
         let geo = Size::from((100, 80));
         let full = [Rectangle::from_size(geo)];

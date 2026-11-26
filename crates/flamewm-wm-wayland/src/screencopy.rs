@@ -63,7 +63,7 @@ pub fn xrgb_rows(rgba: &[u8], width: u32, height: u32, flip_rows: bool) -> Optio
         lines.reverse();
     }
     for line in lines {
-        for px in line.chunks_exact(BPP) {
+        for px in line.as_chunks::<BPP>().0 {
             // Little-endian `Xrgb8888` stores B, G, R, X.
             out.extend_from_slice(&[px[2], px[1], px[0], 0xff]);
         }

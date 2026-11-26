@@ -106,7 +106,7 @@ impl<C: Connector> Pool<C> {
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.slots.lock().map(|s| s.len()).unwrap_or(0)
+        self.slots.lock().map_or(0, |s| s.len())
     }
 
     #[must_use]

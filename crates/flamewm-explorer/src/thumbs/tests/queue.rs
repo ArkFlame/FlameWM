@@ -33,7 +33,7 @@ fn pass_start_drops_queued_jobs_and_frees_their_keys() {
     // Scroll: pass 2 shows rows 2..5. Rows 0 and 1 leave the view; their queued jobs must not decode.
     assert_eq!(cache.start_pass(&queue), 4);
     // The queue is empty and no stale key is pending, so a visible row can request again.
-    assert!(queue.retain(|_| true).is_empty());
+    assert_eq!(queue.retain(|_| true).len(), 0);
     assert!(
         cache.begin(&key_at(0)),
         "a dropped key is requestable again"

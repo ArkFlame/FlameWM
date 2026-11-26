@@ -228,7 +228,7 @@ mod tests {
         let mut port = FakePort::with_count(4);
         let error = service.insert_after(&mut port, 0, 7).expect_err("stale");
         assert_eq!(error.code, ErrorCode::StaleRevision);
-        assert!(port.applied.is_empty());
+        assert_eq!(port.applied, []);
         assert!(!count_store_path(&settings).exists());
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let service = WorkspaceService::new(count_store_path(&blocker.join("settings.toml")));
         let mut port = FakePort::with_count(4);
         assert!(service.insert_after(&mut port, 0, 0).is_err());
-        assert!(port.applied.is_empty());
+        assert_eq!(port.applied, []);
         assert_eq!(port.snapshot.as_ref().map(|s| s.count), Some(4));
     }
 

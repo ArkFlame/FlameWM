@@ -105,7 +105,7 @@ pub fn is_candidate_name(name: &str) -> bool {
     match extension(name) {
         Some(ext) => !PARTIAL_SUFFIXES
             .iter()
-            .any(|partial| ext.eq_ignore_ascii_case(*partial)),
+            .any(|partial| ext.eq_ignore_ascii_case(partial)),
         None => true,
     }
 }

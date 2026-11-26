@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn profiles_of_wrong_shape_are_empty() {
-        assert!(parse_profiles(&variant(s("balanced"))).is_empty());
+        assert_eq!(parse_profiles(&variant(s("balanced"))).len(), 0);
     }
 
     #[test]

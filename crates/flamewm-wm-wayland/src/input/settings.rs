@@ -10,9 +10,7 @@ pub fn saved_focus_follows_mouse() -> bool {
 /// Reads `focusFollowsMouse` from `path`. Split from `settings_path` so the file is really read in
 /// tests; the path itself comes from the environment, which is resolved in one place.
 pub fn focus_follows_mouse_at(path: &std::path::Path) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .is_some_and(|text| focus_follows_mouse_from(&text))
+    std::fs::read_to_string(path).is_ok_and(|text| focus_follows_mouse_from(&text))
 }
 
 /// Parses `focusFollowsMouse` out of settings text; an unreadable file means the default, off.

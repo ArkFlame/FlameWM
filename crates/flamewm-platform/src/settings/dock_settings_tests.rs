@@ -10,7 +10,7 @@ fn dock_and_taskbar_defaults() {
     assert!(!d.dock_enabled);
     assert_eq!(d.dock_position, DockPosition::Bottom);
     assert_eq!(d.dock_icon_size, 32);
-    assert!(d.dock_pinned.is_empty());
+    assert_eq!(d.dock_pinned.len(), 0);
     assert!(d.dock_show_running);
     assert!(!d.dock_auto_hide);
     assert!(!d.dock_reserve_space);

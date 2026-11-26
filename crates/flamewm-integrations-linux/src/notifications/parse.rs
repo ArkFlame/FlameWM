@@ -58,7 +58,7 @@ pub(super) fn parse_hints(hints: &dbus::arg::messageitem::MessageItemDict) -> Hi
 pub(super) fn parse_actions(items: &[MessageItem]) -> (Vec<NotificationAction>, bool) {
     let mut actions = Vec::new();
     let mut default_action = false;
-    for pair in items.chunks_exact(2) {
+    for pair in items.as_chunks::<2>().0 {
         let (MessageItem::Str(key), MessageItem::Str(label)) = (&pair[0], &pair[1]) else {
             continue;
         };

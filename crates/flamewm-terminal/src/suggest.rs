@@ -106,24 +106,21 @@ impl Trie {
                 next
             };
         }
-        let id = match self.nodes[node].exact {
-            Some(id) => {
-                let command = &mut self.commands[id];
-                command.rank = Rank {
-                    count: command.rank.count + uses,
-                    seq,
-                };
-                id
-            }
-            None => {
-                let id = self.commands.len();
-                self.commands.push(Command {
-                    text: text.to_owned(),
-                    rank: Rank { count: uses, seq },
-                });
-                self.nodes[node].exact = Some(id);
-                id
-            }
+        let id = if let Some(id) = self.nodes[node].exact {
+            let command = &mut self.commands[id];
+            command.rank = Rank {
+                count: command.rank.count + uses,
+                seq,
+            };
+            id
+        } else {
+            let id = self.commands.len();
+            self.commands.push(Command {
+                text: text.to_owned(),
+                rank: Rank { count: uses, seq },
+            });
+            self.nodes[node].exact = Some(id);
+            id
         };
         // Second walk: only ranks grow, so this command replaces the cached best of each prefix unless another
         // command still outranks it.
@@ -156,7 +153,7 @@ impl Trie {
             .drain(..)
             .map(|command| (command.rank, command.text))
             .collect();
-        kept.sort_by(|a, b| b.0.cmp(&a.0));
+        kept.sort_by_key(|k| std::cmp::Reverse(k.0));
         kept.truncate(MAX_COMMANDS);
         *self = Self::default();
         for (rank, text) in kept {

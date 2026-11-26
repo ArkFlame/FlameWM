@@ -3,7 +3,7 @@
 //! `FLAMEWM_PROFILE_COMPOSE=1` turns the profiler on and arms a one-second timer that prints
 //! `FLAMEWM-WAYLAND-COMPOSE` followed by the profiler's span/counter window to stderr. The window
 //! ranks the in-thread subsystems (Wayland dispatch, control/D-Bus, input, render, timers,
-//! XWayland) by total wall time, which is what tells the next unit where the idle second goes.
+//! `XWayland`) by total wall time, which is what tells the next unit where the idle second goes.
 //! Disabled, every helper returns an inert guard: one relaxed atomic load per span.
 
 use std::sync::OnceLock;

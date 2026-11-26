@@ -40,7 +40,7 @@ fn main() -> std::io::Result<()> {
             let sec = *next.next().unwrap();
             rast.render(&state, &mut bgra);
             let mut rgb = Vec::with_capacity((W * H * 3) as usize);
-            for px in bgra.chunks_exact(4) {
+            for px in bgra.as_chunks::<4>().0 {
                 rgb.extend_from_slice(&[px[2], px[1], px[0]]);
             }
             let path = dir.join(format!("frame_t{sec:02}.ppm"));

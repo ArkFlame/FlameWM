@@ -269,7 +269,9 @@ pub fn decode_ximage<C: Connection>(
         let out_row = &mut rgba[row_index * row_len..][..row_len];
         let src_row = &row[..src_row_len];
         for (pixel, source) in out_row
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(src_row.chunks_exact(pixel_bytes))
         {
             let value = if little {
@@ -297,7 +299,7 @@ fn decode_32bpp_in_place(data: &mut [u8], masks: [u32; 3], little: bool) {
     // 8-bit channels (the common case) need only a shift and mask; the general scaling
     // divides per pixel and dominated the capture time at 1080p.
     let channels = Channels::new(masks);
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0.iter_mut() {
         let native = if little {
             u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])
         } else {
@@ -753,7 +755,9 @@ mod tests {
         assert_eq!(
             cropped
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| p[0])
                 .collect::<Vec<_>>(),
             [5, 6, 7, 9, 10, 11]
@@ -794,8 +798,8 @@ mod tests {
             let ptr = bytes.as_ptr();
             decode_32bpp_in_place(&mut bytes, [0x00ff_0000, 0x0000_ff00, 0x0000_00ff], little);
             assert_eq!(bytes.as_ptr(), ptr, "must preserve reply allocation");
-            for (pixel, wanted) in bytes.chunks_exact(4).zip(expected) {
-                assert_eq!(pixel, wanted);
+            for (pixel, wanted) in bytes.as_chunks::<4>().0.iter().zip(expected) {
+                assert_eq!(*pixel, wanted);
             }
         }
     }

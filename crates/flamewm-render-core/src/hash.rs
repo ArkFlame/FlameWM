@@ -21,11 +21,11 @@ impl Hasher for FxHasher {
 
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.add(u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8])));
+        let (blocks, rest) = bytes.as_chunks::<8>();
+        for chunk in blocks {
+            self.add(u64::from_le_bytes(*chunk));
         }
-        for &byte in chunks.remainder() {
+        for &byte in rest {
             self.add(u64::from(byte));
         }
     }

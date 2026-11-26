@@ -297,7 +297,8 @@ pub fn system_action_for_row(
             .iter()
             .find(|endpoint| endpoint.id == id && endpoint.kind == kind)?;
         AudioTarget::Endpoint { id, kind }
-    } else if let Some(id) = row_id.strip_prefix("stream:") {
+    } else {
+        let id = row_id.strip_prefix("stream:")?;
         let id = id.parse::<u32>().ok()?;
         snapshot
             .audio
@@ -305,8 +306,6 @@ pub fn system_action_for_row(
             .iter()
             .find(|stream| stream.id == id)?;
         AudioTarget::Stream { id }
-    } else {
-        return None;
     };
     let action = match (percent, muted) {
         (Some(percent), None) if percent <= MAX_VOLUME_PERCENT => {
@@ -626,7 +625,7 @@ mod tests {
             ids,
             ["endpoint:sink:1", "endpoint:sink:2", "endpoint:source:3"]
         );
-        assert!(visible_rows(&snapshot, AudioTab::Applications, 0).is_empty());
+        assert_eq!(visible_rows(&snapshot, AudioTab::Applications, 0).len(), 0);
     }
 
     #[test]

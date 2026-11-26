@@ -98,6 +98,6 @@ mod tests {
     fn close_order_ignores_cycles_and_unknown_roots() {
         let edges = [(2, 1), (1, 2)];
         assert_eq!(descendant_close_order(1, &edges), vec![2]);
-        assert!(descendant_close_order(7, &edges).is_empty());
+        assert_eq!(descendant_close_order(7, &edges).len(), 0);
     }
 }

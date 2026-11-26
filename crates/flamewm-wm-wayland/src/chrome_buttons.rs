@@ -91,7 +91,7 @@ pub(crate) fn paint_control(
     if let Some(glyph) = glyph_pixels(role, edge, colors.glyph.0) {
         let start_x = center - half;
         let start_y = cy - half;
-        for (index, rgba) in glyph.chunks_exact(4).enumerate() {
+        for (index, rgba) in glyph.as_chunks::<4>().0.iter().enumerate() {
             let alpha = rgba[3];
             if alpha > 0 {
                 let x = start_x + (index % edge as usize) as i32;

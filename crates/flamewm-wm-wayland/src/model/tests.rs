@@ -410,7 +410,7 @@ fn minimize_and_show_desktop_round_trip() {
     assert_eq!(model.visible_top_first(), vec![2, 1]);
 
     model.toggle_show_desktop();
-    assert!(model.visible_top_first().is_empty());
+    assert_eq!(model.visible_top_first().len(), 0);
     model.toggle_show_desktop();
     assert_eq!(model.visible_top_first().len(), 2);
 }
@@ -1278,6 +1278,7 @@ fn clamp_floating_into_shrinks_a_window_larger_than_the_output() {
 
 /// Maximized and fullscreen windows are owned by the refit path, not this clamp.
 #[test]
+#[allow(clippy::assert_is_empty)]
 fn clamp_floating_into_leaves_maximized_windows_alone() {
     let mut model = model_with(&[1]);
     model.configure(true, 0);
@@ -1293,10 +1294,11 @@ fn clamp_floating_into_leaves_maximized_windows_alone() {
 
 /// A zero or negative output has no usable area: nothing moves and nothing panics.
 #[test]
+#[allow(clippy::assert_is_empty)]
 fn clamp_floating_into_ignores_zero_sized_outputs() {
     let mut model = model_with(&[1]);
     model.get_mut(1).unwrap().rect = Rect::new(40, 40, 300, 200);
-    assert!(model.clamp_floating_into(Rect::new(0, 0, 0, 0)).is_empty());
+    assert_eq!(model.clamp_floating_into(Rect::new(0, 0, 0, 0)).len(), 0);
     assert!(
         model
             .clamp_floating_into(Rect::new(0, 0, -5, 300))
@@ -1374,7 +1376,7 @@ fn switcher_lists_minimised_and_other_workspace_windows_most_recent_first() {
     model.switch_workspace(1);
     assert_eq!(model.switcher_order(), vec![3, 2, 1]);
     assert!(model.is_hidden(1) && model.is_hidden(2) && model.is_hidden(3));
-    assert!(model.visible_top_first().is_empty());
+    assert_eq!(model.visible_top_first().len(), 0);
 }
 
 #[test]

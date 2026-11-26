@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn single_workspace_projects_empty() {
         let snap = snapshot(1, 0);
-        assert!(project(Some(&snap)).is_empty());
+        assert_eq!(project(Some(&snap)).len(), 0);
     }
 
     // Six workspaces read `1 2 3 / 4 5 6`: the pager draws exactly the cells
