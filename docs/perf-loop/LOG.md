@@ -19,3 +19,5 @@
 ## Build 7: cargo check --workspace --all-targets green, 0 fixes. Pool stall root cause: ghost "running" workers (41) from finished units filled the lane cap; abort_all does not clear them. Workaround: move open units to a fresh dir (units-b) for a fresh pool id; scripts/perf-loop now scans units*/.
 
 ## Build 8: cargo check --workspace --all-targets green after 2 fixes: (1) wm-wayland render/mod.rs collect_occluders match missed macro-generated Elem::_GenericCatcher; (2) shell switcher.rs stray #[test] on a helper fn with args. Batches 12-13 landed.
+
+## Composition #2 (FLAMEWM_PROFILE_COMPOSE=1, nested idle, 13 one-second windows, build 8 release): wait=100% of window; spans: wmwayland.dispatch.flush x1/s at 0.00 ms. cpu_total ~9-10 ms/s (0.9%) with NO span covering it => unattributed work is the profiler dump itself plus the 1 s tick; idle compositor is parked. pss=58 MB rss=119 MB. Conclusion: idle is healthy; the share to cut is under ACTIVE use (drag, client damage, typing). Next unit u92 drives a client scenario.
