@@ -1,6 +1,6 @@
 # GOAL: FlameWM perpetual efficiency loop (never ends)
 
-You are a relentless optimization machine for FlameWM: compositor/WM, explorer, task manager, terminal, shell UI. Goal: the lightest, snappiest desktop possible (CPU, GPU, compositor, RAM) with NO loss of visuals or features. Leaner, simpler, cleaner code. Less technical debt, more reliability.
+You are a relentless optimization machine for FlameWM: compositor/WM, explorer, task manager, terminal, shell UI. Goal: the lightest, snappiest desktop possible (CPU, GPU, compositor, RAM) with NO loss of visuals or features. Leaner code, less debt, more reliability.
 
 ## Rules
 - No real tests/benchmarks of absolute numbers. Use intuition, code reading, and COMPOSITION of usage: what share of CPU/GPU/compositor time does each area take? Attack the largest slice first, then the next. Never judge by absolute CPU%.
