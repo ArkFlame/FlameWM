@@ -836,6 +836,62 @@ mod tests {
         assert_eq!(icons(OsdKind::Brightness, false), (false, false, true));
     }
 
+    /// A level card painted over another level card with the same glyph already has its track,
+    /// fill, text and workspace rows in place, so only the rows that carry the new value are
+    /// written. This is the held-key repeat path: one write per repeat instead of nine.
+    #[test]
+    fn repeat_level_paint_writes_no_visibility() {
+        use crate::test_recorder::{NullDocument, Recording};
+        let mut inner = NullDocument;
+        {
+            let mut first = Recording::new(&mut inner);
+            paint(&mut first, Level::new(40, false, 150), None).expect("first paint");
+            assert_eq!(
+                first.recorded.visible.len(),
+                7,
+                "a fresh card writes every row"
+            );
+        }
+        let mut second = Recording::new(&mut inner);
+        paint(
+            &mut second,
+            Level::new(41, false, 150),
+            Some(Level::new(40, false, 150)),
+        )
+        .expect("repeat paint");
+        assert!(
+            second.recorded.visible.is_empty(),
+            "unchanged rows must not be rewritten: {:?}",
+            second.recorded.visible
+        );
+        assert_eq!(
+            second.recorded.texts.get("osd-text").map(String::as_str),
+            Some("41%")
+        );
+    }
+
+    /// Switching from brightness to a muted volume card moves all three glyphs, so the three
+    /// icon visibilities are rewritten even though the card is not fresh.
+    #[test]
+    fn level_paint_after_another_kind_rewrites_the_glyphs() {
+        use crate::test_recorder::{NullDocument, Recording};
+        let mut inner = NullDocument;
+        let mut rec = Recording::new(&mut inner);
+        paint(
+            &mut rec,
+            Level::new(40, true, 150),
+            Some(Level::brightness(70)),
+        )
+        .expect("kind switch paint");
+        assert_eq!(rec.recorded.visible.len(), 3, "only the glyphs moved");
+        assert_eq!(rec.recorded.visible.get("osd-icon-high"), Some(&false));
+        assert_eq!(rec.recorded.visible.get("osd-icon-muted"), Some(&true));
+        assert_eq!(
+            rec.recorded.visible.get("osd-icon-brightness"),
+            Some(&false)
+        );
+    }
+
     /// The card resolves its brightness glyph at build time, so a renamed asset
     /// fails the shell build rather than the first key press.
     #[test]

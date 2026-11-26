@@ -3,7 +3,6 @@
 //! Pure functions only. The notification host owns the surface and the provider, and applies
 //! the nodes produced here to `ui/shell/notification-center.html`.
 
-use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use flamewm_integrations_linux::notification_history::NotificationHistory;
@@ -112,14 +111,11 @@ impl Command {
                     }
                     "action" => {
                         let action = slot(parts.next()?, MAX_ITEM_ACTION_SLOTS)?;
-                        parts
-                            .next()
-                            .is_none()
-                            .then_some(Self::InvokeItemAction {
-                                group,
-                                item,
-                                action,
-                            })
+                        parts.next().is_none().then_some(Self::InvokeItemAction {
+                            group,
+                            item,
+                            action,
+                        })
                     }
                     _ => None,
                 }

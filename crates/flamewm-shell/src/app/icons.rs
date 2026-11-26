@@ -138,10 +138,26 @@ impl ShellLoop {
                     }
                 }
                 DependentSurface::Launcher => {
-                    if matches!(
-                        runtime.with_document(self.surfaces.launcher, apply),
-                        Ok(true)
-                    ) {
+                    let applied = runtime.with_document(self.surfaces.launcher, |document| {
+                        if async_projection::apply_icon_result(
+                            document,
+                            res.target,
+                            &res.name,
+                            res.width,
+                            res.height,
+                            res.generation,
+                            image.clone(),
+                        )? {
+                            Ok(true)
+                        } else {
+                            // Typing bumps the launcher epoch, so a reply for a row that is
+                            // still visible lands stale. The raster is cached; repaint the
+                            // bound row now instead of leaving its placeholder until the next
+                            // projection.
+                            async_projection::apply_cached_binding(document, res.target, res.width)
+                        }
+                    });
+                    if matches!(applied, Ok(true)) {
                         let _ = runtime.redraw(self.surfaces.launcher);
                     }
                 }

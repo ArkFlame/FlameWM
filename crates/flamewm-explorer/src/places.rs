@@ -150,7 +150,11 @@ pub fn gvfs_root() -> PathBuf {
     // The process uid never changes: resolve `/proc/self` once instead of stat-ing it on every
     // sidebar rebuild (mountinfo, block-device and watch events each trigger one).
     static UID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    let uid = *UID.get_or_init(|| fs::metadata("/proc/self").map(|meta| meta.uid()).unwrap_or(0));
+    let uid = *UID.get_or_init(|| {
+        fs::metadata("/proc/self")
+            .map(|meta| meta.uid())
+            .unwrap_or(0)
+    });
     PathBuf::from(format!("/run/user/{uid}/gvfs"))
 }
 

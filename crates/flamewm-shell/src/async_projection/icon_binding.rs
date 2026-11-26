@@ -39,6 +39,10 @@ pub(super) static START_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 pub(super) static TASK_EPOCH: AtomicU64 = AtomicU64::new(0);
 
+/// Launcher slot epoch. Separate from `START_EPOCH`: the launcher result list changes on its
+/// own query, and typing there must not stale the Start submenu's in-flight icon results.
+pub(super) static LAUNCHER_EPOCH: AtomicU64 = AtomicU64::new(0);
+
 /// Dock slot epoch. Separate from `TASK_EPOCH`: panel task projections bump
 /// that counter on every reprojection, which must not drop dock icon results.
 pub(super) static DOCK_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -53,6 +57,11 @@ pub fn bump_start_view_epoch() -> u64 {
     START_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// Bump the launcher view epoch: launcher query change or a new result order.
+pub fn bump_launcher_view_epoch() -> u64 {
+    LAUNCHER_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
+}
+
 /// Bump the task view epoch: task-slot reprojection.
 pub fn bump_task_view_epoch() -> u64 {
     TASK_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
@@ -60,9 +69,8 @@ pub fn bump_task_view_epoch() -> u64 {
 
 pub(super) fn epoch_for_target(target: IconTarget) -> u64 {
     match target {
-        IconTarget::StartSlot(_) | IconTarget::LauncherSlot(_) => {
-            START_EPOCH.load(Ordering::SeqCst)
-        }
+        IconTarget::StartSlot(_) => START_EPOCH.load(Ordering::SeqCst),
+        IconTarget::LauncherSlot(_) => LAUNCHER_EPOCH.load(Ordering::SeqCst),
         IconTarget::TaskSlot(_) | IconTarget::TraySlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
         IconTarget::DockSlot(_) => DOCK_EPOCH.load(Ordering::SeqCst),
     }
@@ -188,12 +196,30 @@ pub(crate) fn icon_test_lock() -> &'static std::sync::Mutex<()> {
 pub fn test_reset_icon_bindings() {
     START_EPOCH.store(0, Ordering::SeqCst);
     TASK_EPOCH.store(0, Ordering::SeqCst);
+    LAUNCHER_EPOCH.store(0, Ordering::SeqCst);
     if let Ok(mut bindings) = bindings().lock() {
         bindings.clear();
     }
     if let Ok(mut cache) = icon_cache().lock() {
         cache.clear();
     }
+}
+
+/// Whether the live binding already names this key under the current loader generation.
+/// Every paint path records its binding, so a match means the node already shows this key.
+fn shows_key(target: IconTarget, name: &str, w: u32, h: u32, generation: u64) -> bool {
+    bindings()
+        .lock()
+        .ok()
+        .and_then(|bindings| {
+            bindings.get(&(target, w)).map(|binding| {
+                binding.generation == generation
+                    && binding.key.1 == w
+                    && binding.key.2 == h
+                    && binding.key.0 == name
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Visible-row request: cache hit applies now; miss applies the neutral
@@ -226,6 +252,17 @@ pub(crate) fn schedule_visible(
     // results arrive as neutral packaged/system rasters via
     // `note_icon_result`. Until then apply transparent empty so the row
     // never shows a stale icon and never a flame-red square.
+    //
+    // A row that kept the same key since the previous projection already shows this key's
+    // placeholder and its one worker request is still in flight: repainting would allocate
+    // the same transparent buffer again and dirty the surface for no visible change.
+    if let Some(loader) = loader.as_deref_mut() {
+        if loader.is_pending(target, name, w, h)
+            && shows_key(target, name, w, h, loader.generation())
+        {
+            return Ok(());
+        }
+    }
     document.image_rgb8(icon_id, empty_image(w, h))?;
     fallback_counter().increment();
     if let Some(loader) = loader.as_deref_mut() {

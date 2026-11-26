@@ -5,6 +5,7 @@
 //! come from the indexed Start model, so filtering is the same search Start uses.
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::ops::Range;
 
 use flamewm_api::applications::DesktopApplication;
@@ -63,11 +64,6 @@ impl LauncherState {
     #[must_use]
     pub fn claim_activation(&mut self) -> bool {
         std::mem::replace(&mut self.activation_armed, false)
-    }
-
-    #[must_use]
-    pub fn query(&self) -> &str {
-        &self.query
     }
 
     #[must_use]
@@ -185,6 +181,17 @@ impl LauncherState {
     }
 
     fn refresh(&mut self, model: &StartModel) {
+        // Same application set and query: the cached order already is the result list, so a
+        // reopen reuses it instead of rescanning every indexed entry and allocating a fresh
+        // index vector. Keeping the epoch also keeps in-flight launcher icon requests valid.
+        if self.order.as_ref().is_some_and(|cache| {
+            cache.generation == model.generation() && cache.query == self.query
+        }) {
+            if let Some(cache) = &self.order {
+                self.count = cache.indices.len();
+            }
+            return;
+        }
         let indices = ordered_indices(model, &self.query, &self.recent);
         self.count = indices.len();
         self.order = Some(OrderCache {
@@ -192,8 +199,9 @@ impl LauncherState {
             query: self.query.clone(),
             indices,
         });
-        // A text change invalidates every icon binding made for the old result list.
-        crate::async_projection::bump_start_view_epoch();
+        // A text change invalidates every icon binding made for the old result list. The
+        // launcher owns its own epoch, so typing here never stales the Start submenu's icons.
+        crate::async_projection::bump_launcher_view_epoch();
     }
 
     /// Row offset of the single selection highlight inside the visible window.
@@ -234,11 +242,17 @@ impl LauncherState {
         // WAI-ARIA 1.2 listbox of options; the selected option carries aria-selected="true".
         // Precedent: .vendor has no ARIA listbox code, so the choice follows the APG listbox pattern.
         document.attribute("launcher-list", "role", "listbox")?;
+        // The node ids are fixed per slot; reuse three buffers instead of building three
+        // `String`s per row on every projection (typing projects once per keystroke).
+        let (mut row_id, mut label_id, mut icon_id) = (String::new(), String::new(), String::new());
         for slot in 0..LAUNCHER_ROWS {
             let row = slot + 1;
-            let row_id = format!("launcher-row-{row}");
-            let label_id = format!("launcher-row-{row}-label");
-            let icon_id = format!("launcher-row-{row}-icon");
+            row_id.clear();
+            write!(row_id, "launcher-row-{row}").expect("write to String is infallible");
+            label_id.clear();
+            write!(label_id, "launcher-row-{row}-label").expect("write to String is infallible");
+            icon_id.clear();
+            write!(icon_id, "launcher-row-{row}-icon").expect("write to String is infallible");
             let index = window.start + slot;
             let selected = index < window.end && index == self.selected();
             document.attribute(&row_id, "role", "option")?;

@@ -315,14 +315,28 @@ impl SharedApplicationCatalog {
     }
 }
 
-/// Process-wide catalog shared by launch paths; refreshed by `rescan_installed_applications`.
-pub fn shared_application_catalog() -> &'static SharedApplicationCatalog {
+/// XDG application directories, read once per process. The session environment fixes them, so
+/// re-parsing it for every launcher open and every launch lookup only allocates.
+#[must_use]
+pub fn cached_application_dirs() -> &'static [PathBuf] {
+    static DIRS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    DIRS.get_or_init(xdg_application_dirs)
+}
+
+fn shared_catalog_cell() -> &'static std::sync::OnceLock<SharedApplicationCatalog> {
     static SHARED: std::sync::OnceLock<SharedApplicationCatalog> = std::sync::OnceLock::new();
-    SHARED.get_or_init(|| {
-        let dirs = xdg_application_dirs();
-        let stamps = dir_stamps(&dirs);
+    &SHARED
+}
+
+/// Process-wide catalog shared by launch paths; refreshed by `rescan_installed_applications`.
+/// Initializing it parses every `.desktop` file, so first use should come from
+/// [`warm_application_catalog_in_background`] rather than a UI thread.
+pub fn shared_application_catalog() -> &'static SharedApplicationCatalog {
+    shared_catalog_cell().get_or_init(|| {
+        let dirs = cached_application_dirs();
+        let stamps = dir_stamps(dirs);
         let shared =
-            SharedApplicationCatalog::new(ApplicationCatalog::discover().unwrap_or_default());
+            SharedApplicationCatalog::new(ApplicationCatalog::from_dirs(dirs).unwrap_or_default());
         *shared
             .stamps
             .lock()
@@ -331,14 +345,38 @@ pub fn shared_application_catalog() -> &'static SharedApplicationCatalog {
     })
 }
 
+/// The shared catalog once its background warm-up finished; `None` while discovery is still in
+/// flight. Callers on the UI thread use this instead of blocking on [`shared_application_catalog`].
+#[must_use]
+pub fn ready_shared_application_catalog() -> Option<&'static SharedApplicationCatalog> {
+    shared_catalog_cell().get()
+}
+
+/// Parses the XDG application directories on one worker thread, so the first Start or launcher
+/// open never pays discovery on the UI thread. A failed spawn leaves the lazy init path intact.
+pub fn warm_application_catalog_in_background() {
+    static SPAWNED: std::sync::Once = std::sync::Once::new();
+    SPAWNED.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("app-catalog-warm".to_owned())
+            .spawn(|| {
+                // Completes the OnceLock init (parse + stamps) before any UI-thread reader asks.
+                let _ = shared_application_catalog().current();
+            });
+        if let Err(error) = spawned {
+            eprintln!("flamewm-applications: catalog warm-up not spawned: {error}");
+        }
+    });
+}
+
 /// Explicit rescan of the XDG application directories. No watcher and no logout.
 pub fn rescan_installed_applications() -> FlameResult<CatalogDelta> {
-    shared_application_catalog().rescan_from_dirs(&xdg_application_dirs())
+    shared_application_catalog().rescan_from_dirs(cached_application_dirs())
 }
 
 /// Gated rescan for launch-time consumers: a no-op unless an XDG application dir changed.
 pub fn refresh_installed_applications_if_changed() -> FlameResult<CatalogDelta> {
-    shared_application_catalog().refresh_if_dirs_changed(&xdg_application_dirs())
+    shared_application_catalog().refresh_if_dirs_changed(cached_application_dirs())
 }
 
 /// Resolves `app` in `shared`; on a miss, runs the mtime-gated refresh over `dirs` and retries once.
@@ -366,7 +404,7 @@ pub fn with_application_entry<T>(
 ) -> FlameResult<T> {
     resolve_with_refresh(
         shared_application_catalog(),
-        &xdg_application_dirs(),
+        cached_application_dirs(),
         app,
         resolve,
     )

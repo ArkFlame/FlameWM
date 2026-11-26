@@ -721,6 +721,9 @@ pub fn main() {
 fn execute() -> Result<(), String> {
     flamewm_profiler::init_process("flamewm-shell");
     flamewm_debug::init_process("flamewm-shell");
+    // Parse the XDG application list on a worker: the first Start or launcher open then only
+    // stats the application dirs instead of reading every `.desktop` file on the UI thread.
+    flamewm_applications::warm_application_catalog_in_background();
     let total = flamewm_profiler::ProfilePoint::new("shell.startup.total");
     let total_guard = total.start();
     let root = flamewm_ui_x11::root_geometry().unwrap_or((0, 0));

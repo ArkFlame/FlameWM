@@ -259,6 +259,13 @@ impl IconLoader {
         self.generation
     }
 
+    /// Whether a request for this exact key is queued or awaiting its reply. A visible row
+    /// re-projects often; while this key is in flight its placeholder is already on the node.
+    #[must_use]
+    pub fn is_pending(&self, target: IconTarget, name: &str, width: u32, height: u32) -> bool {
+        self.pending.contains(target, name, width, height)
+    }
+
     #[must_use]
     pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Self {
         let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);

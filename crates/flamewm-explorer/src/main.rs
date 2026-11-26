@@ -395,22 +395,26 @@ fn run()->Result<(),String>{
     let (window_w,window_h,window_y)=window_frame(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
     let backdrop:Option<flamewm_ui_x11::backdrop::WindowBackdrop>;
-    let mut doc=decode_document(UI)?.with_file_drop_target();
-    let saved=prefs::load(&prefs::config_dir());
-    let settings=settings_fetch.join().ok().flatten();
     {
         let mut app=app.borrow_mut();
         app.window=(window_w as f32,window_h as f32);
         app.events=Some(app_events);
         app.thumb_queue=Some(thumb_queue);
         app.search=Some(search);
+    }
+    // The listing starts before the template decodes, so rows stream in while the window is built.
+    app.borrow_mut().scan();
+    let mut doc=decode_document(UI)?.with_file_drop_target();
+    let saved=prefs::load(&prefs::config_dir());
+    let settings=settings_fetch.join().ok().flatten();
+    {
+        let mut app=app.borrow_mut();
         app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);
         backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&flamewm_api::paths::workspace_packaged_root()));
         app.model.hidden=saved.show_hidden;
         app.show_type=saved.show_type;
         app.widths=Widths{modified:saved.col_modified as f32,size:saved.col_size as f32,kind:saved.col_kind as f32}.clamped();
     }
-    app.borrow_mut().scan();
     // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
     if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
     app.borrow().project(&mut doc)?;

@@ -460,9 +460,6 @@ fn user_dir_from(content:&str,name:&str,fallback:&str,home:&Path) -> PathBuf {
     }
     home.join(fallback)
 }
-pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
-    user_dir_from(&user_dirs_text(&config_base(home)),name,fallback,home)
-}
 pub fn add_bookmark(path:&Path,home:&Path)->io::Result<()> {
     use std::fs::OpenOptions;
     let base=config_base(home);
