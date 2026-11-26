@@ -14,7 +14,7 @@ use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::{ControlClient, ControlSignal, ControlSignalClient};
 use flamewm_dbus_reactor::BusKind;
 use flamewm_ui_x11::{
-    UiControllerEvent, UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity,
+    UiControllerEvent, UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity,
     decode_document, run_with_controller_events_role_and_two_readable_fds,
 };
 
@@ -136,12 +136,15 @@ fn run() -> Result<(), String> {
     let (settings_tx, settings_rx) = mpsc::channel::<SettingsSnapshot>();
     let settings_wake = writer.try_clone().map_err(|error| error.to_string())?;
     spawn_settings_fetch(cache_path, cached, settings_tx, settings_wake);
+    // Compute the backdrop before the snapshot moves into the app, so no owned snapshot is cloned.
+    let root = flamewm_api::paths::workspace_packaged_root();
+    let backdrop = backdrop_for(snapshot.as_ref(), &root, config.background_opacity);
     let mut app = App::new(
         config,
         config_path,
         store,
-        snapshot.clone(),
-        flamewm_api::paths::workspace_packaged_root(),
+        snapshot,
+        root,
         events_tx,
         writer,
         DEFAULT_WINDOW,
@@ -166,8 +169,6 @@ fn run() -> Result<(), String> {
         launch
     };
     app.open_tab(launch)?;
-    let root = flamewm_api::paths::workspace_packaged_root();
-    let backdrop = backdrop_for(snapshot.as_ref(), &root, app.config.background_opacity);
     let mut tier = app.pool_tier;
     let mut doc = decode_document(UI[tier])?;
     if let Some(spec) = backdrop {
@@ -235,8 +236,10 @@ fn run() -> Result<(), String> {
             let changed = match event {
                 UiControllerEvent::Action(action) => app.pointer(action),
                 UiControllerEvent::Key(key) => {
+                    // A release changes no state (`App::key` ignores it), so it must not request a frame.
+                    let pressed = key.phase == UiKeyPhase::Press;
                     app.key(key);
-                    true
+                    pressed
                 }
                 UiControllerEvent::Resized { width, height } => {
                     app.set_window(*width, *height);
@@ -248,7 +251,7 @@ fn run() -> Result<(), String> {
                     }
                     true
                 }
-                UiControllerEvent::Drag(_) => true,
+                UiControllerEvent::Drag(_) => false,
                 UiControllerEvent::Visibility { .. } => false,
             };
             if changed {
@@ -271,7 +274,7 @@ fn run() -> Result<(), String> {
                 // spec is a no-op in the window loop, so this repaints only when the backdrop changes.
                 document.request_window_backdrop(backdrop_for(
                     app.snapshot.as_ref(),
-                    &root,
+                    &app.packaged_root,
                     app.config.background_opacity,
                 ));
             }

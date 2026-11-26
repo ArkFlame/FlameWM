@@ -159,16 +159,6 @@ impl Screen {
         }
     }
 
-    /// Whole live grid, for changes that can move any row (scrolling, mode switches). Marks every row dirty.
-    fn grid_mut(&mut self) -> &mut Vec<Line> {
-        self.dirty_all = true;
-        if self.alt_active {
-            &mut self.alt
-        } else {
-            &mut self.primary
-        }
-    }
-
     /// One live-grid row, for cell writes that touch only that row.
     fn row_mut(&mut self, row: usize) -> &mut Line {
         self.dirty_rows[row] = true;
@@ -189,7 +179,11 @@ impl Screen {
 
     /// Takes the rows changed since the last call, so a renderer rebuilds only those.
     pub fn take_dirty(&mut self) -> Dirty {
-        let all = std::mem::take(&mut self.dirty_all);
+        if std::mem::take(&mut self.dirty_all) {
+            // The per-row list is unused behind `All`, so skip the scan and its allocation.
+            self.dirty_rows.fill(false);
+            return Dirty::All;
+        }
         let rows: Vec<usize> = self
             .dirty_rows
             .iter()
@@ -197,7 +191,7 @@ impl Screen {
             .filter_map(|(row, dirty)| dirty.then_some(row))
             .collect();
         self.dirty_rows.fill(false);
-        if all { Dirty::All } else { Dirty::Rows(rows) }
+        Dirty::Rows(rows)
     }
 
     fn mark_all(&mut self) {
@@ -249,6 +243,10 @@ impl Screen {
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let cols = cols.max(1);
         let rows = rows.max(1);
+        // A repeated ConfigureNotify for the same size must not rebuild the dirty bitmap or force a full redraw.
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
         for grid in [&mut self.primary, &mut self.alt] {
             for line in grid.iter_mut() {
                 line.resize(cols, Cell::blank(Color::Default));
@@ -258,30 +256,40 @@ impl Screen {
             Ordering::Less => {
                 let excess = self.rows - rows;
                 let shift = excess.min(self.row);
-                for _ in 0..shift {
-                    let line = self.primary.remove(0);
-                    self.scrollback
-                        .push_back(History::pack(&line[..history_len(&line)]));
-                    if self.scrollback.len() > self.scrollback_limit {
-                        self.scrollback.pop_front();
+                if shift > 0 {
+                    // One drain instead of `shift` front removals, each of which moved the whole grid.
+                    let dropped: Vec<Line> = self.primary.drain(0..shift).collect();
+                    for line in &dropped {
+                        self.scrollback
+                            .push_back(History::pack(&line[..history_len(line)]));
+                        if self.scrollback.len() > self.scrollback_limit {
+                            self.scrollback.pop_front();
+                        }
                     }
-                    self.primary.push(blank_line(cols, Color::Default));
-                    self.row = self.row.saturating_sub(1);
+                    self.primary
+                        .extend((0..shift).map(|_| blank_line(cols, Color::Default)));
+                    self.row = self.row.saturating_sub(shift);
                 }
             }
             Ordering::Greater => {
                 let grow = rows - self.rows;
-                for _ in 0..grow {
-                    if !self.alt_active
-                        && self.scrollback.back().is_some()
-                        && self.primary.len() < rows
-                        && let Some(history) = self.scrollback.pop_back()
-                    {
+                let mut pulled = Vec::new();
+                if !self.alt_active {
+                    for _ in 0..grow {
+                        let Some(history) = self.scrollback.pop_back() else {
+                            break;
+                        };
                         let mut line = history.cells().into_owned();
                         line.resize(cols, Cell::blank(Color::Default));
-                        self.primary.insert(0, line);
-                        self.row += 1;
+                        pulled.push(line);
                     }
+                }
+                if !pulled.is_empty() {
+                    // Pop from the back gave newest-first; restore chronological order for one front splice.
+                    pulled.reverse();
+                    let count = pulled.len();
+                    self.primary.splice(0..0, pulled);
+                    self.row += count;
                 }
                 while self.primary.len() < rows {
                     self.primary.push(blank_line(cols, Color::Default));
@@ -340,13 +348,19 @@ impl Screen {
     }
 
     fn scroll_down(&mut self, count: usize) {
-        let top = self.scroll_top;
-        let bottom = self.scroll_bottom;
+        let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let blank = self.blank();
-        let cols = self.cols;
+        self.dirty_all = true;
+        let grid = if self.alt_active {
+            &mut self.alt
+        } else {
+            &mut self.primary
+        };
+        // Rotate in place and blank the row that wrapped to the top: no row removal, insertion or allocation.
         for _ in 0..count.min(bottom - top + 1) {
-            self.grid_mut().remove(bottom);
-            self.grid_mut().insert(top, vec![blank; cols]);
+            grid[top..=bottom].rotate_right(1);
+            let row = &mut grid[top];
+            row.fill(blank);
         }
     }
 
@@ -414,10 +428,10 @@ impl Screen {
 
     fn erase_lines(&mut self, from: usize, to: usize) {
         let blank = self.blank();
-        let cols = self.cols;
         for row in from..to.min(self.rows) {
             if self.grid()[row].iter().any(|cell| *cell != blank) {
-                *self.row_mut(row) = vec![blank; cols];
+                // Fill the kept line buffer instead of replacing it with a fresh allocation per erased row.
+                self.row_mut(row).fill(blank);
             }
         }
     }
@@ -541,7 +555,12 @@ impl Screen {
                 self.alt_saved = Some(self.save_state());
             }
             self.alt_active = true;
-            self.alt = vec![blank_line(self.cols, Color::Default); self.rows];
+            // Blank the retained lines instead of reallocating the whole alternate grid on every switch.
+            let blank = Cell::blank(Color::Default);
+            for line in &mut self.alt {
+                line.clear();
+                line.resize(self.cols, blank);
+            }
         } else {
             self.alt_active = false;
             if save_cursor && let Some(saved) = self.alt_saved.take() {
