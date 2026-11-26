@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::glyphs::{Arm, Rects, blend, glyph_rects};
-use crate::screen::{Cell, Color, CursorShape, Screen, attr};
+use crate::screen::{Cell, Color, CursorShape, Line, Screen, attr};
 use crate::themes::Palette;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +142,19 @@ fn row_runs(
     let Some(line) = screen.line_abs(index) else {
         return Vec::new();
     };
+    runs_for_line(&line, screen, palette, options, index, row)
+}
+
+/// Runs of visible row `row` for an already decoded line `index`, so a caller that scans many rows (the per-frame
+/// cache) can decode each line into one reused buffer instead of allocating a `Line` per row.
+fn runs_for_line(
+    line: &[Cell],
+    screen: &Screen,
+    palette: &Palette,
+    options: &GridOptions,
+    index: usize,
+    row: usize,
+) -> Vec<Run> {
     let (cursor_row, cursor_col) = screen.cursor();
     let show_cursor = cursor_drawn(screen, options);
     let block = options.cursor_shape == CursorShape::Block;
@@ -227,6 +240,9 @@ pub struct RunCache {
     stale: Vec<bool>,
     /// Live rows the screen reported changed, in one buffer reused across frames.
     changed: Vec<usize>,
+    /// Row decode scratch: a scrollback line is turned back into cells into this buffer, so a rebuild frame only
+    /// allocates the runs it keeps.
+    decoded: Line,
     /// Rows rebuilt by the last `update`.
     pub rebuilt: usize,
 }
@@ -282,9 +298,25 @@ impl RunCache {
             self.key = Some((palette.clone(), options.view_offset, options.cursor_shape));
         }
         self.rebuilt = stale.iter().filter(|slot| **slot).count();
+        // One decoded-line buffer for the whole update: a scrollback view no longer allocates a `Line` per rebuilt
+        // row on top of the runs it produces.
+        let mut decoded = std::mem::take(&mut self.decoded);
         for row in (0..rows).filter(|&row| stale[row]) {
-            self.rows[row] = Row::from(row_runs(screen, palette, options, top, row));
+            let index = top + row;
+            // A live row is handed over borrowed; only a scrollback line is decoded, into the reused buffer.
+            let line: &[Cell] = match screen.live_line(index) {
+                Some(line) => line,
+                None => {
+                    if !screen.line_abs_into(index, &mut decoded) {
+                        self.rows[row] = Row::from(Vec::new());
+                        continue;
+                    }
+                    &decoded
+                }
+            };
+            self.rows[row] = Row::from(runs_for_line(line, screen, palette, options, index, row));
         }
+        self.decoded = decoded;
         self.stale = stale;
         self.cursor = cursor;
         self.selection = options.selection;

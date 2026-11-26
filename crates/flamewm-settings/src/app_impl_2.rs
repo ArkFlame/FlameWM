@@ -94,6 +94,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         &self,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        let projected = self.open_picker_rows.get();
         for kind in [
             theme_picker::PickerKind::Icon,
             theme_picker::PickerKind::Cursor,
@@ -101,6 +102,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let open = self.theme_picker == Some(kind);
             let node = kind.node();
             document.visible(&format!("{node}-picker"), open)?;
+            if !open {
+                // A closed picker hides its rows once, on the settle that closes it. While it
+                // stays closed, rewriting all 32 slots per event is pure id churn.
+                if projected == Some(kind) {
+                    for slot in 0..theme_picker::THEME_ROW_SLOTS {
+                        document.visible(&format!("{node}-row-{slot}"), false)?;
+                    }
+                }
+                continue;
+            }
             let items = self.themes.items(kind);
             let shown = items.len().min(theme_picker::THEME_ROW_SLOTS);
             let count = if shown < items.len() {
@@ -113,7 +124,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             // closed picker keeps its previews in the registry, not in the document.
             for slot in 0..theme_picker::THEME_ROW_SLOTS {
                 let row = format!("{node}-row-{slot}");
-                let Some(item) = open.then(|| items.get(slot)).flatten() else {
+                let Some(item) = items.get(slot) else {
                     document.visible(&row, false)?;
                     continue;
                 };
@@ -141,6 +152,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
             }
         }
+        self.open_picker_rows.set(self.theme_picker);
         Ok(())
     }
 
@@ -758,9 +770,21 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Defaults => self.sync_defaults(document)?,
             _ => {}
         }
+        // One visual-order sort feeds every slot; `output_page_slot` would sort per lookup.
+        let output_order = self.ordered_output_indices();
+        let outputs = self.output_count();
         for slot in 0..OUTPUT_PAGE_SLOTS {
             let id = format!("display-output-{slot}");
-            let Some(output) = self.output_page_slot(slot) else {
+            let absolute = self
+                .pages
+                .output_page
+                .saturating_mul(OUTPUT_PAGE_SLOTS)
+                .saturating_add(slot);
+            let Some(output) = self.client.displays().and_then(|snapshot| {
+                output_order
+                    .get(absolute)
+                    .and_then(|index| snapshot.outputs.get(*index))
+            }) else {
                 document.visible(&id, false)?;
                 continue;
             };
@@ -809,12 +833,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document,
             &OUTPUT_PAGER,
             self.pages.output_page,
-            page_count(self.output_count(), OUTPUT_PAGE_SLOTS),
-            page_label(
-                self.pages.output_page,
-                OUTPUT_PAGE_SLOTS,
-                self.output_count(),
-            ),
+            page_count(outputs, OUTPUT_PAGE_SLOTS),
+            page_label(self.pages.output_page, OUTPUT_PAGE_SLOTS, outputs),
         )?;
         if let Some(output) = self.selected_display() {
             document.text(
@@ -1006,10 +1026,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         self.sync_appearance(document)?;
         // Settings is its own document: it projects the appearance's text and overlay tokens here,
-        // the same owner the desktop, Explorer and Task Manager use.
-        if let Some(snapshot) = self.client.settings() {
+        // the same owner the desktop, Explorer and Task Manager use. Those tokens depend only on
+        // the settings revision, so an unchanged snapshot (input, page switch, cursor drag) keeps
+        // the variables already in the document instead of rewriting them on every settle.
+        if let Some(snapshot) = self.client.settings()
+            && self.token_revision.get() != Some(snapshot.revision)
+        {
             flamewm_ui_x11::project_appearance_tokens(document, snapshot)?;
             flamewm_ui_x11::project_nav_row_tokens(document, snapshot)?;
+            self.token_revision.set(Some(snapshot.revision));
         }
         self.sync_option_setting(
             document,

@@ -11,6 +11,7 @@
 //! The entry just written is never evicted.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -98,17 +99,22 @@ fn write_entry(entry: &Path, image: &RgbaImage) {
     if fs::create_dir_all(dir).is_err() {
         return;
     }
-    let mut bytes = Vec::with_capacity(HEADER_LEN + image.pixels.len());
-    bytes.extend_from_slice(MAGIC);
-    bytes.extend_from_slice(&image.width.to_le_bytes());
-    bytes.extend_from_slice(&image.height.to_le_bytes());
-    bytes.extend_from_slice(&image.pixels);
+    // Stream the header and then the raster from the decoded image: staging both in one Vec
+    // would duplicate the whole frame (tens of MiB for a 4K wallpaper) before it is freed.
+    let mut header = [0u8; HEADER_LEN];
+    header[..8].copy_from_slice(&MAGIC[..]);
+    header[8..12].copy_from_slice(&image.width.to_le_bytes());
+    header[12..16].copy_from_slice(&image.height.to_le_bytes());
     // Write to a per-process temp name, then rename, so readers never see a partial entry.
     let temp = entry.with_extension(format!("rgba.{}.tmp", std::process::id()));
-    if fs::write(&temp, &bytes).is_err() {
+    let Ok(mut file) = fs::File::create(&temp) else {
         return;
-    }
-    if fs::rename(&temp, entry).is_err() {
+    };
+    let written = file
+        .write_all(&header)
+        .and_then(|()| file.write_all(&image.pixels));
+    drop(file);
+    if written.is_err() || fs::rename(&temp, entry).is_err() {
         let _ = fs::remove_file(&temp);
         return;
     }

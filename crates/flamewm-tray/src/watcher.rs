@@ -136,9 +136,11 @@ impl TrayWatcher {
             .append3(0i32, -1i32, Vec::<String>::new());
         let serial = self.pump.send(call)?;
         self.state.layouts.remove(key);
+        let pending = Pending::Layout(key.clone());
         self.state
             .pending
-            .insert(serial, Pending::Layout(key.clone()));
+            .retain(|_, existing| existing != &pending);
+        self.state.pending.insert(serial, pending);
         Ok(())
     }
 
@@ -196,15 +198,9 @@ impl WatcherState {
         if message.path().is_none_or(|path| path != WATCHER_PATH) {
             return MessageDisposition::Unhandled;
         }
-        let interface = message
-            .interface()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let member = message
-            .member()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        match (interface.as_str(), member.as_str()) {
+        let interface = message.interface();
+        let member = message.member();
+        match (interface.as_deref(), member.as_deref()) {
             (WATCHER_INTERFACE, "RegisterStatusNotifierItem") => self.register_item(pump, message),
             (WATCHER_INTERFACE, "RegisterStatusNotifierHost") => self.register_host(pump, message),
             (PROPERTIES_INTERFACE, "Get") => get_property(&self.registry, message),
@@ -217,7 +213,7 @@ impl WatcherState {
         let Some(argument) = single_string(message) else {
             return MessageDisposition::Unhandled;
         };
-        let sender = message.sender().map(|value| value.to_string());
+        let sender = message.sender();
         let Ok(key) = parse_registration(&argument, sender.as_deref()) else {
             return MessageDisposition::Unhandled;
         };
@@ -274,7 +270,7 @@ impl WatcherState {
                 if let [MessageItem::Dict(dict)] = items.as_slice() {
                     let props = props_from_entries(dict);
                     self.registry
-                        .set_props(&key, crate::item::ItemProps::from_props(&props));
+                        .set_props(&key, crate::item::ItemProps::from_owned_props(props));
                 }
             }
             Some(Pending::Owner(key)) => {
@@ -300,28 +296,25 @@ impl WatcherState {
     }
 
     fn signal(&mut self, pump: &BusPump, message: &Message) -> MessageDisposition {
-        let interface = message
-            .interface()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let member = message
-            .member()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        if interface == DBUS_INTERFACE && member == NAME_OWNER_CHANGED {
+        let interface = message.interface();
+        let member = message.member();
+        if interface.as_deref() == Some(DBUS_INTERFACE)
+            && member.as_deref() == Some(NAME_OWNER_CHANGED)
+        {
             self.name_owner_changed(pump, message);
             return MessageDisposition::Handled;
         }
-        if interface == ITEM_INTERFACE && member.starts_with("New") {
-            let sender = message
-                .sender()
-                .map(|value| value.to_string())
-                .unwrap_or_default();
-            let path = message
-                .path()
-                .map(|value| value.to_string())
-                .unwrap_or_default();
-            for key in self.registry.keys_for_sender(&sender, &path) {
+        if interface.as_deref() == Some(ITEM_INTERFACE)
+            && member
+                .as_deref()
+                .is_some_and(|member| member.starts_with("New"))
+        {
+            let sender = message.sender();
+            let path = message.path();
+            for key in self.registry.keys_for_sender(
+                sender.as_deref().unwrap_or_default(),
+                path.as_deref().unwrap_or_default(),
+            ) {
                 self.request_props(pump, &key);
             }
             return MessageDisposition::Handled;
@@ -379,6 +372,9 @@ impl WatcherState {
             return;
         };
         if let Ok(serial) = pump.send(call) {
+            // One outstanding request per (kind, item): a chatty item that re-announces itself or
+            // never answers must not consume the shared pending budget and starve other items.
+            self.pending.retain(|_, existing| existing != &pending);
             self.pending.insert(serial, pending);
         }
     }
@@ -457,10 +453,21 @@ fn props_from_entries(entries: &[(MessageItem, MessageItem)]) -> BTreeMap<String
     entries
         .iter()
         .filter_map(|(key, value)| match key {
-            MessageItem::Str(name) => Some((name.clone(), prop_value(name, value))),
+            MessageItem::Str(name) if projected(name) => {
+                Some((name.clone(), prop_value(name, value)))
+            }
             _ => None,
         })
         .collect()
+}
+
+/// The property names `ItemProps` projects; every other property is dropped while decoding, so
+/// a reply never materialises strings, tooltip bodies or pixmap buffers nothing reads.
+fn projected(name: &str) -> bool {
+    matches!(
+        name,
+        "Id" | "Title" | "Status" | "IconName" | "Menu" | "ItemIsMenu" | "ToolTip" | "IconPixmap"
+    )
 }
 
 fn prop_value(name: &str, item: &MessageItem) -> PropValue {
@@ -470,9 +477,7 @@ fn prop_value(name: &str, item: &MessageItem) -> PropValue {
             Some(MessageItem::Str(title)) => title.clone(),
             _ => String::new(),
         }),
-        ("IconPixmap", MessageItem::Array(array)) => {
-            PropValue::Pixmaps(pixmaps(array.clone().into_vec()))
-        }
+        ("IconPixmap", MessageItem::Array(array)) => PropValue::Pixmaps(pixmaps(array)),
         (_, MessageItem::Str(value)) => PropValue::Str(value.clone()),
         (_, MessageItem::ObjectPath(path)) => PropValue::Str(path.to_string()),
         (_, MessageItem::Bool(value)) => PropValue::Bool(*value),
@@ -488,10 +493,12 @@ fn unwrap_variant(item: &MessageItem) -> &MessageItem {
 }
 
 /// Decodes `a(iiay)`, dropping malformed entries (non-positive size, byte count mismatch, or
-/// over the per-entry bound) and capping the entry count.
-fn pixmaps(entries: Vec<MessageItem>) -> Vec<IconPixmap> {
+/// over the per-entry bound) and capping the entry count. Entries are read through the decoded
+/// array, and the size is checked before the bytes are copied, so a hostile reply cannot make the
+/// decoder allocate more than [`MAX_PIXMAP_BYTES`] per entry.
+fn pixmaps(entries: &[MessageItem]) -> Vec<IconPixmap> {
     entries
-        .into_iter()
+        .iter()
         .filter_map(|entry| {
             let MessageItem::Struct(fields) = entry else {
                 return None;
@@ -505,24 +512,24 @@ fn pixmaps(entries: Vec<MessageItem>) -> Vec<IconPixmap> {
                 return None;
             };
             let (width, height) = (u32::try_from(*width).ok()?, u32::try_from(*height).ok()?);
-            let argb: Vec<u8> = bytes
-                .clone()
-                .into_vec()
-                .into_iter()
-                .map(|item| match item {
-                    MessageItem::Byte(value) => Some(value),
-                    _ => None,
-                })
-                .collect::<Option<_>>()?;
             let expected = (width as usize)
                 .checked_mul(height as usize)?
                 .checked_mul(4)?;
-            (width > 0 && height > 0 && expected == argb.len() && argb.len() <= MAX_PIXMAP_BYTES)
-                .then_some(IconPixmap {
-                    width,
-                    height,
-                    argb,
-                })
+            if width == 0 || height == 0 || expected > MAX_PIXMAP_BYTES || expected != bytes.len() {
+                return None;
+            }
+            let mut argb = Vec::with_capacity(expected);
+            for byte in bytes.iter() {
+                let MessageItem::Byte(value) = byte else {
+                    return None;
+                };
+                argb.push(*value);
+            }
+            Some(IconPixmap {
+                width,
+                height,
+                argb,
+            })
         })
         .take(MAX_PIXMAPS)
         .collect()
@@ -642,7 +649,7 @@ mod tests {
         let valid = pixmap_item(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]);
         let short = pixmap_item(2, 2, vec![0; 8]);
         let zero = pixmap_item(0, 0, Vec::new());
-        let decoded = pixmaps(vec![valid, short, zero, MessageItem::Int32(7)]);
+        let decoded = pixmaps(&[valid, short, zero, MessageItem::Int32(7)]);
         assert_eq!(
             decoded,
             vec![IconPixmap {

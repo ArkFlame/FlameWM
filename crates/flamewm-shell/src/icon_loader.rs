@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
@@ -154,7 +155,30 @@ pub enum WorkerMsg {
 /// hold one key, making the probe a single-entry comparison instead of an O(pending) name walk.
 #[derive(Default)]
 struct PendingSet {
-    by_target: HashMap<IconTarget, Vec<(String, u32, u32)>>,
+    by_target: HashMap<IconTarget, Vec<(String, u32, u32)>, BuildHasherDefault<TargetHasher>>,
+}
+
+/// FNV-1a hasher for the five-variant [`IconTarget`] key. The map holds a handful of one-byte
+/// keys, so the default SipHash costs more than the single-entry compare it guards.
+struct TargetHasher(u64);
+
+impl Default for TargetHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for TargetHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
 }
 
 impl PendingSet {
@@ -199,6 +223,7 @@ impl PendingSet {
         self.by_target.is_empty()
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.by_target.values().map(Vec::len).sum()
     }
@@ -214,9 +239,7 @@ pub struct IconLoader {
     pub stale_drops: u64,
     pub results_applied: u64,
     pub high_enqueued: u64,
-    pub low_enqueued: u64,
     pub coalesced: u64,
-    pub dropped_low: u64,
     /// Visible requests refused by a full worker queue; their keys stay
     /// pending and are re-issued by `flush_retries` on the next drain.
     retry: Vec<IconRequest>,
@@ -224,6 +247,10 @@ pub struct IconLoader {
     theme: String,
     /// Theme change refused by a full queue; re-sent by `flush_retries`.
     theme_outbox: Option<String>,
+    /// Replies sent to the worker that have not been received yet (any generation). While it is
+    /// zero and no key is pending, `drain_ready` can skip the wake read and the channel probe. A
+    /// theme switch keeps stale replies counted until they drain.
+    replies_outstanding: usize,
 }
 
 impl IconLoader {
@@ -299,12 +326,11 @@ impl IconLoader {
             stale_drops: 0,
             results_applied: 0,
             high_enqueued: 0,
-            low_enqueued: 0,
             coalesced: 0,
-            dropped_low: 0,
             retry: Vec::new(),
             theme,
             theme_outbox: None,
+            replies_outstanding: 0,
         }
     }
 
@@ -319,8 +345,6 @@ impl IconLoader {
         }
         theme.clone_into(&mut self.theme);
         self.bump_generation();
-        self.pending.clear();
-        self.retry.clear();
         self.theme_outbox = Some(theme.to_owned());
         self.flush_theme();
         true
@@ -337,7 +361,13 @@ impl IconLoader {
         }
     }
 
-    pub fn bump_generation(&mut self) {
+    /// Advances the icon generation and forgets every in-flight key: their replies carry the old
+    /// generation (dropped as stale) and a view re-requests each visible slot under the new one.
+    /// Keeping the keys would strand them, since a stale reply no longer clears them, and would
+    /// suppress the re-request as a false coalesce.
+    fn bump_generation(&mut self) {
+        self.pending.clear();
+        self.retry.clear();
         self.generation = self.generation.wrapping_add(1).max(1);
     }
 
@@ -368,7 +398,7 @@ impl IconLoader {
 
     fn submit(&mut self, req: IconRequest) {
         match self.req_tx.try_send(WorkerMsg::Icon(req)) {
-            Ok(()) => {}
+            Ok(()) => self.replies_outstanding += 1,
             Err(TrySendError::Full(WorkerMsg::Icon(returned))) => {
                 self.queue_full_drops += 1;
                 if self.retry.len() < RETRY_CAP {
@@ -408,7 +438,7 @@ impl IconLoader {
                 continue;
             }
             match self.req_tx.try_send(WorkerMsg::Icon(req)) {
-                Ok(()) => {}
+                Ok(()) => self.replies_outstanding += 1,
                 Err(TrySendError::Full(WorkerMsg::Icon(returned))) => self.retry.push(returned),
                 Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
                     self.pending.remove(
@@ -426,19 +456,47 @@ impl IconLoader {
     /// Drain ready results; stale generations are dropped and counted.
     /// Ready keys leave the pending set so a later view change can re-queue.
     pub fn drain_ready(&mut self) -> Vec<IconResult> {
+        // Steady state once every visible icon is applied: no key is pending, no retry or
+        // theme is queued and no reply is still in flight. The tick then does no wake `read`,
+        // no retry flush and no channel probe; the FD path still drains the wake pipe on its
+        // own wake. A theme switch leaves stale replies counted, keeping this open until they
+        // are consumed.
+        if self.pending.is_empty()
+            && self.retry.is_empty()
+            && self.theme_outbox.is_none()
+            && self.replies_outstanding == 0
+        {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         self.wake_drain();
         self.flush_retries();
-        while let Ok(res) = self.res_rx.try_recv() {
-            // The key borrows the result name: no clone, no move, no restore dance.
-            self.pending
-                .remove(res.target, &res.name, res.width, res.height);
-            if res.generation != self.generation {
-                self.stale_drops += 1;
-                continue;
+        loop {
+            match self.res_rx.try_recv() {
+                Ok(res) => {
+                    self.replies_outstanding = self.replies_outstanding.saturating_sub(1);
+                    // A stale reply must not clear a key: the key was re-inserted under the
+                    // current generation by the theme-switch re-request, and only its own
+                    // reply may release it.
+                    if res.generation != self.generation {
+                        self.stale_drops += 1;
+                        continue;
+                    }
+                    self.pending
+                        .remove(res.target, &res.name, res.width, res.height);
+                    flamewm_integrations_linux::icon_service::observe_icon_raster(
+                        res.raster.is_some(),
+                    );
+                    out.push(res);
+                }
+                // Empty: nothing queued now. Disconnected: the worker is gone, so no reply
+                // can still arrive; a stuck counter would otherwise keep this path awake.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.replies_outstanding = 0;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
             }
-            flamewm_integrations_linux::icon_service::observe_icon_raster(res.raster.is_some());
-            out.push(res);
         }
         self.results_applied += out.len() as u64;
         out
@@ -454,7 +512,8 @@ impl IconLoader {
         use std::io::Read;
         // The reader is set nonblocking once in `spawn`; re-arming it per tick was one fcntl
         // syscall on every shell wake, including idle ticks with no icon traffic.
-        let mut buf = [0u8; 64];
+        // One read drains a whole burst of one-byte wake writes.
+        let mut buf = [0u8; 256];
         loop {
             match (&self.wake_reader).read(&mut buf) {
                 Ok(0) => break,
@@ -629,6 +688,9 @@ mod tests {
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
         let mut loader = loader_with_channels(req_tx, res_rx);
         loader.generation = 2;
+        // Both replies below bypass `request`, so account for them explicitly; otherwise the
+        // idle gate (no pending key, no outstanding reply) returns before reading them.
+        loader.replies_outstanding = 2;
         res_tx
             .try_send(IconResult {
                 target: IconTarget::TaskSlot(0),
@@ -713,12 +775,11 @@ mod tests {
             stale_drops: 0,
             results_applied: 0,
             high_enqueued: 0,
-            low_enqueued: 0,
             coalesced: 0,
-            dropped_low: 0,
             retry: Vec::new(),
             theme: String::new(),
             theme_outbox: None,
+            replies_outstanding: 0,
         }
     }
 

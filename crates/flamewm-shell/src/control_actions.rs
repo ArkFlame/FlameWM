@@ -75,6 +75,8 @@ thread_local! {
     static NETWORK_ACTION_OUTCOMES: RefCell<VecDeque<NetworkActionOutcome>> = const { RefCell::new(VecDeque::new()) };
     static PENDING_WEATHER_PICKS: RefCell<Vec<(u64, WeatherPick)>> = const { RefCell::new(Vec::new()) };
     static WEATHER_PICK_OUTCOMES: RefCell<VecDeque<WeatherPickOutcome>> = const { RefCell::new(VecDeque::new()) };
+    static PENDING_CLIPBOARD_LISTS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    static CLIPBOARD_LIST_OUTCOMES: RefCell<VecDeque<Result<Vec<flamewm_api::clipboard::ClipboardHistoryEntry>, String>>> = const { RefCell::new(VecDeque::new()) };
 }
 
 /// Enqueue a weather location settings transaction; its result is reported by
@@ -135,6 +137,34 @@ pub fn enqueue_network_action(
 #[must_use]
 pub fn take_network_action_outcomes() -> Vec<NetworkActionOutcome> {
     NETWORK_ACTION_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
+}
+
+/// Enqueue the clipboard history query on the control mutation queue. The reply is delivered by
+/// [`take_clipboard_list_outcomes`] on a later tick, so the Super+Shift+V open path never waits on
+/// a bus round trip. A refused enqueue becomes an immediate error outcome. Never blocks.
+#[must_use]
+pub fn enqueue_clipboard_list(dispatcher: Option<&Arc<MutationDispatcher>>) -> Option<u64> {
+    match enqueue_action(dispatcher, ControlRequest::ListClipboardHistory) {
+        Some(id) => {
+            PENDING_CLIPBOARD_LISTS.with(|pending| pending.borrow_mut().push(id));
+            Some(id)
+        }
+        None => {
+            CLIPBOARD_LIST_OUTCOMES.with(|outcomes| {
+                outcomes
+                    .borrow_mut()
+                    .push_back(Err("clipboard history query was not submitted".to_owned()));
+            });
+            None
+        }
+    }
+}
+
+/// Take the clipboard list results recorded since the last call, oldest first.
+#[must_use]
+pub fn take_clipboard_list_outcomes(
+) -> Vec<Result<Vec<flamewm_api::clipboard::ClipboardHistoryEntry>, String>> {
+    CLIPBOARD_LIST_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
 
 /// Enqueue a Start-menu launch and remember the app name against the queue
@@ -252,6 +282,21 @@ pub fn drain_results_with_settings(
         return;
     };
     while let Some(result) = dispatcher.try_recv_result() {
+        let clipboard_list = PENDING_CLIPBOARD_LISTS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            let position = pending.iter().position(|id| *id == result.id)?;
+            pending.swap_remove(position);
+            Some(())
+        });
+        if clipboard_list.is_some() {
+            let outcome = match result.outcome {
+                Ok(flamewm_control_core::ControlResponse::ClipboardHistory(entries)) => Ok(entries),
+                Ok(_) => Err("clipboard history reply had the wrong shape".to_owned()),
+                Err(error) => Err(error.message),
+            };
+            CLIPBOARD_LIST_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(outcome));
+            continue;
+        }
         let network_identity = PENDING_NETWORK_SECRETS.with(|pending| {
             let mut pending = pending.borrow_mut();
             let position = pending.iter().position(|(id, _)| *id == result.id)?;

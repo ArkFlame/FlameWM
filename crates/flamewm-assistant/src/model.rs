@@ -165,11 +165,12 @@ pub trait Pager {
     fn page(&mut self, before: Option<u64>, limit: usize) -> Result<Vec<Message>, String>;
 }
 
-/// One bubble to draw.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Row {
+/// One bubble to draw. The text is borrowed from the history, so repainting a streaming reply
+/// copies no message strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row<'a> {
     pub role: Role,
-    pub text: String,
+    pub text: &'a str,
 }
 
 /// Loaded slice of the chat (`lo..hi` in seq numbers), the viewport, and the streaming reply.
@@ -342,27 +343,27 @@ impl History {
     }
 
     /// Bubbles for the viewport, oldest first, at most `SLOTS` in total.
-    pub fn rows(&self) -> Vec<Row> {
+    pub fn rows(&self) -> Vec<Row<'_>> {
         let count = fitting(
             self.msgs.iter().skip(self.top),
             self.pending_height(),
             self.capacity(),
             &self.heights,
         );
-        let mut rows: Vec<Row> = self
+        let mut rows: Vec<Row<'_>> = self
             .msgs
             .iter()
             .skip(self.top)
             .take(count)
             .map(|msg| Row {
                 role: msg.role,
-                text: msg.text.clone(),
+                text: msg.text.as_str(),
             })
             .collect();
         if let Some(text) = self.pending.as_deref().filter(|text| !text.is_empty()) {
             rows.push(Row {
                 role: Role::Assistant,
-                text: text.to_owned(),
+                text,
             });
         }
         rows
@@ -447,7 +448,11 @@ mod tests {
     }
 
     fn texts(history: &History) -> Vec<String> {
-        history.rows().into_iter().map(|row| row.text).collect()
+        history
+            .rows()
+            .into_iter()
+            .map(|row| row.text.to_owned())
+            .collect()
     }
 
     #[test]
@@ -578,7 +583,7 @@ mod tests {
         history.set_pending(Some(long.clone()));
         let rows = history.rows();
         assert!(
-            rows.iter().any(|row| row.text == long),
+            rows.iter().any(|row| row.text == long.as_str()),
             "reply text must not be cut"
         );
         assert_eq!(rows.last().unwrap().role, Role::Assistant);
@@ -589,7 +594,11 @@ mod tests {
     fn budget_limits_rows_when_bubbles_are_tall() {
         let mut store = Fake::new(40);
         let history = History::open(&mut store, 40).unwrap();
-        let heights: usize = history.rows().iter().map(|row| bubble_px(&row.text)).sum();
+        let heights: usize = history
+            .rows()
+            .iter()
+            .map(|row| bubble_px(row.text))
+            .sum();
         assert!(heights <= LIST_BUDGET);
         assert!(
             history.rows().len() < SLOTS,

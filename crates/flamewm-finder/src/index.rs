@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -18,6 +19,9 @@ pub const RECENT_LIMIT: usize = 50;
 
 const CACHE_HEADER: &str = "flamewm-finder-index 1";
 const SKIPPED_DIRS: [&str; 3] = ["node_modules", "target", "__pycache__"];
+
+/// Source of [`Index::revision`]: monotonic for the life of the process.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -68,6 +72,10 @@ pub struct Index {
     pub doc_paths: Vec<String>,
     /// Indices of `doc_paths` that are in `entries`, in the same order.
     pub docs: Vec<usize>,
+    /// Changes whenever [`Index::finish`] rebuilds the derived views. Every new index and every
+    /// watcher commit gets a fresh number, so a cached rank result can be reused only against the
+    /// exact entry list it was computed from.
+    pub revision: u64,
 }
 
 impl Index {
@@ -90,6 +98,9 @@ impl Index {
 
     /// Recomputes the newest-files and recent-document views after `entries` changed.
     pub fn finish(&mut self) {
+        // A process-wide counter, not a per-index one: the worker replaces the whole index (cached
+        // listing, then fresh walk), and each replacement must invalidate the window's cached rank.
+        self.revision = NEXT_REVISION.fetch_add(1, Ordering::Relaxed) + 1;
         let entries = &self.entries;
         let newest = |&a: &usize, &b: &usize| {
             entries[b]
@@ -297,17 +308,26 @@ pub fn cache_path(cache_home: Option<OsString>, home: Option<OsString>) -> Optio
 #[must_use]
 pub fn load_cache(path: &Path) -> Option<Index> {
     let file = fs::File::open(path).ok()?;
-    let mut lines = io::BufReader::new(file).lines();
-    if lines.next()?.ok()? != CACHE_HEADER {
+    let mut reader = io::BufReader::new(file);
+    // One reused line buffer: `lines()` allocated a String per entry, and a full cache holds
+    // hundreds of thousands of lines per launch.
+    let mut line = String::new();
+    if reader.read_line(&mut line).ok()? == 0
+        || line.trim_end_matches(['\n', '\r']) != CACHE_HEADER
+    {
         return None;
     }
     let mut entries = Vec::new();
-    for line in lines {
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            break;
+        }
         if entries.len() >= MAX_ENTRIES {
             return None;
         }
-        let line = line.ok()?;
-        let mut fields = line.splitn(4, '\t');
+        let record = line.trim_end_matches(['\n', '\r']);
+        let mut fields = record.splitn(4, '\t');
         let is_dir = fields.next()? == "d";
         let modified = fields.next()?.parse().ok()?;
         let size = fields.next()?.parse().ok()?;

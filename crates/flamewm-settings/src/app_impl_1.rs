@@ -27,6 +27,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             canvas_hint: None,
             canvas_snap: None,
             display_canvas: None,
+            drag_write: None,
+            drag_preview: None,
+            open_picker_rows: std::cell::Cell::new(None),
+            token_revision: std::cell::Cell::new(None),
             scale_drag: None,
             scale_slider_focused: false,
             nav_query: String::new(),
@@ -231,16 +235,26 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return Ok(());
         };
         let speed = animation_speed_from_slider(text)?;
-        if self.integer_setting("animationSpeed").ok() != Some(speed) {
+        let changed = self.integer_setting("animationSpeed").ok() != Some(speed);
+        if event.phase == UiActionPhase::Motion {
+            // The pill, fill and thumb follow every pointer sample from the preview; the
+            // authoritative write is coalesced, so a drag sends one transaction per interval
+            // instead of one blocking round trip per sample.
+            self.error = None;
+            self.drag_preview = Some(("animationSpeed", speed));
+            if changed && self.drag_write_due("animationSpeed") {
+                self.client
+                    .apply_setting("animationSpeed", SettingValue::Integer(speed))
+                    .map_err(control_error)?;
+            }
+            return self.sync_animation_speed(document);
+        }
+        self.drag_preview = None;
+        self.drag_write = None;
+        if changed {
             self.client
                 .apply_setting("animationSpeed", SettingValue::Integer(speed))
                 .map_err(control_error)?;
-        }
-        if event.phase == UiActionPhase::Motion {
-            // Motion only moves the speed pill, fill and thumb; a full settle per pointer sample
-            // would rewrite every page for a value no other node shows.
-            self.error = None;
-            return self.sync_animation_speed(document);
         }
         self.settle(document)
     }
@@ -263,19 +277,51 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return Ok(());
         }
         let value = glass_slider_value(text, slider)?;
-        if self.number_setting(slider.key) != Some(value) {
+        let changed = self.number_setting(slider.key) != Some(value);
+        if event.phase == UiActionPhase::Motion {
+            // The three glass sliders redraw from the preview on every sample; the blocking
+            // control write is coalesced so a drag is not one round trip per pointer sample.
+            self.error = None;
+            self.drag_preview = Some((slider.key, value));
+            if changed && self.drag_write_due(slider.key) {
+                let value = u8::try_from(value).map_err(|_| "glass slider value out of range")?;
+                self.client
+                    .apply_setting(slider.key, SettingValue::Percent(value))
+                    .map_err(control_error)?;
+            }
+            return self.sync_glass_rows(document);
+        }
+        self.drag_preview = None;
+        self.drag_write = None;
+        if changed {
             let value = u8::try_from(value).map_err(|_| "glass slider value out of range")?;
             self.client
                 .apply_setting(slider.key, SettingValue::Percent(value))
                 .map_err(control_error)?;
         }
-        if event.phase == UiActionPhase::Motion {
-            // Motion only redraws the three glass sliders and their material rows. The release
-            // still settles every page, matching the keyboard and stepper paths.
-            self.error = None;
-            return self.sync_glass_rows(document);
-        }
         self.settle(document)
+    }
+
+    /// A live drag sends at most one authoritative write per interval; the release path is never
+    /// throttled, so the final value is always written.
+    fn drag_write_due(&mut self, key: &'static str) -> bool {
+        let now = monotonic_now_ms();
+        if let Some((last_key, last_ms)) = self.drag_write
+            && last_key == key
+            && now.wrapping_sub(last_ms) < SLIDER_WRITE_INTERVAL_MS
+        {
+            return false;
+        }
+        self.drag_write = Some((key, now));
+        true
+    }
+
+    /// The value a live drag currently shows, before its coalesced write lands.
+    pub(crate) fn drag_value(&self, key: &str) -> Option<i64> {
+        self.drag_preview
+            .as_ref()
+            .filter(|(preview_key, _)| *preview_key == key)
+            .map(|(_, value)| *value)
     }
 
     /// `taskbarMaterialMode` is `inherit`, which makes the taskbar opacity unavailable.
@@ -485,12 +531,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let Ok(requested) = self.text_setting("cursorTheme") else {
             return;
         };
-        // Resolution stats theme directories; once this exact request resolved and loaded, only a
-        // change of `cursorTheme` can make it stale. A failed load keeps both caches empty, so the
+        // Resolution stats theme directories; once this exact request was dealt with, only a
+        // change of `cursorTheme` can make it stale. A failed load clears the request so the
         // next settle retries it.
-        if self.applied_cursor_theme.is_some()
-            && self.applied_cursor_request.as_deref() == Some(requested.as_str())
-        {
+        if self.applied_cursor_request.as_deref() == Some(requested.as_str()) {
             return;
         }
         let search_path = std::env::var("XCURSOR_PATH").unwrap_or_default();
@@ -508,6 +552,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if errors.is_empty() {
             self.applied_cursor_theme = Some(theme);
             self.applied_cursor_request = Some(requested);
+        } else {
+            self.applied_cursor_request = None;
         }
         for error in errors {
             eprintln!("settings: cursor theme reload failed: {error}");
@@ -783,6 +829,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     pub(crate) fn execute(&mut self, action: SettingsAction) -> Result<(), String> {
+        // Any non-drag control ends a live slider gesture; its preview must not outlive it.
+        self.drag_write = None;
+        self.drag_preview = None;
         // A native key id (e.g. the Super release that ends a capture gesture)
         // must not disarm capture; the key-event path decides when it commits.
         if !matches!(

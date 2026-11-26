@@ -210,9 +210,7 @@ pub fn note_loader_stats(loader: &IconLoader) {
         (queue_full_counter(), loader.queue_full_drops),
         (stale_counter(), loader.stale_drops),
         (high_counter(), loader.high_enqueued),
-        (low_counter(), loader.low_enqueued),
         (coalesced_counter(), loader.coalesced),
-        (dropped_low_counter(), loader.dropped_low),
     ];
     for (counter, n) in bumps {
         if n > 0 {

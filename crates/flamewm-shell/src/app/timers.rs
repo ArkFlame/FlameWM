@@ -88,6 +88,7 @@ impl ShellLoop {
             }
         }
         self.drain_icons(runtime);
+        self.apply_clipboard_outcomes(runtime)?;
         // J07: nonblocking helper poll; restart is bounded, failures are
         // nonfatal diagnostics, the shell loop always survives.
         flamewm_shell::quick_controls::host::poll_supervisor_nonfatal(&mut self.quick_control);

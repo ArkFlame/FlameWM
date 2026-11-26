@@ -86,8 +86,10 @@ fn clip(run: &Run, from: usize, to: usize) -> Run {
         col: run.col + from,
         cells: to - from,
         text,
+        fg: run.fg,
+        bg: run.bg,
+        bold: run.bold,
         shape,
-        ..run.clone()
     }
 }
 
@@ -104,14 +106,18 @@ impl App {
     /// Grid rows of runs for the active view, with the tab bar as row 0. Every pane draws into its own rectangle, so
     /// a row holds the runs of all panes that share it, side by side and never overlapping.
     pub fn frame(&mut self) -> Vec<Row> {
+        // The row list is reused across frames: the projector hands it back after writing the document, so a frame
+        // allocates no container once the window has been drawn at this size.
+        let mut rows = std::mem::take(&mut self.frame_rows);
+        rows.clear();
         let (bar, _) = self.tab_bar();
-        let mut rows = vec![Row::from(bar)];
+        rows.push(Row::from(bar));
         match &self.view {
             View::Terminal => {
                 // The banner takes the top rows of the grid; the grid's bottom rows give way to it.
                 let banner = self.banner_rows();
                 rows.extend(self.banner_lines_for(banner).into_iter().map(Row::from));
-                rows.extend(self.grid_frame(banner));
+                self.grid_frame(banner, &mut rows);
                 self.draw_find(&mut rows, banner);
                 if let Some(suffix) = self.ghost() {
                     self.draw_ghost(&mut rows, suffix);
@@ -138,18 +144,18 @@ impl App {
         rows
     }
 
-    /// The pane grid below the banner. A row is composed only when one of its pane rows is a new allocation or
-    /// moved; otherwise the previous frame's row is handed out again.
-    fn grid_frame(&mut self, banner: usize) -> Vec<Row> {
-        let rows = self.grid_rows.saturating_sub(banner);
+    /// Appends the pane grid below the banner to `rows`. A row is composed only when one of its pane rows is a new
+    /// allocation or moved; otherwise the previous frame's row is handed out again.
+    fn grid_frame(&mut self, banner: usize, rows: &mut Vec<Row>) {
+        let height = self.grid_rows.saturating_sub(banner);
         let (cursor_shape, grid_rect) = (self.cursor_shape(), self.grid_rect());
         // Per-row input lists live across frames: after the first frame their slow growth is paid once, so an idle,
         // scrolling or flooding repaint allocates nothing for the lists themselves.
         let mut inputs = std::mem::take(&mut self.grid_inputs);
-        if inputs.len() > rows {
-            inputs.truncate(rows);
+        if inputs.len() > height {
+            inputs.truncate(height);
         }
-        while inputs.len() < rows {
+        while inputs.len() < height {
             inputs.push(Vec::new());
         }
         for row_inputs in &mut inputs {
@@ -187,10 +193,10 @@ impl App {
         // The composed rows are updated in place, so the old allocations serve the new frame. A row whose inputs are
         // the same allocation at the same rectangle keeps its composed row untouched.
         let mut composed = std::mem::take(&mut self.grid_composed);
-        if composed.len() > rows {
-            composed.truncate(rows);
+        if composed.len() > height {
+            composed.truncate(height);
         }
-        while composed.len() < rows {
+        while composed.len() < height {
             composed.push(GridRow {
                 inputs: Vec::new(),
                 row: Row::from(Vec::new()),
@@ -205,9 +211,10 @@ impl App {
                 row_inputs.clear();
             }
         }
-        let grid = composed.iter().map(|entry| entry.row.clone()).collect();
+        // Append into the caller's row buffer: the composed rows are handles to shared run slices, so this copies no
+        // text and allocates no container.
+        rows.extend(composed.iter().map(|entry| entry.row.clone()));
         self.grid_composed = composed;
         self.grid_inputs = inputs;
-        grid
     }
 }

@@ -394,6 +394,10 @@ pub(crate) const SWITCH_BODIES: &[(&str, &str, &str)] = &[
 
 /// Inline status line for failed requests. Optional in the compiled markup.
 pub(crate) const ERROR_NODE: &str = "settings-error";
+/// Minimum spacing between live-slider writes. The drag preview updates on every pointer
+/// sample; the authoritative write (a blocking control round trip plus persistence) is
+/// coalesced to this interval and always sent once on release.
+pub(crate) const SLIDER_WRITE_INTERVAL_MS: u64 = 120;
 /// Version line on the About page. Optional in the compiled markup.
 pub(crate) const ABOUT_VERSION_NODE: &str = "about-version";
 /// Output rows per page on the Displays page and the Taskbar output list. The

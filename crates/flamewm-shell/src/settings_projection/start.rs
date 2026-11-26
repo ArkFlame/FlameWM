@@ -1,7 +1,26 @@
 //! Start menu icon and slide projection.
 
+use std::cell::RefCell;
+use std::time::SystemTime;
+
 use super::*;
 use flamewm_api::motion::motion_scale;
+
+/// Identity of a custom Start icon file. Re-projection decodes the raster again only when the
+/// path or the file's length/modification time changed.
+#[derive(Clone, PartialEq, Eq)]
+struct StartIconKey {
+    path: String,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+thread_local! {
+    /// Last decoded custom Start icon (25x25 RGBA), so accent/theme settings projections reuse it
+    /// instead of blocking the UI thread on another file read and decode.
+    static START_ICON_CACHE: RefCell<Option<(StartIconKey, RuntimeImage)>> =
+        const { RefCell::new(None) };
+}
 
 /// `showAllProgramsByDefault`: whether Start opens in All Programs. Missing snapshot or key is off.
 #[must_use]
@@ -35,11 +54,21 @@ pub(super) fn load_start_icon(path: &str) -> Result<RuntimeImage, String> {
     let path = std::path::Path::new(path);
     let format = ImageSourceFormat::from_extension(path)
         .ok_or_else(|| format!("unsupported start icon format: {}", path.display()))?;
-    let len = std::fs::metadata(path)
-        .map_err(|error| error.to_string())?
-        .len();
+    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    let len = metadata.len();
     if len > MAX_START_ICON_BYTES {
         return Err(format!("start icon exceeds {MAX_START_ICON_BYTES} bytes"));
+    }
+    let key = StartIconKey {
+        path: path.display().to_string(),
+        len,
+        modified: metadata.modified().ok(),
+    };
+    if let Some(cached) = START_ICON_CACHE.with(|cache| match cache.borrow().as_ref() {
+        Some((cached_key, image)) if *cached_key == key => Some(image.clone()),
+        _ => None,
+    }) {
+        return Ok(cached);
     }
     let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
     let image = decode_bytes_at(
@@ -49,12 +78,16 @@ pub(super) fn load_start_icon(path: &str) -> Result<RuntimeImage, String> {
         START_ICON_SIZE,
         ScaleFilter::Area,
     )?;
-    Ok(RuntimeImage {
+    let image = RuntimeImage {
         source: path.display().to_string(),
         width: image.width,
         height: image.height,
         pixels: image.pixels,
-    })
+    };
+    START_ICON_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some((key, image.clone()));
+    });
+    Ok(image)
 }
 
 /// Start presentation for the panel edge hosting Start. `start_button` is the Start button's root

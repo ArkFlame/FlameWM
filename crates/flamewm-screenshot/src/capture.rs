@@ -172,6 +172,50 @@ fn component(value: u32, mask: u32) -> u8 {
     (((u64::from((value & mask) >> shift) * 255) + u64::from(max) / 2) / u64::from(max)) as u8
 }
 
+/// Per-channel extraction arithmetic for one visual, computed once per frame instead of once per
+/// pixel: 8-bit channels need only a shift and mask, wider ones the scaling division.
+#[derive(Clone, Copy)]
+struct Channels {
+    masks: [u32; 3],
+    shifts: [u32; 3],
+    eight_bit: [bool; 3],
+}
+
+impl Channels {
+    fn new(masks: [u32; 3]) -> Self {
+        let mut shifts = [0u32; 3];
+        let mut eight_bit = [false; 3];
+        for (index, &mask) in masks.iter().enumerate() {
+            if mask != 0 {
+                shifts[index] = mask.trailing_zeros();
+                eight_bit[index] = (mask >> shifts[index]) == 0xff;
+            }
+        }
+        Self {
+            masks,
+            shifts,
+            eight_bit,
+        }
+    }
+
+    fn pixel(&self, value: u32) -> [u8; 4] {
+        [
+            self.channel(value, 0),
+            self.channel(value, 1),
+            self.channel(value, 2),
+            255,
+        ]
+    }
+
+    fn channel(&self, value: u32, channel: usize) -> u8 {
+        if self.eight_bit[channel] {
+            ((value & self.masks[channel]) >> self.shifts[channel]) as u8
+        } else {
+            component(value, self.masks[channel])
+        }
+    }
+}
+
 /// Decodes `XImage` `ZPixmap` bytes, including native padding and 16/24/32 bpp.
 pub fn decode_ximage<C: Connection>(
     conn: &C,
@@ -215,23 +259,28 @@ pub fn decode_ximage<C: Connection>(
         .flat_map(|d| &d.visuals)
         .find(|v| v.visual_id == setup.roots[screen].root_visual)
         .ok_or("X11 root visual missing")?;
-    let mut rgba = Vec::with_capacity(count.checked_mul(4).ok_or("capture too large")?);
-    for row in data.chunks_exact(stride).take(height as usize) {
-        for pixel in row.chunks_exact(bpp / 8).take(width as usize) {
-            let value = if setup.image_byte_order == ImageOrder::LSB_FIRST {
-                pixel
+    let channels = Channels::new([visual.red_mask, visual.green_mask, visual.blue_mask]);
+    let little = setup.image_byte_order == ImageOrder::LSB_FIRST;
+    let pixel_bytes = bpp / 8;
+    let mut rgba = vec![0u8; count.checked_mul(4).ok_or("capture too large")?];
+    let row_len = width as usize * 4;
+    let src_row_len = width as usize * pixel_bytes;
+    for (row_index, row) in data.chunks_exact(stride).take(height as usize).enumerate() {
+        let out_row = &mut rgba[row_index * row_len..][..row_len];
+        let src_row = &row[..src_row_len];
+        for (pixel, source) in out_row
+            .chunks_exact_mut(4)
+            .zip(src_row.chunks_exact(pixel_bytes))
+        {
+            let value = if little {
+                source
                     .iter()
                     .rev()
                     .fold(0u32, |v, b| (v << 8) | u32::from(*b))
             } else {
-                pixel.iter().fold(0u32, |v, b| (v << 8) | u32::from(*b))
+                source.iter().fold(0u32, |v, b| (v << 8) | u32::from(*b))
             };
-            rgba.extend_from_slice(&[
-                component(value, visual.red_mask),
-                component(value, visual.green_mask),
-                component(value, visual.blue_mask),
-                255,
-            ]);
+            pixel.copy_from_slice(&channels.pixel(value));
         }
     }
     Ok(Image {
@@ -247,23 +296,14 @@ pub fn decode_ximage<C: Connection>(
 fn decode_32bpp_in_place(data: &mut [u8], masks: [u32; 3], little: bool) {
     // 8-bit channels (the common case) need only a shift and mask; the general scaling
     // divides per pixel and dominated the capture time at 1080p.
-    let shift_of = |mask: u32| if mask == 0 { 0 } else { mask.trailing_zeros() };
-    let eight_bit = masks.map(|m| m != 0 && (m >> shift_of(m)) == 0xff);
-    let shifts = masks.map(shift_of);
+    let channels = Channels::new(masks);
     for pixel in data.chunks_exact_mut(4) {
         let native = if little {
             u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])
         } else {
             u32::from_be_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])
         };
-        let channel = |i: usize| {
-            if eight_bit[i] {
-                ((native & masks[i]) >> shifts[i]) as u8
-            } else {
-                component(native, masks[i])
-            }
-        };
-        pixel.copy_from_slice(&[channel(0), channel(1), channel(2), 255]);
+        pixel.copy_from_slice(&channels.pixel(native));
     }
 }
 

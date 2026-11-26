@@ -30,25 +30,42 @@ use crate::capture::Image;
 const BPP: usize = 4;
 
 /// Converts the compositor's `Xrgb8888` rows (stride `width * 4`, memory order B, G, R, X) into
-/// RGBA. `y_invert` reverses row order, as the protocol flag requires. `None` when the byte count
-/// does not match the geometry.
+/// RGBA in the same buffer. `y_invert` reverses row order, as the protocol flag requires. `false`
+/// when the byte count does not match the geometry, leaving the buffer untouched. Running in place
+/// keeps one full-size frame buffer alive per capture instead of two.
 #[must_use]
-pub fn xrgb_to_rgba(src: &[u8], width: u32, height: u32, y_invert: bool) -> Option<Vec<u8>> {
+pub fn xrgb_to_rgba_in_place(raw: &mut [u8], width: u32, height: u32, y_invert: bool) -> bool {
     let row = width as usize * BPP;
-    if src.len() != row * height as usize {
-        return None;
+    let Some(total) = row.checked_mul(height as usize) else {
+        return false;
+    };
+    if raw.len() != total {
+        return false;
     }
-    let mut lines: Vec<&[u8]> = src.chunks_exact(row).collect();
+    if row == 0 || height == 0 {
+        return true;
+    }
     if y_invert {
-        lines.reverse();
-    }
-    let mut out = Vec::with_capacity(src.len());
-    for line in lines {
-        for px in line.chunks_exact(BPP) {
-            out.extend_from_slice(&[px[2], px[1], px[0], 0xff]);
+        let last = height as usize - 1;
+        for (index, opposite) in (0..height as usize / 2).map(|index| (index, last - index)) {
+            for offset in 0..row {
+                raw.swap(index * row + offset, opposite * row + offset);
+            }
         }
     }
-    Some(out)
+    for pixel in raw.chunks_exact_mut(BPP) {
+        pixel.swap(0, 2);
+        pixel[3] = 0xff;
+    }
+    true
+}
+
+/// [`xrgb_to_rgba_in_place`] for callers that hold the bytes behind a borrow, as the tests do.
+#[cfg(test)]
+#[must_use]
+fn xrgb_to_rgba(src: &[u8], width: u32, height: u32, y_invert: bool) -> Option<Vec<u8>> {
+    let mut out = src.to_vec();
+    xrgb_to_rgba_in_place(&mut out, width, height, y_invert).then_some(out)
 }
 
 /// What the compositor announced and reported for one frame.
@@ -163,14 +180,15 @@ fn receive(
     let mut raw = vec![0u8; size as usize];
     file.read_exact_at(&mut raw, 0)
         .map_err(|e| format!("read capture: {e}"))?;
-    let rgba =
-        xrgb_to_rgba(&raw, width, height, client.frame.y_invert).ok_or("capture size mismatch")?;
+    if !xrgb_to_rgba_in_place(&mut raw, width, height, client.frame.y_invert) {
+        return Err("capture size mismatch".into());
+    }
     buffer.destroy();
     pool.destroy();
     Ok(Image {
         width,
         height,
-        rgba,
+        rgba: raw,
     })
 }
 

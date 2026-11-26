@@ -418,7 +418,7 @@ impl ShellLoop {
                     .get(index)
                     .copied()
                     .filter(|label| label.w > 0.0 && !name.is_empty())
-                    .map(|label| (name.to_owned(), placed, label))
+                    .map(|label| (name, placed, label))
             }
             _ => None,
         };
@@ -433,8 +433,14 @@ impl ShellLoop {
         let x = placed.0 + label.x.round() as i32;
         let y = placed.1 + label.y.round() as i32;
         // Unchanged text and place: the popup already shows it, so skip the per-tick re-map and
-        // repaint that made the label flicker over window content.
-        if self.dock_stage.label_shown.as_ref() == Some(&(name.clone(), (x, y))) {
+        // repaint that made the label flicker over window content. Compare borrowed: pointer
+        // motion is the bulk of the event stream and must not allocate a label string per event.
+        if self
+            .dock_stage
+            .label_shown
+            .as_ref()
+            .is_some_and(|(shown_name, position)| shown_name.as_str() == name && *position == (x, y))
+        {
             return;
         }
         let popup = match self.dock_stage.label {
@@ -457,7 +463,7 @@ impl ShellLoop {
         let _ = runtime.hide(popup);
         let _ = runtime.move_resize(popup, x, y, dock::LABEL_W as u32, dock::LABEL_H as u32);
         let _ = runtime.with_document(popup, |document| {
-            document.text("dock-tip-text", name.clone())
+            document.text("dock-tip-text", name.to_owned())
         });
         Self::apply_label_backdrop(
             runtime,
@@ -466,7 +472,7 @@ impl ShellLoop {
         );
         let _ = runtime.show(popup);
         let _ = runtime.redraw(popup);
-        self.dock_stage.label_shown = Some((name, (x, y)));
+        self.dock_stage.label_shown = Some((name.to_owned(), (x, y)));
     }
 
     /// Bakes the real pixels beneath the label rect as its backdrop: X11 windows are opaque, so

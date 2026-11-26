@@ -17,6 +17,10 @@ impl Finder {
             query: String::new(),
             parsed: Query::default(),
             hits: Hits::default(),
+            hits_query: String::new(),
+            hits_revision: 0,
+            // No real index predates the epoch, so the first rerank always ranks.
+            hits_day: -1,
             selected: 0,
             first: 0,
             navigating: false,
@@ -59,12 +63,32 @@ impl Finder {
     pub(super) fn rerank(&mut self) {
         self.parsed = Query::parse(&self.query, &self.home);
         let now = now_secs();
+        let day = now / 86_400;
         let files = palette::mode(&self.query) == Mode::Files;
-        self.hits = if files {
-            search::rank(&self.view(), &self.parsed, now)
+        // Reuse the previous ranking when the query, the index and the day are unchanged. The
+        // worker delivers application, session and watcher messages in bursts, and each one used
+        // to rescore every entry again for the same text.
+        let fresh = if files {
+            let view = self.view();
+            let reused = view.revision == self.hits_revision
+                && day == self.hits_day
+                && self.hits_query == self.query;
+            if reused {
+                None
+            } else {
+                Some((search::rank(&view, &self.parsed, now), view.revision))
+            }
         } else {
-            Hits::default()
+            None
         };
+        if !files {
+            self.hits = Hits::default();
+        } else if let Some((hits, revision)) = fresh {
+            self.hits = hits;
+            self.hits_revision = revision;
+            self.hits_day = day;
+            self.hits_query.clone_from(&self.query);
+        }
         let quick = files && !self.query.trim().is_empty();
         self.answer = quick.then(|| quick::calculate(&self.query)).flatten();
         // Applications rank only once the launch-frequency table is in, so no row is ordered by an

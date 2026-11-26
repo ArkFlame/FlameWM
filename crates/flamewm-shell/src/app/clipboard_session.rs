@@ -1,20 +1,11 @@
 //! Clipboard history popup: Super+Shift+V toggle, list/select/clear over the control bus, and
 //! the keyboard walk. The ring and the paste selection live in the compositor; this module only
-//! lists them and sends the three control calls.
+//! lists them and enqueues the three control calls on the nonblocking mutation dispatcher.
 
 use super::*;
-use flamewm_control_core::ControlResponse;
-use flamewm_control_dbus::ControlClient;
-use flamewm_dbus_reactor::BusKind;
 use flamewm_shell::focus_keys::list_focus_after;
 use flamewm_shell::launcher::parse_typed_key;
 use flamewm_shell_core::popup_session::PopupKind;
-
-/// One control call over the session bus. Failures are logged and the popup keeps its state.
-fn call_clipboard(request: &ControlRequest) -> Result<ControlResponse, String> {
-    let client = ControlClient::connect(BusKind::Session).map_err(|error| format!("{error:?}"))?;
-    client.call(request).map_err(|error| format!("{error:?}"))
-}
 
 impl ShellLoop {
     /// Super+Shift+V toggle. A second request while open closes it.
@@ -38,11 +29,9 @@ impl ShellLoop {
         else {
             return Ok(());
         };
-        match call_clipboard(&ControlRequest::ListClipboardHistory) {
-            Ok(ControlResponse::ClipboardHistory(entries)) => self.clipboard.replace(entries),
-            Ok(_) => eprintln!("flamewm-shell: clipboard list reply had the wrong shape"),
-            Err(error) => eprintln!("flamewm-shell: clipboard history unavailable: {error}"),
-        }
+        // Nonblocking: the history arrives through the mutation result drain and is applied on a
+        // later tick, so opening Super+Shift+V never waits on a control bus round trip.
+        let _ = flamewm_shell::control_actions::enqueue_clipboard_list(self.dispatcher.as_ref());
         self.project_clipboard(runtime)?;
         match self.surfaces.open_clipboard_on(runtime, &target.output) {
             Ok(_) => {
@@ -82,20 +71,20 @@ impl ShellLoop {
         match key {
             "Return" | "KP_Enter" => {
                 if let Some(id) = self.clipboard.selected_id() {
-                    if let Err(error) =
-                        call_clipboard(&ControlRequest::SelectClipboardHistory { id })
-                    {
-                        eprintln!("flamewm-shell: clipboard select failed: {error}");
-                    }
+                    flamewm_shell::control_actions::enqueue_action(
+                        self.dispatcher.as_ref(),
+                        ControlRequest::SelectClipboardHistory { id },
+                    );
                     self.close_clipboard(runtime)?;
                 }
             }
             // The control wire has no per-entry delete, so Delete clears the whole history.
             // shortcut: Delete clears all entries; revisit when a per-entry remove control call lands.
             "Delete" | "KP_Delete" => {
-                if let Err(error) = call_clipboard(&ControlRequest::ClearClipboardHistory) {
-                    eprintln!("flamewm-shell: clipboard clear failed: {error}");
-                }
+                flamewm_shell::control_actions::enqueue_action(
+                    self.dispatcher.as_ref(),
+                    ControlRequest::ClearClipboardHistory,
+                );
                 self.clipboard.replace(Vec::new());
                 self.project_clipboard(runtime)?;
             }
@@ -116,5 +105,33 @@ impl ShellLoop {
     fn project_clipboard(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), UiBackendError> {
         let list = &self.clipboard;
         runtime.with_document(self.surfaces.clipboard, |document| list.project(document))
+    }
+
+    /// Applies clipboard history replies drained from the control mutation queue. A reply that
+    /// arrives while the popup is open re-projects and redraws it; one that arrives after it
+    /// closed only updates the model, which the next open re-requests anyway.
+    pub(super) fn apply_clipboard_outcomes(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<(), UiBackendError> {
+        let outcomes = flamewm_shell::control_actions::take_clipboard_list_outcomes();
+        if outcomes.is_empty() {
+            return Ok(());
+        }
+        let mut changed = false;
+        for outcome in outcomes {
+            match outcome {
+                Ok(entries) => {
+                    self.clipboard.replace(entries);
+                    changed = true;
+                }
+                Err(error) => eprintln!("flamewm-shell: clipboard history unavailable: {error}"),
+            }
+        }
+        if changed && self.surfaces.is_clipboard_open() {
+            self.project_clipboard(runtime)?;
+            runtime.redraw(self.surfaces.clipboard)?;
+        }
+        Ok(())
     }
 }

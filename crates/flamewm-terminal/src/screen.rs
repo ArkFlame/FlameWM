@@ -241,6 +241,19 @@ impl Screen {
         }
     }
 
+    /// The live-grid line at absolute `index`, borrowed without a decode. `None` for a scrollback line (decode it
+    /// with `line_abs_into`) or an index past the grid, so a renderer can avoid both a copy and an allocation on the
+    /// live view.
+    #[must_use]
+    pub fn live_line(&self, index: usize) -> Option<&Line> {
+        let history = self.scrollback_len();
+        if index < history {
+            None
+        } else {
+            self.grid().get(index - history)
+        }
+    }
+
     /// Writes absolute line `index` into `out`, which is cleared first; false when the index is out of range. A walk
     /// over the scrollback reuses one buffer instead of allocating a decoded line per entry.
     pub fn line_abs_into(&self, index: usize, out: &mut Line) -> bool {

@@ -8,7 +8,7 @@ use std::path::Path;
 
 pub use flamewm_api::background::WallpaperFit;
 
-use crate::scale::{ScaleFilter, area_tap, scale_rgba};
+use crate::scale::{ScaleFilter, TapTable, scale_rgba};
 use crate::{ImageSourceFormat, RgbaImage, check_size_limits};
 
 /// Opaque black: the desktop background colour from `project_background`. Used for letterbox
@@ -121,9 +121,11 @@ pub fn compose_region(
     let length = (width as usize)
         .checked_mul(height as usize)?
         .checked_mul(4)?;
-    let mut pixels = Vec::with_capacity(length);
+    let mut pixels = vec![0u8; length];
+    let mut cursor = 0;
     emit_region(natural, root_w, root_h, fit, rect, |_, _, pixel| {
-        pixels.extend_from_slice(pixel);
+        pixels[cursor..cursor + 4].copy_from_slice(pixel);
+        cursor += 4;
     })?;
     Some(RgbaImage {
         width,
@@ -210,28 +212,19 @@ fn emit_region(
         Layer::Scaled {
             width: sw,
             height: sh,
-            x,
-            y,
+            x: origin_x,
+            y: origin_y,
         } => {
-            // Keep the identical area_tap sequence and float accumulation order.
-            let taps = |start: u32, len: u32, origin: i64, src: u64, dst: u64| {
-                (start..start + len)
-                    .map(|c| {
-                        let s = i64::from(c) - origin;
-                        (0..dst as i64)
-                            .contains(&s)
-                            .then(|| area_tap(src as usize, dst as usize, s as usize))
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let column_taps = taps(x0, width, x, nw, u64::from(sw));
-            let row_taps = taps(y0, height, y, nh, u64::from(sh));
-            for (j, row) in row_taps.iter().enumerate() {
-                for (i, column) in column_taps.iter().enumerate() {
-                    match (row, column) {
-                        (Some(row), Some(column)) => {
-                            emit(i, j, &area_pixel(natural, column, row));
-                        }
+            // The same area_tap arithmetic and float accumulation order, but every tap of each
+            // axis is built once into flat buffers instead of one short `Vec` per destination
+            // index: a full-HD wallpaper used to allocate ~4000 vectors per compose.
+            let columns = TapTable::new(nw as usize, sw as usize);
+            let rows = TapTable::new(nh as usize, sh as usize);
+            for (j, y) in (y0..y0 + height).enumerate() {
+                let row = tap_at(&rows, i64::from(y) - origin_y, sh as usize);
+                for (i, x) in (x0..x0 + width).enumerate() {
+                    match (row, tap_at(&columns, i64::from(x) - origin_x, sw as usize)) {
+                        (Some(row), Some(column)) => emit(i, j, &area_pixel(natural, column, row)),
                         _ => emit(i, j, &BACKGROUND),
                     }
                 }
@@ -339,9 +332,15 @@ fn layer(natural: &RgbaImage, width: u32, height: u32, fit: WallpaperFit) -> Opt
     }
 }
 
+/// Tap `destination` of `taps` when it names a real destination index, `None` for letterboxing.
+fn tap_at(taps: &TapTable, destination: i64, dst_len: usize) -> Option<(usize, &[f32])> {
+    let index = usize::try_from(destination).ok()?;
+    (index < dst_len).then(|| taps.tap(index))
+}
+
 /// One output pixel of the area-filtered natural image, accumulated in the same order and
 /// precision as `scale::scale_rgba` with `ScaleFilter::Area`.
-fn area_pixel(natural: &RgbaImage, column: &(usize, Vec<f32>), row: &(usize, Vec<f32>)) -> [u8; 4] {
+fn area_pixel(natural: &RgbaImage, column: (usize, &[f32]), row: (usize, &[f32])) -> [u8; 4] {
     let src_w = natural.width as usize;
     let mut acc = [0f32; 4];
     for (row_offset, row_weight) in row.1.iter().enumerate() {

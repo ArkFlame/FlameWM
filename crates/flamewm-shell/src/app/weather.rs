@@ -41,8 +41,8 @@ impl ShellLoop {
                 tray_ok = false;
             }
         }
-        self.push_weather_feed();
-        self.publish_weather_feed();
+        self.publish_weather_feed(&feed);
+        self.push_weather_feed_value(feed);
         if !tray_ok {
             self.weather_feed_pending = true;
         }
@@ -50,16 +50,15 @@ impl ShellLoop {
 
     /// Publishes the same encoded feed to the control host, which caches it for the desktop
     /// widget. Nonblocking submit; the host bumps its revision only when the payload changes.
-    pub(super) fn publish_weather_feed(&self) {
+    pub(super) fn publish_weather_feed(&self, feed: &flamewm_weather::weather::WeatherFeed) {
         self.submit(flamewm_control_core::ControlRequest::PublishWeatherFeed {
-            payload: self.weather.feed().encode(),
+            payload: feed.encode(),
         });
     }
 
-    /// Nonblocking feed push. A full pipe re-arms the pending flag for the next tick;
-    /// no running popup host is not an error (its first OPEN carries the feed).
-    pub(super) fn push_weather_feed(&mut self) {
-        match self.quick_control.push_weather(self.weather.feed()) {
+    /// Nonblocking feed push of an already-built feed (one build per changed tick).
+    pub(super) fn push_weather_feed_value(&mut self, feed: flamewm_weather::weather::WeatherFeed) {
+        match self.quick_control.push_weather(feed) {
             Ok(()) => self.weather_feed_pending = false,
             Err(flamewm_shell::quick_controls::SupervisorError::WouldBlock) => {
                 self.weather_feed_pending = true;
@@ -69,5 +68,13 @@ impl ShellLoop {
                 format_args!("flamewm-shell: weather feed not sent (nonfatal): {error}"),
             ),
         }
+    }
+
+    /// Nonblocking feed push for callers that have not built the feed yet. A full pipe re-arms
+    /// the pending flag for the next tick; no running popup host is not an error (its first OPEN
+    /// carries the feed).
+    pub(super) fn push_weather_feed(&mut self) {
+        let feed = self.weather.feed();
+        self.push_weather_feed_value(feed);
     }
 }

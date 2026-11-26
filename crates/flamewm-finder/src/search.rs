@@ -66,8 +66,6 @@ pub struct Hits {
     pub total: usize,
     /// Index positions in rank order, at most [`DISPLAY_LIMIT`].
     pub indices: Vec<usize>,
-    /// True when `indices` is the recent-files view rather than a search.
-    pub recent: bool,
 }
 
 /// Score of one term against a lowercase path, or `None` when it does not match.
@@ -96,7 +94,14 @@ pub fn term_score(lower: &str, name_at: usize, term: &str) -> Option<i64> {
 }
 
 /// Number of characters skipped inside `haystack` while matching `needle` as a subsequence.
+///
+/// The fuzzy path runs for every entry that misses the substring tests, so it is the hot part of a
+/// keystroke over the whole index. Plain ASCII names and terms are compared byte by byte, which
+/// skips UTF-8 decoding; other text keeps the character walk so the match stays exact.
 fn subsequence_gap(haystack: &str, needle: &str) -> Option<usize> {
+    if haystack.is_ascii() && needle.is_ascii() {
+        return ascii_subsequence_gap(haystack.as_bytes(), needle.as_bytes());
+    }
     let mut wanted = needle.chars().peekable();
     let mut skipped = 0;
     let mut matched = 0;
@@ -111,6 +116,24 @@ fn subsequence_gap(haystack: &str, needle: &str) -> Option<usize> {
         }
     }
     (wanted.peek().is_none() && matched > 0).then_some(skipped)
+}
+
+/// Same walk as [`subsequence_gap`] for ASCII bytes: one byte is one character.
+fn ascii_subsequence_gap(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let mut at = 0;
+    let mut matched = 0;
+    let mut skipped = 0;
+    for &byte in haystack {
+        match needle.get(at) {
+            Some(&next) if next == byte => {
+                at += 1;
+                matched += 1;
+            }
+            Some(_) => skipped += 1,
+            None => break,
+        }
+    }
+    (at == needle.len() && matched > 0).then_some(skipped)
 }
 
 fn recency_bonus(modified: i64, now: i64) -> i64 {
@@ -202,7 +225,6 @@ pub fn rank(index: &Index, query: &Query, now: i64) -> Hits {
         return Hits {
             total: indices.len(),
             indices,
-            recent: true,
         };
     }
     // Keep only the display limit in a min-heap, so a query over the whole index allocates a few
@@ -231,7 +253,6 @@ pub fn rank(index: &Index, query: &Query, now: i64) -> Hits {
     Hits {
         total,
         indices: scored.into_iter().map(|item| item.index).collect(),
-        recent: false,
     }
 }
 
@@ -383,7 +404,6 @@ mod tests {
     fn empty_query_returns_recent_view() {
         let idx = index(vec![entry("/h/a", false, 5), entry("/h/b", false, 9)]);
         let hits = rank(&idx, &Query::default(), NOW);
-        assert!(hits.recent);
         assert_eq!(idx.entries[hits.indices[0]].name(), "b");
     }
 

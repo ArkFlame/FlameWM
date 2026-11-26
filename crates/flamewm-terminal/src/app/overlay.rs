@@ -5,6 +5,7 @@ use super::layout::Axis;
 use super::tabs::Rename;
 use super::{App, View};
 use crate::glyphs::blend;
+use crate::screen::Line;
 use crate::screen::char_width;
 use crate::view::Row;
 use crate::view::Run;
@@ -169,6 +170,9 @@ impl App {
         // Matches are in reading order, so only the visible line window is walked: a long scrollback full of hits
         // does not cost a scan per frame.
         let first = search.matches.partition_point(|found| found.line < top);
+        // One decoded-line buffer for every highlighted row: the paint decodes a scrollback line per visible hit
+        // without allocating a fresh `Line` per hit.
+        let mut decoded = Line::new();
         for (offset, found) in search.matches[first..].iter().enumerate() {
             if found.line >= end {
                 break;
@@ -177,8 +181,15 @@ impl App {
             let Some(row) = rows.get_mut(1 + banner + rect.y0 + (found.line - top)) else {
                 continue;
             };
-            let Some(cells) = screen.line_abs(found.line) else {
-                continue;
+            // A live row is borrowed; only a scrollback line is decoded into the reused buffer.
+            let cells: &[crate::screen::Cell] = match screen.live_line(found.line) {
+                Some(line) => line,
+                None => {
+                    if !screen.line_abs_into(found.line, &mut decoded) {
+                        continue;
+                    }
+                    decoded.as_slice()
+                }
             };
             if found.col + found.len > cells.len() {
                 continue;

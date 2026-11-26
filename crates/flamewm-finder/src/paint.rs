@@ -70,8 +70,11 @@ impl Finder {
         doc.visible("grid", tiles)?;
         doc.visible("list", !tiles)?;
         doc.visible("empty", count == 0)?;
+        // One read guard for the whole row paint: the worker takes the write lock for every
+        // watcher batch, so re-locking once per row widened the window a repaint could stall in.
+        let view = self.view();
         let empty_text = match palette::mode(&self.query) {
-            _ if self.walking && self.view().is_empty() => "Indexing files...",
+            _ if self.walking && view.is_empty() => "Indexing files...",
             Mode::Commands(_) => "No commands match",
             Mode::Scopes(_) => "No folders match",
             Mode::Files if self.query.is_empty() => "Nothing to show yet",
@@ -84,9 +87,9 @@ impl Finder {
             let item = self.item_at(position);
             let selected = position == self.selected;
             if tiles {
-                self.paint_tile(doc, slot, item.as_ref(), selected, now)?;
+                self.paint_tile(doc, slot, item.as_ref(), selected, now, &view)?;
             } else {
-                self.paint_row(doc, slot, item.as_ref(), selected, now)?;
+                self.paint_row(doc, slot, item.as_ref(), selected, now, &view)?;
             }
         }
         Ok(())
@@ -99,6 +102,7 @@ impl Finder {
         item: Option<&Item>,
         selected: bool,
         now: i64,
+        view: &Index,
     ) -> Result<(), String> {
         let mut id = String::with_capacity(16);
         id.push_str("row-");
@@ -114,7 +118,6 @@ impl Finder {
         let (kind, pieces, parent, meta) = match item {
             Item::Entry(position) => {
                 // Borrow the entry for this row instead of cloning its two strings per paint.
-                let view = self.view();
                 let Some(entry) = view.entries.get(*position) else {
                     return doc.visible(&id, false);
                 };
@@ -188,12 +191,12 @@ impl Finder {
         item: Option<&Item>,
         selected: bool,
         now: i64,
+        view: &Index,
     ) -> Result<(), String> {
         let tile = format!("tile-{slot}");
         let Some(Item::Entry(position)) = item else {
             return doc.visible(&tile, false);
         };
-        let view = self.view();
         let Some(entry) = view.entries.get(*position) else {
             return doc.visible(&tile, false);
         };

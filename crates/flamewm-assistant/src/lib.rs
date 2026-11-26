@@ -297,11 +297,11 @@ impl Assistant {
             .filter_map(|row| match row.role {
                 Role::User => Some(Turn {
                     role: "user",
-                    content: row.text.clone(),
+                    content: row.text.to_owned(),
                 }),
                 Role::Assistant => Some(Turn {
                     role: "assistant",
-                    content: row.text.clone(),
+                    content: row.text.to_owned(),
                 }),
                 Role::SystemNote => None,
             })
@@ -781,7 +781,9 @@ impl Assistant {
         doc.text("model", model_label(&pretty_model(&self.selection.model)))?;
         let open = self.model_menu;
         doc.visible("model-menu", open)?;
-        let rows = self.menu_rows();
+        // Listing the picker filters and allocates every model id, so it is skipped while the
+        // picker is closed, which is the normal state on each streaming repaint.
+        let rows = if open { self.menu_rows() } else { Vec::new() };
         doc.visible("model-empty", open && rows.is_empty())?;
         doc.visible("model-hint", open && self.model_query.is_empty())?;
         doc.text("model-query", self.model_query.clone())?;
@@ -812,22 +814,22 @@ impl Assistant {
     }
 
     fn paint_chat(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let rows: Vec<Row> = self.history.rows();
+        let rows: Vec<Row<'_>> = self.history.rows();
         for slot in 0..SLOTS {
             let row = rows.get(slot);
             let user = row.filter(|row| row.role == Role::User);
             let other = row.filter(|row| row.role != Role::User);
             // A wrapping message gets the fixed-width bubble so painted wrap matches measured height.
-            let wide = user.is_some_and(|row| model::wraps(&row.text));
+            let wide = user.is_some_and(|row| model::wraps(row.text));
             doc.visible(&format!("u-{slot}"), user.is_some() && !wide)?;
             doc.visible(&format!("uw-{slot}"), wide)?;
             doc.visible(&format!("a-{slot}"), other.is_some())?;
             if let Some(row) = user {
-                doc.text_ref(&format!("ut-{slot}"), &row.text)?;
-                doc.text_ref(&format!("utw-{slot}"), &row.text)?;
+                doc.text_ref(&format!("ut-{slot}"), row.text)?;
+                doc.text_ref(&format!("utw-{slot}"), row.text)?;
             }
             if let Some(row) = other {
-                doc.text_ref(&format!("at-{slot}"), &row.text)?;
+                doc.text_ref(&format!("at-{slot}"), row.text)?;
             }
         }
         let empty = self.input.is_empty();

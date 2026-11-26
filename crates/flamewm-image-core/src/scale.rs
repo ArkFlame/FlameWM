@@ -54,14 +54,14 @@ fn scale_nearest(source: &RgbaImage, width: u32, height: u32, output: &mut [u8])
     let target_h = height as usize;
     let src_w = source.width as usize;
     let src_h = source.height as usize;
-    for y in 0..target_h {
-        let source_y = y * src_h / target_h;
-        for x in 0..target_w {
-            let source_x = x * src_w / target_w;
-            let source_index = (source_y * src_w + source_x) * 4;
-            let output_index = (y * target_w + x) * 4;
-            output[output_index..output_index + 4]
-                .copy_from_slice(&source.pixels[source_index..source_index + 4]);
+    // The mapping is one-dimensional per axis: compute each source index once, not per pixel.
+    let columns: Vec<usize> = (0..target_w).map(|x| x * src_w / target_w).collect();
+    let rows: Vec<usize> = (0..target_h).map(|y| y * src_h / target_h).collect();
+    for (y, &source_y) in rows.iter().enumerate() {
+        let row = &source.pixels[source_y * src_w * 4..][..src_w * 4];
+        let out_row = &mut output[y * target_w * 4..][..target_w * 4];
+        for (pixel, &source_x) in out_row.chunks_exact_mut(4).zip(&columns) {
+            pixel.copy_from_slice(&row[source_x * 4..source_x * 4 + 4]);
         }
     }
 }
@@ -101,15 +101,8 @@ fn scale_bilinear(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]
     }
 }
 
-/// First covered source index and normalised coverage weights for one destination index.
-pub(crate) fn area_tap(src_len: usize, dst_len: usize, destination: usize) -> (usize, Vec<f32>) {
-    let mut weights = Vec::new();
-    let first = push_area_tap(src_len, dst_len, destination, &mut weights);
-    (first, weights)
-}
-
 /// Appends the coverage weights of one destination index to `weights` and returns the first
-/// covered source index. The same arithmetic `area_tap` exposes, without the per-tap allocation.
+/// covered source index. `TapTable` uses this to build every tap of an axis in one pass.
 fn push_area_tap(
     src_len: usize,
     dst_len: usize,
@@ -138,7 +131,7 @@ fn push_area_tap(
 
 /// Every tap of one axis, packed into three flat buffers instead of one `Vec` per destination
 /// index: a 4000-to-1000 downscale needs three allocations, not two thousand.
-struct TapTable {
+pub(crate) struct TapTable {
     first: Vec<usize>,
     /// Start of each destination's weights in `weights`; has `dst_len + 1` entries.
     offsets: Vec<u32>,
@@ -146,7 +139,7 @@ struct TapTable {
 }
 
 impl TapTable {
-    fn new(src_len: usize, dst_len: usize) -> Self {
+    pub(crate) fn new(src_len: usize, dst_len: usize) -> Self {
         let mut first = Vec::with_capacity(dst_len);
         let mut offsets = Vec::with_capacity(dst_len + 1);
         let mut weights = Vec::with_capacity(dst_len * 2);
@@ -162,7 +155,7 @@ impl TapTable {
         }
     }
 
-    fn tap(&self, destination: usize) -> (usize, &[f32]) {
+    pub(crate) fn tap(&self, destination: usize) -> (usize, &[f32]) {
         let start = self.offsets[destination] as usize;
         let end = self.offsets[destination + 1] as usize;
         (self.first[destination], &self.weights[start..end])
@@ -200,6 +193,13 @@ fn scale_area(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One destination index's taps, for the coverage-weight contract tests below.
+    fn area_tap(src_len: usize, dst_len: usize, destination: usize) -> (usize, Vec<f32>) {
+        let mut weights = Vec::new();
+        let first = push_area_tap(src_len, dst_len, destination, &mut weights);
+        (first, weights)
+    }
 
     fn fixture_rgba() -> RgbaImage {
         RgbaImage::from_rgba8(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128]).unwrap()

@@ -46,8 +46,11 @@ impl App {
         self.project_font(doc)?;
         let frame = self.frame();
         let pool = self.pool();
-        self.ui
-            .project_rows(doc, pool, (self.cell_w, self.cell_h), &frame)
+        let cell = (self.cell_w, self.cell_h);
+        let written = self.ui.project_rows(doc, pool, cell, &frame);
+        // Give the row buffer back: the next frame clears and refills it instead of allocating a new one.
+        self.frame_rows = frame;
+        written
     }
 
     fn project_surface(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {

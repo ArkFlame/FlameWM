@@ -178,32 +178,46 @@ pub struct ItemProps {
     pub icon_pixmaps: Vec<IconPixmap>,
 }
 
+fn take_text(props: &mut BTreeMap<String, PropValue>, key: &str) -> String {
+    match props.remove(key) {
+        Some(PropValue::Str(value)) => value,
+        _ => String::new(),
+    }
+}
+
 impl ItemProps {
     #[must_use]
     pub fn from_props(props: &BTreeMap<String, PropValue>) -> Self {
-        let text = |key: &str| match props.get(key) {
-            Some(PropValue::Str(value)) => value.clone(),
-            _ => String::new(),
-        };
+        Self::from_owned_props(props.clone())
+    }
+
+    /// Same projection as [`ItemProps::from_props`], consuming the map so the kept strings and
+    /// pixmap buffers are moved instead of copied. Receivers that decode a bus reply should use
+    /// this: it avoids cloning up to `MAX_PIXMAP_BYTES` per icon a second time.
+    #[must_use]
+    pub fn from_owned_props(mut props: BTreeMap<String, PropValue>) -> Self {
         let status = match props.get("Status") {
             Some(PropValue::Str(value)) => Status::parse(value).unwrap_or_default(),
             _ => Status::default(),
         };
-        let menu_path = Some(text("Menu")).filter(|path| !path.is_empty() && path != "/");
-        let item_is_menu = matches!(props.get("ItemIsMenu"), Some(PropValue::Bool(true)));
-        let tooltip_title = match props.get("ToolTip") {
-            Some(PropValue::Tooltip(title)) => title.clone(),
+        let menu_path = {
+            let path = take_text(&mut props, "Menu");
+            Some(path).filter(|path| !path.is_empty() && path != "/")
+        };
+        let item_is_menu = matches!(props.remove("ItemIsMenu"), Some(PropValue::Bool(true)));
+        let tooltip_title = match props.remove("ToolTip") {
+            Some(PropValue::Tooltip(title)) => title,
             _ => String::new(),
         };
-        let icon_pixmaps = match props.get("IconPixmap") {
-            Some(PropValue::Pixmaps(pixmaps)) => pixmaps.clone(),
+        let icon_pixmaps = match props.remove("IconPixmap") {
+            Some(PropValue::Pixmaps(pixmaps)) => pixmaps,
             _ => Vec::new(),
         };
         Self {
-            id: text("Id"),
-            title: text("Title"),
+            id: take_text(&mut props, "Id"),
+            title: take_text(&mut props, "Title"),
             status,
-            icon_name: text("IconName"),
+            icon_name: take_text(&mut props, "IconName"),
             tooltip_title,
             menu_path,
             item_is_menu,

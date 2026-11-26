@@ -146,6 +146,8 @@ pub struct App {
     grid_composed: Vec<GridRow>,
     /// Per-row pane inputs used while composing a frame, kept so a frame allocates no list per row.
     grid_inputs: Vec<Vec<(crate::view::Row, Rect)>>,
+    /// Row list of the last projected frame, handed back by the projector so a frame allocates no row container.
+    pub frame_rows: Vec<crate::view::Row>,
     /// Startup banner shown above the first tab until its output scrolls.
     banner: bool,
     /// Window size in logical px, as last reported by the window. Grid and PTY size follow it.
@@ -198,6 +200,7 @@ impl App {
             pane_runs: HashMap::new(),
             grid_composed: Vec::new(),
             grid_inputs: Vec::new(),
+            frame_rows: Vec::new(),
             menu: None,
             rename: None,
             history: History::open_default(),

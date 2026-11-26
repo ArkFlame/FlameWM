@@ -67,12 +67,35 @@ fn pack_rows(
     }
     buffer.fill(0);
     let pixel_bytes = bpp / 8;
+    // Channel arithmetic once per batch: an 8-bit channel needs only its shift, while a narrower
+    // or wider one keeps the `pack_color` scaling. This ran three scale divisions per pixel over
+    // the whole screen on every overlay setup.
+    let shifts = [0usize, 1, 2].map(|channel| {
+        let mask = masks[channel];
+        if mask == 0 { 0 } else { mask.trailing_zeros() }
+    });
+    let exact = [0usize, 1, 2]
+        .map(|channel| masks[channel] != 0 && (masks[channel] >> shifts[channel]) == 0xff);
     for (row, pixels) in source.chunks_exact(source_stride).enumerate() {
+        let row_offset = row * stride;
         for (column, pixel) in pixels.chunks_exact(4).enumerate() {
-            let value = pack_color(pixel[0], masks[0])
-                | pack_color(pixel[1], masks[1])
-                | pack_color(pixel[2], masks[2]);
-            let offset = row * stride + column * pixel_bytes;
+            let red = if exact[0] {
+                u32::from(pixel[0]) << shifts[0]
+            } else {
+                pack_color(pixel[0], masks[0])
+            };
+            let green = if exact[1] {
+                u32::from(pixel[1]) << shifts[1]
+            } else {
+                pack_color(pixel[1], masks[1])
+            };
+            let blue = if exact[2] {
+                u32::from(pixel[2]) << shifts[2]
+            } else {
+                pack_color(pixel[2], masks[2])
+            };
+            let value = red | green | blue;
+            let offset = row_offset + column * pixel_bytes;
             for byte in 0..pixel_bytes {
                 let shift = if little {
                     byte * 8

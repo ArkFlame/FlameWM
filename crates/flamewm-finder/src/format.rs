@@ -69,7 +69,12 @@ pub fn civil_date(days: i64) -> (i64, u32, u32) {
 pub fn parent_for_display(path: &str, home: &str) -> String {
     let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
     let home = home.trim_end_matches('/');
-    if !home.is_empty() && (parent == home || parent.starts_with(&format!("{home}/"))) {
+    // Same rule as `parent == home || parent.starts_with(&format!("{home}/"))`, without building
+    // the joined string for every painted row.
+    if !home.is_empty()
+        && parent.starts_with(home)
+        && (parent.len() == home.len() || parent.as_bytes()[home.len()] == b'/')
+    {
         return format!("~{}", &parent[home.len()..]);
     }
     if parent.is_empty() {

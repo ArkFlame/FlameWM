@@ -136,11 +136,11 @@ impl Clipboard {
         let requester = self.requester.lock().map_err(err)?;
         let primary = requester.primary;
         if let Some(bytes) = requester.read_selection(primary, requester.utf8_string, deadline)? {
-            return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+            return Ok(Some(text_from_bytes(bytes)));
         }
         Ok(requester
             .read_selection(primary, requester.string, deadline)?
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+            .map(text_from_bytes))
     }
 
     /// Reads text from CLIPBOARD, preferring `UTF8_STRING` and falling back to STRING. Returns
@@ -149,11 +149,11 @@ impl Clipboard {
         let deadline = Instant::now() + GET_TIMEOUT;
         let requester = self.requester.lock().map_err(err)?;
         if let Some(bytes) = requester.read(requester.utf8_string, deadline)? {
-            return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+            return Ok(Some(text_from_bytes(bytes)));
         }
         Ok(requester
             .read(requester.string, deadline)?
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+            .map(text_from_bytes))
     }
 
     /// Reads the file list on CLIPBOARD. Returns `Ok(None)` when the clipboard holds no
@@ -180,6 +180,13 @@ impl Clipboard {
         };
         Ok(Some((paths, op)))
     }
+}
+
+/// Decodes a selection payload as text. Valid UTF-8 moves straight into the `String`; only bytes
+/// that are not valid UTF-8 pay for the lossy replacement pass.
+fn text_from_bytes(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 /// Requesting side: one connection and one helper window reused for every read.

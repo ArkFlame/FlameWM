@@ -2,6 +2,7 @@
 //! the per-output background, and the icon and avatar pixels.
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use flamewm_api::Rect;
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
@@ -190,28 +191,38 @@ fn crop_runtime_image(
     })
 }
 
+/// The built-in wallpaper, decoded once per process. Every output crops from the same pixels, and
+/// re-showing the lock after DPMS or a suspend reuses them, so the WebP decode no longer repeats
+/// per output and per lock show.
+fn builtin_background() -> Option<&'static RgbaImage> {
+    static CACHE: OnceLock<Option<RgbaImage>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok())
+        .as_ref()
+}
+
 /// Reads and cover-scales the configured background image to the screen, or the
 /// built-in lock background when none is configured. Any failure returns `None`,
 /// so the caller falls back to a colour.
 fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Option<RuntimeImage> {
-    let (source, natural) = match (
+    match (
         settings.background_mode,
         settings.background_image.as_deref(),
     ) {
         (LockBackgroundMode::Custom, Some(path)) => {
-            (path.display().to_string(), decode_file(path)?)
+            let natural = decode_file(path)?;
+            Some(RuntimeImage::from_rgba(
+                path.display().to_string(),
+                cover_rgba(&natural, width, height)?,
+            ))
         }
-        (LockBackgroundMode::Default, _) => (
+        (LockBackgroundMode::Default, _) => Some(RuntimeImage::from_rgba(
             BUILTIN_BACKGROUND_SOURCE.to_string(),
-            decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok()?,
-        ),
+            cover_rgba(builtin_background()?, width, height)?,
+        )),
         // Solid colour, or a custom mode without a saved path: the caller paints the colour.
-        _ => return None,
-    };
-    Some(RuntimeImage::from_rgba(
-        source,
-        cover_rgba(&natural, width, height)?,
-    ))
+        _ => None,
+    }
 }
 
 /// Scales `image` to fully cover `width` x `height` and crops the centre.

@@ -143,6 +143,15 @@ pub struct SettingsApplication<T: ControlTransport> {
     canvas_snap: Option<usize>,
     /// Keyboard arrangement canvas; `None` until the first arrow, Tab or Escape press.
     display_canvas: Option<display_canvas::CanvasLayout>,
+    /// Coalesces live slider writes: the key of the last write and its monotonic millisecond.
+    drag_write: Option<(&'static str, u64)>,
+    /// Value a live slider drag shows on its own nodes before the next coalesced write lands.
+    drag_preview: Option<(&'static str, i64)>,
+    /// Picker whose rows the last projection left visible. A closed picker hides its rows once
+    /// instead of rewriting all slots on every settle.
+    open_picker_rows: std::cell::Cell<Option<theme_picker::PickerKind>>,
+    /// Settings revision whose appearance tokens were last projected into the document.
+    token_revision: std::cell::Cell<Option<u64>>,
 }
 
 /// Typed API key text not yet saved, with the inline message for the last Enter.

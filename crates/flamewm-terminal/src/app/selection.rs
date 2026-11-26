@@ -55,10 +55,14 @@ impl App {
         // joined copy handed back to the caller.
         let mut out = String::new();
         let mut first = true;
+        // One decoded-line buffer for the whole selection: copying a long scrollback range no longer allocates a
+        // `Line` per selected line.
+        let mut decoded = crate::screen::Line::new();
         for index in span.start.0..=span.end.0 {
-            let Some(line) = screen.line_abs(index) else {
+            if !screen.line_abs_into(index, &mut decoded) {
                 continue;
-            };
+            }
+            let line = decoded.as_slice();
             if !first {
                 out.push('\n');
             }

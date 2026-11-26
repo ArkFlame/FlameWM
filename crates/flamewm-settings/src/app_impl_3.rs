@@ -180,7 +180,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         &self,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
-        if let Ok(speed) = self.integer_setting("animationSpeed") {
+        let speed = self
+            .drag_value("animationSpeed")
+            .or_else(|| self.integer_setting("animationSpeed").ok());
+        if let Some(speed) = speed {
             document.text(
                 "animation-speed-value",
                 format!("{:.2}x", speed as f64 / 100.0),
@@ -211,7 +214,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     ) -> Result<(), String> {
         let accent = self.accent()?;
         for slider in &GLASS_SLIDERS {
-            let Some(value) = self.number_setting(slider.key) else {
+            let Some(value) = self
+                .drag_value(slider.key)
+                .or_else(|| self.number_setting(slider.key))
+            else {
                 continue;
             };
             let ratio = (value - slider.minimum) as f64 / (slider.maximum - slider.minimum) as f64;
@@ -234,13 +240,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 GLASS_SLIDER_THUMB_TOP as f32,
             )?;
         }
-        let mode = Some(
-            self.text_setting("taskbarMaterialMode")
-                .unwrap_or_else(|_| "inherit".to_owned()),
-        );
+        let mode = self
+            .text_setting("taskbarMaterialMode")
+            .unwrap_or_else(|_| "inherit".to_owned());
         highlight_options(
             document,
-            mode.as_deref(),
+            Some(mode.as_str()),
             &[
                 ("blur-only", "taskbar-material-blur-only"),
                 ("inherit", "taskbar-material-inherit"),
@@ -248,10 +253,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ],
             accent,
         )?;
-        let inherits = mode.as_deref() == Some("inherit");
+        let inherits = mode == "inherit";
         document.visible("taskbar-opacity-row", !inherits)?;
         document.visible("taskbar-opacity-live", !inherits)?;
-        let custom = mode.as_deref() == Some("custom-tint");
+        let custom = mode == "custom-tint";
         document.visible("taskbar-tint-row", custom)?;
         document.visible("taskbar-tint-live", custom)?;
         Ok(())

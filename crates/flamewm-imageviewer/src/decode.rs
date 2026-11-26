@@ -101,19 +101,33 @@ pub fn crop(base: &RgbaImage, display: (u32, u32), rect: Rect) -> Vec<u8> {
     let dw = u64::from(display.0.max(1));
     let dh = u64::from(display.1.max(1));
     let row_len = rect.w as usize * 4;
-    let mut out = Vec::with_capacity(row_len * rect.h as usize);
     if rect.w == 0 || rect.h == 0 || base.width == 0 || base.height == 0 {
-        return out;
+        return Vec::new();
     }
-    // Column mapping is the same for every row: compute each source column once, not per pixel.
-    let columns: Vec<usize> = (0..rect.w)
-        .map(|ox| ((u64::from(rect.x + ox) * bw / dw).min(bw - 1) as usize) * 4)
-        .collect();
+    // Column mapping is the same for every row: walk it once and keep runs of adjacent source
+    // columns. Identity and zoom-out crops become one run per row (a plain row copy), and a
+    // nearest-neighbour upscale becomes one run per source column instead of one copy per pixel.
+    let mut runs: Vec<(usize, usize)> = Vec::new(); // (source byte offset, byte length)
+    let mut last_end = usize::MAX;
+    for ox in 0..rect.w {
+        let start = ((u64::from(rect.x + ox) * bw / dw).min(bw - 1) as usize) * 4;
+        if start == last_end {
+            if let Some((_, len)) = runs.last_mut() {
+                *len += 4;
+            }
+        } else {
+            runs.push((start, 4));
+        }
+        last_end = start + 4;
+    }
+    let mut out = vec![0u8; row_len * rect.h as usize];
+    let mut cursor = 0;
     for oy in 0..rect.h {
         let sy = (u64::from(rect.y + oy) * bh / dh).min(bh - 1) as usize;
         let row = &base.pixels[sy * base.width as usize * 4..];
-        for &column in &columns {
-            out.extend_from_slice(&row[column..column + 4]);
+        for &(start, len) in &runs {
+            out[cursor..cursor + len].copy_from_slice(&row[start..start + len]);
+            cursor += len;
         }
     }
     out
@@ -237,11 +251,27 @@ impl Worker {
             return Ok(crop(&source, display, rect));
         }
         // Zoomed out: scale once per display size, then crop 1:1 from the reduced copy.
+        let full = rect.x == 0 && rect.y == 0 && rect.w == display.0 && rect.h == display.1;
         let fresh = matches!(&self.reduced, Some((p, size, _)) if p == path && *size == display);
         if !fresh {
             let scaled = scale_rgba(&source, display.0, display.1, ScaleFilter::Area)
                 .ok_or("requested size overflows")?;
+            if full {
+                // The scaled raster is the frame: hand its pixels over instead of copying it.
+                // A full rect means the whole image fits the stage, so nothing can pan next and
+                // the cache slot would only pin a second full-size buffer.
+                self.reduced = None;
+                return Ok(scaled.pixels);
+            }
             self.reduced = Some((path.to_path_buf(), display, Arc::new(scaled)));
+        } else if full {
+            // Same reduction, still cached: move it out (sole owner) rather than copy it per frame.
+            if let Some((cached, size, image)) = self.reduced.take() {
+                match Arc::try_unwrap(image) {
+                    Ok(image) => return Ok(image.pixels),
+                    Err(image) => self.reduced = Some((cached, size, image)),
+                }
+            }
         }
         let reduced = self.reduced.as_ref().map(|(_, _, image)| Arc::clone(image));
         let reduced = reduced.ok_or("reduced image missing")?;

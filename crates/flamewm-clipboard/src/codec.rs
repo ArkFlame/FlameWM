@@ -1,6 +1,5 @@
 //! Pure clipboard payload encoding and parsing. No X11 access happens here.
 
-use std::fmt::Write as _;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
@@ -11,17 +10,28 @@ pub const GNOME_FILES: &str = "x-special/gnome-copied-files";
 pub const KDE_CUT: &str = "application/x-kde-cutselection";
 pub const TEXT_PLAIN: &str = "text/plain";
 
-/// `file://` URI for an absolute path. Every byte outside the unreserved set is
+const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Appends the `file://` URI for `path` to `uri`. Every byte outside the unreserved set is
 /// percent-encoded, so spaces, `#`, `%`, newlines and UTF-8 bytes all survive.
-pub fn file_uri(path: &Path) -> String {
-    let mut uri = String::from("file://");
+fn push_file_uri(uri: &mut String, path: &Path) {
+    uri.push_str("file://");
     for &byte in path.as_os_str().as_bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
             uri.push(char::from(byte));
         } else {
-            write!(uri, "%{byte:02X}").expect("writing to a String cannot fail");
+            uri.push('%');
+            uri.push(char::from(UPPER_HEX[usize::from(byte >> 4)]));
+            uri.push(char::from(UPPER_HEX[usize::from(byte & 0x0f)]));
         }
     }
+}
+
+/// `file://` URI for an absolute path. Every byte outside the unreserved set is
+/// percent-encoded, so spaces, `#`, `%`, newlines and UTF-8 bytes all survive.
+pub fn file_uri(path: &Path) -> String {
+    let mut uri = String::with_capacity(7 + path.as_os_str().as_bytes().len());
+    push_file_uri(&mut uri, path);
     uri
 }
 
@@ -60,11 +70,12 @@ fn percent_decode(input: &[u8]) -> Option<Vec<u8>> {
 
 /// `text/uri-list` per RFC 2483: CRLF-terminated URIs.
 pub fn uri_list(paths: &[PathBuf]) -> Vec<u8> {
-    paths
-        .iter()
-        .map(|path| file_uri(path) + "\r\n")
-        .collect::<String>()
-        .into_bytes()
+    let mut text = String::new();
+    for path in paths {
+        push_file_uri(&mut text, path);
+        text.push_str("\r\n");
+    }
+    text.into_bytes()
 }
 
 /// Reads `text/uri-list`, skipping blanks and `#` comments and ignoring non-file URIs.
@@ -82,7 +93,7 @@ pub fn gnome_files(op: FileOp, paths: &[PathBuf]) -> Vec<u8> {
     let mut text = String::from(op_word(op));
     for path in paths {
         text.push('\n');
-        text.push_str(&file_uri(path));
+        push_file_uri(&mut text, path);
     }
     text.into_bytes()
 }

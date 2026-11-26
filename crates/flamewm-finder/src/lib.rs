@@ -178,6 +178,11 @@ struct Finder {
     query: String,
     parsed: Query,
     hits: Hits,
+    /// Index revision and day the current `hits` were computed for, and the query text, so an
+    /// unchanged request reuses the ranking instead of scanning the index again.
+    hits_revision: u64,
+    hits_day: i64,
+    hits_query: String,
     selected: usize,
     first: usize,
     navigating: bool,

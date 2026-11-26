@@ -17,8 +17,6 @@ counter! {
     stale_counter = "shell.icon.stale_drop";
     queue_full_counter = "shell.icon.queue_full";
     high_counter = "shell.icon.high";
-    low_counter = "shell.icon.low";
     coalesced_counter = "shell.icon.coalesced";
-    dropped_low_counter = "shell.icon.dropped_low";
     fallback_counter = "shell.icon.empty_placeholder";
 }
