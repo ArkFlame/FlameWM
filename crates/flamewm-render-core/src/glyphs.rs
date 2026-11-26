@@ -718,7 +718,10 @@ mod tests {
         // Another test in this binary may unload first; either way text must stay identical.
         let _ = trim_caches();
         let after = text_mask("Ag 13", 18.0, 0.0, 18.0).expect("mask");
-        assert_eq!(before.coverage, after.coverage, "re-rasterized mask is equal");
+        assert_eq!(
+            before.coverage, after.coverage,
+            "re-rasterized mask is equal"
+        );
         assert_eq!((before.x, before.y), (after.x, after.y));
     }
 
@@ -730,6 +733,9 @@ mod tests {
         let before = text_mask("B", 16.0, 0.0, 16.0).expect("mask");
         let _ = unload();
         let after = text_mask("B", 16.0, 0.0, 16.0).expect("mask");
-        assert_eq!(before.coverage, after.coverage, "reloaded font draws the same");
+        assert_eq!(
+            before.coverage, after.coverage,
+            "reloaded font draws the same"
+        );
     }
 }

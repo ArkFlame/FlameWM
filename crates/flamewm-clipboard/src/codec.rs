@@ -168,13 +168,15 @@ pub fn png_payloads(png: &[u8]) -> Option<Vec<(&'static str, Vec<u8>)>> {
 }
 
 /// Text targets: `UTF8_STRING` always, STRING only for ASCII text (its Latin-1 meaning would
-/// corrupt UTF-8 bytes).
+/// corrupt UTF-8 bytes). Non-ASCII text is copied once, not twice.
 pub fn text_payloads(text: &str) -> Vec<(&'static str, Vec<u8>)> {
-    let bytes = text.as_bytes().to_vec();
-    let mut out = vec![("UTF8_STRING", bytes.clone())];
-    if text.is_ascii() {
-        out.push(("STRING", bytes));
+    if !text.is_ascii() {
+        return vec![("UTF8_STRING", text.as_bytes().to_vec())];
     }
+    let bytes = text.as_bytes().to_vec();
+    let mut out = Vec::with_capacity(2);
+    out.push(("UTF8_STRING", bytes.clone()));
+    out.push(("STRING", bytes));
     out
 }
 

@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 use flamewm_applications::ApplicationCatalog;
 
@@ -349,7 +350,59 @@ impl ApplicationSettings {
             .map(PathBuf::as_path)
             .ok_or_else(|| invalid("missing absolute user config directory"))
     }
+
+    /// Cheap change detector for every XDG path this facade reads.
+    ///
+    /// Each stamp is one `stat` per watched directory or `mimeapps.list`, never a file
+    /// read. Two equal stamps mean a projection built under the earlier stamp is still
+    /// current, so a repaint can reuse it instead of re-reading every autostart and
+    /// application entry. Rewrites through [`atomic_write`] replace a directory entry, so a
+    /// write of this facade always moves the stamp it touches.
+    #[must_use]
+    pub fn stamp(&self) -> XdgStamp {
+        let names: Vec<String> = self.mimeapps_names().collect();
+        let mut entries = Vec::with_capacity(
+            self.config_dirs.len() * (1 + names.len())
+                + self.data_dirs.len() * (1 + names.len()),
+        );
+        for root in &self.config_dirs {
+            entries.push(StampEntry::of(root.join("autostart")));
+            for name in &names {
+                entries.push(StampEntry::of(root.join(name)));
+            }
+        }
+        for root in &self.data_dirs {
+            let applications = root.join("applications");
+            entries.push(StampEntry::of(applications.clone()));
+            for name in &names {
+                entries.push(StampEntry::of(applications.join(name)));
+            }
+        }
+        XdgStamp(entries)
+    }
 }
+
+/// Identity of one watched XDG path; absent paths compare as `modified: None, len: 0`.
+/// Entries keep the path order of [`ApplicationSettings::stamp`], so no path is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StampEntry {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl StampEntry {
+    fn of(path: PathBuf) -> Self {
+        let metadata = fs::metadata(&path).ok();
+        Self {
+            modified: metadata.as_ref().and_then(|meta| meta.modified().ok()),
+            len: metadata.as_ref().map_or(0, std::fs::Metadata::len),
+        }
+    }
+}
+
+/// Snapshot of every watched XDG path's identity; see [`ApplicationSettings::stamp`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct XdgStamp(Vec<StampEntry>);
 
 pub(crate) fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)

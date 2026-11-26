@@ -791,7 +791,13 @@ fn send_frame_callbacks(state: &State) {
     let throttle = Some(Duration::from_millis(16));
     let time = Duration::from_millis(u64::from(time));
     let output = &state.output;
-    for (_, top) in &state.toplevels {
+    for (id, top) in &state.toplevels {
+        // A hidden window (other workspace, minimised) gets no frame callback: the callback is what
+        // unblocks the client's next commit, so it would keep rasterising off screen at the refresh
+        // rate. The first frame after the window is shown resumes its pipeline.
+        if state.model.is_hidden(*id) {
+            continue;
+        }
         let surface = top.wl_surface();
         send_frames_surface_tree(surface, output, time, throttle, |_, _| Some(output.clone()));
         for (popup, _) in PopupManager::popups_for_surface(surface) {
@@ -801,10 +807,12 @@ fn send_frame_callbacks(state: &State) {
         }
     }
     // XWayland presents only after its previous frame callback: without these, an X11 client
-    // keeps the first (usually blank) buffer on screen.
+    // keeps the first (usually blank) buffer on screen. Hidden managed windows are skipped for the
+    // same reason as hidden Wayland toplevels above; unmanaged ones (docks, menus) are always drawn.
     let x11_surfaces = state
         .x11
         .iter()
+        .filter(|(id, _)| !state.model.is_hidden(*id))
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));
     for surface in x11_surfaces.filter_map(smithay::xwayland::X11Surface::wl_surface) {
@@ -812,8 +820,8 @@ fn send_frame_callbacks(state: &State) {
             Some(output.clone())
         });
     }
-    let layers: Vec<_> = layer_map_for_output(output).layers().cloned().collect();
-    for layer in layers {
+    let map = layer_map_for_output(output);
+    for layer in map.layers() {
         send_frames_surface_tree(
             layer.layer_surface().wl_surface(),
             output,

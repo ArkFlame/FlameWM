@@ -72,6 +72,12 @@ pub fn labels() -> Vec<String> {
     let Ok(settings) = ApplicationSettings::from_environment() else {
         return unavailable();
     };
+    labels_with(&settings)
+}
+
+/// [`labels`] for a facade the caller already opened, so the pages share one environment read.
+pub fn labels_with(settings: &ApplicationSettings) -> Vec<String> {
+    let unavailable = || vec!["Unavailable".to_owned(); GROUPS.len()];
     let Ok(index) = settings.handler_index() else {
         return unavailable();
     };

@@ -28,7 +28,10 @@ pub(crate) enum SceneItem {
 }
 
 /// Compose scene owners in the canonical front-to-back order. Kept separate from Smithay handles
-/// so ordering regressions can be tested without a compositor/backend fixture.
+/// so ordering regressions can be tested without a compositor/backend fixture. Test-only: the live
+/// traversal appends into one buffer so it allocates nothing per owner, and the order below is the
+/// reference this helper must keep matching.
+#[cfg(test)]
 pub(crate) fn compose_front_to_back<T>(
     overlay_top: impl IntoIterator<Item = T>,
     unmanaged_above: impl IntoIterator<Item = T>,
@@ -46,50 +49,38 @@ pub(crate) fn compose_front_to_back<T>(
 }
 
 /// Walk scene owners in the same front-to-back order used for both drawing and input.
+///
+/// Appends straight into one buffer: this runs on every painted frame and on every pointer motion,
+/// so the per-owner layers/unmanaged/id vectors the previous version built are gone. A traversal
+/// now allocates exactly the list the caller consumes.
 pub(crate) fn front_to_back(state: &State) -> Vec<SceneItem> {
-    let map = layer_map_for_output(&state.output);
-    let layers: Vec<_> = map.layers().cloned().collect();
-    let mut overlay_top = Vec::new();
-    for group in [Layer::Overlay, Layer::Top] {
-        for surface in layers.iter().rev().filter(|layer| layer.layer() == group) {
-            if let Some(geometry) = map.layer_geometry(surface) {
-                overlay_top.push(SceneItem::Layer {
-                    surface: surface.clone(),
-                    origin: geometry.loc,
-                });
+    let mut out = Vec::new();
+    // 1. Overlay, then Top layer surfaces, topmost first within each layer.
+    {
+        let map = layer_map_for_output(&state.output);
+        for group in [Layer::Overlay, Layer::Top] {
+            for surface in map.layers().rev().filter(|layer| layer.layer() == group) {
+                if let Some(geometry) = map.layer_geometry(surface) {
+                    out.push(SceneItem::Layer {
+                        surface: surface.clone(),
+                        origin: geometry.loc,
+                    });
+                }
             }
         }
     }
-    let bottom_background = layers
-        .iter()
-        .rev()
-        .filter(|layer| matches!(layer.layer(), Layer::Bottom | Layer::Background))
-        .filter_map(|surface| {
-            map.layer_geometry(surface)
-                .map(|geometry| SceneItem::Layer {
-                    surface: surface.clone(),
-                    origin: geometry.loc,
-                })
-        })
-        .collect::<Vec<_>>();
-    drop(map);
-
-    let unmanaged_above = state
-        .unmanaged
-        .iter()
-        .enumerate()
-        .rev()
-        .filter(|(_, entry)| !entry.below)
-        .map(|(index, _)| SceneItem::Unmanaged(index));
-    let unmanaged_below = state
-        .unmanaged
-        .iter()
-        .enumerate()
-        .rev()
-        .filter(|(_, entry)| entry.below)
-        .map(|(index, _)| SceneItem::Unmanaged(index));
-    let mut managed_items = Vec::new();
-    for id in state.model.visible_top_first() {
+    // 2. Override-redirect windows drawn above managed ones (docks, menus, tooltips).
+    out.extend(
+        state
+            .unmanaged
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, entry)| !entry.below)
+            .map(|(index, _)| SceneItem::Unmanaged(index)),
+    );
+    // 3. Managed windows, each preceded by its popup tree.
+    for id in state.model.visible_top_first_iter() {
         let Some(surface) = state.window_wl_surface(id) else {
             continue;
         };
@@ -97,21 +88,39 @@ pub(crate) fn front_to_back(state: &State) -> Vec<SceneItem> {
             continue;
         };
         for (popup, offset) in PopupManager::popups_for_surface(&surface) {
-            managed_items.push(SceneItem::Popup {
+            out.push(SceneItem::Popup {
                 surface: popup.wl_surface().clone(),
                 origin: Point::from((managed.rect.x + offset.x, managed.rect.y + offset.y)),
             });
         }
-        managed_items.push(SceneItem::Managed(id));
+        out.push(SceneItem::Managed(id));
     }
-
-    compose_front_to_back(
-        overlay_top,
-        unmanaged_above,
-        managed_items,
-        bottom_background,
-        unmanaged_below,
-    )
+    // 4. Background and Bottom layer surfaces, then 5. the desktop and other below windows.
+    {
+        let map = layer_map_for_output(&state.output);
+        for surface in map
+            .layers()
+            .rev()
+            .filter(|layer| matches!(layer.layer(), Layer::Bottom | Layer::Background))
+        {
+            if let Some(geometry) = map.layer_geometry(surface) {
+                out.push(SceneItem::Layer {
+                    surface: surface.clone(),
+                    origin: geometry.loc,
+                });
+            }
+        }
+    }
+    out.extend(
+        state
+            .unmanaged
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, entry)| entry.below)
+            .map(|(index, _)| SceneItem::Unmanaged(index)),
+    );
+    out
 }
 
 #[cfg(test)]

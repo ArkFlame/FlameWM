@@ -705,6 +705,41 @@ mod tests {
         assert_eq!(loader.poll(), PollOutcome::Idle);
     }
 
+    #[test]
+    fn identical_layout_request_reuses_the_decoded_raster() {
+        // CONTRACT: re-requesting the layout already presented must not decode or repaint again.
+        // FAILURE MUTATION: bump the generation unconditionally; this test turns red.
+        let path = temp_path("ppm");
+        ppm(&path, [10, 20, 30]);
+        let mut loader = WallpaperLoader::new(1, 1, packaged_root()).expect("start loader");
+        let first = loader
+            .request_layout(&path, WallpaperFit::Fill, &[], true)
+            .expect("first request");
+        wait_applied(&mut loader, first);
+        let WallpaperPresentation::Image(presented) = loader.state().presentation.clone() else {
+            panic!("image expected");
+        };
+        let repeated = loader
+            .request_layout(&path, WallpaperFit::Fill, &[], true)
+            .expect("repeated request");
+        assert_eq!(repeated, first, "a repeat keeps the applied generation");
+        assert_eq!(loader.poll(), PollOutcome::Idle, "no worker turn is staged");
+        assert!(
+            matches!(
+                &loader.state().presentation,
+                WallpaperPresentation::Image(image) if Arc::ptr_eq(&image.pixels, &presented.pixels)
+            ),
+            "the decoded raster is reused, not decoded again"
+        );
+        let refit = loader
+            .request_layout(&path, WallpaperFit::Fit, &[], true)
+            .expect("refit request");
+        assert!(refit > first, "a different fit decodes again");
+        wait_applied(&mut loader, refit);
+        loader.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
     fn production_source() -> &'static str {
         let source = include_str!("wallpaper_loader.rs");
         source

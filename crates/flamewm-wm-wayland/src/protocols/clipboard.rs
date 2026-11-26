@@ -204,12 +204,7 @@ impl TextSlot {
     }
 
     /// Keeps shared bytes already known to be UTF-8 text (a history entry). No copy, no rescan.
-    pub fn complete_utf8(
-        &mut self,
-        generation: u64,
-        mime: &'static str,
-        bytes: Arc<[u8]>,
-    ) -> bool {
+    pub fn complete_utf8(&mut self, generation: u64, mime: &'static str, bytes: Arc<[u8]>) -> bool {
         if generation != self.generation {
             return false;
         }
@@ -221,7 +216,8 @@ impl TextSlot {
         self.kept.is_some()
     }
 
-    /// The kept bytes, when `mime` is the stored mime or, for UTF-8 text, any other text target.
+    /// The kept bytes as a slice. Only tests read a borrowed slice; serving uses `bytes`.
+    #[cfg(test)]
     pub fn text(&self, mime: &str) -> Option<&[u8]> {
         self.matching(mime).map(|kept| kept.bytes.as_ref())
     }
@@ -234,9 +230,7 @@ impl TextSlot {
     fn matching(&self, mime: &str) -> Option<&Kept> {
         self.kept.as_ref().filter(|kept| {
             kept.mime == mime
-                || (kept.utf8
-                    && TEXT_MIMES.contains(&kept.mime)
-                    && TEXT_MIMES.contains(&mime))
+                || (kept.utf8 && TEXT_MIMES.contains(&kept.mime) && TEXT_MIMES.contains(&mime))
         })
     }
 
@@ -586,21 +580,34 @@ mod tests {
     #[test]
     fn history_rejects_empty_and_oversize_and_clears() {
         let mut history = TextHistory::default();
-        assert!(!history.push(String::new()));
-        assert!(!history.push("x".repeat(MAX_TEXT_BYTES + 1)));
-        assert!(history.push("x".repeat(MAX_TEXT_BYTES)));
+        assert!(!history.push(arc("")));
+        assert!(!history.push(Arc::from(vec![b'x'; MAX_TEXT_BYTES + 1])));
+        assert!(history.push(Arc::from(vec![b'x'; MAX_TEXT_BYTES])));
         assert_eq!(history.summaries().len(), 1);
         history.clear();
         assert_eq!(history.summaries().len(), 0);
     }
 
     #[test]
+    fn history_byte_cap_evicts_oldest_entries() {
+        let mut history = TextHistory::default();
+        let per_item = MAX_TEXT_BYTES;
+        let keep = MAX_HISTORY_BYTES / per_item;
+        for tag in 0..=keep {
+            let mut bytes = vec![b'a' + (tag % 26) as u8; per_item];
+            bytes[0] = b'0' + (tag % 10) as u8;
+            assert!(history.push(Arc::from(bytes)));
+        }
+        assert_eq!(history.summaries().len(), keep);
+    }
+
+    #[test]
     fn history_select_by_id_and_unknown_id() {
         let mut history = TextHistory::default();
-        history.push("first".into());
-        history.push("second".into());
+        history.push(arc("first"));
+        history.push(arc("second"));
         let first_id = history.summaries().last().unwrap().id;
-        assert_eq!(history.get(first_id), Some("first"));
+        assert_eq!(history.get(first_id).as_deref(), Some(&b"first"[..]));
         assert_eq!(history.get(u64::MAX), None);
     }
 

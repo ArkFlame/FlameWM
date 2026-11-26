@@ -607,9 +607,7 @@ pub(crate) fn glass_blur_px_from_settings(snapshot: &SettingsSnapshot) -> u8 {
     match percent_u8_key(snapshot, "glassBlurPx") {
         Some(px) => px.min(54),
         None => match snapshot.values.get("surfaceBlurPercent") {
-            Some(SettingValue::Percent(value)) => {
-                (u16::from((*value).min(100)) * 40 / 100) as u8
-            }
+            Some(SettingValue::Percent(value)) => (u16::from((*value).min(100)) * 40 / 100) as u8,
             _ => Appearance::default().glass_blur_px,
         }
         .min(54),
@@ -670,18 +668,12 @@ pub(crate) fn non_inherit_dock_material_from_settings(
             taskbar_custom_tint_from_settings(snapshot)
                 .unwrap_or(Appearance::default().taskbar_custom_tint),
             u16::from(taskbar_opacity_from_settings(snapshot)) * 10,
-            scale_px(
-                taskbar_blur_px(glass_blur_px_from_settings(snapshot)),
-                100,
-            ),
+            scale_px(taskbar_blur_px(glass_blur_px_from_settings(snapshot)), 100),
         ),
         (_, false) => (
             NEUTRAL_RGB,
             u16::from(taskbar_opacity_from_settings(snapshot)) * 10,
-            scale_px(
-                taskbar_blur_px(glass_blur_px_from_settings(snapshot)),
-                100,
-            ),
+            scale_px(taskbar_blur_px(glass_blur_px_from_settings(snapshot)), 100),
         ),
     };
     Some(ResolvedMaterial {
@@ -1544,7 +1536,10 @@ mod fast_path_tests {
                 SettingValue::Text("blur-only".into()),
             )],
             vec![
-                ("taskbarMaterialMode", SettingValue::Text("blur-only".into())),
+                (
+                    "taskbarMaterialMode",
+                    SettingValue::Text("blur-only".into()),
+                ),
                 ("taskbarOpacityPercent", SettingValue::Percent(40)),
                 ("glassBlurPx", SettingValue::Percent(33)),
             ],
@@ -1553,13 +1548,13 @@ mod fast_path_tests {
                     "taskbarMaterialMode",
                     SettingValue::Text("custom-tint".into()),
                 ),
-                (
-                    "taskbarCustomTint",
-                    SettingValue::Text("#112233".into()),
-                ),
+                ("taskbarCustomTint", SettingValue::Text("#112233".into())),
             ],
             vec![
-                ("taskbarMaterialMode", SettingValue::Text("blur-only".into())),
+                (
+                    "taskbarMaterialMode",
+                    SettingValue::Text("blur-only".into()),
+                ),
                 ("reduceTransparency", SettingValue::Boolean(true)),
             ],
             vec![
@@ -1589,4 +1584,3 @@ mod fast_path_tests {
         assert!(non_inherit_dock_material_from_settings(&SettingsSnapshot::new(1)).is_none());
     }
 }
-

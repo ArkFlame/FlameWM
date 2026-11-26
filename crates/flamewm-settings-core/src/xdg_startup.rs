@@ -40,11 +40,18 @@ fn catalog_error(error: flamewm_api::FlameError) -> io::Error {
 impl ApplicationSettings {
     /// Installed, visible applications with no autostart entry, sorted by name then ID.
     pub fn startup_candidates(&self) -> io::Result<Vec<StartupCandidate>> {
-        let existing: std::collections::BTreeSet<String> = self
-            .startup_entries()?
-            .into_iter()
-            .map(|entry| entry.id)
-            .collect();
+        let entries = self.startup_entries()?;
+        self.startup_candidates_with(&entries)
+    }
+
+    /// [`Self::startup_candidates`] for entries the caller already read, so one repaint lists
+    /// the autostart directory once instead of once per projection.
+    pub fn startup_candidates_with(
+        &self,
+        entries: &[crate::xdg_applications::StartupEntry],
+    ) -> io::Result<Vec<StartupCandidate>> {
+        let existing: std::collections::BTreeSet<&str> =
+            entries.iter().map(|entry| entry.id.as_str()).collect();
         let catalog = self.installed_applications().map_err(catalog_error)?;
         let mut candidates: Vec<(String, StartupCandidate)> = catalog
             .entries()

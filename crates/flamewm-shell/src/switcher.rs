@@ -406,11 +406,7 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
         let icon_id = format!("switcher-row-{row}-icon");
         let thumb_id = format!("switcher-row-{row}-thumb");
         let index = window.start + slot;
-        match frame
-            .entries
-            .get(index)
-            .filter(|_| index < window.end)
-        {
+        match frame.entries.get(index).filter(|_| index < window.end) {
             Some(entry) => {
                 document.text_ref(&label_id, row_label(entry))?;
                 document.visible(&row_id, true)?;
@@ -523,19 +519,27 @@ mod tests {
         );
     }
 
-    // Regression: an unchanged preview arrives as a reference and the shell reuses its pixels.
+    // Regression: an unchanged preview arrives as a reference and the shell reuses the same
+    // buffer handle, so resolution and repaint never copy preview bytes.
     #[test]
     fn thumb_cache_reuses_pixels_for_reference_entries() {
         let mut cache = SwitcherThumbCache::default();
         let mut first = vec![thumb_entry(5, vec![1, 2, 3, 255])];
-        cache.resolve(&mut first);
-        assert_eq!(first[0].thumb.as_ref().map(|t| t.rgba.len()), Some(4));
+        let fresh = cache.resolve(&mut first);
+        let fresh = fresh[0].as_ref().expect("fresh preview");
+        assert_eq!(*fresh.pixels, vec![1, 2, 3, 255]);
+        assert_eq!(fresh.source(), "switcher-thumb-1x1-g5");
+        assert!(
+            first[0].thumb.as_ref().is_some_and(|t| t.rgba.is_empty()),
+            "the entry keeps metadata only"
+        );
 
         let mut again = vec![thumb_entry(5, Vec::new())];
-        cache.resolve(&mut again);
-        assert_eq!(
-            again[0].thumb.as_ref().map(|t| t.rgba.clone()),
-            Some(vec![1, 2, 3, 255])
+        let reused = cache.resolve(&mut again);
+        let reused = reused[0].as_ref().expect("cached preview");
+        assert!(
+            Arc::ptr_eq(&fresh.pixels, &reused.pixels),
+            "a reference shares the cached buffer instead of copying it"
         );
     }
 
@@ -544,42 +548,46 @@ mod tests {
     #[test]
     fn thumb_cache_prunes_unnamed_generations_and_drops_missing_references() {
         let mut cache = SwitcherThumbCache::default();
-        cache.resolve(&mut [
+        let named = cache.resolve(&mut [
             thumb_entry(5, vec![1, 2, 3, 255]),
             thumb_entry(6, vec![0; 4]),
         ]);
+        assert!(named.iter().all(Option::is_some));
         assert_eq!(cache.len(), 2);
 
-        cache.resolve(&mut [thumb_entry(6, Vec::new())]);
+        let kept = cache.resolve(&mut [thumb_entry(6, Vec::new())]);
         assert_eq!(cache.len(), 1, "generation 5 is no longer named");
+        assert!(kept[0].is_some());
 
         let mut stale = vec![thumb_entry(5, Vec::new())];
-        cache.resolve(&mut stale);
+        assert!(cache.resolve(&mut stale)[0].is_none());
         assert_eq!(stale[0].thumb, None);
 
         cache.resolve(&mut []);
         assert!(cache.is_empty(), "a closed snapshot names nothing");
     }
 
-    // LEGACY-DEFAULT: pixels with generation 0 (older WMs) render directly and are not cached.
+    // LEGACY-DEFAULT: pixels with generation 0 (older WMs) render directly, uncached.
     #[test]
     fn thumb_cache_leaves_untracked_pixels_alone() {
         let mut cache = SwitcherThumbCache::default();
         let mut rows = vec![thumb_entry(0, vec![9, 9, 9, 255])];
-        cache.resolve(&mut rows);
+        let previews = cache.resolve(&mut rows);
         assert_eq!(
-            rows[0].thumb.as_ref().map(|t| t.rgba.clone()),
+            previews[0].as_ref().map(|p| p.pixels.as_ref().clone()),
             Some(vec![9, 9, 9, 255])
         );
         assert!(cache.is_empty());
     }
 
+    #[test]
     fn frame(open: bool, immediate: bool, count: usize) -> SwitcherFrame {
         SwitcherFrame {
             open,
             immediate,
             selected: 0,
             entries: (0..count).map(|i| entry(&format!("w{i}"), "")).collect(),
+            previews: vec![None; count],
         }
     }
 
@@ -634,6 +642,22 @@ mod tests {
         controller.apply(frame(true, true, 3), Instant::now());
         assert!(controller.visible);
         assert_eq!(controller.deadline(), None);
+    }
+
+    // Idle repaint guard: a repeated snapshot with the same selection and preview generations
+    // marks nothing dirty, while a selection move still repaints.
+    #[test]
+    fn repeated_snapshot_does_not_repaint() {
+        let mut controller = SwitcherController::default();
+        let now = Instant::now();
+        controller.apply(frame(true, true, 2), now);
+        controller.dirty = false;
+        controller.apply(frame(true, true, 2), now);
+        assert!(!controller.dirty, "an identical snapshot repaints nothing");
+        let mut moved = frame(true, true, 2);
+        moved.selected = 1;
+        controller.apply(moved, now);
+        assert!(controller.dirty, "a selection move repaints");
     }
 
     #[test]

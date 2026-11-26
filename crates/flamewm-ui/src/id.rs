@@ -13,7 +13,7 @@ macro_rules! stable_id {
             #[must_use]
             pub fn new(value: impl Into<String>) -> Self {
                 let value = value.into();
-                Self(Arc::from(value))
+                Self(Arc::<str>::from(value))
             }
             #[must_use]
             pub fn as_str(&self) -> &str {
@@ -27,13 +27,13 @@ macro_rules! stable_id {
 
         impl From<&str> for $name {
             fn from(value: &str) -> Self {
-                Self(Arc::from(value))
+                Self(Arc::<str>::from(value))
             }
         }
 
         impl From<String> for $name {
             fn from(value: String) -> Self {
-                Self(Arc::from(value))
+                Self(Arc::<str>::from(value))
             }
         }
 

@@ -57,6 +57,7 @@ mod sliders;
 mod startup_extras;
 mod startup_page;
 mod tables;
+mod xdg_cache;
 
 use actions::*;
 use consts::*;

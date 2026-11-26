@@ -440,12 +440,17 @@ impl WindowModel {
 
     /// Visible (current workspace, not minimized) windows, topmost first.
     pub fn visible_top_first(&self) -> Vec<WindowId> {
+        self.visible_top_first_iter().collect()
+    }
+
+    /// [`Self::visible_top_first`] without the id list: the scene traversal runs on every painted
+    /// frame and every pointer motion, so it borrows the stacking order instead of allocating.
+    pub fn visible_top_first_iter(&self) -> impl DoubleEndedIterator<Item = WindowId> + '_ {
         self.windows
             .iter()
             .rev()
             .filter(|w| !self.is_hidden(w.id))
             .map(|w| w.id)
-            .collect()
     }
 
     /// Alt+Tab order: every managed window, most recently stacked first. Minimised and
