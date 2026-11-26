@@ -17,3 +17,5 @@
 ## First composition (scripts/perf-compose, 1 s, nested idle): 100% of sampled ticks on the single main thread `flamewm-wayland`; no per-subsystem split from thread names. Next: add flamewm-profiler counters or perf record for a within-thread split (unit u79).
 
 ## Build 7: cargo check --workspace --all-targets green, 0 fixes. Pool stall root cause: ghost "running" workers (41) from finished units filled the lane cap; abort_all does not clear them. Workaround: move open units to a fresh dir (units-b) for a fresh pool id; scripts/perf-loop now scans units*/.
+
+## Build 8: cargo check --workspace --all-targets green after 2 fixes: (1) wm-wayland render/mod.rs collect_occluders match missed macro-generated Elem::_GenericCatcher; (2) shell switcher.rs stray #[test] on a helper fn with args. Batches 12-13 landed.

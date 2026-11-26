@@ -580,7 +580,6 @@ mod tests {
         assert!(cache.is_empty());
     }
 
-    #[test]
     fn frame(open: bool, immediate: bool, count: usize) -> SwitcherFrame {
         SwitcherFrame {
             open,

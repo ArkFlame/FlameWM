@@ -374,7 +374,7 @@ fn collect_occluders(elements: &[Elem], scale: f64, occluders: &mut Vec<Rectangl
             Elem::Solid(solid) => solid.opaque_regions(scale.into()),
             Elem::Surface(surface) => surface.opaque_regions(scale.into()),
             Elem::Rounded(rounded) => rounded.opaque_regions(scale.into()),
-            Elem::Memory(_) => continue,
+            Elem::Memory(_) | Elem::_GenericCatcher(_) => continue,
         };
         // `Element::opaque_regions` is element-local, as the renderer expects: shift each region
         // by this element's placed geometry so the stored rects are in output space.
