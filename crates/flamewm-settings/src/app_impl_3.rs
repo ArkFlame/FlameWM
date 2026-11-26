@@ -1,5 +1,7 @@
 //! Split from `lib.rs` (`app_impl_3`); see crate docs.
 
+use std::rc::Rc;
+
 use flamewm_settings_core::xdg_applications::ApplicationSettings;
 
 use super::*;
@@ -25,13 +27,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Projects the Startup page rows from the live XDG autostart entries.
     pub(crate) fn sync_startup(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        // One facade read covers rows and the picker candidates: this page resyncs on every
-        // input event, so opening the environment twice per repaint was duplicated work.
-        let settings = ApplicationSettings::from_environment().ok();
-        let entries = settings
-            .as_ref()
-            .and_then(|settings| crate::startup_page::rows_with(settings).ok())
-            .unwrap_or_default();
+        // One facade read covers rows and the picker candidates, memoized until its XDG stamp
+        // moves: this page resyncs on every input event, so a repaint must not re-read files.
+        let view = match ApplicationSettings::from_environment() {
+            Ok(settings) => self.xdg_cache.borrow_mut().startup(&settings),
+            Err(_) => Rc::new(crate::xdg_cache::StartupView::default()),
+        };
+        let entries = &view.rows;
         document.visible("startup-empty", entries.is_empty())?;
         for slot in 0..crate::startup_page::SLOTS {
             let entry = entries.get(slot);
@@ -51,18 +53,20 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 )?;
             }
         }
-        let candidates = settings
-            .as_ref()
-            .map(crate::startup_page::candidates_with)
-            .unwrap_or_default();
-        self.sync_startup_extras(document, &candidates)
+        self.sync_startup_extras(document, &view.candidates)
     }
 
     /// Projects the current default handler name for each Default Applications row.
     pub(crate) fn sync_defaults(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let labels = crate::default_apps_page::labels();
-        for (slot, value) in labels.into_iter().enumerate() {
-            document.text(&format!("defaults-value-{slot}"), value)?;
+        let labels = match ApplicationSettings::from_environment() {
+            Ok(settings) => self.xdg_cache.borrow_mut().defaults(&settings),
+            Err(_) => Rc::new(vec![
+                "Unavailable".to_owned();
+                crate::default_apps_page::GROUPS.len()
+            ]),
+        };
+        for (slot, value) in labels.iter().enumerate() {
+            document.text(&format!("defaults-value-{slot}"), value.clone())?;
         }
         Ok(())
     }

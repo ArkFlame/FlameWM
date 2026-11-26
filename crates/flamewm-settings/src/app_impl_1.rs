@@ -40,6 +40,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             render_probe: None,
             startup_pick: 0,
             file_manager_label: "FlameWM Explorer".into(),
+            xdg_cache: std::cell::RefCell::new(xdg_cache::XdgCache::default()),
         }
     }
 
@@ -57,6 +58,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     pub fn refresh(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        // A refresh marks a page entry or an authoritative change, so the XDG pages re-read
+        // their files once instead of trusting a projection from before the change.
+        self.xdg_cache.borrow_mut().clear();
         self.client.refresh_all().map_err(control_error)?;
         self.file_manager_label = file_manager::current();
         self.sync_cursor_theme();
@@ -874,11 +878,23 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::FileManagerCycle => {
                 self.file_manager_label = file_manager::toggle()?;
             }
-            SettingsAction::StartupToggle(slot) => startup_page::toggle(slot)?,
-            SettingsAction::StartupRemove(slot) => startup_page::remove(slot)?,
-            SettingsAction::StartupDelay(slot) => startup_page::cycle_delay(slot)?,
+            SettingsAction::StartupToggle(slot) => {
+                startup_page::toggle(slot)?;
+                self.xdg_cache.borrow_mut().clear();
+            }
+            SettingsAction::StartupRemove(slot) => {
+                startup_page::remove(slot)?;
+                self.xdg_cache.borrow_mut().clear();
+            }
+            SettingsAction::StartupDelay(slot) => {
+                startup_page::cycle_delay(slot)?;
+                self.xdg_cache.borrow_mut().clear();
+            }
             SettingsAction::StartupPick => self.startup_pick = self.startup_pick.wrapping_add(1),
-            SettingsAction::StartupAddPicked => startup_page::add_candidate(self.startup_pick)?,
+            SettingsAction::StartupAddPicked => {
+                startup_page::add_candidate(self.startup_pick)?;
+                self.xdg_cache.borrow_mut().clear();
+            }
             SettingsAction::StartupCommandFocus => {
                 if self.startup_command.is_none() {
                     self.startup_command = Some(startup_extras::StartupCommandDraft {
@@ -889,6 +905,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::DefaultCycle(slot) => {
                 default_apps_page::cycle(slot)?;
+                self.xdg_cache.borrow_mut().clear();
             }
             SettingsAction::NativeKeyEvent => {}
             SettingsAction::ApiKeyFocus => {

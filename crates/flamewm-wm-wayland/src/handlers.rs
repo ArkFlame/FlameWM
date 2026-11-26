@@ -128,9 +128,12 @@ impl CompositorHandler for State {
         let before = buffer_geometry(surface);
         on_commit_buffer_handler::<Self>(surface);
         // A repaint of a window the open switcher lists refreshes its preview (throttled there).
+        // The switcher is closed almost always, so its check comes before the surface-to-window
+        // lookup: that scan is O(toplevels + X11 windows) and commits are the hottest client path.
         if visible
+            && let Some(control) = self.control.as_ref()
+            && control.switcher_open()
             && let Some(id) = self.window_for_surface(surface)
-            && let Some(control) = self.control.clone()
             && control.note_switcher_commit(id)
         {
             self.request_redraw();

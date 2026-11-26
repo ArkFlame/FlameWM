@@ -820,15 +820,19 @@ fn send_frame_callbacks(state: &State) {
             Some(output.clone())
         });
     }
-    let map = layer_map_for_output(output);
-    for layer in map.layers() {
-        send_frames_surface_tree(
-            layer.layer_surface().wl_surface(),
-            output,
-            time,
-            throttle,
-            |_, _| Some(output.clone()),
-        );
+    // Scoped so the per-output layer map lock is released before the cursor callback, never held
+    // across unrelated work (smithay deadlocks on a second guard for the same output).
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            send_frames_surface_tree(
+                layer.layer_surface().wl_surface(),
+                output,
+                time,
+                throttle,
+                |_, _| Some(output.clone()),
+            );
+        }
     }
     send_cursor_frame(state, time);
 }

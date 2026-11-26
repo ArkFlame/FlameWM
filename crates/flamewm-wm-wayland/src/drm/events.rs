@@ -161,7 +161,12 @@ pub(super) fn send_frame_callbacks(state: &State) {
     );
     let throttle = Some(Duration::from_millis(16));
     let output = &state.output;
-    for (_, top) in &state.toplevels {
+    for (id, top) in &state.toplevels {
+        // Hidden windows are skipped: a frame callback unblocks the client's next commit, so a
+        // window on another workspace or minimised would keep rasterising off screen every refresh.
+        if state.model.is_hidden(*id) {
+            continue;
+        }
         let surface = top.wl_surface();
         send_frames_surface_tree(surface, output, time, throttle, |_, _| Some(output.clone()));
         for (popup, _) in PopupManager::popups_for_surface(surface) {
@@ -173,6 +178,7 @@ pub(super) fn send_frame_callbacks(state: &State) {
     let x11 = state
         .x11
         .iter()
+        .filter(|(id, _)| !state.model.is_hidden(*id))
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));
     for surface in x11.filter_map(smithay::xwayland::X11Surface::wl_surface) {
@@ -180,15 +186,18 @@ pub(super) fn send_frame_callbacks(state: &State) {
             Some(output.clone())
         });
     }
-    let layers: Vec<_> = layer_map_for_output(output).layers().cloned().collect();
-    for layer in layers {
-        send_frames_surface_tree(
-            layer.layer_surface().wl_surface(),
-            output,
-            time,
-            throttle,
-            |_, _| Some(output.clone()),
-        );
+    // Scoped so the layer map lock is released before `send_cursor_frame`.
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            send_frames_surface_tree(
+                layer.layer_surface().wl_surface(),
+                output,
+                time,
+                throttle,
+                |_, _| Some(output.clone()),
+            );
+        }
     }
     render::send_cursor_frame(state, time);
 }

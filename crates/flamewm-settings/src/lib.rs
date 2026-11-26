@@ -153,6 +153,8 @@ pub struct SettingsApplication<T: ControlTransport> {
     open_picker_rows: std::cell::Cell<Option<theme_picker::PickerKind>>,
     /// Settings revision whose appearance tokens were last projected into the document.
     token_revision: std::cell::Cell<Option<u64>>,
+    /// Startup/Defaults XDG projections, reused across repaints until their stamp moves.
+    xdg_cache: std::cell::RefCell<xdg_cache::XdgCache>,
 }
 
 /// Typed API key text not yet saved, with the inline message for the last Enter.

@@ -1,9 +1,10 @@
 //! Startup Applications page: XDG autostart rows through the shared application settings facade.
 //!
-//! The page has a fixed number of slots, so the markup stays static. Each slot reads the entry at
-//! its index on every action, so the list is never cached across user changes.
+//! The page has a fixed number of slots, so the markup stays static. Rows are projected from
+//! the caller's memoized [`crate::xdg_cache::StartupView`]; every write path clears that cache,
+//! so the list is never stale across user changes.
 use flamewm_settings_core::xdg_applications::{ApplicationSettings, StartupEntry, value};
-use flamewm_settings_core::xdg_startup::{StartupCandidate, startup_delay};
+use flamewm_settings_core::xdg_startup::startup_delay;
 
 /// Visible rows on the Startup page; `ui/settings.html` declares this many slots.
 pub const SLOTS: usize = 8;
@@ -18,8 +19,8 @@ pub fn display_name(entry: &StartupEntry) -> String {
         )
 }
 
-/// Startup entries from an already opened facade, so one refresh reads rows and candidates
-/// through a single environment read.
+/// Startup entries from an already opened facade; the Startup page projection builds these once
+/// per XDG stamp and reuses them for rows and candidates.
 pub fn rows_with(settings: &ApplicationSettings) -> Result<Vec<StartupEntry>, String> {
     settings
         .startup_entries()
@@ -86,12 +87,6 @@ pub fn delay_label(seconds: u32) -> String {
 /// Row-button text for an entry's current start delay.
 pub fn delay_text(entry: &StartupEntry) -> String {
     delay_label(startup_delay(&entry.text))
-}
-
-/// Installed applications that can still be added, in display order, from an already opened
-/// facade that shares one environment read with [`rows_with`].
-pub fn candidates_with(settings: &ApplicationSettings) -> Vec<StartupCandidate> {
-    settings.startup_candidates().unwrap_or_default()
 }
 
 /// Advances the delay of the entry in `slot` to the next preset.

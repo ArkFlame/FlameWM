@@ -762,9 +762,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         ] {
             document.visible(&format!("page-{name}"), self.client.ui().page == page)?;
         }
-        // Both pages read live XDG state from disk on every line, so they sync only while their
-        // page is the visible one. Switching pages runs a refresh, so a page is always current
-        // when it is shown and never costs file reads while another page is up.
+        // Both pages project live XDG state, so they sync only while their page is the visible
+        // one and their file reads are memoized per XDG stamp (see `xdg_cache`). Switching pages
+        // runs a refresh, so a page is always current when it is shown.
         match self.client.ui().page {
             SettingsPage::Startup => self.sync_startup(document)?,
             SettingsPage::Defaults => self.sync_defaults(document)?,

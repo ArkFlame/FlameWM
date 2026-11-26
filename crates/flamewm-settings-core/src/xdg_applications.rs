@@ -362,8 +362,7 @@ impl ApplicationSettings {
     pub fn stamp(&self) -> XdgStamp {
         let names: Vec<String> = self.mimeapps_names().collect();
         let mut entries = Vec::with_capacity(
-            self.config_dirs.len() * (1 + names.len())
-                + self.data_dirs.len() * (1 + names.len()),
+            self.config_dirs.len() * (1 + names.len()) + self.data_dirs.len() * (1 + names.len()),
         );
         for root in &self.config_dirs {
             entries.push(StampEntry::of(root.join("autostart")));
@@ -764,6 +763,51 @@ mod tests {
             )
             .unwrap(),
             "# comment\n[Default Applications]\ntext/plain=a.desktop;\n"
+        );
+    }
+
+    #[test]
+    fn stamp_is_stable_until_a_watched_path_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-xdg-stamp-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let user = root.join("home/.config");
+        let data = root.join("share");
+        let settings = ApplicationSettings {
+            config_dirs: vec![user.clone()],
+            data_dirs: vec![data.clone()],
+            desktops: Vec::new(),
+        };
+        let absent = settings.stamp();
+        assert_eq!(
+            settings.stamp(),
+            absent,
+            "an untouched tree keeps its stamp"
+        );
+        fs::create_dir_all(user.join("autostart")).unwrap();
+        fs::create_dir_all(data.join("applications")).unwrap();
+        fs::write(
+            user.join("autostart/demo.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Demo\nExec=/bin/true\n",
+        )
+        .unwrap();
+        let present = settings.stamp();
+        assert_ne!(
+            present, absent,
+            "a new autostart entry must move the stamp"
+        );
+        assert_eq!(
+            settings.stamp(),
+            present,
+            "a settled tree keeps its stamp across reads"
+        );
+        settings.remove_startup("demo.desktop").unwrap();
+        assert_ne!(
+            settings.stamp(),
+            present,
+            "a removed autostart entry must move the stamp"
         );
     }
 }
