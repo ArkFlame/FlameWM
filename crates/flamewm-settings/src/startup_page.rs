@@ -1,8 +1,8 @@
 //! Startup Applications page: XDG autostart rows through the shared application settings facade.
 //!
 //! The page has a fixed number of slots, so the markup stays static. Rows are projected from
-//! the caller's memoized [`crate::xdg_cache::StartupView`]; every write path clears that cache,
-//! so the list is never stale across user changes.
+//! the caller's memoized [`crate::xdg_cache::StartupView`]; every write path clears that cache and
+//! a moved XDG stamp reloads it, so a user change is shown on the next repaint.
 use flamewm_settings_core::xdg_applications::{ApplicationSettings, StartupEntry, value};
 use flamewm_settings_core::xdg_startup::startup_delay;
 

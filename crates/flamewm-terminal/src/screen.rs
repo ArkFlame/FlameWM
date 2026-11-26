@@ -296,9 +296,19 @@ impl Screen {
         if cols == self.cols && rows == self.rows {
             return;
         }
-        for grid in [&mut self.primary, &mut self.alt] {
-            for line in grid.iter_mut() {
-                line.resize(cols, Cell::blank(Color::Default));
+        let cols_changed = cols != self.cols;
+        // Width padding and truncation only when the column count moves. The alternate grid is blanked and sized on
+        // activation (`switch_alt`), so an inactive one keeps its old width instead of paying the same per-line pass
+        // on every ConfigureNotify; a height-only resize touches no line buffer at all.
+        if cols_changed {
+            let blank = Cell::blank(Color::Default);
+            for line in &mut self.primary {
+                line.resize(cols, blank);
+            }
+            if self.alt_active {
+                for line in &mut self.alt {
+                    line.resize(cols, blank);
+                }
             }
         }
         match rows.cmp(&self.rows) {
@@ -306,11 +316,11 @@ impl Screen {
                 let excess = self.rows - rows;
                 let shift = excess.min(self.row);
                 if shift > 0 {
-                    // One drain instead of `shift` front removals, each of which moved the whole grid.
-                    let dropped: Vec<Line> = self.primary.drain(0..shift).collect();
-                    for line in &dropped {
+                    // One drain, packing each departing top line into scrollback as it leaves. The drain borrows only
+                    // the primary grid, so the drops need no temporary list of removed lines.
+                    for line in self.primary.drain(0..shift) {
                         self.scrollback
-                            .push_back(History::pack(&line[..history_len(line)]));
+                            .push_back(History::pack(&line[..history_len(&line)]));
                         if self.scrollback.len() > self.scrollback_limit {
                             self.scrollback.pop_front();
                         }
@@ -322,7 +332,8 @@ impl Screen {
             }
             Ordering::Greater => {
                 let grow = rows - self.rows;
-                let mut pulled = Vec::new();
+                // One capacity for the whole batch: growing the window never reallocates the pull list per row.
+                let mut pulled = Vec::with_capacity(grow);
                 if !self.alt_active {
                     for _ in 0..grow {
                         let Some(history) = self.scrollback.pop_back() else {
@@ -353,9 +364,15 @@ impl Screen {
         self.alt.truncate(rows);
         self.cols = cols;
         self.rows = rows;
-        self.dirty_rows = vec![false; rows];
+        // Reuse the damage bitmap: `take_dirty_into` clears it behind `All`, so only its capacity is carried over.
+        self.dirty_rows.clear();
+        self.dirty_rows.resize(rows, false);
         self.mark_all();
-        self.tabs = default_tabs(cols);
+        // Tab stops depend on the column count alone: a height-only resize keeps them, including any stop the
+        // program set with HTS, so no tab list is rebuilt.
+        if cols_changed {
+            self.tabs = default_tabs(cols);
+        }
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.row = self.row.min(rows - 1);

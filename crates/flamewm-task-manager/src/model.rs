@@ -58,8 +58,13 @@ pub struct Sampler {
     path: String,
     /// Reused text buffer for the whole-file procfs reads of a sample.
     text: String,
-    /// Reused pid list, so the per-sample walk allocates nothing.
+    /// Reused sanitized `cmdline` buffer, so a static-field refresh allocates only the `Arc<str>`.
+    command_text: String,
+    /// Sorted pid list, kept in ascending order across samples: vanished pids are dropped and a
+    /// discovery scan binary-inserts new ones, so a sample never sorts the whole table.
     pids: Vec<u32>,
+    /// Reused per-core counters for `/proc/stat`; swapped with `prev_cores` each sample.
+    cores: Vec<Cpu>,
     /// Reused pid→ppid map for `assign_depths`; cleared each sample, capacity kept.
     parents: HashMap<u32, u32>,
     /// Reused CPU ranking behind the hot set; cleared each sample, capacity kept.
@@ -173,10 +178,15 @@ fn read_text<'a>(buf: &'a mut String, path: &str) -> &'a str {
         Err(_) => "",
     }
 }
-fn load_cpu(text: &str) -> (Cpu, Vec<Cpu>) {
+/// Fills the reused `cores` buffer with the per-core counters and returns the aggregate line.
+/// The sampler swaps this buffer with `prev_cores` each sample, so the per-second `/proc/stat`
+/// refresh allocates no `Vec` after the first sample.
+fn load_cpu_into(text: &str, cores: &mut Vec<Cpu>) -> Cpu {
+    cores.clear();
     let mut lines = text.lines().take_while(|line| line.starts_with("cpu"));
     let total = lines.next().and_then(cpu_ticks).unwrap_or_default();
-    (total, lines.filter_map(cpu_ticks).collect())
+    cores.extend(lines.filter_map(cpu_ticks));
+    total
 }
 fn percent(now: Cpu, old: Cpu) -> f64 {
     let total = now.total.saturating_sub(old.total);
@@ -187,27 +197,63 @@ fn percent(now: Cpu, old: Cpu) -> f64 {
     }
 }
 
-/// `/proc/[pid]/stat`: the comm field may contain spaces and closing parentheses.
-/// Only the final closing parenthesis can delimit it.
-pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
-    parse_stat_with_name(pid, text, page_bytes, None)
+/// Parses one whitespace-delimited ASCII number. `None` for an empty or non-numeric field.
+fn parse_uint(field: &[u8]) -> Option<u64> {
+    if field.is_empty() {
+        return None;
+    }
+    let mut value = 0_u64;
+    for &byte in field {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value
+            .checked_mul(10)?
+            .checked_add(u64::from(byte - b'0'))?;
+    }
+    Some(value)
 }
 
-/// Same as `parse_stat`, but reuses `cached_name` when the unchanged `comm` field still matches.
+/// Same, accepting a leading `-` for the signed `priority` and `nice` fields.
+fn parse_int(field: &[u8]) -> Option<i64> {
+    match field.split_first() {
+        Some((b'-', rest)) => i64::try_from(parse_uint(rest)?).ok().map(|value| -value),
+        _ => i64::try_from(parse_uint(field)?).ok(),
+    }
+}
+
+/// `/proc/[pid]/stat`: the comm field may contain spaces and closing parentheses.
+/// Only the final closing parenthesis can delimit it. Parsing the raw bytes skips the UTF-8
+/// validation of the whole line, the `char` decoding of whitespace splitting and the `parse::<>`
+/// machinery, and keeps a process whose `comm` is not valid UTF-8 instead of dropping it.
+pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
+    parse_stat_bytes(pid, text.as_bytes(), page_bytes, None)
+}
+
+/// Same as `parse_stat`, but reuses `cached_name` when the unchanged `comm` bytes still match.
 /// A process keeps its name for its whole life, so the rotating `stat` read then bumps a refcount
 /// instead of building two fresh heap strings on every tick.
 fn parse_stat_with_name(
     pid: u32,
-    text: &str,
+    text: &[u8],
     page_bytes: u64,
     cached_name: Option<&Arc<str>>,
 ) -> Option<Process> {
-    let first = text.find('(')?;
-    let last = text.rfind(')')?;
+    parse_stat_bytes(pid, text, page_bytes, cached_name)
+}
+
+fn parse_stat_bytes(
+    pid: u32,
+    text: &[u8],
+    page_bytes: u64,
+    cached_name: Option<&Arc<str>>,
+) -> Option<Process> {
+    let first = text.iter().position(|&byte| byte == b'(')?;
+    let last = text.iter().rposition(|&byte| byte == b')')?;
     if first >= last {
         return None;
     }
-    // One indexed pass over the fields: the sampler parses a `stat` per due task per tick, so
+    // One byte pass over the fields: the sampler parses a `stat` per due task per tick, so
     // collecting a `Vec<&str>` of all fifty-odd fields would allocate for every read.
     let rest = text.get(last + 1..)?;
     let mut state: Option<char> = None;
@@ -221,18 +267,31 @@ fn parse_stat_with_name(
     let mut vsize: Option<u64> = None;
     let mut pages: Option<u64> = None;
     let mut count = 0_usize;
-    for field in rest.split_whitespace() {
+    let mut index = 0_usize;
+    while index < rest.len() {
+        while index < rest.len() && rest[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let begin = index;
+        while index < rest.len() && !rest[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if begin == index {
+            break;
+        }
+        let field = &rest[begin..index];
         match count {
-            0 => state = field.chars().next(),
-            1 => ppid = field.parse().ok(),
-            11 => utime = field.parse().ok(),
-            12 => stime = field.parse().ok(),
-            15 => priority = field.parse().ok(),
-            16 => nice = field.parse().ok(),
-            17 => threads = field.parse().ok(),
-            19 => start = field.parse().ok(),
-            20 => vsize = field.parse().ok(),
-            21 => pages = field.parse().ok(),
+            // The state is a single ASCII letter; a non-ASCII byte still yields a usable char.
+            0 => state = field.first().map(|&byte| char::from(byte)),
+            1 => ppid = parse_uint(field).and_then(|value| u32::try_from(value).ok()),
+            11 => utime = parse_uint(field),
+            12 => stime = parse_uint(field),
+            15 => priority = parse_int(field),
+            16 => nice = parse_int(field).and_then(|value| i32::try_from(value).ok()),
+            17 => threads = parse_uint(field).and_then(|value| u32::try_from(value).ok()),
+            19 => start = parse_uint(field),
+            20 => vsize = parse_uint(field),
+            21 => pages = parse_uint(field),
             _ => {}
         }
         count += 1;
@@ -242,11 +301,11 @@ fn parse_stat_with_name(
     }
     // Field 24 (rss) is in pages: it replaces /proc/<pid>/status VmRSS, one read fewer per task.
     let comm = text.get(first + 1..last)?;
-    // Sanitizing maps control bytes to spaces, so the raw comm can only be compared to the cached
-    // name when it has none; otherwise the sanitized fallback rebuilds it (rare).
+    // Sanitizing maps control bytes to spaces, so the raw comm is compared to the cached name
+    // byte for byte; a rename (or the rare non-UTF-8 comm) rebuilds it through the lossy path.
     let name = match cached_name {
-        Some(existing) if existing.as_ref() == comm => Arc::clone(existing),
-        _ => Arc::from(sanitize(comm, 64)),
+        Some(existing) if existing.as_bytes() == comm => Arc::clone(existing),
+        _ => Arc::from(sanitize(&String::from_utf8_lossy(comm), 64)),
     };
     Some(Process {
         pid,
@@ -325,18 +384,17 @@ pub fn parse_uid(status: &str) -> u32 {
         .and_then(|v| v.split_whitespace().next()?.parse().ok())
         .unwrap_or(u32::MAX)
 }
-fn command(scratch: &mut Vec<u8>, path: &mut String, pid: u32, name: &str) -> Arc<str> {
-    if let Some(bytes) = read_proc(scratch, proc_path(path, pid, "cmdline")) {
-        let args = String::from_utf8_lossy(bytes);
-        // `sanitize` already maps every control byte, including the NUL argument separators,
-        // to a space, so no intermediate replacement string is needed.
-        let text = sanitize(&args, 180);
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return Arc::from(trimmed);
-        }
+/// Sanitized `cmdline` text into the sampler's reused `text` buffer: control bytes (the NUL
+/// argument separators included) become spaces, and at most 180 chars are kept. Empty when the
+/// read fails, so the caller falls back to the bracketed name.
+fn command_into(scratch: &mut Vec<u8>, path: &mut String, text: &mut String, pid: u32) {
+    text.clear();
+    let Some(bytes) = read_proc(scratch, proc_path(path, pid, "cmdline")) else {
+        return;
+    };
+    for ch in String::from_utf8_lossy(bytes).chars().take(180) {
+        text.push(if ch.is_control() { ' ' } else { ch });
     }
-    Arc::from(format!("[{name}]"))
 }
 fn memory(text: &str) -> (u64, u64, u64, u64) {
     // One pass over the four counters we need: no per-sample HashMap of every field.
@@ -435,7 +493,7 @@ impl Sampler {
         if self.user_cache.is_none() {
             self.user_cache = Some(user_names());
         }
-        let (now, cores) = load_cpu(read_text(&mut self.text, "/proc/stat"));
+        let now = load_cpu_into(read_text(&mut self.text, "/proc/stat"), &mut self.cores);
         let (mem_total, mem_used, swap_total, swap_used) =
             memory(read_text(&mut self.text, "/proc/meminfo"));
         let load = load_summary(read_text(&mut self.text, "/proc/loadavg"));
@@ -450,7 +508,8 @@ impl Sampler {
             cpu_total: self
                 .prev_global
                 .map_or(0.0, |previous| percent(now, previous)),
-            cores: cores
+            cores: self
+                .cores
                 .iter()
                 .enumerate()
                 .map(|(i, cpu)| {
@@ -461,26 +520,30 @@ impl Sampler {
                 .collect(),
             ..Snapshot::default()
         };
-        let cpu_count = cores.len().max(1) as f64;
+        let cpu_count = self.cores.len().max(1) as f64;
         if self.page_bytes == 0 {
             self.page_bytes = page_size_bytes();
         }
         self.tick += 1;
         let tick = self.tick;
-        // Reused pid list: discovery appends, then one sort/dedup pass over the same buffer.
-        self.pids.clear();
-        self.pids.extend(self.tasks.keys().copied());
+        // The pid list stays sorted across samples: entries that vanished from the cache last
+        // sample are dropped here, and a discovery scan binary-inserts the new pids. That keeps
+        // the ascending invariant the hot-set cursor relies on without a per-sample sort.
+        let tasks = &self.tasks;
+        self.pids.retain(|pid| tasks.contains_key(pid));
         if discovery_due(tick)
             && let Ok(entries) = fs::read_dir("/proc")
         {
-            self.pids.extend(
-                entries
-                    .flatten()
-                    .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
-            );
+            for entry in entries.flatten() {
+                let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                if let Err(at) = self.pids.binary_search(&pid) {
+                    self.pids.insert(at, pid);
+                }
+            }
         }
-        self.pids.sort_unstable();
-        self.pids.dedup();
         result.processes.reserve(self.pids.len());
         // `pids` and `hot` are both ascending, so one forward cursor answers "is this pid hot"
         // for the whole walk: no hash probe per process per sample.
@@ -515,7 +578,8 @@ impl Sampler {
         }
         self.prev_net = Some((rx, tx, sampled));
         self.prev_global = Some(now);
-        self.prev_cores = cores;
+        // Hand the fresh counters to `prev_cores` and keep the old buffer as next sample's scratch.
+        std::mem::swap(&mut self.prev_cores, &mut self.cores);
         result
     }
 
@@ -541,14 +605,13 @@ impl Sampler {
             cached.seen = tick;
             return Some(last);
         }
-        let text = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "stat"))?;
-        let text = std::str::from_utf8(text).ok()?;
+        let bytes = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "stat"))?;
         // One probe for the whole due path: the name reuse, the CPU counters and the static
         // fields all live in this entry, so a rotating read costs one map lookup instead of three.
         let cached = self.tasks.entry(pid).or_default();
         // A live pid's `comm` rarely changes: reuse the cached name so the per-tick `stat` read
         // does not rebuild two heap strings for every due task.
-        let mut task = parse_stat_with_name(pid, text, self.page_bytes, Some(&cached.name))?;
+        let mut task = parse_stat_with_name(pid, bytes, self.page_bytes, Some(&cached.name))?;
         // Same PID and start time as the previous sample: the delta is meaningful. PID reuse
         // changes the start time, so a recycled PID never inherits the old CPU counter.
         let known = cached.seen != 0 && cached.start == task.start;
@@ -585,7 +648,18 @@ impl Sampler {
                     }
                 });
             // exec can replace argv without changing PID/starttime; the refresh bounds that lag.
-            cached.command = command(&mut self.scratch, &mut self.path, pid, &task.name);
+            // The sanitized text goes into one reused buffer, and the shared `Arc<str>` is only
+            // rebuilt when the command actually changed.
+            command_into(&mut self.scratch, &mut self.path, &mut self.command_text, pid);
+            let trimmed = self.command_text.trim();
+            if trimmed.is_empty() {
+                let fallback = format!("[{}]", task.name);
+                if cached.command.as_ref() != fallback.as_str() {
+                    cached.command = Arc::from(fallback);
+                }
+            } else if cached.command.as_ref() != trimmed {
+                cached.command = Arc::from(trimmed);
+            }
             cached.refreshed = tick;
         }
         if cached.name != task.name {
@@ -632,10 +706,10 @@ pub fn assign_depths(parents: &mut HashMap<u32, u32>, processes: &mut [Process])
 /// Refuse PID reuse between display and process operation. No shell expansion is possible.
 pub fn check_identity(pid: u32, start: u64) -> bool {
     let path = format!("/proc/{pid}/stat");
-    let Ok(stat) = fs::read_to_string(path) else {
+    let Ok(stat) = fs::read(path) else {
         return false;
     };
-    parse_stat(pid, &stat, 0).is_some_and(|current| current.start == start)
+    parse_stat_bytes(pid, &stat, 0, None).is_some_and(|current| current.start == start)
 }
 
 pub fn change_nice(pid: u32, start: u64, nice: i32) -> Result<(), String> {
@@ -743,11 +817,12 @@ mod tests {
     fn unchanged_comm_reuses_the_cached_name_arc() {
         let stat = "4242 (fire fox) S 1 4242 4242 0 -1 4194560 1 0 0 0 150 30 0 0 20 0 7 0 555 6291456 1030 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
         let cached: Arc<str> = "fire fox".into();
-        let reused = parse_stat_with_name(4242, stat, 4096, Some(&cached)).expect("parse");
+        let reused = parse_stat_with_name(4242, stat.as_bytes(), 4096, Some(&cached)).expect("parse");
         assert!(Arc::ptr_eq(&reused.name, &cached));
         // A different cached name is ignored and the parsed comm still wins.
         let stale: Arc<str> = "old name".into();
-        let renamed = parse_stat_with_name(4242, stat, 4096, Some(&stale)).expect("parse");
+        let renamed =
+            parse_stat_with_name(4242, stat.as_bytes(), 4096, Some(&stale)).expect("parse");
         assert_eq!(&*renamed.name, "fire fox");
         assert!(!Arc::ptr_eq(&renamed.name, &stale));
     }
