@@ -108,3 +108,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Regression tests cover malformed and clamped values; native Wayland windows retain `(100, 0)`.
 
 - u148-u150 window backdrop under Wayland: apps publish `_FLAMEWM_WINDOW_MATERIAL`, the compositor sets `_FLAMEWM_COMPOSITOR_BACKDROP` and draws a blurred scene-beneath backdrop for translucent windows. Needed a smithay patch (third_party/smithay) so depth-32 clients get ARGB frames. Nested frame check: xterm text blurred through the translucent task manager.
+
+## u154 (frame callbacks)
+- Already implemented: send_frame_callbacks skips hidden and off-output windows (render/mod.rs:984). Occluded-window skip deliberately not added: a covered window that stops getting callbacks stalls its commit. Composition shift: none.
