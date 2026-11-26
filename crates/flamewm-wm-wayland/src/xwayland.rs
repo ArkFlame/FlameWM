@@ -310,15 +310,20 @@ pub fn spawn_xwayland(
     )?;
     let wm_handle = handle.clone();
     let wm_client = client.clone();
-    handle.insert_source(xwayland, move |event, (), state| match event {
-        XWaylandEvent::Ready {
-            x11_socket,
-            display_number,
-        } => match X11Wm::start_wm(wm_handle.clone(), x11_socket, wm_client.clone()) {
-            Ok(wm) => state.xwayland_ready(wm, display_number),
-            Err(error) => eprintln!("flamewm-wayland: X11 window manager failed to start: {error}"),
-        },
-        XWaylandEvent::Error => eprintln!("flamewm-wayland: XWayland failed to start"),
+    handle.insert_source(xwayland, move |event, (), state| {
+        let _span = crate::profile::xwayland();
+        match event {
+            XWaylandEvent::Ready {
+                x11_socket,
+                display_number,
+            } => match X11Wm::start_wm(wm_handle.clone(), x11_socket, wm_client.clone()) {
+                Ok(wm) => state.xwayland_ready(wm, display_number),
+                Err(error) => {
+                    eprintln!("flamewm-wayland: X11 window manager failed to start: {error}");
+                }
+            },
+            XWaylandEvent::Error => eprintln!("flamewm-wayland: XWayland failed to start"),
+        }
     })?;
     Ok(client)
 }
@@ -398,6 +403,7 @@ impl State {
             match props.strut_event_source() {
                 Ok(source) => {
                     if let Err(error) = self.loop_handle.insert_source(source, |_, _, state| {
+                        let _span = crate::profile::xwayland();
                         let affected = match state.props.as_mut().map(Props::drain_strut_events) {
                             Some(Ok(affected)) => affected,
                             Some(Err(error)) => {

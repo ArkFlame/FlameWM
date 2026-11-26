@@ -9,7 +9,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
 UNITS=docs/perf-loop/units
-open_units() { rg -l '^OPEN' "$UNITS" 2>/dev/null | wc -l; }
+open_units() { rg -l '^OPEN' -g '**/units*/*.md' docs/perf-loop 2>/dev/null | wc -l; }
 since_build() { local t=0; [[ -f docs/perf-loop/LASTBUILD ]] && t=$(<docs/perf-loop/LASTBUILD); echo $(( ($(date +%s) - t) / 60 )); }
 dirty() { git status --short | rg -vc '^\?\?' || true; }
 # Blocks on a never-written fd with a timeout: no sleep binary, no process spawn per tick.

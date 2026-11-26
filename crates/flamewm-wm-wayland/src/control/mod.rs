@@ -171,6 +171,9 @@ pub struct Service {
     /// Settings file mtime last read for the output scale; Settings writes the scale without a
     /// revision bump, so this stamp is what tells the compositor a scale was saved.
     scale_stamp: std::cell::Cell<Option<std::time::SystemTime>>,
+    /// When the settings file was last stat'ed for the output scale. A pointer-moving compositor
+    /// dispatches many times per second; without this bound each turn issued a `stat`.
+    scale_checked_at: std::cell::Cell<Option<Instant>>,
     /// Alt+Tab previews, kept across opens and bounded (see `ThumbCache`).
     thumbs: RefCell<ThumbCache>,
     started: Instant,

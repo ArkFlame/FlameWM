@@ -522,6 +522,7 @@ fn layer_elements(
 }
 
 pub fn render_frame(state: &mut State) {
+    let _span = crate::profile::render();
     let Some(mut backend) = state.backend.take() else {
         return;
     };

@@ -3,6 +3,7 @@
 use super::settings::{output_scale_to_apply, saved_shell_scales};
 use super::*;
 use flamewm_api::clipboard::ClipboardRequest;
+use std::time::Duration;
 
 impl Service {
     /// Connects to the session bus, owns `com.arkflame.FlameWM1` and starts the platform host.
@@ -161,6 +162,7 @@ impl Service {
             popup_focus: RefCell::new(None),
             switcher: RefCell::new(None),
             scale_stamp: std::cell::Cell::new(None),
+            scale_checked_at: std::cell::Cell::new(None),
             thumbs: RefCell::new(ThumbCache::default()),
             started: Instant::now(),
             publish_pending: std::cell::Cell::new(false),
@@ -169,11 +171,24 @@ impl Service {
     }
 
     /// Applies an output scale Settings saved since the last look. A scale write leaves the
-    /// settings revision alone, so the settings file's mtime is the change signal; an unchanged
-    /// file costs one stat. Called from `after_dispatch`, so the next loop turn (any input event or
-    /// bus wake) applies it. Only the nested output is driven here (the DRM path sets scale at
-    /// build time).
+    /// settings revision alone, so the settings file's mtime is the change signal. The stat is
+    /// bounded to one per 250 ms, so a saved scale still lands within that window while pointer
+    /// motion (many dispatches per second) no longer pays one stat per turn. Called from
+    /// `after_dispatch`, so the next loop turn (any input event or bus wake) applies it. Only the
+    /// nested output is driven here (the DRM path sets scale at build time).
     pub(super) fn sync_output_scale(&self, state: &mut State) {
+        // Bound the settings stat: `after_dispatch` runs on every loop turn, and pointer motion is
+        // many turns per second. A saved scale still applies within this window, while an idle or
+        // moving pointer no longer pays one `metadata` syscall per turn.
+        let now = Instant::now();
+        if self
+            .scale_checked_at
+            .get()
+            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(250))
+        {
+            return;
+        }
+        self.scale_checked_at.set(Some(now));
         let stamp = std::fs::metadata(settings_path())
             .and_then(|meta| meta.modified())
             .ok();
@@ -210,6 +225,7 @@ impl Service {
     /// Runs one bus turn. Returns whether anything happened (a message was dispatched or a command
     /// applied), which drives the idle back-off in `install`.
     pub fn turn(&self, state: &mut State) -> bool {
+        let _span = crate::profile::control();
         self.sync(state);
         let mut busy = false;
         self.host
@@ -262,6 +278,7 @@ impl Service {
 
     /// Called after every loop dispatch: emits `WindowsSnapshotChanged` when the windows moved.
     pub fn after_dispatch(&self, state: &mut State) {
+        let _span = crate::profile::control();
         // Pointer motion repaints without touching the mirror: rebuilding it on every loop turn
         // was per-motion work on the input path. Every path that changes the mirror also requests a
         // redraw (`State::request_full_redraw` sets `mirror_dirty`), so this gate cannot miss a change.

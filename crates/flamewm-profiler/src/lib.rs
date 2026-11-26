@@ -45,7 +45,10 @@ struct Config {
 pub(crate) fn config() -> &'static Config {
     static CFG: OnceLock<Config> = OnceLock::new();
     CFG.get_or_init(|| {
-        let enabled = std::env::var("FLAMEWM_PROFILE").is_ok_and(|v| v == "1");
+        // `FLAMEWM_PROFILE_COMPOSE` turns on the same spans for a one-second composition dump, so a
+        // single variable both records and exposes the window instead of asking the user to set two.
+        let enabled = std::env::var("FLAMEWM_PROFILE").is_ok_and(|v| v == "1")
+            || std::env::var("FLAMEWM_PROFILE_COMPOSE").is_ok_and(|v| v == "1");
         let interval_secs: u64 = std::env::var("FLAMEWM_PROFILE_INTERVAL")
             .ok()
             .and_then(|v| v.parse().ok())

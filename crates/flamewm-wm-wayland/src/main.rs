@@ -13,6 +13,9 @@
 //!   the compositor exits right after the dump (used by the headless evidence run).
 //!   `FLAMEWM_WAYLAND_DUMP_POINTER=<x>,<y>` places the pointer there half a second before the dump,
 //!   so the frame shows the cursor the client under it asked for.
+//! - `FLAMEWM_PROFILE_COMPOSE=1`: print one `FLAMEWM-WAYLAND-COMPOSE` window per second to stderr
+//!   with the thread's span shares (Wayland dispatch, control/D-Bus, input, render, timers,
+//!   `XWayland`), then the profiler report. Off by default; no timer, no clock read.
 //!
 //! Two non-compositing entry points exist for packaging and diagnostics:
 //! - `--capabilities`: machine-readable build facts on stdout, exit 0. Touches no bus, no `/dev`
@@ -92,6 +95,7 @@ mod model;
 mod output_layout;
 mod presentation_scale;
 mod probe;
+mod profile;
 mod render;
 mod scene;
 mod screencopy;
@@ -615,6 +619,8 @@ fn run() -> Result<i32, Box<dyn Error>> {
         std::env::var("FLAMEWM_WAYLAND_SOCKET").unwrap_or_else(|_| "wayland-flame".to_owned());
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
     let handle = event_loop.handle();
+    profile::init();
+    profile::install_compose_dump(&handle);
     let mut display: Display<State> = Display::new()?;
     let dh = display.handle();
     // calloop watches a duplicate of the display fd; the Display itself is dispatched through the
@@ -680,6 +686,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     handle.insert_source(
         Generic::new(poll_fd, Interest::READ, Mode::Level),
         move |_, _, state| {
+            let _span = profile::wayland_dispatch();
             dispatch_display.borrow_mut().dispatch_clients(state)?;
             Ok(PostAction::Continue)
         },
@@ -781,7 +788,9 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // the first flip completes.
     stage_line(Stage::Ready, StageStatus::Ok, "backend_init");
     let result = event_loop.run(None, &mut state, |state| {
+        let _flush = profile::wayland_flush();
         let _ = state.display.flush_clients();
+        drop(_flush);
         if let Some(service) = state.control.clone() {
             service.after_dispatch(state);
         }
@@ -883,8 +892,14 @@ fn init_winit(
     state.backend = Some(backend);
     state.sync_host_cursor();
     handle.insert_source(winit_source, |event, (), state| match event {
-        WinitEvent::Resized { size, .. } => state.on_resized(size.w, size.h),
-        WinitEvent::Input(event) => state.process_input(event),
+        WinitEvent::Resized { size, .. } => {
+            let _span = profile::resize();
+            state.on_resized(size.w, size.h);
+        }
+        WinitEvent::Input(event) => {
+            let _span = profile::input();
+            state.process_input(event);
+        }
         WinitEvent::Redraw => render::render_frame(state),
         WinitEvent::CloseRequested => state.loop_signal.stop(),
         WinitEvent::Focus(_) => {}
