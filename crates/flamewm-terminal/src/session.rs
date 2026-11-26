@@ -18,8 +18,15 @@ use crate::screen::Screen;
 /// What the reader threads report to the UI loop.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SessionEvent {
-    Output { id: u64, bytes: Vec<u8> },
-    Exited { id: u64 },
+    Output {
+        id: u64,
+        bytes: Vec<u8>,
+    },
+    Exited {
+        id: u64,
+    },
+    /// One requested glide frame. Wakes the UI loop without touching a pane.
+    Tick,
 }
 
 pub struct Session {
