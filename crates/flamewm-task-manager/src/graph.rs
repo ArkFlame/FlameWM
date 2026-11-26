@@ -78,7 +78,7 @@ pub fn render_into(series: &[Series<'_>], full_scale: f32, pixels: &mut Vec<u8>)
     for quarter in 1..4 {
         let y = height * quarter / 4;
         for x in (0..width).step_by(2) {
-            blend(pixels, x, y, GRID);
+            blend(&mut pixels[..], x, y, GRID);
         }
     }
     let scale = if full_scale > 0.0 { full_scale } else { 1.0 };
@@ -107,12 +107,12 @@ pub fn render_into(series: &[Series<'_>], full_scale: f32, pixels: &mut Vec<u8>)
             let y = y_of(value).round() as usize;
             if line.filled {
                 for fill_y in y..height {
-                    blend(pixels, x, fill_y, [r, g, b, AREA_ALPHA]);
+                    blend(&mut pixels[..], x, fill_y, [r, g, b, AREA_ALPHA]);
                 }
             }
             let (top, bottom) = previous_y.map_or((y, y), |last| (last.min(y), last.max(y)));
             for line_y in top..=(bottom + 1).min(height - 1) {
-                blend(pixels, x, line_y, [r, g, b, 255]);
+                blend(&mut pixels[..], x, line_y, [r, g, b, 255]);
             }
             previous_y = Some(y);
         }

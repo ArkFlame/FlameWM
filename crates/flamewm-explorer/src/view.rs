@@ -141,12 +141,6 @@ fn cmp_ignore_ascii_case(a: &str, b: &str) -> std::cmp::Ordering {
         .cmp(b.bytes().map(|byte| byte.to_ascii_lowercase()))
 }
 
-/// Index of the first name, starting at `from` and wrapping, whose lowercase form starts with `prefix`.
-#[must_use]
-pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usize> {
-    typeahead_match_iter(names.iter().copied(), names.len(), prefix, from)
-}
-
 /// Same wrap-and-match over the listing itself. Typeahead on the projection path has no filter
 /// active, so it reads `Entry::name` in place instead of collecting every name into a `Vec<&str>`
 /// (an 800 KB allocation per typed character in a 100k-row folder).
@@ -433,12 +427,15 @@ mod tests {
     #[test]
     fn typeahead_is_case_insensitive_and_wraps() {
         let names = ["Apple", "banana", "Blueberry", "cherry"];
-        assert_eq!(typeahead_match(&names, "b", 0), Some(1));
-        assert_eq!(typeahead_match(&names, "b", 2), Some(2));
-        assert_eq!(typeahead_match(&names, "ch", 3), Some(3));
-        assert_eq!(typeahead_match(&names, "a", 1), Some(0));
-        assert_eq!(typeahead_match(&names, "z", 0), None);
-        assert_eq!(typeahead_match(&names, "", 0), None);
+        let matched = |prefix: &str, from: usize| {
+            typeahead_match_iter(names.iter().copied(), names.len(), prefix, from)
+        };
+        assert_eq!(matched("b", 0), Some(1));
+        assert_eq!(matched("b", 2), Some(2));
+        assert_eq!(matched("ch", 3), Some(3));
+        assert_eq!(matched("a", 1), Some(0));
+        assert_eq!(matched("z", 0), None);
+        assert_eq!(matched("", 0), None);
     }
 
     #[test]

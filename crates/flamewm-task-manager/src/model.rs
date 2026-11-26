@@ -1,6 +1,6 @@
 //! Linux procfs sampler. All filesystem reads run off the X11/UI thread.
 //! PID plus process start-time is the authority for selecting a live process.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::sync::Arc;
@@ -56,18 +56,23 @@ pub struct Sampler {
     scratch: Vec<u8>,
     /// Reused `/proc/<pid>/<file>` path, so no `format!` allocation per task read.
     path: String,
+    /// Reused text buffer for the whole-file procfs reads of a sample.
+    text: String,
     /// Reused pid list, so the per-sample walk allocates nothing.
     pids: Vec<u32>,
     /// Reused pid→ppid map for `assign_depths`; cleared each sample, capacity kept.
     parents: HashMap<u32, u32>,
+    /// Reused text buffer for the five whole-file procfs reads of a sample.
+    text: String,
     /// Reused CPU ranking behind the hot set; cleared each sample, capacity kept.
     ranked: Vec<(f64, u32)>,
     tick: u64,
     page_bytes: u64,
     user_cache: Option<HashMap<u32, Arc<str>>>,
     prev_net: Option<(u64, u64, Instant)>,
-    /// Highest-CPU processes of the last sample: read `/proc/<pid>/stat` every tick.
-    hot: HashSet<u32>,
+    /// Highest-CPU processes of the last sample, ascending. Read `/proc/<pid>/stat` every tick.
+    /// A sorted `Vec` is probed by the pid walk with one forward index and no hashing.
+    hot: Vec<u32>,
 }
 
 /// Processes re-read every tick because they carry the most CPU. Others are re-read on a rotating
@@ -89,17 +94,19 @@ pub fn cpu_percent(process_ticks: u64, span_ticks: u64, cpu_count: f64) -> f64 {
     100.0 * cpu_count * process_ticks as f64 / span_ticks as f64
 }
 
-/// Rebuilds `hot` with the `HOT_COUNT` highest-CPU pids of `processes`, reusing `hot` and
-/// `ranked` so the per-sample hot-set update allocates nothing after the first sample.
-pub fn hot_pids_into(hot: &mut HashSet<u32>, ranked: &mut Vec<(f64, u32)>, processes: &[Process]) {
-    hot.clear();
+/// Rebuilds `hot` with the `HOT_COUNT` highest-CPU pids of `processes`, ascending, reusing `hot`
+/// and `ranked` so the per-sample hot-set update allocates nothing after the first sample.
+pub fn hot_pids_into(hot: &mut Vec<u32>, ranked: &mut Vec<(f64, u32)>, processes: &[Process]) {
     ranked.clear();
     ranked.extend(processes.iter().map(|p| (p.cpu, p.pid)));
     if ranked.len() > HOT_COUNT {
         ranked.select_nth_unstable_by(HOT_COUNT, |a, b| b.0.total_cmp(&a.0));
         ranked.truncate(HOT_COUNT);
     }
+    hot.clear();
     hot.extend(ranked.iter().map(|&(_, pid)| pid));
+    // Ascending, so the pid walk can test membership with one forward index instead of hashing.
+    hot.sort_unstable();
 }
 
 /// Static-per-process fields are re-read on first sight, on a rename (comm changed), and at
@@ -153,8 +160,23 @@ fn cpu_ticks(line: &str) -> Option<Cpu> {
         busy: total - idle,
     })
 }
-fn load_cpu() -> (Cpu, Vec<Cpu>) {
-    let text = fs::read_to_string("/proc/stat").unwrap_or_default();
+/// Whole-file procfs read into the sampler's reused text buffer: `/proc/stat`, `meminfo` and
+/// `net/dev` are a few kilobytes per sample, so their capacity is kept instead of allocating a
+/// fresh `String` on every tick. A failed or partial read yields the empty string.
+fn read_text<'a>(buf: &'a mut String, path: &str) -> &'a str {
+    use std::io::Read;
+    buf.clear();
+    match fs::File::open(path) {
+        Ok(mut file) => {
+            if file.read_to_string(buf).is_err() {
+                buf.clear();
+            }
+            buf.as_str()
+        }
+        Err(_) => "",
+    }
+}
+fn load_cpu(text: &str) -> (Cpu, Vec<Cpu>) {
     let mut lines = text.lines().take_while(|line| line.starts_with("cpu"));
     let total = lines.next().and_then(cpu_ticks).unwrap_or_default();
     (total, lines.filter_map(cpu_ticks).collect())
@@ -258,14 +280,22 @@ fn page_size_bytes() -> u64 {
         })
         .unwrap_or(4096)
 }
-/// Reads a procfs file into the reused `buf`. `None` when the file is gone or unreadable.
-fn read_proc<'a>(buf: &'a mut Vec<u8>, path: &str) -> Option<&'a [u8]> {
+/// `/proc/<pid>/status` carries the real UID within its first lines; the bounded read lets the
+/// kernel skip generating the VM, signal and cgroup counters the sampler never looks at.
+const STATUS_PREFIX: usize = 2048;
+/// Reads at most `limit` bytes of a procfs file into the reused `buf`. `None` when unreadable.
+fn read_proc_prefix<'a>(buf: &'a mut Vec<u8>, path: &str, limit: usize) -> Option<&'a [u8]> {
     use std::io::Read;
     buf.clear();
     let mut file = fs::File::open(path).ok()?;
     let mut chunk = [0_u8; 2048];
+    let chunk_len = chunk.len();
     loop {
-        match file.read(&mut chunk) {
+        let room = limit.saturating_sub(buf.len());
+        if room == 0 {
+            break;
+        }
+        match file.read(&mut chunk[..room.min(chunk_len)]) {
             Ok(0) => break,
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -273,6 +303,10 @@ fn read_proc<'a>(buf: &'a mut Vec<u8>, path: &str) -> Option<&'a [u8]> {
         }
     }
     Some(buf.as_slice())
+}
+/// Reads a whole procfs file into the reused `buf`, e.g. `stat` or `cmdline`.
+fn read_proc<'a>(buf: &'a mut Vec<u8>, path: &str) -> Option<&'a [u8]> {
+    read_proc_prefix(buf, path, usize::MAX)
 }
 /// Writes `/proc/<pid>/<leaf>` into the sampler's reused path buffer: no `format!` per read.
 fn proc_path<'a>(path: &'a mut String, pid: u32, leaf: &str) -> &'a str {
@@ -307,8 +341,7 @@ fn command(scratch: &mut Vec<u8>, path: &mut String, pid: u32, name: &str) -> Ar
     }
     Arc::from(format!("[{name}]"))
 }
-fn memory() -> (u64, u64, u64, u64) {
-    let text = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+fn memory(text: &str) -> (u64, u64, u64, u64) {
     // One pass over the four counters we need: no per-sample HashMap of every field.
     let (mut total, mut available, mut swap_total, mut swap_free) = (0_u64, 0, 0, 0);
     for line in text.lines() {
@@ -381,35 +414,42 @@ fn load_summary(text: &str) -> String {
     }
     out
 }
+/// Uptime from the first `/proc/uptime` field as `Nd HH:MM:SS`; `Unavailable` when unparsable.
+fn uptime_text(text: &str) -> String {
+    text.split_whitespace()
+        .next()
+        .and_then(|v| v.parse::<f64>().ok())
+        .map_or_else(
+            || "Unavailable".into(),
+            |secs| {
+                let secs = secs as u64;
+                format!(
+                    "{}d {:02}:{:02}:{:02}",
+                    secs / 86400,
+                    secs / 3600 % 24,
+                    secs / 60 % 60,
+                    secs % 60
+                )
+            },
+        )
+}
 impl Sampler {
     pub fn collect(&mut self) -> Snapshot {
         if self.user_cache.is_none() {
             self.user_cache = Some(user_names());
         }
-        let (now, cores) = load_cpu();
-        let (mem_total, mem_used, swap_total, swap_used) = memory();
+        let (now, cores) = load_cpu(read_text(&mut self.text, "/proc/stat"));
+        let (mem_total, mem_used, swap_total, swap_used) =
+            memory(read_text(&mut self.text, "/proc/meminfo"));
+        let load = load_summary(read_text(&mut self.text, "/proc/loadavg"));
+        let uptime = uptime_text(read_text(&mut self.text, "/proc/uptime"));
         let mut result = Snapshot {
             mem_total,
             mem_used,
             swap_total,
             swap_used,
-            load: load_summary(&fs::read_to_string("/proc/loadavg").unwrap_or_default()),
-            uptime: fs::read_to_string("/proc/uptime")
-                .ok()
-                .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
-                .map_or_else(
-                    || "Unavailable".into(),
-                    |secs| {
-                        let secs = secs as u64;
-                        format!(
-                            "{}d {:02}:{:02}:{:02}",
-                            secs / 86400,
-                            secs / 3600 % 24,
-                            secs / 60 % 60,
-                            secs % 60
-                        )
-                    },
-                ),
+            load,
+            uptime,
             cpu_total: self
                 .prev_global
                 .map_or(0.0, |previous| percent(now, previous)),
@@ -445,9 +485,16 @@ impl Sampler {
         self.pids.sort_unstable();
         self.pids.dedup();
         result.processes.reserve(self.pids.len());
+        // `pids` and `hot` are both ascending, so one forward cursor answers "is this pid hot"
+        // for the whole walk: no hash probe per process per sample.
+        let mut hot_at = 0_usize;
         for index in 0..self.pids.len() {
             let pid = self.pids[index];
-            let Some(task) = self.sample_task(pid, tick, now.total, cpu_count) else {
+            while hot_at < self.hot.len() && self.hot[hot_at] < pid {
+                hot_at += 1;
+            }
+            let hot = self.hot.get(hot_at) == Some(&pid);
+            let Some(task) = self.sample_task(pid, tick, now.total, cpu_count, hot) else {
                 continue;
             };
             result.threads += u64::from(task.threads);
@@ -460,7 +507,7 @@ impl Sampler {
         assign_depths(&mut self.parents, &mut result.processes);
         hot_pids_into(&mut self.hot, &mut self.ranked, &result.processes);
         result.tasks = result.processes.len();
-        let (rx, tx) = parse_net_dev(&fs::read_to_string("/proc/net/dev").unwrap_or_default());
+        let (rx, tx) = parse_net_dev(read_text(&mut self.text, "/proc/net/dev"));
         let sampled = Instant::now();
         if let Some((prev_rx, prev_tx, at)) = self.prev_net {
             let seconds = sampled.duration_since(at).as_secs_f64();
@@ -477,11 +524,19 @@ impl Sampler {
 
     /// One task per sample: `stat` every time (CPU and RSS), `status` and `cmdline` only when
     /// the cached static fields are stale. Returns `None` for tasks that vanished mid-read.
-    fn sample_task(&mut self, pid: u32, tick: u64, total: u64, cpu_count: f64) -> Option<Process> {
-        let hot = self.hot.contains(&pid);
+    /// `hot` pids are the highest-CPU ones of the last sample: they are re-read every tick, while
+    /// a cold pid replays its last sample on the ticks its rotating read is not due.
+    fn sample_task(
+        &mut self,
+        pid: u32,
+        tick: u64,
+        total: u64,
+        cpu_count: f64,
+        hot: bool,
+    ) -> Option<Process> {
         if !hot
-            && let Some(cached) = self.tasks.get_mut(&pid)
             && !slow_due(pid, tick)
+            && let Some(cached) = self.tasks.get_mut(&pid)
             && let Some(last) = cached.last.clone()
         {
             // Non-hot and not due: keep the last sample. Its `seen` tick stays current so the
@@ -491,11 +546,12 @@ impl Sampler {
         }
         let text = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "stat"))?;
         let text = std::str::from_utf8(text).ok()?;
+        // One probe for the whole due path: the name reuse, the CPU counters and the static
+        // fields all live in this entry, so a rotating read costs one map lookup instead of three.
+        let cached = self.tasks.entry(pid).or_default();
         // A live pid's `comm` rarely changes: reuse the cached name so the per-tick `stat` read
         // does not rebuild two heap strings for every due task.
-        let cached_name = self.tasks.get(&pid).map(|cached| &cached.name);
-        let mut task = parse_stat_with_name(pid, text, self.page_bytes, cached_name)?;
-        let cached = self.tasks.entry(pid).or_default();
+        let mut task = parse_stat_with_name(pid, text, self.page_bytes, Some(&cached.name))?;
         // Same PID and start time as the previous sample: the delta is meaningful. PID reuse
         // changes the start time, so a recycled PID never inherits the old CPU counter.
         let known = cached.seen != 0 && cached.start == task.start;
@@ -511,7 +567,11 @@ impl Sampler {
             || cached.name != task.name
             || tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
         if stale {
-            let status = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "status"));
+            let status = read_proc_prefix(
+                &mut self.scratch,
+                proc_path(&mut self.path, pid, "status"),
+                STATUS_PREFIX,
+            );
             cached.uid = status
                 .and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .map_or(u32::MAX, parse_uid);
@@ -874,12 +934,13 @@ mod sampling_schedule_tests {
         let mut processes: Vec<Process> = (0..(HOT_COUNT as u32 + 10))
             .map(|pid| process(pid, f64::from(pid)))
             .collect();
-        let mut hot = std::collections::HashSet::new();
+        let mut hot = Vec::new();
         let mut ranked = Vec::new();
         hot_pids_into(&mut hot, &mut ranked, &processes);
         assert_eq!(hot.len(), HOT_COUNT);
         assert!(hot.contains(&(HOT_COUNT as u32 + 9)));
         assert!(!hot.contains(&0));
+        assert!(hot.windows(2).all(|pair| pair[0] < pair[1]), "ascending");
         processes.truncate(3);
         hot_pids_into(&mut hot, &mut ranked, &processes);
         assert_eq!(hot.len(), 3);

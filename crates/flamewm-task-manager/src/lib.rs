@@ -190,16 +190,15 @@ impl Application {
             return;
         }
         self.hits_dirty = false;
-        let query = self.query.to_lowercase();
+        // A folded copy is only needed for a real query: `process_matches` short-circuits on `""`.
+        let query = if self.query.is_empty() {
+            String::new()
+        } else {
+            self.query.to_lowercase()
+        };
         let sort = self.sort;
         let descending = self.descending;
         let processes = &self.snapshot.processes;
-        // Name keys are lowercased once per process per rebuild, not twice per comparison.
-        let lower_names: Vec<String> = if sort == Sort::Name {
-            processes.iter().map(|p| p.name.to_lowercase()).collect()
-        } else {
-            Vec::new()
-        };
         self.hits.clear();
         self.hits.extend(
             processes
@@ -215,7 +214,8 @@ impl Application {
                 Sort::Cpu => a.cpu.total_cmp(&b.cpu),
                 Sort::Memory => a.rss_kib.cmp(&b.rss_kib),
                 Sort::Pid => a.pid.cmp(&b.pid),
-                Sort::Name => lower_names[ai].cmp(&lower_names[bi]),
+                // Folded in the comparator, so a name sort copies no `String` per process.
+                Sort::Name => folded_cmp(&a.name, &b.name),
             };
             let order = if descending { order.reverse() } else { order };
             order.then_with(|| a.pid.cmp(&b.pid))
@@ -622,8 +622,11 @@ impl Application {
             if next != self.hovered {
                 let previous = std::mem::replace(&mut self.hovered, next);
                 let accent = accent_color(&self.theme);
+                // One reused id buffer for the two rows that changed highlight.
+                let mut id = String::with_capacity(16);
                 for slot in [previous, next].into_iter().flatten() {
-                    let id = format!("row-{slot}");
+                    id.clear();
+                    let _ = write!(id, "row-{slot}");
                     if let Some((pid, start)) = self.rows.get(slot).copied() {
                         if self.selected == Some((pid, start)) {
                             doc.background(&id, UiColor::from_rgb(accent, 60))?;
@@ -742,15 +745,16 @@ impl Application {
                     Sort::Name => Sort::Cpu,
                 }),
                 "up" | "down" | "page_up" | "page_down" | "prior" | "next" => {
-                    let hits = self.sorted();
-                    if hits.is_empty() {
+                    self.ensure_hits();
+                    let len = self.hits.len();
+                    if len == 0 {
                         return Ok(());
                     }
                     let pos = self
                         .selected
                         .and_then(|identity| {
-                            hits.iter().position(|i| {
-                                let p = &self.snapshot.processes[*i];
+                            self.hits.iter().position(|&i| {
+                                let p = &self.snapshot.processes[i];
                                 (p.pid, p.start) == identity
                             })
                         })
@@ -762,9 +766,10 @@ impl Application {
                     let index = if matches!(name.as_str(), "up" | "page_up" | "prior") {
                         pos.saturating_sub(step)
                     } else {
-                        (pos + step).min(hits.len() - 1)
+                        (pos + step).min(len - 1)
                     };
-                    let p = &self.snapshot.processes[hits[index]];
+                    let proc_index = self.hits[index];
+                    let p = &self.snapshot.processes[proc_index];
                     self.selected = Some((p.pid, p.start));
                     if index < self.first {
                         self.first = index;
@@ -832,6 +837,14 @@ fn rate_into(out: &mut String, bytes_per_second: f64) {
         let _ = write!(out, "{value:.0} B/s");
     }
 }
+/// One process matches the search box: name, command or PID contains the (already lowercased)
+/// query. A free function so `ensure_hits` can borrow `processes` and `hits` as disjoint fields.
+fn process_matches(process: &model::Process, query: &str) -> bool {
+    query.is_empty()
+        || contains_folded(process.name.as_ref(), query)
+        || contains_folded(process.command.as_ref(), query)
+        || pid_contains(process.pid, query)
+}
 /// Substring test that ignores ASCII case, where `needle` is already lowercased. The search runs
 /// on every process on every paint; doing it on bytes avoids the two `String` allocations that
 /// `to_lowercase()` made per process. Non-ASCII text keeps the exact former behaviour.
@@ -846,6 +859,18 @@ fn contains_folded(haystack: &str, needle: &str) -> bool {
             .any(|window| window.eq_ignore_ascii_case(needle));
     }
     haystack.to_lowercase().contains(needle)
+}
+/// Orders two names the way the former `to_lowercase()` keys did, without allocating for ASCII
+/// names (`name` order is rebuilt after every sample and has to look at every process). Pairs
+/// with non-ASCII text keep the exact `String` comparison by folding both sides.
+fn folded_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        return a
+            .bytes()
+            .map(|byte| byte.to_ascii_lowercase())
+            .cmp(b.bytes().map(|byte| byte.to_ascii_lowercase()));
+    }
+    a.to_lowercase().cmp(&b.to_lowercase())
 }
 /// Matches a PID against `needle` by writing its decimal digits into a stack buffer, so the
 /// search never allocates the `to_string()` of every process.
@@ -1146,12 +1171,51 @@ mod tests {
         ];
         app.sort = Sort::Name;
         app.descending = false;
+        app.ensure_hits();
         let names: Vec<u32> = app
-            .sorted()
-            .into_iter()
-            .map(|i| app.snapshot.processes[i].pid)
+            .hits
+            .iter()
+            .map(|&i| app.snapshot.processes[i].pid)
             .collect();
         assert_eq!(names, vec![2, 4, 3, 1]);
+    }
+    #[test]
+    fn name_order_folds_case_without_per_process_strings() {
+        use std::cmp::Ordering;
+        assert_eq!(folded_cmp("apple", "Apple"), Ordering::Equal);
+        assert_eq!(folded_cmp("apple", "Zed"), Ordering::Less);
+        assert_eq!(folded_cmp("Zed", "apple"), Ordering::Greater);
+        assert_eq!(folded_cmp("", "a"), Ordering::Less);
+        // Non-ASCII pairs keep the former `to_lowercase()` comparison.
+        assert_eq!(folded_cmp("Äpfel", "äpfel"), Ordering::Equal);
+    }
+    #[test]
+    fn ordering_is_cached_until_the_snapshot_or_sort_invalidates_it() {
+        let proc = |pid: u32| {
+            let mut p = model::Process::default();
+            p.pid = pid;
+            p
+        };
+        let (actions, _rx) = std::sync::mpsc::sync_channel(1);
+        let mut app = Application::new(SettingsSnapshot::new(0), actions);
+        app.snapshot.processes = vec![proc(2), proc(1)];
+        app.sort = Sort::Pid;
+        app.descending = false;
+        app.ensure_hits();
+        let cached = app.hits.clone();
+        // Reordering the backing table without invalidating reuses the previous order.
+        app.snapshot.processes.reverse();
+        app.ensure_hits();
+        assert_eq!(app.hits, cached);
+        // A new sample invalidates the cache and the order follows the new table.
+        app.hits_dirty = true;
+        app.ensure_hits();
+        let pids: Vec<u32> = app
+            .hits
+            .iter()
+            .map(|&i| app.snapshot.processes[i].pid)
+            .collect();
+        assert_eq!(pids, vec![1, 2]);
     }
     #[test]
     fn memory_progress_is_bounded_in_all_cases() {

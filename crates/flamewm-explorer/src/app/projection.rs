@@ -3,6 +3,9 @@ use super::super::*;
 /// Tab strip slots compiled into the template (`tab-0`…`tab-4`).
 const TAB_SLOTS:usize=5;
 
+/// Context-menu entries, mirroring `MENU_ITEMS`; the per-projection offer pass uses a fixed array.
+const MENU_SLOTS:usize=MENU_ITEMS.len();
+
 /// Node ids for one sidebar slot, formatted once instead of on every projection.
 struct SidebarIds {
     head:String, head_label:String, prow:String, place:String, place_label:String,
@@ -552,11 +555,14 @@ impl ExplorerApp {
         let in_trash=self.is_trash_files(tab.path());
         let searching=self.search_rows.is_some();
         let enabled=self.menu_enabled(selected_path.as_deref(),many,in_trash,searching);
-        let mut shown:Vec<&str>=Vec::new();
-        for (index,item) in MENU_ITEMS.into_iter().enumerate() {
+        // Offered indices, in menu order. A fixed array keeps this pass allocation-free: the menu
+        // can stay open across frames, and a Vec allocated on every projection.
+        let mut shown=[0usize;MENU_SLOTS];
+        let mut shown_len=0;
+        for index in 0..MENU_ITEMS.len() {
             let offered=enabled.get(index).copied().unwrap_or(false);
             doc.visible(&ids.menus[index],offered)?;
-            if offered {shown.push(item);}
+            if offered {shown[shown_len]=index;shown_len+=1;}
         }
         if let Some((x,y))=self.context {
             // Shared desktop context-menu metrics; hidden actions consume no space.
@@ -564,10 +570,9 @@ impl ExplorerApp {
             let row_h=metrics.row_height as f32;
             let pad=metrics.padding as f32;
             // Rows that fit the window; a taller menu shows a window-sized slice that the wheel moves through.
-            let fit=(((self.window.1-2.0*pad)/row_h).floor().max(0.0) as usize).min(shown.len());
-            let first=self.context_scroll.min(shown.len()-fit);
-            for (index,item) in shown.iter().enumerate() {
-                let Some(position)=MENU_ITEMS.iter().position(|candidate|candidate==item) else {continue;};
+            let fit=(((self.window.1-2.0*pad)/row_h).floor().max(0.0) as usize).min(shown_len);
+            let first=self.context_scroll.min(shown_len-fit);
+            for (index,&position) in shown[..shown_len].iter().enumerate() {
                 doc.visible(&ids.menus[position],index>=first && index<first+fit)?;
             }
             let height=fit as f32*row_h+2.0*pad;

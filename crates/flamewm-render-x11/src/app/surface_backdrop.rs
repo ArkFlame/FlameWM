@@ -106,7 +106,7 @@ impl X11App {
         width: u32,
         height: u32,
     ) -> Result<Pixmap, String> {
-        let visual = unsafe { self.backdrop_argb_visual() }?;
+        let visual = self.backdrop_argb_visual()?;
         let root = unsafe { XRootWindow(self.display, self.screen) };
         let pixmap = unsafe { XCreatePixmap(self.display, root, width, height, 32) };
         if pixmap == 0 {
@@ -132,7 +132,7 @@ impl X11App {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let visual = unsafe { self.backdrop_argb_visual() }?;
+        let visual = self.backdrop_argb_visual()?;
         unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
     }
 

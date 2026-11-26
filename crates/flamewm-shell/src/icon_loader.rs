@@ -37,12 +37,7 @@ fn resolve_icon_raster(
 ) -> Option<Rgb8Raster> {
     let accept = |raster: &Rgb8Raster| !is_brand_fallback(raster);
     candidate_names(name)
-        .find_map(|candidate| {
-            resolver
-                .prepare_name(candidate, size)
-                .ok()
-                .filter(accept)
-        })
+        .find_map(|candidate| resolver.prepare_name(candidate, size).ok().filter(accept))
         .or_else(|| {
             resolver
                 .prepare_name(GENERIC_APP_ICON, size)
@@ -172,10 +167,11 @@ impl PendingSet {
     }
 
     fn insert(&mut self, req: &IconRequest) {
-        self.by_target
-            .entry(req.target)
-            .or_default()
-            .push((req.name.clone(), req.width, req.height));
+        self.by_target.entry(req.target).or_default().push((
+            req.name.clone(),
+            req.width,
+            req.height,
+        ));
     }
 
     fn remove(&mut self, target: IconTarget, name: &str, width: u32, height: u32) {
@@ -379,15 +375,23 @@ impl IconLoader {
                     // Key stays pending so duplicate requests coalesce.
                     self.retry.push(returned);
                 } else {
-                    self.pending
-                        .remove(returned.target, &returned.name, returned.width, returned.height);
+                    self.pending.remove(
+                        returned.target,
+                        &returned.name,
+                        returned.width,
+                        returned.height,
+                    );
                 }
             }
             Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
                 // Worker is gone: clear the key so it is never stranded.
                 self.queue_full_drops += 1;
-                self.pending
-                    .remove(returned.target, &returned.name, returned.width, returned.height);
+                self.pending.remove(
+                    returned.target,
+                    &returned.name,
+                    returned.width,
+                    returned.height,
+                );
             }
             Err(error) => eprintln!("shell: icon request not sent: {error}"),
         }
@@ -407,8 +411,12 @@ impl IconLoader {
                 Ok(()) => {}
                 Err(TrySendError::Full(WorkerMsg::Icon(returned))) => self.retry.push(returned),
                 Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
-                    self.pending
-                        .remove(returned.target, &returned.name, returned.width, returned.height);
+                    self.pending.remove(
+                        returned.target,
+                        &returned.name,
+                        returned.width,
+                        returned.height,
+                    );
                 }
                 Err(error) => eprintln!("shell: icon retry not sent: {error}"),
             }

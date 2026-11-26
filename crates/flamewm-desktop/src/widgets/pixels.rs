@@ -87,32 +87,43 @@ pub(crate) fn analog_face_pixels(size: u32, time: WallTime, hands: Rgb, accent: 
         (accent, turns.second, -0.25, 0.9, (side * 0.006).max(0.6)),
     ];
     let mut pixels = vec![[0.0f32; 4]; (size * size) as usize];
+    // Tick and hand endpoints depend only on time and geometry, never on the pixel, so they are
+    // resolved once per face instead of once per pixel (60 ticks x sin/cos over the whole face
+    // was the dominant cost of a seconds clock).
+    let ring_min = radius * 0.82 - 1.0;
+    let ticks: Vec<((f32, f32), (f32, f32), f32)> = (0..60)
+        .map(|minute| {
+            let turn = minute as f32 / 60.0;
+            let (inner, half) = if minute % 5 == 0 {
+                (radius * 0.84, hour_half)
+            } else {
+                (radius * 0.95, minute_half)
+            };
+            (point(turn, inner), point(turn, radius), half)
+        })
+        .collect();
+    let hands_geom: Vec<(Rgb, (f32, f32), (f32, f32), f32)> = hand_specs
+        .iter()
+        .map(|&(color, turn, from, to, half)| {
+            (
+                color,
+                point(turn, radius * from),
+                point(turn, radius * to),
+                half,
+            )
+        })
+        .collect();
     for y in 0..size {
         for x in 0..size {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
             let pixel = &mut pixels[(y * size + x) as usize];
-            if (px - center).hypot(py - center) >= radius * 0.82 - 1.0 {
-                for minute in 0..60 {
-                    let turn = minute as f32 / 60.0;
-                    let (inner, half) = if minute % 5 == 0 {
-                        (radius * 0.84, hour_half)
-                    } else {
-                        (radius * 0.95, minute_half)
-                    };
-                    let coverage =
-                        segment_coverage(px, py, point(turn, inner), point(turn, radius), half);
-                    over(pixel, hands, coverage);
+            if (px - center).hypot(py - center) >= ring_min {
+                for &(from, to, half) in &ticks {
+                    over(pixel, hands, segment_coverage(px, py, from, to, half));
                 }
             }
-            for (color, turn, from, to, half) in hand_specs {
-                let coverage = segment_coverage(
-                    px,
-                    py,
-                    point(turn, radius * from),
-                    point(turn, radius * to),
-                    half,
-                );
-                over(pixel, color, coverage);
+            for &(color, from, to, half) in &hands_geom {
+                over(pixel, color, segment_coverage(px, py, from, to, half));
             }
             let hub = segment_coverage(px, py, (center, center), (center, center), side * 0.035);
             over(pixel, hands, hub);

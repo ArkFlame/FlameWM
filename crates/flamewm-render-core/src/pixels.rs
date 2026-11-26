@@ -30,7 +30,7 @@ thread_local! {
     static BATCH_SCRATCH: RefCell<BatchScratch> = RefCell::new(BatchScratch::default());
     /// Clip-sized buffer for in-place clipped fills, so they do not force the whole-frame scratch
     /// copy that the blur and backdrop ops need.
-    static INPLACE_REGION: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static INPLACE_REGION: RefCell<Vec<u8>> = RefCell::new(Vec::new());
 }
 
 /// Which pixel backend the `renderAcceleration` setting requests. `Cpu` is the default; `Gpu` is
