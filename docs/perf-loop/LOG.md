@@ -1,5 +1,17 @@
 # Perf loop log (T0=2026-11-26T09:27:11-03:00)
 
+## u150: managed-window scene backdrop
+
+Generalized the Dock scene cache to identify Dock and managed-window sites; managed windows capture beneath their own front-to-back scene position, draw their cached rounded client mask below client surfaces, and omit the opaque client fill when eligible. Flat, opaque, missing, or closed sites drop/refrain from retaining cache entries; capture-mode scene composition emits no backdrop elements. Static comparison remains in-place against the retained scene stamp. Added pure site identity/eligibility regression coverage. Verification intentionally omitted by handoff (cargo/git prohibited); static source inspection only, and Managed.material is supplied by u149.
+
+## U149: Window material compositor read
+
+Published XWayland compositor backdrop capability and read, clamped, cached, and refreshed per-window material for X11-managed windows; added parse/clamp regression tests. Native Wayland windows retain the default `(100, 0)`.
+
+## u148: app-side compositor-owned window material
+
+`render-x11` samples root `_FLAMEWM_COMPOSITOR_BACKDROP` once at app creation. When enabled, it selects the composited ARGB visual when available and bypasses snapshot/live-scene capture, leaving the scene's transparent clear intact. Changed material requests write `_FLAMEWM_WINDOW_MATERIAL` as `CARDINAL[2] = [opacity_percent, blur_percent]`; removal/opaque requests delete it. Pure tests cover flag and word encoding. Verification: `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo check -p flamewm-render-x11` passed (22.20s).
+
 ## Build 1 (min 30): cargo check --workspace --all-targets green after 4 fixes (render-x11 gpu.rs borrow, explorer places.rs inference x2, projection.rs labels). 24 units landed (u01-u24); u25-u30 in flight.
 
 ## Build 2: cargo check --workspace --all-targets green after 2 fixes (archiver progress.rs scratch buffer lifetime, desktop rubber.rs test types). u01-u40 landed. Root disk at ~100% (other projects /tmp/opencode 58G); pool paused disk_low.
@@ -89,3 +101,10 @@
 - Session supervisor readiness replaced the 100 ms sleep-poll with a poll() on an X11 root-property watch plus the signal wakeup pipe (1 s safety bound; 100 ms retry kept once EWMH is up because the control socket has no event source). Idle supervisor wakeups during startup drop from 10/s to event-driven.
 - downloads-core POLL is armed only while a candidate settles (documented); no behaviour change.
 - Evidence: clippy -D warnings and flamewm-wm/downloads-core tests clean.
+
+## U149: Window material compositor read
+- XWayland publishes compositor backdrop support and reads per-window opacity/blur material for managed X11 windows.
+- Material values default and clamp safely; property changes refresh cached values and request redraw only when changed.
+- Regression tests cover malformed and clamped values; native Wayland windows retain `(100, 0)`.
+
+- u148-u150 window backdrop under Wayland: apps publish `_FLAMEWM_WINDOW_MATERIAL`, the compositor sets `_FLAMEWM_COMPOSITOR_BACKDROP` and draws a blurred scene-beneath backdrop for translucent windows. Needed a smithay patch (third_party/smithay) so depth-32 clients get ARGB frames. Nested frame check: xterm text blurred through the translucent task manager.

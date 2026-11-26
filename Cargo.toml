@@ -142,3 +142,9 @@ opt-level = 2
 
 [profile.dev.package."*"]
 debug = 0
+
+# Smithay 0.7.0 with one change: an ARGB (depth 32) X11 client gets an ARGB reparent frame, so
+# XWayland keeps its alpha and the compositor can draw a backdrop beneath translucent windows.
+# See third_party/smithay/FLAMEWM-PATCH.md.
+[patch.crates-io]
+smithay = { path = "third_party/smithay" }

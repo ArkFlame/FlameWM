@@ -680,7 +680,7 @@ impl X11App {
         // XRender backend owns the live destination picture; the plan records
         // presence (1) only when composited + xrender is live.
 
-        Ok(Self {
+        let mut app = Self {
             display,
             screen,
             depth,
@@ -774,7 +774,22 @@ impl X11App {
             press_observed: false,
             raw_presses: Vec::new(),
             xdnd,
-        })
+        };
+        // The initial backdrop comes from the config, not a later request, so announce its
+        // material to a compositor-drawn backdrop here (no-op when opaque).
+        let material = app.window_backdrop.as_ref().and_then(|state| {
+            window_material::material_words(state.spec.opacity_percent, state.spec.blur_percent)
+        });
+        // SAFETY: the display and window were created above on this thread.
+        unsafe {
+            window_material::publish_window_material(
+                app.display,
+                app.window,
+                &mut app.published_window_material,
+                material,
+            );
+        }
+        Ok(app)
     }
 
     pub(crate) fn ensure_xft(&mut self) {
