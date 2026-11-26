@@ -49,13 +49,15 @@ pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
         let (Some(mount), Some(source)) = (mount, source) else {
             continue;
         };
-        let mount = unescape_mount(mount);
+        // The media-root prefix has no escape sequences, so the cheap test runs on the raw field:
+        // `unescape_mount` allocates four strings and previously ran for every mountinfo line.
         if !(mount.starts_with("/media/")
             || mount.starts_with("/run/media/")
             || mount.starts_with("/mnt/"))
         {
             continue;
         }
+        let mount = unescape_mount(mount);
         let Some(block_name) = source
             .strip_prefix("/dev/")
             .filter(|n| !n.is_empty() && !n.contains('/'))
@@ -145,9 +147,10 @@ pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
 #[must_use]
 pub fn gvfs_root() -> PathBuf {
     use std::os::unix::fs::MetadataExt;
-    let uid = fs::metadata("/proc/self")
-        .map(|meta| meta.uid())
-        .unwrap_or(0);
+    // The process uid never changes: resolve `/proc/self` once instead of stat-ing it on every
+    // sidebar rebuild (mountinfo, block-device and watch events each trigger one).
+    static UID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let uid = *UID.get_or_init(|| fs::metadata("/proc/self").map(|meta| meta.uid()).unwrap_or(0));
     PathBuf::from(format!("/run/user/{uid}/gvfs"))
 }
 

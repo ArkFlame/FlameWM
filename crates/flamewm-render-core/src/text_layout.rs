@@ -211,12 +211,17 @@ pub fn layout_styled(
                     current_w = word_w;
                     continue;
                 }
-                let candidate_text = format!("{current} {word}");
-                let candidate = text_width(&candidate_text, size, weight);
+                // Grow the candidate line in place and measure it as a whole string, then keep it
+                // or drop the appended word. Rebuilding `current` through `format!` allocated a
+                // fresh line buffer per word.
+                let kept = current.len();
+                current.push(' ');
+                current.push_str(word);
+                let candidate = text_width(&current, size, weight);
                 if candidate <= avail_width {
-                    current = candidate_text;
                     current_w = candidate;
                 } else {
+                    current.truncate(kept);
                     flush(&mut current, &mut current_w, &mut lines);
                     current.push_str(word);
                     current_w = word_w;
@@ -250,27 +255,31 @@ fn push_ellipsized(lines: &mut Vec<TextLine>, text: &str, font_size: f32, avail:
     let cuts: Vec<usize> = std::iter::once(0)
         .chain(text.char_indices().skip(1).map(|(index, _)| index))
         .collect();
-    let candidate = |cut: usize| {
-        let mut out = String::with_capacity(cut + ELLIPSIS.len_utf8());
-        out.push_str(text[..cut].trim_end_matches(' '));
-        out.push(ELLIPSIS);
-        out
-    };
-    // Largest kept prefix whose candidate fits; width grows with length, so binary search applies.
+    // One candidate buffer for every probe: the search only needs widths, so it reuses this
+    // string instead of allocating a fresh prefix per binary-search step.
+    let mut probe = String::with_capacity(text.len() + ELLIPSIS.len_utf8());
     let (mut lo, mut hi) = (0usize, cuts.len());
-    let mut best: Option<String> = None;
+    let mut best_cut: Option<usize> = None;
     while lo < hi {
         let mid = (lo + hi) / 2;
-        let out = candidate(cuts[mid]);
-        if text_width(&out, font_size, weight) <= avail {
-            best = Some(out);
+        let cut = cuts[mid];
+        probe.clear();
+        probe.push_str(text[..cut].trim_end_matches(' '));
+        probe.push(ELLIPSIS);
+        if text_width(&probe, font_size, weight) <= avail {
+            best_cut = Some(cut);
             lo = mid + 1;
         } else {
             hi = mid;
         }
     }
-    match best {
-        Some(out) => push_measured(lines, out, font_size, weight),
+    match best_cut {
+        Some(cut) => {
+            let mut out = String::with_capacity(cut + ELLIPSIS.len_utf8());
+            out.push_str(text[..cut].trim_end_matches(' '));
+            out.push(ELLIPSIS);
+            push_measured(lines, out, font_size, weight);
+        }
         None => lines.push(TextLine::default()),
     }
 }
@@ -282,6 +291,9 @@ fn push_measured(lines: &mut Vec<TextLine>, text: String, font_size: f32, weight
     });
 }
 
+/// Greedy char-level chunks by measured caret position; a degenerate avail yields one char per
+/// chunk. Chunks are pushed straight into `lines`: no intermediate `Vec<String>`, and one
+/// byte-offset table slices the source instead of collecting a `Vec<char>` per token.
 fn push_chunks(
     lines: &mut Vec<TextLine>,
     text: &str,
@@ -289,7 +301,32 @@ fn push_chunks(
     avail_width: f32,
     weight: u16,
 ) {
-    for chunk in char_chunks(text, font_size, avail_width) {
+    // Byte offset of every char boundary plus the end: `cuts[k]` is char `k`'s first byte.
+    let mut cuts: Vec<usize> = text.char_indices().map(|(index, _)| index).collect();
+    cuts.push(text.len());
+    let boundaries = glyphs::caret_positions(text, font_size).unwrap_or_else(|| {
+        (0..cuts.len())
+            .map(|i| i as f32 * char_width(font_size))
+            .collect()
+    });
+    let usable = avail_width.is_finite() && avail_width > 0.0;
+    let chars = cuts.len() - 1;
+    let mut start = 0usize;
+    for end in 1..=chars {
+        let fits = usable && boundaries[end] - boundaries[start] <= avail_width;
+        if !fits && end - start > 1 {
+            let chunk = text[cuts[start]..cuts[end - 1]].to_owned();
+            push_measured(lines, chunk, font_size, weight);
+            start = end - 1;
+        } else if !fits {
+            // One char wider than the available width still gets its own line.
+            let chunk = text[cuts[start]..cuts[end]].to_owned();
+            push_measured(lines, chunk, font_size, weight);
+            start = end;
+        }
+    }
+    if start < chars {
+        let chunk = text[cuts[start]..].to_owned();
         push_measured(lines, chunk, font_size, weight);
     }
 }
@@ -321,34 +358,6 @@ fn collapse_whitespace(input: &str) -> Cow<'_, str> {
         }
     }
     Cow::Owned(out)
-}
-
-/// Greedy char-level chunks by measured caret position; degenerate avail yields one char per chunk.
-fn char_chunks(text: &str, font_size: f32, avail_width: f32) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
-    let boundaries = glyphs::caret_positions(text, font_size).unwrap_or_else(|| {
-        (0..=chars.len())
-            .map(|i| i as f32 * char_width(font_size))
-            .collect()
-    });
-    let usable = avail_width.is_finite() && avail_width > 0.0;
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
-    for end in 1..=chars.len() {
-        let fits = usable && boundaries[end] - boundaries[start] <= avail_width;
-        if !fits && end - start > 1 {
-            chunks.push(chars[start..end - 1].iter().collect());
-            start = end - 1;
-        } else if !fits {
-            // One char wider than the available width still gets its own line.
-            chunks.push(chars[start..end].iter().collect());
-            start = end;
-        }
-    }
-    if start < chars.len() {
-        chunks.push(chars[start..].iter().collect());
-    }
-    chunks
 }
 
 #[cfg(test)]

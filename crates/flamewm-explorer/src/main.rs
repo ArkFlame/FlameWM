@@ -388,31 +388,36 @@ fn run()->Result<(),String>{
     let (search_tx,search_wake)=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let search=SearchWorker::spawn(move||{if search_tx.send(WorkerResult::SearchTick).is_ok() {let _=(&search_wake).write_all(&[1]);}}).map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
+    // The session-bus settings round trip (up to its full timeout when the control service is
+    // slow) runs beside the template decode and the prefs read below, so it never adds to
+    // first-paint time; only the result is joined before the window is built.
+    let settings_fetch=std::thread::spawn(initial_settings);
     let (window_w,window_h,window_y)=window_frame(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
     let backdrop:Option<flamewm_ui_x11::backdrop::WindowBackdrop>;
+    let mut doc=decode_document(UI)?.with_file_drop_target();
+    let saved=prefs::load(&prefs::config_dir());
+    let settings=settings_fetch.join().ok().flatten();
     {
         let mut app=app.borrow_mut();
         app.window=(window_w as f32,window_h as f32);
         app.events=Some(app_events);
         app.thumb_queue=Some(thumb_queue);
         app.search=Some(search);
-        let settings=initial_settings();
         app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);
         backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&flamewm_api::paths::workspace_packaged_root()));
-        let saved=prefs::load(&prefs::config_dir());
         app.model.hidden=saved.show_hidden;
         app.show_type=saved.show_type;
         app.widths=Widths{modified:saved.col_modified as f32,size:saved.col_size as f32,kind:saved.col_kind as f32}.clamped();
     }
     app.borrow_mut().scan();
-    // Present-but-unmounted devices arrive from lsblk on a worker; without this they only show after a reload.
-    app.borrow().refresh_devices();
-    app.borrow_mut().watch_devices();
-    let mut doc=decode_document(UI)?.with_file_drop_target();
     // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
     if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
     app.borrow().project(&mut doc)?;
+    // Present-but-unmounted devices arrive from lsblk on a worker, and the udev watch follows;
+    // both start after the first paint so device enumeration never delays the window.
+    app.borrow().refresh_devices();
+    app.borrow_mut().watch_devices();
     let event_app=Rc::clone(&app);
     let wake_app=Rc::clone(&app);
     let fd=reader.as_raw_fd();

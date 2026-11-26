@@ -440,12 +440,19 @@ pub fn fill_sidebar_rows(rows:&mut Vec<SidebarRow>, places:&[Place]) {
     }
 }
 pub fn home_dir() -> PathBuf {std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
-pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
-    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
-    let content=fs::read_to_string(base.join("user-dirs.dirs")).unwrap_or_default();
+/// XDG config root (`XDG_CONFIG_HOME`, else `~/.config`).
+fn config_base(home:&Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from)
+}
+/// One read of `user-dirs.dirs`; the sidebar resolves every user directory from the same text.
+fn user_dirs_text(config:&Path) -> String {fs::read_to_string(config.join("user-dirs.dirs")).unwrap_or_default()}
+/// Resolves `name` in already-read `user-dirs.dirs` content. The key compare is allocation-free:
+/// a per-line `format!` built a throwaway key for every directive on each sidebar rebuild.
+fn user_dir_from(content:&str,name:&str,fallback:&str,home:&Path) -> PathBuf {
     for line in content.lines() {
         if let Some((key,val))=line.trim().split_once('=')
-            && key==format!("XDG_{name}_DIR") {
+            && let Some(constant)=key.strip_prefix("XDG_").and_then(|k|k.strip_suffix("_DIR"))
+            && constant==name {
                 let v=val.trim().trim_matches('"');
                 if v=="$HOME" {return home.to_path_buf();}
                 if let Some(r)=v.strip_prefix("$HOME/") && !r.split('/').any(|p|p=="..") {return home.join(r);}
@@ -453,9 +460,12 @@ pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
     }
     home.join(fallback)
 }
+pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
+    user_dir_from(&user_dirs_text(&config_base(home)),name,fallback,home)
+}
 pub fn add_bookmark(path:&Path,home:&Path)->io::Result<()> {
     use std::fs::OpenOptions;
-    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
+    let base=config_base(home);
     let dest=base.join("gtk-3.0/bookmarks");
     let escaped=path.to_string_lossy().bytes().map(|b|if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {(b as char).to_string()}else{format!("%{b:02X}")}).collect::<String>();
     let uri=format!("file://{escaped}");
@@ -484,13 +494,17 @@ fn favorite(name:&str,path:PathBuf,icon:&'static str)->Place {
 /// Sidebar places: built-in folders, bookmarks, mounted removable media (from mountinfo) and
 /// removable block devices that are present but not mounted (from `lsblk`, passed in by the caller).
 pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
-    let mut places=vec![favorite("Home",home.to_path_buf(),"home")];
+    // One config-root and one `user-dirs.dirs` read for the whole sidebar build; each user
+    // directory used to open and parse the same file again.
+    let config=config_base(home);
+    let user_dirs=user_dirs_text(&config);
+    let mut places=Vec::with_capacity(16);
+    places.push(favorite("Home",home.to_path_buf(),"home"));
     for (id,name,dir,icon) in [("DESKTOP","Desktop","Desktop","desktop"),("DOCUMENTS","Documents","Documents","documents"),("DOWNLOAD","Downloads","Downloads","downloads"),("MUSIC","Music","Music","music"),("PICTURES","Pictures","Pictures","pictures"),("VIDEOS","Videos","Videos","videos")] {
-        places.push(favorite(name,user_dir(id,dir,home),icon));
+        places.push(favorite(name,user_dir_from(&user_dirs,id,dir,home),icon));
     }
     places.push(Place{name:"Local Disk".into(),path:PathBuf::from("/"),removable:false,group:PlaceGroup::Devices,icon:"drive",device:None});
-    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
-    if let Ok(source)=fs::read_to_string(base.join("gtk-3.0/bookmarks")) {
+    if let Ok(source)=fs::read_to_string(config.join("gtk-3.0/bookmarks")) {
         for line in source.lines().take(128) {
             let mut words=line.splitn(2,' ');
             if let Some(path)=words.next().and_then(unescape_uri).filter(|p|p.is_dir()) {

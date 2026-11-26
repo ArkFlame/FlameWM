@@ -272,6 +272,13 @@ pub struct OsdController {
     surface: Option<SurfaceHandle>,
     /// True while the surface shows the workspace card; that surface is destroyed at hide.
     workspace_card: bool,
+    /// Settings revision last applied to [`OsdState::set_motion`]. A sampled tick repeats while a
+    /// key is held or a card fades, so the `reducedMotion`/`animationSpeed` lookups run only when
+    /// the snapshot revision moves.
+    motion_revision: Option<u64>,
+    /// Level of the last painted level card. `None` before the first paint and after a workspace
+    /// card, when the next paint must write every visibility instead of only what changed.
+    painted: Option<Level>,
 }
 
 impl OsdController {
@@ -309,8 +316,13 @@ impl OsdController {
         now: Instant,
     ) -> Result<(), UiBackendError> {
         if let Some(settings) = settings {
-            self.state
-                .set_motion(flamewm_api::motion::motion_scale(settings));
+            // The fade only follows `reducedMotion`/`animationSpeed`: re-derive it when the
+            // settings snapshot moves, not on every sampled tick of a held key or a fade.
+            if self.motion_revision != Some(settings.revision) {
+                self.state
+                    .set_motion(flamewm_api::motion::motion_scale(settings));
+                self.motion_revision = Some(settings.revision);
+            }
         }
         let volume_changed = volume.is_some_and(|level| self.state.observe(level, now));
         let brightness_changed = brightness.is_some_and(|level| self.state.observe(level, now));
@@ -324,6 +336,7 @@ impl OsdController {
         let (work, scale) = target();
         let surface = self.ensure_surface(runtime)?;
         self.workspace_card = false;
+        let previous = self.painted;
         let scale = runtime.apply_output_scale(surface, scale)?;
         let card = placement(work, scale);
         // One document pass for styles and values: the backdrop is a runtime property, so it
@@ -332,8 +345,9 @@ impl OsdController {
             if let Some(settings) = settings {
                 settings_projection::project(document, settings, SurfaceKind::Osd)?;
             }
-            paint(document, level)
+            paint(document, level, previous)
         })?;
+        self.painted = Some(level);
         if let Some(settings) = settings {
             let (opacity, blur) = settings_projection::start_backdrop_percents(settings);
             runtime.set_popup_backdrop(surface, Some((opacity, blur)))?;
@@ -365,6 +379,11 @@ impl OsdController {
         let Some(index) = active else {
             return Ok(());
         };
+        // The active index repeats on every shell wake. Recording the same index is a no-op, so
+        // skip the settings lookup that decides whether a change would show the card.
+        if self.state.last_workspace == Some(index) {
+            return Ok(());
+        }
         if !self
             .state
             .observe_workspace(index, workspace_osd_enabled(settings), now)
@@ -382,6 +401,8 @@ impl OsdController {
             }
             paint_workspace(document, &label)
         })?;
+        // The workspace card hid the level rows, so the next level paint must write them all.
+        self.painted = None;
         runtime.set_popup_backdrop(surface, None)?;
         runtime.move_resize(
             surface,
@@ -487,17 +508,40 @@ fn paint_workspace(document: &mut impl UiDocumentAccess, label: &str) -> Result<
     document.text("osd-workspace", label.to_owned())
 }
 
-fn paint(document: &mut impl UiDocumentAccess, level: Level) -> Result<(), String> {
-    let (high, muted, brightness) = icons(level.kind, level.muted);
-    document.visible("osd-workspace", false)?;
-    document.visible("osd-track", true)?;
-    document.visible("osd-fill", true)?;
-    document.visible("osd-text", true)?;
-    document.visible("osd-icon-high", high)?;
-    document.visible("osd-icon-muted", muted)?;
-    document.visible("osd-icon-brightness", brightness)?;
+/// Level card. `previous` is the level of the last painted level card, or `None` after a fresh
+/// surface or a workspace card, when every visibility must be written. Between two level cards
+/// the track, fill and text stay visible, so only the icons that actually moved are rewritten.
+fn paint(
+    document: &mut impl UiDocumentAccess,
+    level: Level,
+    previous: Option<Level>,
+) -> Result<(), String> {
+    let shown = icons(level.kind, level.muted);
+    match previous {
+        None => {
+            document.visible("osd-workspace", false)?;
+            document.visible("osd-track", true)?;
+            document.visible("osd-fill", true)?;
+            document.visible("osd-text", true)?;
+            paint_icons(document, shown)?;
+        }
+        Some(previous) if icons(previous.kind, previous.muted) != shown => {
+            paint_icons(document, shown)?;
+        }
+        Some(_) => {}
+    }
     document.size("osd-fill", level.fill_width() as f32, TRACK_H as f32)?;
     document.text("osd-text", level.label())
+}
+
+/// Writes the three glyph visibilities as one group: exactly one is shown.
+fn paint_icons(
+    document: &mut impl UiDocumentAccess,
+    (high, muted, brightness): (bool, bool, bool),
+) -> Result<(), String> {
+    document.visible("osd-icon-high", high)?;
+    document.visible("osd-icon-muted", muted)?;
+    document.visible("osd-icon-brightness", brightness)
 }
 
 #[cfg(test)]
