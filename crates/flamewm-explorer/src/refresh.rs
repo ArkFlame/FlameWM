@@ -1,5 +1,8 @@
 //! Live directory refresh: an inotify watch on the visible directory on a helper thread.
-//! Bursts of events are coalesced; `notify` runs once the directory has been quiet for `QUIET`.
+//! Bursts of events are coalesced on the trailing edge; `notify` runs once, `QUIET` after the last
+//! drained batch, so a burst (archive extraction, large copy) flushes its final event instead of
+//! firing once per `QUIET` mid-burst. A burst that never goes quiet (continuous `MODIFY` events)
+//! still repaints once per `MAX_WAIT` so the listing never freezes behind it.
 use std::io;
 use std::os::fd::OwnedFd;
 use std::path::Path;
@@ -15,6 +18,12 @@ use rustix::io::Errno;
 
 pub const QUIET: Duration = Duration::from_millis(200);
 
+/// Upper bound on how long a burst may defer its refresh. `MASK` includes `MODIFY`, so a large
+/// copy into the visible directory emits events continuously; without this cap the listing would
+/// not repaint until the copy ended. One refresh per second during such a burst keeps the view
+/// live while still coalescing the hundreds of events behind it.
+pub const MAX_WAIT: Duration = Duration::from_secs(1);
+
 const MASK: WatchMask = WatchMask::CREATE
     .union(WatchMask::DELETE)
     .union(WatchMask::MODIFY)
@@ -25,15 +34,32 @@ const MASK: WatchMask = WatchMask::CREATE
     .union(WatchMask::DELETE_SELF)
     .union(WatchMask::MOVE_SELF);
 
-/// Pure coalescing rule: fire once there is a pending change and the quiet period has elapsed.
+/// Pure coalescing rule: fire once there is a pending change and the quiet period has elapsed
+/// since the last drained batch.
 #[must_use]
 pub fn should_fire(pending_since: Option<Instant>, now: Instant) -> bool {
     pending_since.is_some_and(|since| now.duration_since(since) >= QUIET)
 }
 
-/// Poll timeout in milliseconds: block indefinitely while idle, otherwise wake when the quiet period ends.
-fn poll_timeout_ms(pending: Option<Instant>, now: Instant) -> Option<i64> {
-    pending.map(|since| QUIET.saturating_sub(now.duration_since(since)).as_millis() as i64 + 1)
+/// Liveness bound for a burst that never goes quiet: fire once the burst has run for `MAX_WAIT`.
+#[must_use]
+pub fn burst_forced(burst_start: Option<Instant>, now: Instant) -> bool {
+    burst_start.is_some_and(|since| now.duration_since(since) >= MAX_WAIT)
+}
+
+/// Poll timeout in milliseconds: block indefinitely while idle, otherwise wake at the earlier of
+/// the quiet deadline (last batch + `QUIET`) and the burst's max-wait deadline.
+fn poll_timeout_ms(
+    pending: Option<Instant>,
+    burst_start: Option<Instant>,
+    now: Instant,
+) -> Option<i64> {
+    let next = pending
+        .map(|since| since + QUIET)
+        .into_iter()
+        .chain(burst_start.map(|since| since + MAX_WAIT))
+        .min()?;
+    Some(next.saturating_duration_since(now).as_millis() as i64 + 1)
 }
 
 /// Owns the watch thread. The thread blocks in `poll` on the inotify fd and a stop pipe, so an idle
@@ -62,9 +88,13 @@ impl DirWatch {
             .spawn(move || {
                 flamewm_integrations_linux::background::lower_current_thread();
                 let mut buffer = [0_u8; 4096];
+                // Last drained batch: the quiet deadline counts from here.
                 let mut pending: Option<Instant> = None;
+                // First batch of the current burst: bounds how long continuous churn may defer.
+                let mut burst_start: Option<Instant> = None;
                 loop {
-                    let timeout = poll_timeout_ms(pending, Instant::now()).map(|ms| Timespec {
+                    let now = Instant::now();
+                    let timeout = poll_timeout_ms(pending, burst_start, now).map(|ms| Timespec {
                         tv_sec: (ms / 1000) as _,
                         tv_nsec: ((ms % 1000) * 1_000_000) as _,
                     });
@@ -106,11 +136,19 @@ impl DirWatch {
                             }
                         }
                         if had_events {
-                            pending.get_or_insert_with(Instant::now);
+                            // Trailing edge: restart the quiet window on every drained batch, so
+                            // a burst still longer than `QUIET` settles into one refresh after it
+                            // ends rather than firing every `QUIET` while it runs. Only drained
+                            // batches move the deadline; the final event is never lost.
+                            let now = Instant::now();
+                            pending = Some(now);
+                            burst_start.get_or_insert(now);
                         }
                     }
-                    if should_fire(pending, Instant::now()) {
+                    let now = Instant::now();
+                    if should_fire(pending, now) || burst_forced(burst_start, now) {
                         pending = None;
+                        burst_start = None;
                         notify();
                     }
                 }
@@ -140,6 +178,27 @@ mod tests {
         assert!(!should_fire(None, t0 + Duration::from_secs(5)));
         assert!(!should_fire(Some(t0), t0 + Duration::from_millis(50)));
         assert!(should_fire(Some(t0), t0 + QUIET));
+    }
+
+    #[test]
+    fn a_burst_that_never_goes_quiet_repaints_every_max_wait() {
+        let t0 = Instant::now();
+        assert!(!burst_forced(None, t0 + Duration::from_secs(5)));
+        assert!(!burst_forced(Some(t0), t0 + MAX_WAIT - Duration::from_millis(1)));
+        assert!(burst_forced(Some(t0), t0 + MAX_WAIT));
+        // Max-wait counts from the first batch of the burst, so continuous `MODIFY` events
+        // (a large copy) still repaint instead of deferring until the copy ends.
+        let last_batch = t0 + Duration::from_millis(900);
+        assert_eq!(
+            poll_timeout_ms(Some(last_batch), Some(t0), last_batch),
+            Some(101),
+            "quiet is 200 ms away but max-wait only 100 ms, so the earlier deadline wins"
+        );
+        assert_eq!(
+            poll_timeout_ms(None, None, t0),
+            None,
+            "an idle watch blocks with no timeout"
+        );
     }
 
     #[test]

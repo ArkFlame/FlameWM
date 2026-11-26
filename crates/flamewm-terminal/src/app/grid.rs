@@ -224,3 +224,121 @@ impl App {
         self.grid_inputs = inputs;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x0: usize, cols: usize) -> Rect {
+        Rect {
+            x0,
+            y0: 0,
+            cols,
+            rows: 1,
+        }
+    }
+
+    fn run(col: usize, text: &str) -> Run {
+        Run {
+            col,
+            cells: text.chars().count(),
+            text: text.to_owned(),
+            fg: 0x00ff_ffff,
+            bg: None,
+            bold: false,
+            shape: None,
+        }
+    }
+
+    fn row(runs: Vec<Run>) -> Row {
+        runs.into()
+    }
+
+    #[test]
+    fn same_inputs_compares_allocation_rectangle_and_pane_count() {
+        let line = row(vec![run(0, "ab")]);
+        assert!(same_inputs(
+            &[(line.clone(), rect(0, 4))],
+            &[(line.clone(), rect(0, 4))]
+        ));
+        // A re-allocated row is a change even when its runs are value-equal: the
+        // cache records that the pane rebuilt its line, so the row must recompose.
+        let copy = row(vec![run(0, "ab")]);
+        assert!(!same_inputs(
+            &[(line.clone(), rect(0, 4))],
+            &[(copy, rect(0, 4))]
+        ));
+        assert!(!same_inputs(
+            &[(line.clone(), rect(0, 4))],
+            &[(line.clone(), rect(1, 4))]
+        ));
+        assert!(!same_inputs(&[(line.clone(), rect(0, 4))], &[]));
+    }
+
+    #[test]
+    fn compose_row_hands_out_the_single_pane_allocation_when_it_fits() {
+        let line = row(vec![run(0, "ab"), run(2, "cd")]);
+        let composed = compose_row(&[(line.clone(), rect(0, 8))]);
+        assert!(
+            Arc::ptr_eq(&composed, &line),
+            "a lone pane that already fits keeps its shared row"
+        );
+        // A pane offset moves every run into the window's columns.
+        let offset = compose_row(&[(line.clone(), rect(2, 8))]);
+        assert!(!Arc::ptr_eq(&offset, &line));
+        assert_eq!(
+            offset.iter().map(|run| run.col).collect::<Vec<_>>(),
+            vec![2, 4]
+        );
+        // A row wider than its pane is clipped to the pane.
+        let clipped = compose_row(&[(line, rect(0, 3))]);
+        assert_eq!(
+            clipped.iter().map(|run| run.cells).sum::<usize>(),
+            3,
+            "cells past the pane's right edge are dropped"
+        );
+    }
+
+    #[test]
+    fn compose_row_places_panes_side_by_side_and_drops_runs_past_their_edge() {
+        let left = row(vec![run(0, "abc")]);
+        let right = row(vec![run(0, "xy"), run(2, "z")]);
+        let composed = compose_row(&[(left, rect(0, 2)), (right, rect(2, 2))]);
+        let cells: Vec<(usize, usize, &str)> = composed
+            .iter()
+            .map(|run| (run.col, run.cells, run.text.as_str()))
+            .collect();
+        // Left pane clips "abc" to two cells; the right pane starts at column 2
+        // and its run that begins at its own right edge is dropped.
+        assert_eq!(cells, vec![(0, 2, "ab"), (2, 2, "xy")]);
+    }
+
+    #[test]
+    fn overlay_replaces_only_the_middle_and_clips_the_edges() {
+        let line = row(vec![run(0, "abcdef")]);
+        let menu = run(2, "XY");
+        let out = overlay(&line, 2, 2, menu.clone());
+        let texts: Vec<&str> = out.iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(texts, vec!["ab", "XY", "ef"]);
+        assert_eq!(
+            out.iter().map(|run| run.col).collect::<Vec<_>>(),
+            vec![0, 2, 4]
+        );
+        assert_eq!(out[1], menu);
+    }
+
+    #[test]
+    fn clip_cuts_text_and_keeps_shapes_inside_the_new_run() {
+        let mut boxed = run(0, "abcd");
+        boxed.shape = Some(Arm {
+            x0: 0.0,
+            x1: 4.0,
+            y0: 0.0,
+            y1: 1.0,
+        });
+        let cut = clip(&boxed, 1, 3);
+        assert_eq!((cut.col, cut.cells, cut.text.as_str()), (1, 2, "bc"));
+        let shape = cut.shape.expect("a clipped block glyph keeps its shape");
+        assert_eq!((shape.x0, shape.x1), (0.0, 2.0));
+    }
+}

@@ -276,7 +276,7 @@ impl IconLoader {
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
         let (wake_reader, mut wake_writer) = UnixStream::pair().ok()?;
         wake_reader.set_nonblocking(true).ok()?;
-        std::thread::Builder::new()
+        let spawned=std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
                 flamewm_integrations_linux::background::lower_current_thread();
@@ -322,8 +322,14 @@ impl IconLoader {
                     }
                     let _ = wake_writer.write_all(&[1]);
                 }
-            })
-            .ok()?;
+            });
+        if spawned.is_err() {
+            static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!("flamewm-shell: icon worker could not start; the shell runs without themed icons");
+            }
+            return None;
+        }
         Some(Self {
             req_tx,
             res_rx,
@@ -499,8 +505,16 @@ impl IconLoader {
                 }
                 // Empty: nothing queued now. Disconnected: the worker is gone, so no reply
                 // can still arrive; a stuck counter would otherwise keep this path awake.
+                // Release the keys it never answered so callers stop waiting for an icon
+                // that cannot come, and say so once instead of failing silently.
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.replies_outstanding = 0;
+                    self.pending.clear();
+                    self.retry.clear();
+                    static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+                    if WARNED.set(()).is_ok() {
+                        eprintln!("flamewm-shell: icon worker stopped; icons keep their placeholders");
+                    }
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,

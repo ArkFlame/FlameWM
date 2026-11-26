@@ -27,14 +27,26 @@ impl JobPool {
                         match next {Ok(job)=>job(),Err(_)=>return}
                     }
                 });
-            if spawned.is_err() {break;}
+            if spawned.is_err() {
+                // Thread exhaustion shrinks the pool instead of losing the explorer: idle lanes are
+                // rare and a degraded pool still drains jobs. Report it once, not per failed lane.
+                static WARNED:OnceLock<()>=OnceLock::new();
+                if WARNED.set(()).is_ok() {eprintln!("flamewm-explorer: {name} worker could not start; the pool keeps the lanes it has");}
+                break;
+            }
         }
         Self{jobs}
     }
 
     /// Queues `job`. When every worker is gone the job runs on its own thread, so no work is dropped.
     pub(crate) fn submit(&self,job:impl FnOnce()+Send+'static) {
-        if let Err(mpsc::SendError(job))=self.jobs.send(Box::new(job)) {std::thread::spawn(job);}
+        let Err(mpsc::SendError(job))=self.jobs.send(Box::new(job)) else {return};
+        // Every pooled worker is gone (a panic or a failed start). A job still has to run, but a
+        // refused thread must not panic the UI thread on a desktop already out of resources.
+        if let Err(error)=std::thread::Builder::new().name("flamewm-explorer-job".into()).spawn(job) {
+            static WARNED:OnceLock<()>=OnceLock::new();
+            if WARNED.set(()).is_ok() {eprintln!("flamewm-explorer: background job dropped: {error}");}
+        }
     }
 }
 
@@ -65,9 +77,13 @@ pub(crate) fn thumb_worker(queue:Arc<thumbs::ThumbQueue>, result:Sender<WorkerRe
             thumbs::ThumbRender::Ready(canvas)=>Some(canvas),
             thumbs::ThumbRender::None=>None,
         };
-        let sent=result.send(WorkerResult::Thumbnail{key,pixels}).is_ok();
+        if result.send(WorkerResult::Thumbnail{key,pixels}).is_err() {
+            // The UI result channel is gone (window closed): no decode can reach anyone, so stop
+            // instead of burning the queue on a dead receiver.
+            return;
+        }
         let due=last_wake.is_none_or(|at|at.elapsed()>=THUMB_WAKE_INTERVAL);
-        if sent && (queue.is_empty() || due) {
+        if queue.is_empty() || due {
             let _=wake.write_all(&[1]);
             last_wake=Some(Instant::now());
         }

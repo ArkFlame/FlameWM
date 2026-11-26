@@ -1123,19 +1123,30 @@ pub fn run() -> Result<(), String> {
     // first and the live snapshot is applied from the same wake socket as the samples.
     let (settings_tx, settings_rx) = mpsc::sync_channel::<SettingsSnapshot>(1);
     let mut settings_wake = writer.try_clone().map_err(|e| e.to_string())?;
-    std::thread::spawn(move || {
-        let snapshot = initial_settings();
-        if settings_tx.try_send(snapshot).is_ok() {
-            let _ = settings_wake.write(&[1]);
+    // A refused thread keeps the default theme and backdrop; it must not abort the window.
+    let settings_worker = std::thread::Builder::new()
+        .name("flamewm-taskmgr-settings".into())
+        .spawn(move || {
+            let snapshot = initial_settings();
+            if settings_tx.try_send(snapshot).is_ok() {
+                let _ = settings_wake.write(&[1]);
+            }
+        });
+    if settings_worker.is_err() {
+        static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            eprintln!("flamewm-task-manager: settings worker could not start; defaults stay in use");
         }
-    });
+    }
     let (sender, receiver) = mpsc::sync_channel::<model::Snapshot>(1);
     let running = Arc::new(AtomicBool::new(true));
     let active = Arc::clone(&running);
     let gate = Arc::new(sample_gate::SampleGate::default());
     let worker_gate = Arc::clone(&gate);
     // One sampler exists only while this window is open; never a permanent desktop daemon.
-    let worker = std::thread::spawn(move || {
+    let worker = std::thread::Builder::new()
+        .name("flamewm-task-manager-sampler".into())
+        .spawn(move || {
         let mut sampler = model::Sampler::default();
         while active.load(Ordering::Relaxed) {
             // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
@@ -1176,7 +1187,19 @@ pub fn run() -> Result<(), String> {
                 }
             }
         }
-    });
+        });
+    // A refused sampler thread leaves an empty table; the window still runs and the wake drain
+    // reports the missing samples instead of the process aborting on a spawn failure.
+    let worker = match worker {
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            static WARNED:std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!("flamewm-task-manager: sampler worker could not start: {error}");
+            }
+            None
+        }
+    };
     let queue = Rc::new(RefCell::new(receiver));
     let window = Rc::new(RefCell::new(app));
     let event_window = Rc::clone(&window);
@@ -1269,9 +1292,24 @@ pub fn run() -> Result<(), String> {
                 app.theme_dirty = true;
                 changed = true;
             }
-            while let Ok(snapshot) = wake_queue.borrow().try_recv() {
-                app.accept(snapshot);
-                changed = true;
+            loop {
+                match wake_queue.borrow().try_recv() {
+                    Ok(snapshot) => {
+                        app.accept(snapshot);
+                        changed = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    // The sampler is gone (a panic or a failed start). Keep the last table and say
+                    // so once, instead of repainting nothing on every later wake.
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        const STOPPED:&str="Process sampling stopped; showing the last sample";
+                        if app.message != STOPPED {
+                            app.message = STOPPED.to_owned();
+                            changed = true;
+                        }
+                        break;
+                    }
+                }
             }
             while let Ok(message) = result_rx.try_recv() {
                 app.message = message;
@@ -1285,7 +1323,15 @@ pub fn run() -> Result<(), String> {
     );
     running.store(false, Ordering::Relaxed);
     gate.wake();
-    let _ = worker.join();
+    if let Some(worker) = worker {
+        // A panic in the sampler must not take the process down with it; report it once.
+        if worker.join().is_err() {
+            static WARNED:std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!("flamewm-task-manager: sampler worker panicked");
+            }
+        }
+    }
     outcome
 }
 

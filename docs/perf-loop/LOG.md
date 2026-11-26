@@ -33,3 +33,5 @@
 ## u99 verdict: no cheap headless backend (smithay has no backend_headless; pixman still needs a display). Steady ACTIVE composition requires the real DRM session; nested/winit cannot provide it. Use code-read hotspot ranking for active paths until a real-session run is possible.
 
 ## Build 10: cargo check --workspace --all-targets green after 3 fixes: (1) explorer main.rs settings_wake cloned after writer moved into io thread, (2) shell main.rs load_panels_bootstrap tuple order from subscribe_then_load, (3) explorer thumbs queue test compared retain() Vec to an int. Batches 14-16, u94-u99 landed.
+
+## Release + nested smoke after build 10: release 0 errors (2 warnings); scripts/flamewm-nested-smoke PASS (10 s, no early exit, no panic lines in log). Covers batches 9-16 compositor-side changes at startup only; explorer/shell/terminal/task-manager release binaries not run.

@@ -749,13 +749,22 @@ fn execute() -> Result<(), String> {
     settings_ready
         .set_nonblocking(true)
         .map_err(|error| format!("settings wake nonblocking: {error}"))?;
-    std::thread::spawn(move || {
-        if let Some(snapshot) = load_startup_settings() {
-            if startup_settings_tx.try_send(snapshot).is_ok() {
-                let _ = settings_done.write(&[1]);
+    // A refused thread leaves the defaults painted; it must never abort the shell session.
+    let settings_worker = std::thread::Builder::new()
+        .name("flamewm-shell-settings".into())
+        .spawn(move || {
+            if let Some(snapshot) = load_startup_settings() {
+                if startup_settings_tx.try_send(snapshot).is_ok() {
+                    let _ = settings_done.write(&[1]);
+                }
             }
+        });
+    if settings_worker.is_err() {
+        static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            eprintln!("flamewm-shell: settings worker could not start; defaults stay in use");
         }
-    });
+    }
     flamewm_ui_x11::install_default_layout_measure();
     let mut runtime = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.runtime_create");
