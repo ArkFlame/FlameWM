@@ -597,4 +597,95 @@ mod tests {
         assert_eq!(hits, 1);
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn name_matches_agrees_with_rank_match() {
+        let queries = ["report", "REPORT", "  epo  ", " ", "", "école", "É", "zzz"];
+        let names = [
+            "Report",
+            "report-final.txt",
+            "a-report-b",
+            "notes.md",
+            "ÉCOLE.TXT",
+            "müller",
+        ];
+        for query in queries {
+            for name in names {
+                assert_eq!(
+                    name_matches(name, query),
+                    rank_match(query, name).is_some(),
+                    "query {query:?} name {name:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_contains_ci_matches_the_folded_substring() {
+        let cases = [
+            ("report-final.txt", "REPORT"),
+            ("report-final.txt", "final"),
+            ("report-final.txt", "t-f"),
+            ("report-final.txt", "report-final.txt"),
+            ("report-final.txt", "zzz"),
+            ("abc", "abcd"),
+            ("abc", "c"),
+            ("ABC", "b"),
+            ("", "a"),
+            ("anything", ""),
+        ];
+        for (text, needle) in cases {
+            assert_eq!(
+                ascii_contains_ci(text.as_bytes(), needle.as_bytes()),
+                text.to_lowercase().contains(&needle.to_lowercase()),
+                "text {text:?} needle {needle:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_burst_of_batches_costs_one_wake_until_polled() {
+        let root = tree("wake");
+        // Three full batches plus a remainder: enough sink calls that uncoalesced wakes would be several.
+        for index in 0..200 {
+            fs::write(root.join(format!("report-{index:03}.txt")), b"x").unwrap();
+        }
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let mut worker =
+            SearchWorker::spawn(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        let id = worker.start(root.clone(), "report".into(), false).unwrap();
+        // Let the walk publish every batch without any poll: the pending flag stays set, so only the
+        // first batch wakes the UI. The events themselves all wait in the channel.
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(wakes.load(Ordering::Relaxed), 1, "batches must coalesce");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut hits = 0;
+        let mut done = false;
+        while !done {
+            for event in worker.poll() {
+                match event {
+                    SearchEvent::Batch {
+                        id: got,
+                        hits: batch,
+                    } => {
+                        assert_eq!(got, id);
+                        hits += batch.len();
+                    }
+                    SearchEvent::Done { id: got, .. } => {
+                        assert_eq!(got, id);
+                        done = true;
+                    }
+                }
+            }
+            assert!(Instant::now() < deadline, "search worker timed out");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(hits, 202, "every match still streams");
+        let _ = fs::remove_dir_all(&root);
+    }
 }

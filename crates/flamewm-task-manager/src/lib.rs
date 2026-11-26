@@ -155,7 +155,8 @@ impl RowText {
             self.command = Some(Arc::clone(&process.command));
             self.depth = Some(process.depth);
             self.name_text.clear();
-            self.name_text.push_str(INDENTS[process.depth.min(8) as usize]);
+            self.name_text
+                .push_str(INDENTS[process.depth.min(8) as usize]);
             self.name_text.push_str(display_name(process));
         }
         if reset || self.threads != Some(process.threads) {

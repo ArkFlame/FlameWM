@@ -10,24 +10,87 @@
 # A run whose busiest tick still has < 5% non-wait work prints LOAD-NOT-REACHED and exits 3, so an
 # idle compositor is never reported as an active-use measurement.
 #
-# Usage: scripts/compose-scenario [--dry-run] [--help]
+# `--xvfb` samples without a host session: it starts a private Xvfb, points the nested winit
+# compositor at it, and tears both down afterwards. smithay 0.7 ships no headless backend
+# (`backend_winit`, `backend_x11`, `backend_drm`/`udev` only), and its EGL display needs a native
+# display handle, so the winit window keeps its `swap_buffers`; on Xvfb that swap is a local
+# framebuffer copy instead of a host round trip, and no real desktop is touched. Use it for
+# repeatable numbers; use a bare run to see the numbers as a real host paces them.
+#
+# Usage: scripts/compose-scenario [--xvfb] [--dry-run] [--help]
 # Env:   FLAMEWM_WAYLAND_BIN, FLAMEWM_TERMINAL_BIN, CARGO_TARGET_DIR
-# Needs: an existing Wayland or X11 display, XDG_RUNTIME_DIR, timeout, a built compositor + terminal.
+# Needs: an existing Wayland or X11 display (or --xvfb + Xvfb), XDG_RUNTIME_DIR, timeout, a built
+#        compositor + terminal.
 # No python, no sleep binary: waiting uses `read -rt` timeouts.
 set -Eeuo pipefail
 
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+DRY_RUN=0
+XVFB=0
+
 usage() {
-  printf '%s\n' 'Usage: scripts/compose-scenario [--dry-run]' \
+  printf '%s\n' 'Usage: scripts/compose-scenario [--xvfb] [--dry-run]' \
     'Starts a nested FLAMEWM_PROFILE_COMPOSE=1 compositor, streams one second of terminal output,' \
-    'and prints the COMPOSITION block of the busiest tick, naming the largest share.'
+    'and prints the COMPOSITION block of the busiest tick, naming the largest share.' \
+    '--xvfb hosts it on a private Xvfb instead of the session display.'
 }
-if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then usage; exit 0; fi
-if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != --dry-run ]]; }; then
-  usage >&2
-  exit 2
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h) usage; exit 0 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --xvfb) XVFB=1 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+
+# `--xvfb` outer stage: own the X server, then run this same script inside that private world.
+# Xvfb is the only cheap "no host" display: FlameWM's render path is Glow on a winit window, and
+# smithay offers no offscreen backend. The inner run must not inherit a host `WAYLAND_DISPLAY`, or
+# winit builds a Wayland event loop instead of the X11 one it was pointed at.
+if (( XVFB )) && [[ -z "${FLAMEWM_COMPOSE_XVFB_INNER:-}" ]]; then
+  command -v Xvfb >/dev/null || { echo 'FLAMEWM-COMPOSE-SCENARIO: --xvfb needs the Xvfb utility' >&2; exit 2; }
+  XVFB_RUN="$(mktemp -d "${TMPDIR:-/tmp}/flamewm-compose-xvfb-XXXXXXXX")"
+  xvfb_pid=''
+  cleanup_xvfb() {
+    [[ -n "$xvfb_pid" ]] && kill -TERM "$xvfb_pid" 2>/dev/null || true
+    exec 8>&- 2>/dev/null || true
+    rm -rf "$XVFB_RUN"
+  }
+  trap cleanup_xvfb EXIT
+  mkdir -p "$XVFB_RUN/run" "$XVFB_RUN/home/.config"
+  chmod 700 "$XVFB_RUN/run"
+  # Sleep-free readiness poll: a FIFO opened read-write never reaches EOF, so `read -rt` blocks.
+  mkfifo "$XVFB_RUN/wait"
+  exec 8<>"$XVFB_RUN/wait"
+  # `-displayfd 3` lets Xvfb pick a free display number and report it, so no python helper is needed.
+  Xvfb -displayfd 3 -screen 0 1600x900x24 -nolisten tcp -noreset \
+    >"$XVFB_RUN/xvfb.log" 2>&1 3>"$XVFB_RUN/display" &
+  xvfb_pid=$!
+  display_num=''
+  for _ in {1..200}; do
+    display_num="$(tr -d '[:space:]' <"$XVFB_RUN/display" 2>/dev/null || true)"
+    [[ -n "$display_num" ]] && break
+    kill -0 "$xvfb_pid" 2>/dev/null || break
+    read -rt 0.05 -u 8 || true
+  done
+  if [[ -z "$display_num" ]]; then
+    echo 'FLAMEWM-COMPOSE-SCENARIO: --xvfb could not start Xvfb' >&2
+    tail -n 20 "$XVFB_RUN/xvfb.log" >&2 || true
+    exit 1
+  fi
+  printf 'FLAMEWM-COMPOSE-SCENARIO: --xvfb private Xvfb on DISPLAY=:%s; sampling without the session display\n' \
+    "$display_num"
+  inner_args=()
+  (( DRY_RUN )) && inner_args+=(--dry-run)
+  rc=0
+  env -u WAYLAND_DISPLAY FLAMEWM_COMPOSE_XVFB_INNER=1 \
+    DISPLAY=":$display_num" HOME="$XVFB_RUN/home" XDG_CONFIG_HOME="$XVFB_RUN/home/.config" \
+    XDG_RUNTIME_DIR="$XVFB_RUN/run" "$SELF" "${inner_args[@]}" || rc=$?
+  exit "$rc"
 fi
+
 if [[ -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
-  echo 'FLAMEWM-COMPOSE-SCENARIO: no existing Wayland/X11 display; run this on a graphical session.' >&2
+  echo 'FLAMEWM-COMPOSE-SCENARIO: no existing Wayland/X11 display; run this on a graphical session or pass --xvfb.' >&2
   exit 2
 fi
 if [[ -z "${XDG_RUNTIME_DIR:-}" || ! -d "${XDG_RUNTIME_DIR:-/nonexistent}" ]]; then
@@ -44,8 +107,9 @@ TERM_BIN="${FLAMEWM_TERMINAL_BIN:-$TARGET_DIR/release/flamewm-terminal}"
 [[ -x "$TERM_BIN" ]] || TERM_BIN="$(command -v flamewm-terminal || true)"
 SOCKET="wayland-flame-compose-$$"
 
-if [[ "${1:-}" == --dry-run ]]; then
-  printf 'FLAMEWM-COMPOSE-SCENARIO: dry-run backend=winit socket=%s compositor=%s terminal=%s window=1000ms\n' \
+if (( DRY_RUN )); then
+  printf 'FLAMEWM-COMPOSE-SCENARIO: dry-run backend=winit host=%s socket=%s compositor=%s terminal=%s window=1000ms\n' \
+    "$([[ -n "${FLAMEWM_COMPOSE_XVFB_INNER:-}" ]] && echo xvfb || echo session)" \
     "$SOCKET" "$BIN" "${TERM_BIN:-<missing>}"
   exit 0
 fi

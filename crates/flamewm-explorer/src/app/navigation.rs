@@ -22,6 +22,7 @@ impl ExplorerApp {
 
     pub(crate) fn clear_search(&mut self) {
         self.search_rows=None;
+        self.search_running=false;
         if let Some(search)=self.search.as_mut() {search.cancel();}
     }
 
@@ -32,11 +33,14 @@ impl ExplorerApp {
         }
         if query.trim().is_empty() {self.clear_search();self.model.status="Search cleared".into();return;}
         let root=self.model.tab().path().to_path_buf();
+        // Re-committing the same query while its walk is still running would cancel it and start the same
+        // tree walk again; keep the live job and its streamed results instead.
+        if self.search_running && self.search_text==query && self.model.tab().path()==root.as_path() {return;}
         let hidden=self.model.hidden;
         let query_text=query.clone();
         let started=self.search.as_mut().map(|search|search.start(root,query,hidden));
         match started {
-            Some(Ok(id))=>{self.search_id=id;self.search_text=query_text;self.search_rows=Some(Vec::new());self.model.status="Searching…".into();},
+            Some(Ok(id))=>{self.search_id=id;self.search_text=query_text;self.search_running=true;self.search_rows=Some(Vec::new());self.model.status="Searching…".into();},
             Some(Err(error))=>self.model.status=format!("Search unavailable: {error}"),
             None=>self.model.status="Search worker unavailable".into(),
         }
@@ -53,6 +57,7 @@ impl ExplorerApp {
                     self.model.status=format!("Searching… {} found",rows.len());
                 },
                 SearchEvent::Done{truncated,cancelled,..}=>{
+                    self.search_running=false;
                     if cancelled {continue;}
                     let query=self.search_text.as_str();
                     if let Some(rows)=self.search_rows.as_mut() {rows.sort_by_cached_key(|entry|crate::search::result_order(query,&entry.name));}

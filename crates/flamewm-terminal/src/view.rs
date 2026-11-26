@@ -236,6 +236,9 @@ pub struct RunCache {
     cursor: Option<(usize, usize)>,
     selection: Option<Span>,
     rows: Vec<Row>,
+    /// Absolute index of the first visible line last update, so a reported scroll shift can be trusted only when the
+    /// window advanced by exactly that many lines (a scrollback drop keeps the index while the content moves).
+    top: Option<usize>,
     /// Per-frame row scratch, kept so an update allocates no state bitmap.
     stale: Vec<bool>,
     /// Live rows the screen reported changed, in one buffer reused across frames.
@@ -257,6 +260,7 @@ impl RunCache {
         options: &GridOptions,
     ) -> &[Row] {
         let all_dirty = screen.take_dirty_into(&mut self.changed);
+        let shift = screen.take_scroll_shift();
         let rows = screen.rows();
         let top = top_line(screen, options);
         let cursor = cursor_drawn(screen, options).then(|| screen.cursor());
@@ -267,15 +271,51 @@ impl RunCache {
         let mut stale = std::mem::take(&mut self.stale);
         stale.clear();
         stale.resize(rows, false);
-        if !key_matches || self.rows.len() != rows || all_dirty {
+        // Whether the stale rows are a partial set; when they are, the changed rows, the cursor and the selection
+        // are marked below and every other row is reused.
+        let mut partial = true;
+        // Lines a scroll let this update reuse from the previous frame, 0 when it rebuilt every row.
+        let mut reused = 0;
+        if !key_matches || self.rows.len() != rows {
             stale.fill(true);
-        } else {
+            partial = false;
+        } else if all_dirty {
+            // A captured scroll moved every visible row up by `shift`: the runs of a row are those of the row below
+            // it, so rotate the handles and rebuild only the rows the scroll exposed at the bottom. Reuse needs the
+            // absolute window to have advanced by exactly that many lines; a capped scrollback drops lines and keeps
+            // the index, which renumbers the selection, so that case rebuilds.
+            if shift > 0
+                && shift < rows
+                && self.top.is_some_and(|old| old.checked_add(shift) == Some(top))
+            {
+                self.rows.rotate_left(shift);
+                stale[rows - shift..].fill(true);
+                reused = shift;
+            } else {
+                stale.fill(true);
+                partial = false;
+            }
+        }
+        if partial {
             for &live in &self.changed {
                 mark_live(screen, top, live, &mut stale);
             }
             if cursor != self.cursor {
                 for live in [self.cursor, cursor].into_iter().flatten() {
                     mark_live(screen, top, live.0, &mut stale);
+                }
+            } else if all_dirty {
+                // The scroll moved the row under a stationary cursor, so its reused runs no longer show the cursor.
+                if let Some((row, _)) = cursor {
+                    mark_live(screen, top, row, &mut stale);
+                }
+            }
+            if reused > 0 {
+                // A reused row can still paint the cursor where it sat last frame: its old allocation moved up.
+                if let Some((row, _)) = self.cursor
+                    && row >= reused
+                {
+                    stale[row - reused] = true;
                 }
             }
             if options.selection != self.selection {
@@ -320,6 +360,7 @@ impl RunCache {
         self.stale = stale;
         self.cursor = cursor;
         self.selection = options.selection;
+        self.top = Some(top);
         &self.rows
     }
 }
@@ -612,7 +653,31 @@ mod tests {
     }
 
     #[test]
-    fn scroll_and_resize_rebuild_every_row() {
+    fn a_scroll_reuses_the_shifted_rows_and_rebuilds_the_exposed_bottom() {
+        let p = palette();
+        let mut screen = Screen::new(5, 3, 100);
+        let mut cache = RunCache::default();
+        let options = opts(false);
+        feed(&mut screen, b"1\r\n2\r\n3");
+        let before: Vec<Row> = cache.update(&mut screen, &p, &options).to_vec();
+        feed(&mut screen, b"\r\n");
+        let after = cache.update(&mut screen, &p, &options).to_vec();
+        assert_eq!(
+            cache.rebuilt, 1,
+            "only the blank row the scroll exposed is new"
+        );
+        assert!(
+            Arc::ptr_eq(&before[1], &after[0]),
+            "row 1 moved up to row 0"
+        );
+        assert!(
+            Arc::ptr_eq(&before[2], &after[1]),
+            "row 2 moved up to row 1"
+        );
+    }
+
+    #[test]
+    fn a_scroll_clears_the_cursor_row_it_reused() {
         let p = palette();
         let mut screen = Screen::new(5, 3, 100);
         let mut cache = RunCache::default();
@@ -621,7 +686,20 @@ mod tests {
         cache.update(&mut screen, &p, &options);
         feed(&mut screen, b"\r\n");
         cache.update(&mut screen, &p, &options);
-        assert_eq!(cache.rebuilt, 3, "a scroll moves every row");
+        assert_eq!(
+            cache.rebuilt, 2,
+            "the exposed bottom row and the reused row that painted the cursor"
+        );
+    }
+
+    #[test]
+    fn a_resize_still_rebuilds_every_row() {
+        let p = palette();
+        let mut screen = Screen::new(5, 3, 100);
+        let mut cache = RunCache::default();
+        let options = opts(true);
+        feed(&mut screen, b"1\r\n2\r\n3");
+        cache.update(&mut screen, &p, &options);
         screen.resize(6, 3);
         cache.update(&mut screen, &p, &options);
         assert_eq!(cache.rebuilt, 3, "a resize rebuilds every row");
@@ -653,9 +731,8 @@ mod tests {
         );
         assert_eq!(typed_rebuilds, 20, "one row per typed char");
         assert_eq!(
-            scroll_rebuilds,
-            screen.rows(),
-            "a scroll rebuilds every row"
+            scroll_rebuilds, 2,
+            "a scroll rebuilds the exposed row and the reused row the cursor painted"
         );
     }
 
