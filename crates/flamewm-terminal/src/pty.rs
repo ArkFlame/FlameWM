@@ -218,7 +218,7 @@ fn wait_for_exit(pid: rustix::process::Pid, grace: Duration) -> Option<bool> {
         match poll(&mut fds, Some(&timeout)) {
             Ok(0) => return Some(false),
             Ok(_) => return Some(true),
-            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::INTR) => {}
             Err(_) => return None,
         }
     }

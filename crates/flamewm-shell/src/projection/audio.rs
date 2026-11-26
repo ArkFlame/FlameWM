@@ -15,10 +15,58 @@ pub fn project_audio(
     )
 }
 
+thread_local! {
+    /// Digest of the audio model this thread projected last. The quick-control
+    /// host keeps one audio popup document for the process lifetime, so a repeat
+    /// event with an identical model would rewrite ~100 node properties to the
+    /// values the document already holds. A fresh document starts with the cache
+    /// empty and therefore gets one full write.
+    static LAST_AUDIO_PROJECTION: std::cell::RefCell<Option<u64>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Allocation-free digest of everything [`project_audio_full`] paints: tab,
+/// raise-maximum cap, live accent (the raise track), and the visible rows.
+/// Equal digests mean every write would repeat the current document values.
+fn audio_projection_digest(
+    devices: bool,
+    settings: flamewm_shell_core::status::AudioSettings,
+    rows: &[crate::taskbar::status::audio::RowSource],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    devices.hash(&mut hasher);
+    settings.raise_maximum.hash(&mut hasher);
+    let accent = crate::projection::task_accent();
+    u32::from_be_bytes([accent.r, accent.g, accent.b, accent.a]).hash(&mut hasher);
+    rows.len().hash(&mut hasher);
+    for row in rows {
+        row.id.hash(&mut hasher);
+        row.label.hash(&mut hasher);
+        row.volume_percent.hash(&mut hasher);
+        row.muted.hash(&mut hasher);
+        let is_stream = row.kind == crate::taskbar::status::audio::AudioRowKind::Stream;
+        is_stream.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Clears the thread's last-projection digest. Test-only: each test decodes a
+/// fresh audio document, which must get one full write even when an earlier
+/// test in the same thread projected the same model.
+#[cfg(test)]
+fn reset_audio_projection_cache() {
+    LAST_AUDIO_PROJECTION.with(|last| *last.borrow_mut() = None);
+}
+
 /// Full audio projection: Devices/Applications tabs, `RangeSpec` slider state,
 /// mute + percent, raise-maximum cap. Scroll/virtualized lists are declared
 /// in the template (`overflow-y:auto` on `#audio-list`); the retained
 /// `scroll_offset` selects the visible window without truncating the model.
+///
+/// Element ids are built once per row in two reused capacity-reserved buffers,
+/// so a refresh allocates nothing per property; `text_ref` keeps string values
+/// borrowed until the document actually stores a change.
 pub fn project_audio_full(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
@@ -26,7 +74,16 @@ pub fn project_audio_full(
     settings: flamewm_shell_core::status::AudioSettings,
     scroll_offset: u32,
 ) -> Result<(), String> {
+    use std::fmt::Write as _;
+
     let devices = tab == flamewm_shell_core::status::AudioTab::Devices;
+    // Rows come from the tab-filtered, scroll-windowed list shared with host routing.
+    let rows =
+        crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, tab, scroll_offset);
+    let digest = audio_projection_digest(devices, settings, &rows);
+    if LAST_AUDIO_PROJECTION.with(|last| *last.borrow() == Some(digest)) {
+        return Ok(());
+    }
     for (id, active) in [("audio-tab-devices", devices), ("audio-tab-apps", !devices)] {
         if active {
             document.background(id, ACTIVE_TAB_FILL)?;
@@ -34,9 +91,6 @@ pub fn project_audio_full(
             document.background_clear(id)?;
         }
     }
-    // Rows come from the tab-filtered, scroll-windowed list shared with host routing.
-    let rows =
-        crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, tab, scroll_offset);
     document.visible("audio-empty", rows.is_empty())?;
     document.text_ref(
         "audio-empty",
@@ -50,43 +104,67 @@ pub fn project_audio_full(
             ""
         },
     )?;
+    // Reused across rows and properties; both grow to the widest id once, then never again.
+    let mut slot_id = String::with_capacity(32);
+    let mut value = String::with_capacity(8);
     for slot in 0..crate::taskbar::status::audio::AUDIO_POPUP_ROWS {
         let n = slot + 1;
         let row = rows.get(slot);
-        document.visible(&format!("audio-slot-{n}"), row.is_some())?;
+        slot_id.clear();
+        let _ = write!(slot_id, "audio-slot-{n}");
+        let base = slot_id.len();
+        document.visible(&slot_id, row.is_some())?;
         let Some(row) = row else { continue };
         // Per-row RangeSpec under the current 100/150 cap; fill snapped into it.
         let spec = settings.slider_spec(row.volume_percent);
         let shown = spec.snap(f32::from(row.volume_percent));
         let is_stream = row.kind == crate::taskbar::status::audio::AudioRowKind::Stream;
         let is_input = row.id.starts_with("endpoint:source:");
-        document.text_ref(&format!("audio-slot-{n}-label"), &row.label)?;
-        document.text(
-            &format!("audio-slot-{n}-value"),
-            format!("{}%", row.volume_percent),
-        )?;
-        document.visible(&format!("audio-slot-{n}-mute-icon-on"), row.muted)?;
-        document.visible(&format!("audio-slot-{n}-mute-icon-off"), !row.muted)?;
+
+        slot_id.truncate(base);
+        slot_id.push_str("-label");
+        document.text_ref(&slot_id, &row.label)?;
+        value.clear();
+        let _ = write!(value, "{}%", row.volume_percent);
+        slot_id.truncate(base);
+        slot_id.push_str("-value");
+        document.text_ref(&slot_id, &value)?;
+        for (suffix, visible) in [("-mute-icon-on", row.muted), ("-mute-icon-off", !row.muted)] {
+            slot_id.truncate(base);
+            slot_id.push_str(suffix);
+            document.visible(&slot_id, visible)?;
+        }
+        slot_id.truncate(base);
+        slot_id.push_str("-fill");
         document.size(
-            &format!("audio-slot-{n}-fill"),
+            &slot_id,
             audio_fill_width(shown, spec.max),
             AUDIO_TRACK_HEIGHT,
         )?;
-        document.position(
-            &format!("audio-slot-{n}-thumb"),
-            audio_thumb_left(shown, spec.max),
-            AUDIO_THUMB_TOP,
-        )?;
+        slot_id.truncate(base);
+        slot_id.push_str("-thumb");
+        document.position(&slot_id, audio_thumb_left(shown, spec.max), AUDIO_THUMB_TOP)?;
         // WAI-ARIA 1.2 slider: range from aria-valuemin/max, current value from aria-valuenow.
         // Precedent: .vendor has no ARIA slider or dialog code (grep hits were unrelated); WAI-ARIA 1.2 APG slider.
-        let track = format!("audio-slot-{n}-track");
-        document.attribute(&track, "role", "slider")?;
-        document.attribute(&track, "aria-valuemin", "0")?;
-        document.attribute(&track, "aria-valuemax", &format!("{:.0}", spec.max))?;
-        document.attribute(&track, "aria-valuenow", &format!("{shown:.0}"))?;
-        document.visible(&format!("audio-slot-{n}-icon-out"), !is_stream && !is_input)?;
-        document.visible(&format!("audio-slot-{n}-icon-in"), !is_stream && is_input)?;
-        document.visible(&format!("audio-slot-{n}-icon-app"), is_stream)?;
+        slot_id.truncate(base);
+        slot_id.push_str("-track");
+        document.attribute(&slot_id, "role", "slider")?;
+        document.attribute(&slot_id, "aria-valuemin", "0")?;
+        value.clear();
+        let _ = write!(value, "{:.0}", spec.max);
+        document.attribute(&slot_id, "aria-valuemax", &value)?;
+        value.clear();
+        let _ = write!(value, "{shown:.0}");
+        document.attribute(&slot_id, "aria-valuenow", &value)?;
+        for (suffix, visible) in [
+            ("-icon-out", !is_stream && !is_input),
+            ("-icon-in", !is_stream && is_input),
+            ("-icon-app", is_stream),
+        ] {
+            slot_id.truncate(base);
+            slot_id.push_str(suffix);
+            document.visible(&slot_id, visible)?;
+        }
     }
     document.toggle(
         "audio-raise-track",
@@ -97,6 +175,7 @@ pub fn project_audio_full(
         // The shared toggle recipe paints a fixed skin red; the on-track follows the live accent.
         document.background("audio-raise-track", crate::projection::task_accent())?;
     }
+    LAST_AUDIO_PROJECTION.with(|last| *last.borrow_mut() = Some(digest));
     Ok(())
 }
 
@@ -174,6 +253,15 @@ mod audio_template_tests {
 
     impl<'a> AudioRecorder<'a> {
         fn new(document: &'a mut flamewm_ui_x11::UiDocument) -> Self {
+            // Each recorder wraps a freshly decoded document, which must receive one full
+            // projection even when an earlier test in this thread projected the same model.
+            reset_audio_projection_cache();
+            Self::new_keeping_cache(document)
+        }
+
+        /// Recorder for consecutive projections of the same document: leaves the
+        /// thread's last-projection digest alone so the second call can skip.
+        fn new_keeping_cache(document: &'a mut flamewm_ui_x11::UiDocument) -> Self {
             Self {
                 document,
                 recorded: Recorded::default(),
@@ -293,6 +381,21 @@ mod audio_template_tests {
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
         let mut recorder = AudioRecorder::new(&mut document);
+        project_audio_full(&mut recorder, snapshot, tab, settings, 0)
+            .expect("every projected audio id must be a valid target");
+        recorder.recorded
+    }
+
+    /// Same as `project`, but keeps the thread's last-projection digest so a
+    /// repeat call can take the unchanged-model early return.
+    fn project_keeping_cache(
+        snapshot: &crate::ShellSnapshot,
+        tab: AudioTab,
+        settings: AudioSettings,
+    ) -> Recorded {
+        let mut document =
+            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
+        let mut recorder = AudioRecorder::new_keeping_cache(&mut document);
         project_audio_full(&mut recorder, snapshot, tab, settings, 0)
             .expect("every projected audio id must be a valid target");
         recorder.recorded
@@ -459,6 +562,84 @@ mod audio_template_tests {
         let recorded = project(&snapshot, AudioTab::Applications, AudioSettings::default());
         assert_eq!(recorded.visible.get("audio-empty"), Some(&true));
         assert_eq!(text(&recorded, "audio-empty"), "No active applications");
+    }
+
+    fn endpoint_row(volume_percent: u8, muted: bool) -> crate::taskbar::status::audio::RowSource {
+        crate::taskbar::status::audio::RowSource {
+            kind: crate::taskbar::status::audio::AudioRowKind::Endpoint,
+            id: "endpoint:sink:1".to_owned(),
+            label: "Speakers".to_owned(),
+            volume_percent,
+            muted,
+            selected: false,
+        }
+    }
+
+    #[test]
+    fn projection_digest_changes_only_with_painted_state() {
+        let rows = [endpoint_row(50, false)];
+        let digest = audio_projection_digest(true, AudioSettings::default(), &rows);
+        assert_eq!(
+            digest,
+            audio_projection_digest(true, AudioSettings::default(), &[endpoint_row(50, false)])
+        );
+        assert_ne!(
+            digest,
+            audio_projection_digest(false, AudioSettings::default(), &rows)
+        );
+        assert_ne!(
+            digest,
+            audio_projection_digest(
+                true,
+                AudioSettings {
+                    raise_maximum: true
+                },
+                &rows
+            )
+        );
+        assert_ne!(
+            digest,
+            audio_projection_digest(true, AudioSettings::default(), &[endpoint_row(51, false)])
+        );
+        assert_ne!(
+            digest,
+            audio_projection_digest(true, AudioSettings::default(), &[endpoint_row(50, true)])
+        );
+        assert_ne!(
+            digest,
+            audio_projection_digest(true, AudioSettings::default(), &[])
+        );
+    }
+
+    #[test]
+    fn identical_repeat_projection_skips_every_write() {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        snapshot.system.audio.endpoints = vec![AudioEndpointSnapshot {
+            id: 1,
+            kind: AudioEndpointKind::Sink,
+            name: "speakers".to_owned(),
+            description: "Built-in Speakers".to_owned(),
+            volume_percent: 50,
+            muted: false,
+            is_default: true,
+        }];
+        reset_audio_projection_cache();
+        let first = project_keeping_cache(&snapshot, AudioTab::Devices, AudioSettings::default());
+        assert_eq!(text(&first, "audio-slot-1-label"), "Built-in Speakers");
+        // Same model again: the document already holds every value, so nothing is written.
+        let second = project_keeping_cache(&snapshot, AudioTab::Devices, AudioSettings::default());
+        assert!(second.texts.is_empty(), "{:?}", second.texts);
+        assert!(second.visible.is_empty(), "{:?}", second.visible);
+        assert!(second.widths.is_empty(), "{:?}", second.widths);
+        assert!(second.positions.is_empty(), "{:?}", second.positions);
+        assert!(second.attributes.is_empty(), "{:?}", second.attributes);
+        assert!(second.toggles.is_empty(), "{:?}", second.toggles);
+        assert!(second.backgrounds.is_empty(), "{:?}", second.backgrounds);
+        // A visible change still rewrites the row.
+        snapshot.system.audio.endpoints[0].volume_percent = 60;
+        let third = project_keeping_cache(&snapshot, AudioTab::Devices, AudioSettings::default());
+        assert_eq!(text(&third, "audio-slot-1-value"), "60%");
     }
 
     const POPUP_VIEWPORT: (f32, f32) = (459.0, 460.0);
@@ -710,6 +891,7 @@ mod audio_render_tests {
 
     /// The Devices tab projected at `percent` with the 100% cap (no raise-maximum).
     fn popup(percent: u8) -> flamewm_ui_x11::UiDocument {
+        reset_audio_projection_cache();
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
         project_audio_full(

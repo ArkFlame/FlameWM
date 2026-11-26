@@ -1000,10 +1000,10 @@ fn send_frame_callbacks(state: &State) {
         .iter()
         .filter(|(id, _)| {
             !state.model.is_hidden(*id)
-                && !state
+                && state
                     .model
                     .get(*id)
-                    .is_some_and(|managed| !frame_reaches_output(managed.frame(), scale, visible))
+                    .is_none_or(|managed| frame_reaches_output(managed.frame(), scale, visible))
         })
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));

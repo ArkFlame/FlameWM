@@ -163,7 +163,7 @@ pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
     let mut shares: Vec<PathBuf> = fs::read_dir(root)
         .into_iter()
         .flatten()
-        .filter_map(|entry| entry.ok())
+        .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .map(|entry| entry.path())
         .collect();

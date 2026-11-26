@@ -362,7 +362,7 @@ pub fn nodes_with_focus(view: &CenterView, focus: Option<usize>) -> Vec<Node> {
             });
             out.push(visible(
                 item_ids.focus.as_str(),
-                item.is_some() && focus == Some(base + item_slot - 1),
+                item.is_some() && focus == Some(base + item_slot),
             ));
             if let Some(item) = item {
                 out.push(text(item_ids.summary.as_str(), item.summary.clone()));

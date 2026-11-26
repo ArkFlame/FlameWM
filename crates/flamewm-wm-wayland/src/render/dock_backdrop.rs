@@ -569,7 +569,7 @@ mod tests {
             ),
             "an extra entry recaptures"
         );
-        let swapped = vec![
+        let swapped = [
             ((20, 0, 10, 10), committed(2)),
             ((0, 0, 10, 10), committed(1)),
         ];
@@ -577,7 +577,7 @@ mod tests {
             !stamp_matches(swapped.iter().copied(), &cached),
             "restacking recaptures"
         );
-        let recommitted = vec![
+        let recommitted = [
             ((0, 0, 10, 10), committed(2)),
             ((20, 0, 10, 10), committed(2)),
         ];

@@ -58,6 +58,45 @@ fn fit(runs: &[Run], slots: usize) -> Cow<'_, [Run]> {
     Cow::Owned(out)
 }
 
+/// Whether slot `slot` of a previous row equals slot `slot` of `fitted` (a row fitted by [`fit`]) without building
+/// the previous row's merged tail. Only the last slot of an overflowing row is synthetic, and its cells take the
+/// first merged run's style, so a later tail run changing colour still draws the same merged slot.
+fn slot_matches(prev: &[Run], fitted: &[Run], slots: usize, slot: usize) -> bool {
+    match fitted.get(slot) {
+        Some(expected) => prev_slot_eq(prev, slots, slot, expected),
+        // The fitted row has no such slot, so it matches only a previous row that already lacked it.
+        None => prev.len() <= slots && prev.get(slot).is_none(),
+    }
+}
+
+/// Compares one slot of `prev` under the same tail merge as [`fit`] against `expected`.
+fn prev_slot_eq(prev: &[Run], slots: usize, slot: usize, expected: &Run) -> bool {
+    if prev.len() <= slots || slot + 1 < slots {
+        return prev.get(slot).is_some_and(|run| run == expected);
+    }
+    let head = &prev[slots - 1];
+    head.col == expected.col
+        && expected.cells == prev[slots - 1..].iter().map(|run| run.cells).sum::<usize>()
+        && head.fg == expected.fg
+        && head.bg == expected.bg
+        && head.bold == expected.bold
+        && expected.shape.is_none()
+        && {
+            // Compare the concatenated tail text against the merged run without allocating it.
+            let mut rest = expected.text.as_str();
+            prev[slots - 1..]
+                .iter()
+                .all(|run| match rest.strip_prefix(run.text.as_str()) {
+                    Some(next) => {
+                        rest = next;
+                        true
+                    }
+                    None => false,
+                })
+                && rest.is_empty()
+        }
+}
+
 impl App {
     /// Writes the current frame to `doc`, touching only the nodes whose content changed.
     pub fn project(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -93,10 +132,14 @@ impl App {
     }
 
     fn project_font(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let font = (self.config.font_size, self.config.font_family.clone());
-        if self.ui.font.as_ref() == Some(&font) {
+        // Compare in place: cloning the family before the check allocated a `String` on every frame.
+        let unchanged = self.ui.font.as_ref().is_some_and(|(size, family)| {
+            *size == self.config.font_size && family == &self.config.font_family
+        });
+        if unchanged {
             return Ok(());
         }
+        let font = (self.config.font_size, self.config.font_family.clone());
         doc.font_family(font.1.clone())?;
         let pool = self.pool();
         for row in 0..pool.rows {
@@ -149,25 +192,29 @@ impl UiCache {
         row: usize,
         runs: &Row,
     ) -> Result<(), String> {
-        let previous = self.rows[row].clone();
+        // Take the previous handle instead of cloning it: a row is stored back once per frame, so the frame holds
+        // one refcount per row rather than two. A failed write leaves the slot empty and the next frame rewrites it.
+        let previous = self.rows[row].take();
         if previous
             .as_ref()
-            .is_some_and(|prev| Arc::ptr_eq(prev, runs) || prev[..] == runs[..])
+            .is_some_and(|prev| Arc::ptr_eq(prev, runs))
         {
+            self.rows[row] = previous;
+            return Ok(());
+        }
+        if previous.as_deref().is_some_and(|prev| prev[..] == runs[..]) {
             self.rows[row] = Some(runs.clone());
             return Ok(());
         }
         let fitted = fit(runs, pool.runs);
         // `None` (never written) must write every slot, including the hidden ones.
-        let previous = previous.as_deref().map(|prev| fit(prev, pool.runs));
+        let prev_runs = previous.as_deref();
         // One id buffer per row: a row formats an id per slot, not an allocation per slot.
         let mut id = String::new();
         let base = row * pool.runs;
         for slot in 0..pool.runs {
-            if previous
-                .as_ref()
-                .is_some_and(|prev| prev.get(slot) == fitted.get(slot))
-            {
+            // Compare against the previous row under the same merge, without allocating its fitted form.
+            if prev_runs.is_some_and(|prev| slot_matches(prev, &fitted, pool.runs, slot)) {
                 continue;
             }
             run_id_into(&mut id, row, slot);
@@ -202,11 +249,16 @@ impl UiCache {
     ) -> Result<(), String> {
         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
         text.clear();
-        text.extend(
-            run.text
-                .chars()
-                .map(|c| if c == ' ' { '\u{a0}' } else { c }),
-        );
+        if run.text.as_bytes().contains(&b' ') {
+            text.extend(
+                run.text
+                    .chars()
+                    .map(|c| if c == ' ' { '\u{a0}' } else { c }),
+            );
+        } else {
+            // No space to convert: copy the bytes instead of decoding and re-encoding every character.
+            text.push_str(&run.text);
+        }
         doc.text_ref(id, text)?;
         let (cell_w, cell_h) = cell;
         let (x, y, w, h) = match run.shape {
@@ -322,6 +374,39 @@ mod tests {
         assert_eq!(fitted[2].col, 2);
         assert_eq!(fitted[2].cells, 3);
         assert_eq!(fitted[2].text, "xxx");
+    }
+
+    #[test]
+    fn overflowing_row_slots_compare_under_the_same_merge() {
+        let prev: Vec<Run> = (0..5).map(|i| run(i, "x")).collect();
+        let fitted = fit(&prev, 3);
+        assert!((0..3).all(|slot| slot_matches(&prev, &fitted, 3, slot)));
+
+        let mut text_changed = prev.clone();
+        text_changed[4].text = "y".into();
+        let fitted = fit(&text_changed, 3);
+        assert!(slot_matches(&prev, &fitted, 3, 0));
+        assert!(!slot_matches(&prev, &fitted, 3, 2), "merged text differs");
+
+        let mut head_changed = prev.clone();
+        head_changed[2].fg = 9;
+        let fitted = fit(&head_changed, 3);
+        assert!(!slot_matches(&prev, &fitted, 3, 2), "merged colour differs");
+
+        // Only the first merged run's style reaches the merged slot, so a later run's colour cannot change it.
+        let mut later_changed = prev.clone();
+        later_changed[4].fg = 9;
+        let fitted = fit(&later_changed, 3);
+        assert!(slot_matches(&prev, &fitted, 3, 2));
+    }
+
+    #[test]
+    fn slots_past_a_shorter_row_stay_hidden() {
+        let prev: Vec<Run> = (0..2).map(|i| run(i, "x")).collect();
+        let fitted = fit(&prev, 3);
+        assert!(slot_matches(&prev, &fitted, 3, 0));
+        // The previous row already lacked the slot, so re-hiding it would be another no-op write.
+        assert!(slot_matches(&prev, &fitted, 3, 2));
     }
 }
 

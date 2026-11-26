@@ -25,6 +25,7 @@ const POLL_STILL: Duration = Duration::from_millis(250);
 const MOTION_WINDOW: Duration = Duration::from_secs(1);
 /// Pending-dot frame period from `ui/shell/launch-feedback.html`.
 const INDICATOR_FRAME_MILLIS: u128 = 120;
+#[cfg(test)]
 const INDICATOR_FRAME: Duration = Duration::from_millis(120);
 const BASE_ICON: i32 = 16;
 const BASE_OFFSET: i32 = 13;

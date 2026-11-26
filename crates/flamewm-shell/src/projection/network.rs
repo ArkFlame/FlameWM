@@ -1,31 +1,39 @@
+use std::borrow::Cow;
+
 use super::*;
 
 pub fn project_network_secret(
     document: &mut impl UiDocumentAccess,
     secret: &str,
 ) -> Result<(), String> {
+    // The caller already passes the masked run of `*`; borrow it instead of allocating a second
+    // copy. Any other input is still masked to one `*` per character, so the secret never leaks.
+    if secret.bytes().all(|byte| byte == b'*') {
+        return document.text_ref("network-secret-value", secret);
+    }
     document.text("network-secret-value", "*".repeat(secret.chars().count()))
 }
 
 /// The truthful connection sentence for the popup subtitle. The template carries no fixed prefix,
-/// so every state reads as a full phrase ("Connected to X", "Not connected", ...).
+/// so every state reads as a full phrase ("Connected to X", "Not connected", ...). Static phrases
+/// are borrowed so an unchanged subtitle costs no allocation.
 #[must_use]
-pub fn connection_sentence(system: &flamewm_api::system::SystemSnapshot) -> String {
+pub fn connection_sentence(system: &flamewm_api::system::SystemSnapshot) -> Cow<'static, str> {
     let network = &system.network;
     if !network.wifi_enabled && network.kind != flamewm_api::system::NetworkKind::Wired {
-        return "Wi-Fi is off".to_owned();
+        return Cow::Borrowed("Wi-Fi is off");
     }
     match network.kind {
-        flamewm_api::system::NetworkKind::Connecting => "Connecting".to_owned(),
+        flamewm_api::system::NetworkKind::Connecting => Cow::Borrowed("Connecting"),
         flamewm_api::system::NetworkKind::Wired if !network.active_path.is_empty() => {
-            "Connected (wired)".to_owned()
+            Cow::Borrowed("Connected (wired)")
         }
         flamewm_api::system::NetworkKind::Disconnected
-        | flamewm_api::system::NetworkKind::Unavailable => "Not connected".to_owned(),
-        _ => crate::taskbar::status::network::connected_row(system).map_or_else(
-            || "Not connected".to_owned(),
-            |row| format!("Connected to {}", row.label),
-        ),
+        | flamewm_api::system::NetworkKind::Unavailable => Cow::Borrowed("Not connected"),
+        _ => crate::taskbar::status::network::connected_row(system)
+            .map_or(Cow::Borrowed("Not connected"), |row| {
+                Cow::Owned(format!("Connected to {}", row.label))
+            }),
     }
 }
 
@@ -34,8 +42,11 @@ pub fn project_network_focus(
     document: &mut impl UiDocumentAccess,
     focus: Option<usize>,
 ) -> Result<(), String> {
+    // One reused id buffer: the eight slot ids rebuild without a per-slot allocation.
+    let mut row = String::with_capacity(16);
     for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
-        let row = format!("network-slot-{}", slot + 1);
+        row.clear();
+        let _ = write!(row, "network-slot-{}", slot + 1);
         if focus == Some(slot) {
             document.border(&row, crate::projection::task_accent())?;
         } else {
@@ -50,7 +61,7 @@ pub fn project_network_status(
     document: &mut impl UiDocumentAccess,
     error: Option<&str>,
 ) -> Result<(), String> {
-    document.text("network-action-error", error.unwrap_or_default().to_owned())
+    document.text_ref("network-action-error", error.unwrap_or_default())
 }
 
 /// Expands the `>` details of the visible row whose AP path is `expanded`: its status line lists
@@ -111,11 +122,21 @@ pub fn project_network_full(
     query: &flamewm_shell_core::status::NetworkQuery,
     scroll_offset: u32,
 ) -> Result<(), String> {
-    // Rows keep model order and AP path identity; `popover_view` pages the AP list
-    // and only the page window maps into the `network-slot-N` rows. The secret value
-    // is never projected.
-    let view = crate::taskbar::status::network::project(&snapshot.system);
-    let popover = crate::taskbar::status::network::popover_view(&snapshot.system);
+    // Rows keep model order and AP path identity; the page window maps into the
+    // `network-slot-N` rows. The secret value is never projected.
+    //
+    // The popover model alone answers the scan/disconnect flags. Building the full
+    // `NetworkPopoverView` here would clone the pending-secret path and up to eight
+    // row labels on every network event, and its `visible_rows` are superseded by
+    // `project_visible_rows` below, so it is not built.
+    let network = &snapshot.system.network;
+    let popover = crate::taskbar::status::network::popover(&snapshot.system);
+    // Reused scratch strings: the eight slot ids and their status lines rebuild without a
+    // per-slot allocation, and text is borrowed so an unchanged label is never cloned.
+    let mut slot_id = String::with_capacity(16);
+    let mut name_id = String::with_capacity(24);
+    let mut status_id = String::with_capacity(28);
+    let mut status = String::with_capacity(32);
     // Dedicated connected container: independent of paging, shown on every page.
     // The connected row is filtered by the same search query as Available rows.
     let connected = crate::taskbar::status::network::connected_row(&snapshot.system)
@@ -124,16 +145,16 @@ pub fn project_network_full(
         "network-connected",
         connected.as_ref().map_or("", |row| row.label.as_str()),
     )?;
-    document.text(
-        "network-connected-status",
-        connected.as_ref().map_or_else(String::new, |row| {
-            format!("Connected · {}%", row.strength_percent)
-        }),
-    )?;
+    status.clear();
+    if let Some(row) = &connected {
+        let _ = write!(status, "Connected · {}%", row.strength_percent);
+    }
+    document.text_ref("network-connected-status", &status)?;
     document.visible("network-connected-row", connected.is_some())?;
     document.visible("network-connected", connected.is_some())?;
     if let Some(popover) = popover {
-        document.text("wifi-connected-name", connection_sentence(&snapshot.system))?;
+        let sentence = connection_sentence(&snapshot.system);
+        document.text_ref("wifi-connected-name", &sentence)?;
         // The label stays static; the query lives inside the input box so the
         // layout never shifts while typing.
         let filter_empty = query.filter.trim().is_empty();
@@ -160,18 +181,28 @@ pub fn project_network_full(
         document.background("network-connected-tile", crate::projection::task_accent())?;
         document.visible("network-scan", popover.can_scan)?;
         document.visible("network-disconnect", popover.can_disconnect)?;
-        document.visible("network-secret", popover.secret_masked)?;
+        let secret_masked = network.pending_secret.is_some();
+        document.visible("network-secret", secret_masked)?;
+        let pending_secret_path = network
+            .pending_secret
+            .as_ref()
+            .map(|request| request.access_point_path.as_str());
         let window = crate::taskbar::status::network::project_visible_rows(
             &snapshot.system,
             query,
             scroll_offset,
         );
-        for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
-            let row = window.get(slot);
-            let (mut name, mut status) = (String::new(), String::new());
+        for index in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
+            let row = window.get(index);
+            slot_id.clear();
+            let _ = write!(slot_id, "network-slot-{}", index + 1);
+            name_id.clear();
+            let _ = write!(name_id, "{slot_id}-name");
+            status_id.clear();
+            let _ = write!(status_id, "{slot_id}-status");
+            status.clear();
             if let Some(row) = row {
-                name.clone_from(&row.label);
-                status = format!("{}%", row.strength_percent);
+                let _ = write!(status, "{}%", row.strength_percent);
                 if row.secured {
                     status.push_str(" · secured");
                 }
@@ -181,27 +212,38 @@ pub fn project_network_full(
                 if row.connected {
                     status.push_str(" · connected");
                 }
-                if popover.pending_secret_path.as_deref() == Some(row.path.as_str()) {
+                if pending_secret_path == Some(row.path.as_str()) {
                     status.push_str(" · password required");
                 }
             }
-            document.visible(&format!("network-slot-{}", slot + 1), row.is_some())?;
-            document.text(&format!("network-slot-{}-name", slot + 1), name)?;
-            document.text(&format!("network-slot-{}-status", slot + 1), status)?;
+            document.visible(&slot_id, row.is_some())?;
+            document.text_ref(&name_id, row.map_or("", |row| row.label.as_str()))?;
+            document.text_ref(&status_id, &status)?;
         }
     } else {
-        document.text("wifi-connected-name", connection_sentence(&snapshot.system))?;
-        for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
-            document.visible(&format!("network-slot-{}", slot + 1), false)?;
-            document.text(&format!("network-slot-{}-name", slot + 1), String::new())?;
-            document.text(&format!("network-slot-{}-status", slot + 1), String::new())?;
+        let sentence = connection_sentence(&snapshot.system);
+        document.text_ref("wifi-connected-name", &sentence)?;
+        for index in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
+            slot_id.clear();
+            let _ = write!(slot_id, "network-slot-{}", index + 1);
+            name_id.clear();
+            let _ = write!(name_id, "{slot_id}-name");
+            status_id.clear();
+            let _ = write!(status_id, "{slot_id}-status");
+            document.visible(&slot_id, false)?;
+            document.text_ref(&name_id, "")?;
+            document.text_ref(&status_id, "")?;
         }
         document.visible("network-wifi-toggle", false)?;
         document.visible("network-scan", false)?;
         document.visible("network-disconnect", false)?;
         document.visible("network-secret", false)?;
     }
-    document.visible("wifi-connected-name", view.visible)?;
+    // `NetworkView::visible` is the availability matrix: hidden only when Unavailable.
+    document.visible(
+        "wifi-connected-name",
+        network.availability != flamewm_api::system::ServiceAvailability::Unavailable,
+    )?;
     Ok(())
 }
 
@@ -667,21 +709,134 @@ mod network_template_tests {
             "wifi button {button:?} overlaps connected row {connected:?}"
         );
     }
+
+    // REGRESSION: the page window is the only formatting work. With more access
+    // points than slots, exactly the visible window is named and no row past it is
+    // ever projected.
+    // MUTATION: formatting or cloning every scanned AP (instead of the window)
+    // shows Nets beyond the window and fails the last assertion.
+    #[test]
+    fn only_the_visible_window_reaches_the_slot_rows() {
+        let mut document = network_document();
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.network.availability = ServiceAvailability::Available;
+        snapshot.system.network.wifi_enabled = true;
+        snapshot.system.network.kind = flamewm_api::system::NetworkKind::Wireless;
+        snapshot.system.network.access_points = (0..20)
+            .map(|index| flamewm_api::system::NetworkAccessPointSnapshot {
+                path: format!("/ap/{index}"),
+                ssid: format!("Net{index}"),
+                strength_percent: 50,
+                secured: false,
+                known: false,
+            })
+            .collect();
+        let mut recorder = NetworkRecorder::new(&mut document);
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        // The window `project_visible_rows` derives from the same row height/viewport.
+        let (first, last) = flamewm_shell_core::status::visible_window(20, 44, 180, 0);
+        let shown = last - first;
+        assert!(shown < 20, "the fixture must exceed one page");
+        assert_eq!(recorder.texts["network-slot-1-name"], "Net0");
+        assert_eq!(
+            recorder.texts[&format!("network-slot-{shown}-name")],
+            format!("Net{}", shown - 1)
+        );
+        assert_eq!(
+            recorder.texts[&format!("network-slot-{shown}-status")],
+            "50%"
+        );
+        assert_eq!(
+            recorder.visible.get(&format!("network-slot-{shown}")),
+            Some(&true)
+        );
+        // Everything below the window stays empty and hidden; no off-window AP was formatted.
+        assert_eq!(
+            recorder.visible.get(&format!("network-slot-{}", shown + 1)),
+            Some(&false)
+        );
+        assert_eq!(
+            recorder.texts[&format!("network-slot-{}-name", shown + 1)],
+            ""
+        );
+        assert!(
+            !recorder
+                .texts
+                .values()
+                .any(|text| text == &format!("Net{shown}")),
+            "an AP outside the visible window was formatted"
+        );
+    }
+
+    // REGRESSION: the pending-secret AP is the only row flagged "password required",
+    // keyed by AP path and read from the model, not from a copied popover view.
+    // MUTATION: dropping the flag, or keying it by SSID, fails here.
+    #[test]
+    fn pending_secret_marks_only_its_access_point_row() {
+        let mut document = network_document();
+        let mut snapshot = network_snapshot(
+            "/ap/1",
+            "LinsaFTW",
+            vec![("/ap/2", "StubNeighbor", 42), ("/ap/3", "OtherStub", 30)],
+        );
+        snapshot.system.network.pending_secret =
+            Some(flamewm_api::system::NetworkSecretRequestSnapshot {
+                request_id: 7,
+                access_point_path: "/ap/2".to_owned(),
+            });
+        let mut recorder = NetworkRecorder::new(&mut document);
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(
+            recorder.texts["network-slot-1-status"],
+            "42% · secured · password required"
+        );
+        assert_eq!(recorder.texts["network-slot-2-status"], "30% · secured");
+        assert_eq!(recorder.visible.get("network-secret"), Some(&true));
+    }
+
+    // REGRESSION: static connection sentences are borrowed from the binary; only the
+    // "Connected to X" phrase is built per projection.
+    // MUTATION: returning owned copies for the static states fails the Borrowed checks.
+    #[test]
+    fn static_connection_states_are_borrowed() {
+        let mut off = crate::ShellSnapshot::default();
+        off.system.network.wifi_enabled = false;
+        assert!(matches!(
+            connection_sentence(&off.system),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        let mut connecting = crate::ShellSnapshot::default();
+        connecting.system.network.wifi_enabled = true;
+        connecting.system.network.kind = flamewm_api::system::NetworkKind::Connecting;
+        assert!(matches!(
+            connection_sentence(&connecting.system),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        let connected = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
+        assert!(matches!(
+            connection_sentence(&connected.system),
+            std::borrow::Cow::Owned(_)
+        ));
+    }
 }
 
 /// Names for the Bluetooth row status: alias when present, address otherwise.
-fn bluetooth_device_names(devices: Vec<&flamewm_api::system::BluetoothDevice>) -> String {
-    devices
-        .into_iter()
-        .map(|device| {
-            if device.name.is_empty() {
-                device.address.as_str()
-            } else {
-                device.name.as_str()
-            }
-        })
-        .collect::<Vec<&str>>()
-        .join(", ")
+fn bluetooth_device_names<'a>(
+    devices: impl Iterator<Item = &'a flamewm_api::system::BluetoothDevice>,
+) -> String {
+    // One String built in place: no intermediate `Vec` of borrowed names, no second join copy.
+    let mut names = String::new();
+    for device in devices {
+        if !names.is_empty() {
+            names.push_str(", ");
+        }
+        if device.name.is_empty() {
+            names.push_str(&device.address);
+        } else {
+            names.push_str(&device.name);
+        }
+    }
+    names
 }
 
 /// Status line for the Bluetooth row in the network popup. `None` hides the row when no adapter
@@ -694,23 +849,12 @@ pub fn bluetooth_row_status(bluetooth: &flamewm_api::system::BluetoothSnapshot) 
     if !bluetooth.powered {
         return Some("Off".to_owned());
     }
-    let connected = bluetooth_device_names(
-        bluetooth
-            .devices
-            .iter()
-            .filter(|device| device.connected)
-            .collect(),
-    );
+    let connected =
+        bluetooth_device_names(bluetooth.devices.iter().filter(|device| device.connected));
     if !connected.is_empty() {
         return Some(format!("Connected: {connected}"));
     }
-    let paired = bluetooth_device_names(
-        bluetooth
-            .devices
-            .iter()
-            .filter(|device| device.paired)
-            .collect(),
-    );
+    let paired = bluetooth_device_names(bluetooth.devices.iter().filter(|device| device.paired));
     if !paired.is_empty() {
         return Some(format!("Paired: {paired}"));
     }
@@ -774,25 +918,30 @@ pub fn project_vpn_rows(
     document: &mut impl UiDocumentAccess,
     network: &flamewm_api::system::NetworkSnapshot,
 ) -> Result<(), String> {
+    // Reused ids: four rows rebuild without per-slot allocations, and the status
+    // line is a borrowed literal, never a fresh `String`.
+    let mut row_id = String::with_capacity(24);
+    let mut name_id = String::with_capacity(28);
+    let mut status_id = String::with_capacity(30);
     for slot in 1..=VPN_ROW_SLOTS {
         let profile = network.vpn_profiles.get(slot - 1);
-        document.visible(&format!("network-vpn-row-{slot}"), profile.is_some())?;
-        document.text(
-            &format!("network-vpn-name-{slot}"),
-            profile.map(|p| p.id.clone()).unwrap_or_default(),
-        )?;
-        document.text(
-            &format!("network-vpn-status-{slot}"),
-            profile
-                .map(|p| {
-                    if p.active {
-                        "Connected"
-                    } else {
-                        "Not connected"
-                    }
-                })
-                .unwrap_or_default()
-                .to_owned(),
+        row_id.clear();
+        let _ = write!(row_id, "network-vpn-row-{slot}");
+        name_id.clear();
+        let _ = write!(name_id, "network-vpn-name-{slot}");
+        status_id.clear();
+        let _ = write!(status_id, "network-vpn-status-{slot}");
+        document.visible(&row_id, profile.is_some())?;
+        document.text_ref(&name_id, profile.map_or("", |p| p.id.as_str()))?;
+        document.text_ref(
+            &status_id,
+            profile.map_or("", |p| {
+                if p.active {
+                    "Connected"
+                } else {
+                    "Not connected"
+                }
+            }),
         )?;
     }
     Ok(())
@@ -804,7 +953,10 @@ pub fn project_bluetooth_row(
 ) -> Result<(), String> {
     let status = bluetooth_row_status(bluetooth);
     document.visible("network-bluetooth-row", status.is_some())?;
-    document.text("network-bluetooth-status", status.unwrap_or_default())
+    document.text_ref(
+        "network-bluetooth-status",
+        status.as_deref().unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]

@@ -194,6 +194,7 @@ impl SwitcherThumbCache {
                     .get(&thumb.generation)
                     .filter(|held| held.width == thumb.width && held.height == thumb.height);
                 if let Some(held) = held {
+                    next.insert(thumb.generation, held.clone());
                     previews.push(Some(held.clone()));
                 } else {
                     entry.thumb = None;
