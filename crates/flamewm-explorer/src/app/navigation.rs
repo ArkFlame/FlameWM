@@ -128,7 +128,11 @@ impl ExplorerApp {
     pub(crate) fn request_listing(&mut self) {
         self.pending_navigation=None;
         self.pending_directory_dirty=false;
-        let generation=self.model.next_generation();
+        // A live refresh keeps the rows on screen: the worker sends one complete listing in display
+        // order and the UI merge-updates it. A fresh load (empty pane or new path) still streams
+        // batches so its first rows paint early.
+        let refresh=!self.model.tab().entries.is_empty();
+        let generation=if refresh {self.model.refresh_generation()} else {self.model.next_generation()};
         let path=self.model.tab().path().to_path_buf();
         if let Some(previous)=self.remote_cancel.take() {previous.cancel();}
         if let Some(url)=remote::url_of(&path) {
@@ -145,7 +149,7 @@ impl ExplorerApp {
             });
         }
         self.model.status="Loading directory…".into();
-        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.model.sort}).is_err() {
+        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.column_sort,stream:!refresh}).is_err() {
             self.model.status="File worker unavailable".into();
         }
     }
@@ -221,7 +225,7 @@ impl ExplorerApp {
         if let Some(cancel)=self.remote_cancel.take() {cancel.cancel();}
         self.pending_navigation=Some((generation,self.model.active,candidate));
         self.model.status="Loading directory…".into();
-        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.model.sort}).is_err() {
+        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.column_sort,stream:true}).is_err() {
             self.pending_navigation=None;
             if self.pending_directory_dirty {self.request_listing();}
             self.model.tab_mut().loading=false;

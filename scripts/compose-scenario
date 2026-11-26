@@ -55,6 +55,12 @@ umask 077
 mkdir -p "$CACHE"
 LOG="$(mktemp "$CACHE/compose-scenario-XXXXXXXX.log")"
 CLIENT_LOG="${LOG%.log}.client.log"
+# Sleep-free pause: a FIFO opened read-write never reaches EOF, so `read -rt SECS -u 9` blocks for
+# exactly the timeout. Pipes (`<(:)`) hit EOF instantly and would spin the poll loops.
+WAIT_FIFO="${LOG%.log}.wait"
+mkfifo "$WAIT_FIFO"
+exec 9<>"$WAIT_FIFO"
+pause() { read -rt "${1:-0.1}" -u 9 || true; }
 SOCK_PATH="$XDG_RUNTIME_DIR/$SOCKET"
 comp_pid=''
 client_pid=''
@@ -65,7 +71,7 @@ cleanup() {
     [[ -n "$pid" ]] || continue
     kill -TERM "$pid" 2>/dev/null || true
   done
-  # Bounded reap: `wait` alone could hang on a compositor that ignores TERM. `read -rt` is the
+  # Bounded reap: `wait` alone could hang on a compositor that ignores TERM. `pause` is the
   # sleep-free delay and also the loop bound.
   for _ in {1..40}; do
     alive=0
@@ -73,12 +79,14 @@ cleanup() {
       [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && alive=1
     done
     (( alive )) || break
-    read -rt 0.05 <> <(:) || true
+    pause 0.05
   done
   for pid in "$client_pid" "$comp_pid"; do
     [[ -n "$pid" ]] && kill -KILL "$pid" 2>/dev/null || true
   done
   wait 2>/dev/null || true
+  exec 9>&- 2>/dev/null || true
+  rm -f "$WAIT_FIFO"
 }
 trap cleanup EXIT
 
@@ -92,10 +100,25 @@ comp_pid=$!
 for _ in {1..200}; do
   [[ -S "$SOCK_PATH" ]] && break
   kill -0 "$comp_pid" 2>/dev/null || break
-  read -rt 0.05 <> <(:) || true
+  pause 0.05
 done
 if [[ ! -S "$SOCK_PATH" ]]; then
   echo "FLAMEWM-COMPOSE-SCENARIO: compositor socket never appeared: $SOCK_PATH" >&2
+  tail -n 20 "$LOG" >&2 || true
+  exit 1
+fi
+
+# FlameWM's own apps (the terminal included) are X11 clients, so the scenario must point them at
+# this compositor's XWayland display, not the host's. The compositor logs the display it got.
+CLIENT_DISPLAY=''
+for _ in {1..100}; do
+  CLIENT_DISPLAY="$(sed -n 's/.*XWayland ready on DISPLAY=\(:[0-9][0-9]*\).*/\1/p' "$LOG" | tail -n 1)"
+  [[ -n "$CLIENT_DISPLAY" ]] && break
+  kill -0 "$comp_pid" 2>/dev/null || break
+  pause 0.05
+done
+if [[ -z "$CLIENT_DISPLAY" ]]; then
+  echo 'FLAMEWM-COMPOSE-SCENARIO: nested XWayland never became ready; the X11 terminal cannot attach' >&2
   tail -n 20 "$LOG" >&2 || true
   exit 1
 fi
@@ -104,17 +127,17 @@ fi
 # until the SECONDS clock passes the start second. Bursts keep the PTY continuously readable and
 # land in whole lines so the terminal exercises its dirty-line path, not a partial-line redraw.
 FEED='end=$((SECONDS+1)); while (( SECONDS < end )); do yes | head -n 2000; done'
-WAYLAND_DISPLAY="$SOCKET" timeout --signal=TERM --kill-after=1s 10s \
+WAYLAND_DISPLAY="$SOCKET" DISPLAY="$CLIENT_DISPLAY" timeout --signal=TERM --kill-after=1s 10s \
   "$TERM_BIN" -e bash -c "$FEED" >/dev/null 2>"$CLIENT_LOG" &
 client_pid=$!
 
 # Cover the streaming second plus the tick that reports it (the dump is once per second).
-read -rt 2.2 <> <(:) || true
+pause 2.2
 
 kill -TERM "$client_pid" 2>/dev/null || true
 client_pid=''
 # One more tick boundary so the active window is flushed to the log.
-read -rt 1.2 <> <(:) || true
+pause 1.2
 kill -TERM "$comp_pid" 2>/dev/null || true
 
 block="$(awk '

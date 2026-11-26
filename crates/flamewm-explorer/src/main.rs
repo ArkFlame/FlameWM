@@ -16,7 +16,7 @@ use std::time::{Duration,Instant};
 
 use flamewm_clipboard::{Clipboard,FileOp};
 use flamewm_explorer::clipboard::{resolve_paste,settle_cut};
-use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,fill_sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed_cancellable,sort_listing,parse_address,places};
+use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,sidebar_rows,fill_sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed_cancellable,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort};
 use flamewm_explorer::thumbs::{self,Lookup,ThumbKey,Thumbnails,THUMB_SIZE};
 use flamewm_explorer::columns::{Divider,Widths};
@@ -137,7 +137,7 @@ impl RowDrag {
 }
 
 enum WorkerJob {
-    Scan {generation:u64,path:PathBuf,hidden:bool,sort:SortBy},
+    Scan {generation:u64,path:PathBuf,hidden:bool,sort:ColumnSort,stream:bool},
     Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict,cancel:CancellationToken},
     Drop {sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool,cancel:CancellationToken},
     Trash {paths:Vec<PathBuf>},

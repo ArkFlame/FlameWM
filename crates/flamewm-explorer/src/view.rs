@@ -63,7 +63,7 @@ pub fn is_sorted_by(entries: &[Entry], sort: ColumnSort) -> bool {
         .all(|pair| column_order(&pair[0], &pair[1], sort) != std::cmp::Ordering::Greater)
 }
 
-fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
+pub(crate) fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
     b.directory.cmp(&a.directory).then_with(|| {
         let order = match sort.column {
             Column::Name => a.cmp_lower_name(b),

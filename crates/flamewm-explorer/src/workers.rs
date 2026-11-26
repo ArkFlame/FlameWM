@@ -108,14 +108,20 @@ pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, m
         };
         // Obsolete queued navigation requests must never block the latest scan.
         while let Ok(newer)=rx.try_recv() { job=newer; }
-        let WorkerJob::Scan{generation,path,hidden,sort}=job else {continue};
+        let WorkerJob::Scan{generation,path,hidden,sort,stream}=job else {continue};
         let mut all=Vec::new();
         let mut first=true;
         let streamed=list_directory_streamed_cancellable(&path,hidden,|mut batch|{
-            sort_listing(&mut batch,sort);
-            all.extend(batch.iter().cloned());
-            send_wake(&mut wake,&result,WorkerResult::ScanBatch{generation,path:path.clone(),first,entries:batch});
-            first=false;
+            // The worker sorts in the exact display order, so the UI thread installs the listing
+            // without re-sorting it (and a live refresh sends one complete listing, no batches).
+            view::sort_entries(&mut batch,sort);
+            if stream {
+                all.extend(batch.iter().cloned());
+                send_wake(&mut wake,&result,WorkerResult::ScanBatch{generation,path:path.clone(),first,entries:batch});
+                first=false;
+            } else {
+                all.extend(batch);
+            }
             true
         },||{
             if let Ok(newer)=rx.try_recv() { next=Some(newer); true } else { false }
@@ -123,7 +129,7 @@ pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, m
         match streamed {
             Ok(false)=>{},
             Ok(true)=>{
-                sort_listing(&mut all,sort);
+                view::sort_entries(&mut all,sort);
                 send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Ok(all),path});
             },
             Err(error)=>send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Err(error),path}),
