@@ -117,6 +117,9 @@ pub(crate) struct DesktopState {
     pub(crate) pending_delete: Option<Vec<PathBuf>>,
     pub(crate) last_click: Option<ClickRecord>,
     pub(crate) dirty: Arc<AtomicBool>,
+    /// Names the desktop directory watch reported since the last rescan; launcher stamps reuse
+    /// cached metadata for entries a burst never touched.
+    pub(crate) changed: Arc<ChangedPaths>,
     pub(crate) icons_pending: Arc<AtomicBool>,
     pub(crate) rename: Option<RenameState>,
     pub(crate) drag_ghost: Option<DragGhost>,
@@ -131,6 +134,8 @@ pub(crate) struct DesktopState {
     pub(crate) weather: flamewm_api::weather::WeatherFeedSnapshot,
     pub(crate) weather_visual_dirty: bool,
     pub(crate) downloads: downloads::Organizer,
+    /// Off-turn trash moves and emptying; completion arrives on the reactor wake fd.
+    pub(crate) trash: TrashJobs,
     /// Resolved cursor theme last loaded into the live cursor owners.
     pub(crate) applied_cursor_theme: Option<String>,
     /// Pending backoff for a failed cursor theme reload; `None` after a success.

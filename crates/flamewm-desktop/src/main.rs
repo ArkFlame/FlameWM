@@ -195,6 +195,7 @@ pub fn main() -> Result<(), String> {
         flamewm_widgets_core::widgets::WidgetStore::default()
     });
     let dirty = Arc::new(AtomicBool::new(false));
+    let changed = Arc::new(ChangedPaths::default());
     let icons_pending = Arc::new(AtomicBool::new(false));
     let downloads_dir = flamewm_downloads_core::downloads_dir(&home, user_dirs.as_deref());
     let mut downloads = downloads::Organizer::new(
@@ -258,6 +259,7 @@ pub fn main() -> Result<(), String> {
             pending_delete: None,
             last_click: None,
             dirty: Arc::clone(&dirty),
+            changed: Arc::clone(&changed),
             icons_pending: Arc::clone(&icons_pending),
             rename: None,
             drag_ghost: None,
@@ -271,6 +273,7 @@ pub fn main() -> Result<(), String> {
             weather: query_weather_feed(),
             weather_visual_dirty: true,
             downloads,
+            trash: TrashJobs::new()?,
             applied_cursor_theme: None,
             cursor_theme_failure: None,
             icon_theme: String::new(),
@@ -349,9 +352,10 @@ pub fn main() -> Result<(), String> {
         );
         warn_degraded("workspace mutation", registration);
     }
-    register_inotify(&mut reactor, inotify, dirty)?;
+    register_inotify(&mut reactor, inotify, dirty, changed)?;
     register_downloads(&mut reactor, &state_cell)?;
     register_icon_and_wallpaper_wakes(&mut reactor, &state_cell, &icons_pending);
+    register_trash_wake(&mut reactor, &state_cell);
     let geometry_slot = WindowGeometrySlot::default();
     // Armed while a menu or the delete confirm is open: root presses reach the close path.
     let press_watch = RawPressWatch::default();
@@ -689,6 +693,7 @@ fn register_inotify(
     reactor: &mut Reactor,
     inotify: inotify::Inotify,
     dirty: Arc<AtomicBool>,
+    changed_paths: Arc<ChangedPaths>,
 ) -> Result<(), String> {
     reactor
         .register_fd_with_source_action(inotify, calloop::Interest::READ, move |_, source, _| {
@@ -702,6 +707,15 @@ fn register_inotify(
                             break;
                         }
                         changed = true;
+                        // Recording names lets the rescan reuse stat results for untouched
+                        // entries; an overflow dropped events, so every entry is re-checked.
+                        for event in events {
+                            if event.mask.intersects(inotify::EventMask::Q_OVERFLOW) {
+                                changed_paths.note_overflow();
+                            } else if let Some(name) = event.name {
+                                changed_paths.note(name);
+                            }
+                        }
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => break,
                     Err(_) => break,
@@ -716,6 +730,30 @@ fn register_inotify(
         })
         .map_err(|error| format!("register inotify: {error}"))?;
     Ok(())
+}
+
+fn register_trash_wake(
+    reactor: &mut Reactor,
+    state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
+) {
+    // Trash moves run off the UI turn; a completion only reports failures and arms one rescan.
+    let fd = state_cell.borrow().trash.wake_fd();
+    let trash_cell = std::rc::Rc::clone(state_cell);
+    let registration =
+        reactor.register_raw_fd_with_action(fd, calloop::Interest::READ, move |_, _| {
+            let mut state = trash_cell.borrow_mut();
+            let outcomes = state.trash.drain();
+            for outcome in outcomes {
+                match outcome {
+                    // The directory watch usually rescans first; this guarantees the moves apply.
+                    Ok(()) => state.dirty.store(true, Ordering::Release),
+                    // A failed move keeps the entry in place; never fall back to deletion.
+                    Err(error) => report_action_failure("move to trash", error),
+                }
+            }
+            FdAction::Continue
+        });
+    warn_degraded("trash completion", registration);
 }
 
 fn register_downloads(

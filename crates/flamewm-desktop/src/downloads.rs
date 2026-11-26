@@ -182,27 +182,24 @@ impl Organizer {
             entry.finished |= finished;
         }
 
+        // Stat each pending file in place; only names that need a move or a removal are copied
+        // out, so a settle poll allocates nothing for downloads that are still arriving.
         let mut due = Vec::new();
-        for name in self.tracked.keys().cloned().collect::<Vec<_>>() {
-            let stat = match fs::symlink_metadata(self.dir.join(&name)) {
+        let mut vanished = Vec::new();
+        for (name, entry) in self.tracked.iter_mut() {
+            let stat = match fs::symlink_metadata(self.dir.join(name)) {
                 Ok(metadata) if metadata.file_type().is_file() => {
                     (metadata.len(), metadata.modified().ok())
                 }
                 // Vanished, directory or symlink: never acted on from here on.
-                Ok(metadata) => {
-                    self.tracked.remove(&name);
-                    if !metadata.file_type().is_file() {
-                        self.ignored.insert(name);
-                    }
+                Ok(_) => {
+                    vanished.push((name.clone(), true));
                     continue;
                 }
                 Err(_) => {
-                    self.tracked.remove(&name);
+                    vanished.push((name.clone(), false));
                     continue;
                 }
-            };
-            let Some(entry) = self.tracked.get_mut(&name) else {
-                continue;
             };
             match entry.stat {
                 None => {
@@ -218,9 +215,15 @@ impl Organizer {
                     if entry.finished
                         || now.saturating_duration_since(entry.changed_at) >= STABLE_AFTER
                     {
-                        due.push(name);
+                        due.push(name.clone());
                     }
                 }
+            }
+        }
+        for (name, non_file) in vanished {
+            self.tracked.remove(&name);
+            if non_file {
+                self.ignored.insert(name);
             }
         }
 

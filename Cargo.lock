@@ -728,9 +728,7 @@ version = "0.1.7"
 dependencies = [
  "flamewm-api",
  "flamewm-assistant-core",
- "flamewm-control-core",
  "flamewm-control-dbus",
- "flamewm-dbus-reactor",
  "flamewm-integrations-core",
  "flamewm-reactor",
  "flamewm-render-compiler",
@@ -922,9 +920,7 @@ name = "flamewm-imageviewer"
 version = "0.1.7"
 dependencies = [
  "flamewm-api",
- "flamewm-control-core",
  "flamewm-control-dbus",
- "flamewm-dbus-reactor",
  "flamewm-image-core",
  "flamewm-integrations-linux",
  "flamewm-render-compiler",

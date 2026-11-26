@@ -446,23 +446,79 @@ pub(crate) fn refresh_workspace_projection(
     Ok(())
 }
 
+/// Names the desktop directory watch reported since the last rescan, plus an overflow flag that
+/// forces a full re-check. A launcher a burst never named reuses its cached stamp without a stat,
+/// so rescans on slow or network mounts never walk every `.desktop` file.
+#[derive(Default)]
+pub(crate) struct ChangedPaths {
+    inner: std::sync::Mutex<Changed>,
+}
+
+#[derive(Default)]
+struct Changed {
+    names: BTreeSet<std::ffi::OsString>,
+    /// At least one event was dropped, so every entry must be re-checked.
+    overflow: bool,
+}
+
+impl ChangedPaths {
+    pub(crate) fn note(&self, name: &std::ffi::OsStr) {
+        self.lock().names.insert(name.to_os_string());
+    }
+
+    pub(crate) fn note_overflow(&self) {
+        self.lock().overflow = true;
+    }
+
+    /// Consumes the recorded names; `None` means "unknown, re-check every entry".
+    fn take(&self) -> Option<BTreeSet<std::ffi::OsString>> {
+        let mut changed = self.lock();
+        let names = std::mem::take(&mut changed.names);
+        if std::mem::take(&mut changed.overflow) {
+            return None;
+        }
+        (!names.is_empty()).then_some(names)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Changed> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// Launcher metadata cache keyed by path, refreshed after every rescan.
 /// The Icon= value wins; per-kind defaults apply otherwise. Parsing stays in
 /// the applications owner; this cache only records the outcome. An entry whose
-/// file stamp is unchanged is reused, so a rescan triggered by any other file in
-/// the desktop directory does not re-read and re-parse every launcher.
+/// file stamp is unchanged is reused, and an entry the directory watch never
+/// named skips the stat entirely, so a rescan triggered by any other file in the
+/// desktop directory does not re-read, re-parse, or even stat every launcher.
 pub(crate) fn refresh_launchers(state: &mut DesktopState) {
+    let changed = state.changed.take();
     let mut previous = std::mem::take(&mut state.launchers);
     let mut next = BTreeMap::new();
     for item in state.model.items() {
         if item.kind != DesktopItemKind::DesktopLauncher {
             continue;
         }
-        let stamp = launcher_stamp(&item.path);
-        let meta = previous
-            .remove(&item.path)
-            .filter(|held| held.stamp == stamp && stamp.modified.is_some())
-            .unwrap_or_else(|| parse_launcher(&item.path, stamp));
+        let touched = changed.as_ref().is_none_or(|names| {
+            item.path
+                .file_name()
+                .is_some_and(|name| names.contains(name))
+        });
+        let held = previous.remove(&item.path);
+        let meta = match held {
+            Some(held) if !touched && held.stamp.modified.is_some() => held,
+            Some(held) => {
+                let stamp = launcher_stamp(&item.path);
+                if stamp == held.stamp && stamp.modified.is_some() {
+                    held
+                } else {
+                    parse_launcher(&item.path, stamp)
+                }
+            }
+            None => parse_launcher(&item.path, launcher_stamp(&item.path)),
+        };
         next.insert(item.path.clone(), meta);
     }
     state.launchers = next;
@@ -538,7 +594,9 @@ pub(crate) fn sync_document(
 ) -> Result<(), String> {
     let _span = sync_point().start();
     render_sync_counter().increment();
-    state.icons.refresh_theme();
+    // One theme-watch check per sync; the per-row projection inside `project_slots` used to
+    // repeat this throttled check once per tile.
+    let _ = state.icons.refresh_theme();
     apply_ready_icons(document, state)?;
     project_slots(document, state)?;
     // Model or grid may have changed under an open rubber gesture: re-freeze item rects and

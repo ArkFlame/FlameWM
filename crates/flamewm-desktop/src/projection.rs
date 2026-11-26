@@ -212,7 +212,8 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
     Ok(())
 }
 
-const SLOT_COUNT: usize = 128;
+/// Desktop slot budget; `state` owns the single authority so the two cannot drift.
+const SLOT_COUNT: usize = super::state::SLOT_COUNT;
 const ICON_KIND_COUNT: usize = ICON_KINDS.len();
 
 /// Document ids one desktop slot owns, formatted once and shared for the life of the process.
@@ -402,9 +403,8 @@ impl ParallelIconService {
             document.size(id, 76.0 * factor, 15.0 * factor)?;
             document.font_size(id, LABEL_FONT_SIZE_PX * factor)?;
         }
-        // Per-frame theme watch (throttled inside needs_rebuild). A new
-        // generation changes the key below, so stale cache entries miss.
-        self.refresh_theme();
+        // The theme watch runs once per `sync_document`; `project_slots` only projects tiles
+        // whose inputs changed, so a redundant per-row check would be paid on every changed tile.
         let key = Self::icon_key_scaled(kind, icon_override, scale);
         if let Some(Ok(raster)) = self.service.cached(&key) {
             apply_raster(document, index, kind, raster)?;

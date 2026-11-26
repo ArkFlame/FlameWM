@@ -178,15 +178,11 @@ pub(crate) fn handle_menu_action(
         }
         "confirm.trash" => {
             if let Some(paths) = state.pending_delete.take() {
-                for path in &paths {
-                    if let Err(error) = move_entry_to_trash(path) {
-                        // Partial multi-selection failures remain visible, never
-                        // fall back to irreversible removal.
-                        report_action_failure("move to trash", error);
-                    }
+                // The move runs off-turn so a large selection on slow storage cannot freeze the
+                // desktop; the worker wake reports failures and arms the rescan.
+                if let Err(error) = state.trash.submit(TrashWork::MoveToTrash(paths)) {
+                    report_action_failure("move to trash", error);
                 }
-                rescan_desktop(state)?;
-                refresh_launchers(state);
                 state.selection.clear();
             }
             hide_confirm(document, &mut state.menu_rects)?;
@@ -206,7 +202,8 @@ pub(crate) fn handle_menu_action(
             sync_rename_editor(document, state)?;
         }
         "entry.empty-trash" => {
-            empty_home_trash()?;
+            // Emptying the trash can delete gigabytes; it never blocks the event turn.
+            state.trash.submit(TrashWork::EmptyHome)?;
             state.menu = None;
             sync_menu(document, state)?;
         }

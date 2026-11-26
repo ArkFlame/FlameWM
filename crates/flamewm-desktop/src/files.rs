@@ -1,4 +1,7 @@
 use super::*;
+use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 
 pub(crate) fn control_client() -> Result<ControlClient, String> {
     ControlClient::connect(BusKind::Session).map_err(|error| format!("{error:?}"))
@@ -86,6 +89,102 @@ pub(crate) fn empty_home_trash() -> Result<(), String> {
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))?;
     Ok(())
+}
+
+/// One detached trash operation. Both variants are unbounded filesystem work on possibly remote
+/// storage, so neither runs on the UI turn.
+pub(crate) enum TrashWork {
+    /// Move each entry to the freedesktop trash; every path reports its own outcome.
+    MoveToTrash(Vec<PathBuf>),
+    /// Empty the user's home trash.
+    EmptyHome,
+}
+
+/// Off-turn trash executor. A desktop turn only submits work; the worker thread publishes its
+/// outcome through a wake descriptor, and the reactor callback reports failures and arms one
+/// rescan. Jobs are independent, so a blocked network mount cannot stall a later move.
+pub(crate) struct TrashJobs {
+    results: TrashOutcomes,
+    wake_read: UnixStream,
+    wake_write: Arc<UnixStream>,
+}
+
+/// Outcomes finished since the last drain, published from worker threads.
+type TrashOutcomes = Arc<Mutex<Vec<Result<(), String>>>>;
+
+impl TrashJobs {
+    pub(crate) fn new() -> Result<Self, String> {
+        let (wake_read, wake_write) =
+            UnixStream::pair().map_err(|error| format!("create trash wake pair: {error}"))?;
+        wake_read
+            .set_nonblocking(true)
+            .map_err(|error| format!("configure trash wake reader: {error}"))?;
+        wake_write
+            .set_nonblocking(true)
+            .map_err(|error| format!("configure trash wake writer: {error}"))?;
+        Ok(Self {
+            results: Arc::new(Mutex::new(Vec::new())),
+            wake_read,
+            wake_write: Arc::new(wake_write),
+        })
+    }
+
+    /// Read end that becomes readable as soon as one job finishes.
+    #[must_use]
+    pub(crate) fn wake_fd(&self) -> RawFd {
+        self.wake_read.as_raw_fd()
+    }
+
+    /// Starts one job off the UI turn. Only a spawn failure is reported here.
+    pub(crate) fn submit(&self, work: TrashWork) -> Result<(), String> {
+        let results = Arc::clone(&self.results);
+        let wake = Arc::clone(&self.wake_write);
+        std::thread::Builder::new()
+            .name("flamewm-desktop-trash".to_owned())
+            .spawn(move || {
+                let finished = match work {
+                    TrashWork::MoveToTrash(paths) => paths
+                        .into_iter()
+                        .map(|path| move_entry_to_trash(&path))
+                        .collect(),
+                    TrashWork::EmptyHome => vec![empty_home_trash()],
+                };
+                results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend(finished);
+                // A full wake pipe still leaves the earlier byte pending, and the drain that byte
+                // triggers reports every finished outcome, so a lost write cannot hide a result.
+                if let Ok(mut writer) = wake.try_clone() {
+                    let _ = writer.write(&[1]);
+                }
+            })
+            .map(|_| ())
+            .map_err(|error| format!("start trash worker: {error}"))
+    }
+
+    /// Drains the wake byte and every outcome finished since the last call.
+    pub(crate) fn drain(&mut self) -> Vec<Result<(), String>> {
+        let mut buffer = [0_u8; 64];
+        loop {
+            match self.wake_read.read(&mut buffer) {
+                Ok(read) if read > 0 => {}
+                Ok(_) => break,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                Err(error) => {
+                    eprintln!("desktop: trash wake drain failed: {error}");
+                    break;
+                }
+            }
+        }
+        let mut finished = Vec::new();
+        let mut held = self
+            .results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        finished.append(&mut held);
+        finished
+    }
 }
 
 pub(crate) fn blank_row_id(action: BlankDesktopAction) -> &'static str {
