@@ -235,3 +235,162 @@ fn copy_chunks(
         total += n as u64;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reporter_opens_with_a_zero_snapshot_and_suppresses_sub_step_updates() {
+        let mut seen = Vec::new();
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.push(progress);
+            // Entries: 500 gives an entry step of 5, so one finished entry is below the step.
+            let mut reporter = Reporter::new(1_000_000, 500, &cancel, &mut sink);
+            assert_eq!(seen.len(), 1, "the constructor emits one starting snapshot");
+            assert_eq!(
+                seen[0],
+                Progress {
+                    bytes_done: 0,
+                    bytes_total: 1_000_000,
+                    entries_done: 0,
+                    entries_total: 500,
+                }
+            );
+            reporter.add_bytes(1024);
+            reporter.finish_entry();
+            assert_eq!(
+                seen.len(),
+                1,
+                "updates below both the byte and the entry step are coalesced"
+            );
+        }
+    }
+
+    #[test]
+    fn reporter_reports_completion_even_inside_the_minimum_interval() {
+        let mut seen = Vec::new();
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.push(progress);
+            let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
+            // Completion bypasses the step and the 100 ms interval: a finished
+            // operation always reports its final totals.
+            reporter.finish_entry();
+            assert_eq!(seen.len(), 2);
+            assert_eq!(
+                seen[1],
+                Progress {
+                    bytes_done: 0,
+                    bytes_total: 0,
+                    entries_done: 1,
+                    entries_total: 0,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cancel_is_visible_to_the_reporter_and_maps_io_failures_to_cancelled() {
+        let cancel = CancelToken::new();
+        let mut sink = |_progress: Progress| {};
+        let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
+        assert!(reporter.check().is_ok());
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Io(_)
+        ));
+        cancel.cancel();
+        assert!(reporter.check().is_err(), "cancel stops the copy loop");
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Cancelled
+        ));
+
+        // A failure with no cancellation keeps its I/O cause.
+        let fresh = CancelToken::new();
+        let mut sink = |_progress: Progress| {};
+        let reporter = Reporter::new(0, 0, &fresh, &mut sink);
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Io(_)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reporter_opens_with_one_zero_snapshot_and_drops_sub_step_updates() {
+        let mut seen = Vec::new();
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.push(progress);
+            // 500 entries keep the entry step at 5, so one finished entry stays below both steps.
+            let mut reporter = Reporter::new(1_000_000, 500, &cancel, &mut sink);
+            assert_eq!(seen.len(), 1, "the constructor emits one zero snapshot");
+            assert_eq!(
+                seen[0],
+                Progress {
+                    bytes_done: 0,
+                    bytes_total: 1_000_000,
+                    entries_done: 0,
+                    entries_total: 500,
+                }
+            );
+            reporter.add_bytes(1024);
+            reporter.finish_entry();
+            assert_eq!(
+                seen.len(),
+                1,
+                "bytes and entries below their steps never reach the sink"
+            );
+        }
+    }
+
+    #[test]
+    fn reporter_always_emits_completion_even_inside_the_throttle_interval() {
+        let mut seen = Vec::new();
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.push(progress);
+            let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
+            // Completion bypasses both the step gate and the minimum interval.
+            reporter.finish_entry();
+            assert_eq!(seen.len(), 2);
+            assert_eq!(
+                seen[1],
+                Progress {
+                    bytes_done: 0,
+                    bytes_total: 0,
+                    entries_done: 1,
+                    entries_total: 0,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cancelled_reporter_maps_failures_and_reports_cancellation() {
+        let cancel = CancelToken::new();
+        let mut sink = |_progress: Progress| {};
+        let reporter = Reporter::new(0, 0, &cancel, &mut sink);
+        assert!(reporter.check().is_ok());
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Io(_)
+        ));
+        cancel.cancel();
+        assert!(
+            reporter.check().is_err(),
+            "a cancelled token fails the reporter's check"
+        );
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Cancelled
+        ));
+    }
+}

@@ -334,9 +334,11 @@ fn spawn_settings_fetch(
             }
         });
     if spawned.is_err() {
-        static WARNED:std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         if WARNED.set(()).is_ok() {
-            eprintln!("flamewm-terminal: settings worker could not start; cached theme stays in use");
+            eprintln!(
+                "flamewm-terminal: settings worker could not start; cached theme stays in use"
+            );
         }
     }
 }

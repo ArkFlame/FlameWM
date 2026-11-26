@@ -347,6 +347,58 @@ fn cache_is_bounded_lru_and_caches_failures() {
 }
 
 #[test]
+fn cache_evicts_by_pixel_bytes_before_the_entry_count_cap() {
+    let mut cache = Thumbnails::default();
+    // 64 KiB each: five fit CACHE_CAPACITY entries but only four fit CACHE_BYTES,
+    // so the byte cap alone must drop the least recently used thumbnail.
+    let pixels = vec![0u8; 64 * 1024];
+    for i in 0..5 {
+        cache.complete(key(&format!("big{i}"), 1), Some(pixels.clone()));
+    }
+    assert!(
+        cache.bytes <= CACHE_BYTES,
+        "retained {} bytes stayed within the {CACHE_BYTES}-byte cap",
+        cache.bytes
+    );
+    assert_eq!(
+        cache.entries.len(),
+        CACHE_BYTES / pixels.len(),
+        "the oldest thumbnail is evicted once the byte budget is exceeded"
+    );
+    assert!(matches!(cache.lookup(&key("big0", 1)), Lookup::Missing));
+    assert!(matches!(cache.lookup(&key("big4", 1)), Lookup::Ready(..)));
+}
+
+#[test]
+fn cache_evicts_least_recently_used_at_the_pixel_byte_budget() {
+    let mut cache = Thumbnails::default();
+    // Four thumbnails fill the pixel budget exactly.
+    let chunk = CACHE_BYTES / 4;
+    for i in 0..4 {
+        cache.complete(key(&format!("b{i}"), 1), Some(vec![0; chunk]));
+    }
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    // A fifth image crosses the byte budget even though the entry count is far
+    // below `CACHE_CAPACITY`, so the least recently used thumbnail is evicted.
+    cache.complete(key("b4", 1), Some(vec![0; chunk]));
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    assert_eq!(cache.entries.len(), 4);
+    assert!(matches!(cache.lookup(&key("b0", 1)), Lookup::Missing));
+    for i in 1..=4 {
+        assert!(matches!(
+            cache.lookup(&key(&format!("b{i}"), 1)),
+            Lookup::Ready(..)
+        ));
+    }
+    // A cached failure costs no pixel bytes, so it never evicts a ready image.
+    let ready = cache.entries.len();
+    cache.complete(key("broken", 1), None);
+    assert_eq!(cache.entries.len(), ready + 1);
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    assert!(matches!(cache.lookup(&key("broken", 1)), Lookup::Failed));
+}
+
+#[test]
 fn changed_mtime_is_a_different_key() {
     assert_ne!(key("a", 1), key("a", 2));
 }

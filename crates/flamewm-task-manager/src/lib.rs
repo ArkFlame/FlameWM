@@ -1133,9 +1133,11 @@ pub fn run() -> Result<(), String> {
             }
         });
     if settings_worker.is_err() {
-        static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         if WARNED.set(()).is_ok() {
-            eprintln!("flamewm-task-manager: settings worker could not start; defaults stay in use");
+            eprintln!(
+                "flamewm-task-manager: settings worker could not start; defaults stay in use"
+            );
         }
     }
     let (sender, receiver) = mpsc::sync_channel::<model::Snapshot>(1);
@@ -1147,53 +1149,53 @@ pub fn run() -> Result<(), String> {
     let worker = std::thread::Builder::new()
         .name("flamewm-task-manager-sampler".into())
         .spawn(move || {
-        let mut sampler = model::Sampler::default();
-        while active.load(Ordering::Relaxed) {
-            // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
-            if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
-                break;
-            }
-            let snapshot = sampler.collect();
-            if sender.try_send(snapshot).is_ok() {
-                match writer.write(&[1]) {
-                    Ok(_) => (),
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
-                    Err(_) => break,
-                }
-            }
-            // Sleep on the action channel until the next sample is due: no 100 ms polling timer.
-            // A queued process operation wakes the worker at once; the sample cadence stays 1 s.
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            loop {
-                if !active.load(Ordering::Relaxed) {
+            let mut sampler = model::Sampler::default();
+            while active.load(Ordering::Relaxed) {
+                // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
+                if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
                     break;
                 }
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                if remaining.is_zero() {
-                    break;
-                }
-                match action_rx.recv_timeout(remaining) {
-                    // Process operations may block, but only on this sampler worker.
-                    // The caller-selected PID/start-time pair is checked by the operation.
-                    Ok(command) => {
-                        let _ = result_tx.try_send(command.execute());
-                        let _ = writer.write(&[1]);
+                let snapshot = sampler.collect();
+                if sender.try_send(snapshot).is_ok() {
+                    match writer.write(&[1]) {
+                        Ok(_) => (),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+                        Err(_) => break,
                     }
-                    Err(mpsc::RecvTimeoutError::Timeout) => break,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        std::thread::sleep(remaining);
+                }
+                // Sleep on the action channel until the next sample is due: no 100 ms polling timer.
+                // A queued process operation wakes the worker at once; the sample cadence stays 1 s.
+                let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                loop {
+                    if !active.load(Ordering::Relaxed) {
                         break;
                     }
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match action_rx.recv_timeout(remaining) {
+                        // Process operations may block, but only on this sampler worker.
+                        // The caller-selected PID/start-time pair is checked by the operation.
+                        Ok(command) => {
+                            let _ = result_tx.try_send(command.execute());
+                            let _ = writer.write(&[1]);
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            std::thread::sleep(remaining);
+                            break;
+                        }
+                    }
                 }
             }
-        }
         });
     // A refused sampler thread leaves an empty table; the window still runs and the wake drain
     // reports the missing samples instead of the process aborting on a spawn failure.
     let worker = match worker {
         Ok(worker) => Some(worker),
         Err(error) => {
-            static WARNED:std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
             if WARNED.set(()).is_ok() {
                 eprintln!("flamewm-task-manager: sampler worker could not start: {error}");
             }
@@ -1302,7 +1304,7 @@ pub fn run() -> Result<(), String> {
                     // The sampler is gone (a panic or a failed start). Keep the last table and say
                     // so once, instead of repainting nothing on every later wake.
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        const STOPPED:&str="Process sampling stopped; showing the last sample";
+                        const STOPPED: &str = "Process sampling stopped; showing the last sample";
                         if app.message != STOPPED {
                             app.message = STOPPED.to_owned();
                             changed = true;
@@ -1326,7 +1328,7 @@ pub fn run() -> Result<(), String> {
     if let Some(worker) = worker {
         // A panic in the sampler must not take the process down with it; report it once.
         if worker.join().is_err() {
-            static WARNED:std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
             if WARNED.set(()).is_ok() {
                 eprintln!("flamewm-task-manager: sampler worker panicked");
             }

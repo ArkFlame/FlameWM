@@ -760,7 +760,7 @@ fn execute() -> Result<(), String> {
             }
         });
     if settings_worker.is_err() {
-        static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         if WARNED.set(()).is_ok() {
             eprintln!("flamewm-shell: settings worker could not start; defaults stay in use");
         }
@@ -1109,8 +1109,13 @@ fn execute() -> Result<(), String> {
         let icon_state = Rc::clone(&state);
         reactor
             .register_raw_fd_with_action(icon_fd, calloop::Interest::READ, move |_, _| {
-                icon_state.borrow_mut().drain_icons_pending();
-                flamewm_reactor::FdAction::Continue
+                if icon_state.borrow_mut().drain_icons_pending() {
+                    flamewm_reactor::FdAction::Continue
+                } else {
+                    // The icon worker is gone and its pipe now reads EOF forever; unregistering
+                    // it keeps the shell idle instead of waking on a dead fd. Placeholders stay.
+                    flamewm_reactor::FdAction::Remove
+                }
             })
             .map_err(|error| format!("register icon result source: {error}"))?;
     }

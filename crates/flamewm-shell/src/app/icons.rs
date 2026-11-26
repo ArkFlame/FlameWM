@@ -21,12 +21,14 @@ impl ShellLoop {
     }
 
     /// FD wake path: drain the wake pipe only. Result payloads stay queued
-    /// for the tick (`drain_icons`), which owns document mutation.
-    pub(crate) fn drain_icons_pending(&mut self) {
+    /// for the tick (`drain_icons`), which owns document mutation. Returns
+    /// `false` once the worker's write end is gone (EOF), so the reactor can
+    /// unregister the fd instead of spinning on a permanently readable pipe.
+    pub(crate) fn drain_icons_pending(&mut self) -> bool {
         self.ensure_loader();
-        if let Some(loader) = self.icon_loader.as_mut() {
-            loader.wake_drain();
-        }
+        self.icon_loader
+            .as_ref()
+            .is_some_and(|loader| loader.wake_drain())
     }
 
     pub(crate) fn drain_icons(&mut self, runtime: &mut SurfaceRuntime) {

@@ -276,7 +276,7 @@ impl IconLoader {
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
         let (wake_reader, mut wake_writer) = UnixStream::pair().ok()?;
         wake_reader.set_nonblocking(true).ok()?;
-        let spawned=std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
                 flamewm_integrations_linux::background::lower_current_thread();
@@ -324,7 +324,7 @@ impl IconLoader {
                 }
             });
         if spawned.is_err() {
-            static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+            static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
             if WARNED.set(()).is_ok() {
                 eprintln!("flamewm-shell: icon worker could not start; the shell runs without themed icons");
             }
@@ -511,9 +511,11 @@ impl IconLoader {
                     self.replies_outstanding = 0;
                     self.pending.clear();
                     self.retry.clear();
-                    static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+                    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
                     if WARNED.set(()).is_ok() {
-                        eprintln!("flamewm-shell: icon worker stopped; icons keep their placeholders");
+                        eprintln!(
+                            "flamewm-shell: icon worker stopped; icons keep their placeholders"
+                        );
                     }
                     break;
                 }
@@ -530,7 +532,10 @@ impl IconLoader {
         self.wake_reader.as_raw_fd()
     }
 
-    pub fn wake_drain(&self) {
+    /// Drains wake bytes. Returns `false` when the writer side is gone: EOF is the only signal a
+    /// dead worker gives, and the reactor must stop watching the fd instead of spinning on it.
+    #[must_use]
+    pub fn wake_drain(&self) -> bool {
         use std::io::Read;
         // The reader is set nonblocking once in `spawn`; re-arming it per tick was one fcntl
         // syscall on every shell wake, including idle ticks with no icon traffic.
@@ -538,9 +543,9 @@ impl IconLoader {
         let mut buf = [0u8; 256];
         loop {
             match (&self.wake_reader).read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => return false,
                 Ok(_) => {}
-                Err(_) => break,
+                Err(_) => return true,
             }
         }
     }
