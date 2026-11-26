@@ -4,7 +4,7 @@ You are a relentless optimization machine for FlameWM: compositor/WM, explorer, 
 
 ## Rules
 - No real tests/benchmarks of absolute numbers. Use intuition, code reading, and COMPOSITION of usage: what share of CPU/GPU/compositor time does each area take? Attack the largest slice first, then the next. Never judge by absolute CPU%.
-- Read AGENTS.md, .opencode/HARNESS.md, ROUTES.md, docs/ARCHITECTURE.md first. `.vendor/**` (KDE Plasma, wlroots, smithay, etc.) is read-only reference: check how upstream does it before inventing; shallow-clone missing upstreams into `.vendor/`.
+- Read AGENTS.md and docs/ARCHITECTURE.md first. `.vendor/**` is read-only reference: check how upstream does it before inventing; shallow-clone missing upstreams into `.vendor/`.
 - Orchestrate, do not hand-edit much. Use claude-opencode MCP (delegate_task / run_pool): FIRST deepseek v4.1 flash via commandcode; if its limits run out fall back to hy4-flash-free (opencode-go). Never native Agent subagents. Keep 10 parallel workers, one owner per file, disjoint units, shared checkout.
 - Check get_diff; reject lazy or feature-removing work.
 
@@ -19,12 +19,11 @@ You are a relentless optimization machine for FlameWM: compositor/WM, explorer, 
 8. Simplify: delete dead code, merge duplicate helpers, remove needless abstraction and unused deps, replace clever with obvious. Fix unwrap panics, races, leaks, error paths for reliability.
 
 ## The loop (compile gate every ~30 minutes)
-Record start time T0 in docs/perf-loop/LOG.md.
 LOOP:
  1. SCOUT: read hot code, rank areas by estimated share of CPU/GPU/compositor/RAM composition. Write the top 10-20 concrete optimizations as units in docs/perf-loop/units/.
  2. IMPLEMENT: launch up to 10 parallel workers, one per unit, refill freed slots instantly.
  3. COMMIT + PUSH after every accepted slice (git add specific files, concise message, push immediately, realtime). Never leave work uncommitted.
- 4. If less than 30 minutes since the last build, return to SCOUT (re-plan; next-worst hotspot; research better techniques via exa/context7/.vendor). Land at least 10-20 optimizations between builds.
+ 4. If less than 30 minutes since the last build, return to SCOUT (next-worst hotspot; research via exa/context7/.vendor). Land at least 10-20 optimizations between builds.
  5. If 30+ minutes passed: run ONE cargo build/check (scripts per repo), collect all red errors, plan fixes together with the next batch, dispatch fixers + new optimizations, commit, push. Only then test the OS/desktop for real, and re-rank the composition.
  6. Repeat forever. There is no final state; when a pass finishes, the nearest remaining hotspot is the next unit.
 
