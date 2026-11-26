@@ -242,15 +242,15 @@ mod tests {
 
     #[test]
     fn reporter_opens_with_a_zero_snapshot_and_suppresses_sub_step_updates() {
-        let mut seen = Vec::new();
+        let seen = std::cell::RefCell::new(Vec::new());
         {
             let cancel = CancelToken::new();
-            let mut sink = |progress: Progress| seen.push(progress);
+            let mut sink = |progress: Progress| seen.borrow_mut().push(progress);
             // Entries: 500 gives an entry step of 5, so one finished entry is below the step.
             let mut reporter = Reporter::new(1_000_000, 500, &cancel, &mut sink);
-            assert_eq!(seen.len(), 1, "the constructor emits one starting snapshot");
+            assert_eq!(seen.borrow().len(), 1, "the constructor emits one starting snapshot");
             assert_eq!(
-                seen[0],
+                seen.borrow()[0],
                 Progress {
                     bytes_done: 0,
                     bytes_total: 1_000_000,
@@ -261,7 +261,7 @@ mod tests {
             reporter.add_bytes(1024);
             reporter.finish_entry();
             assert_eq!(
-                seen.len(),
+                seen.borrow().len(),
                 1,
                 "updates below both the byte and the entry step are coalesced"
             );
@@ -270,17 +270,17 @@ mod tests {
 
     #[test]
     fn reporter_reports_completion_even_inside_the_minimum_interval() {
-        let mut seen = Vec::new();
+        let seen = std::cell::RefCell::new(Vec::new());
         {
             let cancel = CancelToken::new();
-            let mut sink = |progress: Progress| seen.push(progress);
+            let mut sink = |progress: Progress| seen.borrow_mut().push(progress);
             let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
             // Completion bypasses the step and the 100 ms interval: a finished
             // operation always reports its final totals.
             reporter.finish_entry();
-            assert_eq!(seen.len(), 2);
+            assert_eq!(seen.borrow().len(), 2);
             assert_eq!(
-                seen[1],
+                seen.borrow()[1],
                 Progress {
                     bytes_done: 0,
                     bytes_total: 0,
