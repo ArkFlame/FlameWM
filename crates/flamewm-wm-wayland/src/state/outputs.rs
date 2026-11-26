@@ -24,7 +24,14 @@ impl State {
 
     /// Output handle a surface sits on, the primary output when unmapped.
     pub fn output_handle_of(&self, surface: &WlSurface) -> Output {
-        self.output_handle(&self.output_name_of(surface))
+        let key = smithay::reexports::wayland_server::Resource::id(surface);
+        // Every commit resolves this. Looking the name up by reference keeps the hot path free of
+        // the `String` that `output_name_of` allocates for callers that need to keep the name.
+        self.surface_outputs
+            .output_of(&key)
+            .and_then(|name| self.output_handles.iter().find(|out| out.name() == name))
+            .unwrap_or(&self.output)
+            .clone()
     }
 
     /// Records the output a surface sits on. Sends `wl_surface.leave` on the output it left and

@@ -232,18 +232,51 @@ pub fn visible_canvas(canvas: &[u8]) -> bool {
 /// Decodes image bytes of a known thumbnail format into a fitted canvas. `None` means "no thumbnail".
 #[must_use]
 pub fn thumbnail_from_bytes(bytes: &[u8], format: ThumbFormat) -> Option<Vec<u8>> {
-    let (width, height) = probe_dimensions(bytes, format)?;
-    decode_canvas(bytes, format, width, height)
+    match thumbnail_from_bytes_while(bytes, format, &mut || true) {
+        ThumbRender::Ready(canvas) => Some(canvas),
+        _ => None,
+    }
+}
+
+/// Decodes bytes that are already fully read; `wanted` is checked before the decode so a source that
+/// scrolled away is not decoded.
+fn thumbnail_from_bytes_while(
+    bytes: &[u8],
+    format: ThumbFormat,
+    wanted: &mut impl FnMut() -> bool,
+) -> ThumbRender {
+    let Some((width, height)) = probe_dimensions(bytes, format) else {
+        return ThumbRender::None;
+    };
+    decode_canvas(bytes, format, width, height, wanted)
 }
 
 /// Decodes bytes whose canvas size the caller already probed. Keeping the probe separate lets a
 /// header-first reader reject an oversized source without reading (or probing) it a second time.
-fn decode_canvas(bytes: &[u8], format: ThumbFormat, width: u32, height: u32) -> Option<Vec<u8>> {
+fn decode_canvas(
+    bytes: &[u8],
+    format: ThumbFormat,
+    width: u32,
+    height: u32,
+    wanted: &mut impl FnMut() -> bool,
+) -> ThumbRender {
     if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
-        return None;
+        return ThumbRender::None;
+    }
+    if !wanted() {
+        return ThumbRender::Cancelled;
     }
     let canvas = match format {
-        ThumbFormat::Raster(format) => fit_canvas(&decode_bytes(bytes, format).ok()?),
+        ThumbFormat::Raster(format) => {
+            let Ok(image) = decode_bytes(bytes, format) else {
+                return ThumbRender::None;
+            };
+            // The decode cannot be interrupted, but scaling a canvas nobody shows can be skipped.
+            if !wanted() {
+                return ThumbRender::Cancelled;
+            }
+            fit_canvas(&image)
+        }
         // Vectors render straight at the fitted size: no full-size raster is ever allocated.
         ThumbFormat::Svg | ThumbFormat::Ico => {
             let (fit_w, fit_h) = fit_dimensions(width, height, THUMB_SIZE);
@@ -263,11 +296,18 @@ fn decode_canvas(bytes: &[u8], format: ThumbFormat, width: u32, height: u32) -> 
                     ScaleFilter::Area,
                 ),
             };
-            fit_canvas(&decoded.ok()?)
+            let Ok(decoded) = decoded else {
+                return ThumbRender::None;
+            };
+            fit_canvas(&decoded)
         }
-        ThumbFormat::Desktop => return None,
+        ThumbFormat::Desktop => return ThumbRender::None,
     };
-    visible_canvas(&canvas).then_some(canvas)
+    if visible_canvas(&canvas) {
+        ThumbRender::Ready(canvas)
+    } else {
+        ThumbRender::None
+    }
 }
 
 /// Opens a source that is a regular file within the byte cap. The type and size check runs before the
@@ -298,23 +338,39 @@ fn read_rest(file: &mut fs::File, mut bytes: Vec<u8>) -> Option<Vec<u8>> {
 
 /// Decodes one opened source into a fitted canvas without reading a rejected source whole: the header
 /// alone proves an oversized canvas, and a source already fully in the prefix is decoded from it.
-fn thumbnail_from_file(mut file: fs::File, format: ThumbFormat) -> Option<Vec<u8>> {
-    let mut header = read_prefix(&mut file, HEADER_BYTES)?;
+/// `wanted` is re-checked before the rest of the file is read and before it is decoded.
+fn thumbnail_from_file(
+    mut file: fs::File,
+    format: ThumbFormat,
+    wanted: &mut impl FnMut() -> bool,
+) -> ThumbRender {
+    let Some(mut header) = read_prefix(&mut file, HEADER_BYTES) else {
+        return ThumbRender::None;
+    };
+    if !wanted() {
+        return ThumbRender::Cancelled;
+    }
     let whole = header.len() < HEADER_BYTES;
     if let Some((width, height)) = probe_dimensions(&header, format) {
         if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
-            return None;
+            return ThumbRender::None;
         }
         if whole {
-            return decode_canvas(&header, format, width, height);
+            return decode_canvas(&header, format, width, height, wanted);
         }
     }
     // The header did not finish the probe (a JPEG whose frame header sits past the prefix) or the
     // source is longer than the prefix: read the rest and decode from the complete bytes.
     if !whole {
-        header = read_rest(&mut file, header)?;
+        if !wanted() {
+            return ThumbRender::Cancelled;
+        }
+        let Some(rest) = read_rest(&mut file, header) else {
+            return ThumbRender::None;
+        };
+        header = rest;
     }
-    thumbnail_from_bytes(&header, format)
+    thumbnail_from_bytes_while(&header, format, wanted)
 }
 
 /// Whole-file read used by the pipeline tests.
@@ -327,14 +383,49 @@ fn read_source(path: &Path) -> Option<Vec<u8>> {
 /// Reads and decodes one image into a thumbnail canvas. Runs on the worker thread; `None` means no thumbnail.
 #[must_use]
 pub fn render_thumbnail(key: &ThumbKey) -> Option<Vec<u8>> {
-    let format = thumb_format(&key.path)?;
+    match render_thumbnail_while(key, &mut || true) {
+        ThumbRender::Ready(canvas) => Some(canvas),
+        _ => None,
+    }
+}
+
+/// Worker decode that gives up when `wanted` turns false. The check runs after the header probe, before
+/// the rest of the file is read and before the decode, so a row scrolled away costs one prefix read
+/// instead of a whole-file read plus a full-resolution decode.
+pub fn render_thumbnail_while(key: &ThumbKey, wanted: &mut impl FnMut() -> bool) -> ThumbRender {
+    let Some(format) = thumb_format(&key.path) else {
+        return ThumbRender::None;
+    };
     if format == ThumbFormat::Desktop {
         // The .desktop file itself is data, not a picture: its Icon= names the artwork to decode.
-        let icon = appicon::icon_file(&key.path)?;
-        let icon_format = thumb_format(&icon).filter(|format| format.is_image())?;
-        return thumbnail_from_file(open_source(&icon)?, icon_format);
+        if !wanted() {
+            return ThumbRender::Cancelled;
+        }
+        let Some(icon) = appicon::icon_file(&key.path) else {
+            return ThumbRender::None;
+        };
+        let Some(icon_format) = thumb_format(&icon).filter(|format| format.is_image()) else {
+            return ThumbRender::None;
+        };
+        let Some(file) = open_source(&icon) else {
+            return ThumbRender::None;
+        };
+        return thumbnail_from_file(file, icon_format, wanted);
     }
-    thumbnail_from_file(open_source(&key.path)?, format)
+    let Some(file) = open_source(&key.path) else {
+        return ThumbRender::None;
+    };
+    thumbnail_from_file(file, format, wanted)
+}
+
+/// Outcome of one worker decode. `Cancelled` means the row left the view while the worker was
+/// running, so nothing is cached: the file is still decodable when it scrolls back.
+pub enum ThumbRender {
+    Ready(Vec<u8>),
+    /// No thumbnail to show; cached as a failure so the row keeps its type icon.
+    None,
+    /// The row was scrolled away between two read/decode stages.
+    Cancelled,
 }
 
 /// Result of a cache lookup on the UI thread.
@@ -359,11 +450,15 @@ impl Slot {
 }
 
 /// UI-to-decoder handoff. The UI pushes misses in row order during a full projection; the decoder
-/// pops the front. `retain` lets the UI drop jobs that no longer match the view before they decode.
+/// pops the front. `retain` lets the UI drop jobs that no longer match the view before they decode,
+/// and also abandons the decode already in flight, so a scroll never waits for a row that left the view.
 #[derive(Default)]
 pub struct ThumbQueue {
     jobs: Mutex<VecDeque<ThumbKey>>,
     ready: Condvar,
+    /// The key the single decoder is working on. A pass that no longer wants it clears it, so the
+    /// decoder abandons a large file between stages instead of finishing a decode nobody shows.
+    in_flight: Mutex<Option<ThumbKey>>,
 }
 
 impl ThumbQueue {
@@ -375,25 +470,72 @@ impl ThumbQueue {
         self.ready.notify_one();
     }
 
-    /// Blocks until a job is queued, then takes the oldest one.
+    /// Blocks until a job is queued, then takes the oldest one and marks it in flight.
     pub fn pop(&self) -> ThumbKey {
-        let mut jobs = self
-            .jobs
+        let key = {
+            let mut jobs = self
+                .jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            loop {
+                if let Some(key) = jobs.pop_front() {
+                    break key;
+                }
+                jobs = self
+                    .ready
+                    .wait(jobs)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        };
+        *self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key.clone());
+        key
+    }
+
+    /// True while `key` is still wanted: it is queued or it is the job being decoded. The decoder
+    /// re-checks it between the header probe, the full read and the decode, so a row scrolled away
+    /// stops at the next stage instead of paying for the rest of the file.
+    #[must_use]
+    pub fn wants(&self, key: &ThumbKey) -> bool {
+        let in_flight = self
+            .in_flight
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        loop {
-            if let Some(key) = jobs.pop_front() {
-                return key;
-            }
-            jobs = self
-                .ready
-                .wait(jobs)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if in_flight.as_ref() == Some(key) {
+            return true;
+        }
+        drop(in_flight);
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(key)
+    }
+
+    /// Clears the in-flight mark for a finished (or abandoned) decode.
+    pub fn release(&self, key: &ThumbKey) {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if in_flight.as_ref() == Some(key) {
+            *in_flight = None;
         }
     }
 
     /// Keeps the queued jobs `keep` accepts and returns the rest, in queue order.
     pub fn retain(&self, mut keep: impl FnMut(&ThumbKey) -> bool) -> Vec<ThumbKey> {
+        // The in-flight decode is cancelled when the new pass no longer shows its row; the worker
+        // notices at its next `wants` check and skips the remaining read or decode.
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if in_flight.as_ref().is_some_and(|key| !keep(key)) {
+            *in_flight = None;
+        }
+        drop(in_flight);
         let mut jobs = self
             .jobs
             .lock()

@@ -53,11 +53,18 @@ pub(crate) fn remote_pool()->&'static JobPool {
 }
 
 /// Decodes queued image keys one at a time, oldest first; the UI reads results from the cache, never waits on this thread.
+/// A decode whose row scrolled away is abandoned at the next stage check and its result is never cached.
 pub(crate) fn thumb_worker(queue:Arc<thumbs::ThumbQueue>, result:Sender<WorkerResult>, mut wake:UnixStream) {
     let mut last_wake:Option<Instant>=None;
     loop {
         let key=queue.pop();
-        let pixels=thumbs::render_thumbnail(&key);
+        let rendered=thumbs::render_thumbnail_while(&key,&mut ||queue.wants(&key));
+        queue.release(&key);
+        let pixels=match rendered {
+            thumbs::ThumbRender::Cancelled=>continue,
+            thumbs::ThumbRender::Ready(canvas)=>Some(canvas),
+            thumbs::ThumbRender::None=>None,
+        };
         let sent=result.send(WorkerResult::Thumbnail{key,pixels}).is_ok();
         let due=last_wake.is_none_or(|at|at.elapsed()>=THUMB_WAKE_INTERVAL);
         if sent && (queue.is_empty() || due) {
