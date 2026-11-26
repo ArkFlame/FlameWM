@@ -29,3 +29,5 @@
 ## u94 verdict (code-read, not yet run): NOT a bug that X11 updates are dropped; 99% wait is the compositor parked while the X11 client paints in its own process. Two real defects fixed in wm-wayland: (1) frame requests during a paint were dropped (render_frame takes state.backend), (2) skipped paint left the 16 ms winit pacing clock stale. Nested paints measured 100-280 ms, dominated by blocking host swap_buffers in smithay winit => the nested harness cannot give a steady ACTIVE composition; do not tune compositor CPU from it. Active-use composition needs the real DRM session or a headless backend.
 
 ## Violation: an OpenCode worker (opencode serve pid 1131738) spawned /tmp/ctx-exec-th0hPN/code.js despite BRIEF rules. Killed by pid (12 s old, 0.3% cpu). Brief already forbids ctx_execute; check again each cycle.
+
+## u99 verdict: no cheap headless backend (smithay has no backend_headless; pixman still needs a display). Steady ACTIVE composition requires the real DRM session; nested/winit cannot provide it. Use code-read hotspot ranking for active paths until a real-session run is possible.
