@@ -206,8 +206,8 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
             a,
         });
     }
-    if let Some(inner) = strip_prefix_ignore_ascii_case(value, "rgb(")
-        .and_then(|rest| rest.strip_suffix(')'))
+    if let Some(inner) =
+        strip_prefix_ignore_ascii_case(value, "rgb(").and_then(|rest| rest.strip_suffix(')'))
     {
         let values: Vec<u8> = inner
             .split(',')
@@ -217,8 +217,8 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
             return Some(Color::rgb(values[0], values[1], values[2]));
         }
     }
-    if let Some(inner) = strip_prefix_ignore_ascii_case(value, "rgba(")
-        .and_then(|rest| rest.strip_suffix(')'))
+    if let Some(inner) =
+        strip_prefix_ignore_ascii_case(value, "rgba(").and_then(|rest| rest.strip_suffix(')'))
     {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
         if parts.len() == 4 {

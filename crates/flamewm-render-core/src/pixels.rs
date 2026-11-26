@@ -650,11 +650,9 @@ pub(crate) fn apply_ops_to_scratch<B: PixelBackend + ?Sized>(
                 hole,
                 color,
                 clip,
-            } => {
-                fill_clipped_cpu(
-                    backend, region, scratch, width, height, outer, hole, color, clip,
-                )?
-            }
+            } => fill_clipped_cpu(
+                backend, region, scratch, width, height, outer, hole, color, clip,
+            )?,
             PixelOp::BackdropBlur {
                 clip,
                 node,

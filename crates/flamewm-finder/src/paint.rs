@@ -372,7 +372,10 @@ impl Finder {
                 doc.visible(&row, false)?;
                 continue;
             };
-            let Some(first) = group.first().and_then(|position| view.entries.get(*position)) else {
+            let Some(first) = group
+                .first()
+                .and_then(|position| view.entries.get(*position))
+            else {
                 doc.visible(&row, false)?;
                 continue;
             };

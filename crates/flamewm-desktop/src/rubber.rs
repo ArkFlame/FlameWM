@@ -215,11 +215,11 @@ mod rubber_tests {
     use super::*;
 
     fn grid_items() -> Vec<RubberItem> {
-        (0..100)
+        (0_usize..100)
             .map(|i| RubberItem {
                 slot: projection::item_slot_id(i),
                 id: format!("item-{i:03}"),
-                rect: Rect::new((i % 10) * 20, (i / 10) * 20, 16, 16),
+                rect: Rect::new(((i % 10) * 20) as _, ((i / 10) * 20) as _, 16, 16),
             })
             .collect()
     }

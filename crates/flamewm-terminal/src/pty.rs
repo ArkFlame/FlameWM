@@ -111,8 +111,12 @@ impl PtyProcess {
     pub fn line_modes(&self) -> (bool, bool) {
         rustix::termios::tcgetattr(&self.master).map_or((true, true), |attrs| {
             (
-                attrs.local_modes.contains(rustix::termios::LocalModes::ICANON),
-                attrs.local_modes.contains(rustix::termios::LocalModes::ECHO),
+                attrs
+                    .local_modes
+                    .contains(rustix::termios::LocalModes::ICANON),
+                attrs
+                    .local_modes
+                    .contains(rustix::termios::LocalModes::ECHO),
             )
         })
     }

@@ -119,7 +119,9 @@ pub fn copy_items(
         let url = url_of(source);
         total += match &url {
             Some(url) => fs.stat(url).map_or(0, |entry| entry.size),
-            None => fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 }),
+            None => {
+                fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 })
+            }
         };
         source_urls.push(url);
     }
@@ -131,9 +133,18 @@ pub fn copy_items(
             break;
         }
         let source_url = source_urls[index].as_ref();
-        match copy_one(fs, source, source_url, directory, directory_url.as_ref(), cancel, base, &mut |bytes| {
-            events(CopyEvent::Progress(bytes));
-        }) {
+        match copy_one(
+            fs,
+            source,
+            source_url,
+            directory,
+            directory_url.as_ref(),
+            cancel,
+            base,
+            &mut |bytes| {
+                events(CopyEvent::Progress(bytes));
+            },
+        ) {
             Ok(bytes) => {
                 base += bytes;
                 report.record(source, Ok(()));

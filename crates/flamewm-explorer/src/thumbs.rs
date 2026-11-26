@@ -283,7 +283,10 @@ fn open_source(path: &Path) -> Option<fs::File> {
 /// Reads at most `limit` bytes from the front of `file`, stopping early at end of file.
 fn read_prefix(file: &mut fs::File, limit: usize) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
-    (&mut *file).take(limit as u64).read_to_end(&mut bytes).ok()?;
+    (&mut *file)
+        .take(limit as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
     Some(bytes)
 }
 

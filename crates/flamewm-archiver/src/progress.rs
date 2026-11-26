@@ -183,12 +183,17 @@ pub fn copy_tracked(
     rep: &mut Reporter<'_>,
 ) -> Result<u64> {
     rep.check()?;
-    // A nested copy on the same thread (re-entrant writer) cannot share the scratch buffer, so it
-    // falls back to a temporary one instead of panicking on an already-borrowed `RefCell`.
-    match COPY_SCRATCH.try_with(|scratch| scratch.try_borrow_mut()) {
-        Ok(Ok(mut buffer)) => copy_chunks(src, dst, rep, &mut buffer),
-        _ => copy_chunks(src, dst, rep, &mut vec![0_u8; COPY_BUFFER]),
+    // The scratch is taken out of the thread-local for the copy and put back after, so a nested
+    // copy on the same thread (re-entrant writer) simply finds it empty and uses a fresh buffer.
+    let mut buffer = COPY_SCRATCH
+        .try_with(|scratch| std::mem::take(&mut *scratch.borrow_mut()))
+        .unwrap_or_default();
+    if buffer.len() != COPY_BUFFER {
+        buffer.resize(COPY_BUFFER, 0);
     }
+    let result = copy_chunks(src, dst, rep, &mut buffer);
+    let _ = COPY_SCRATCH.try_with(|scratch| *scratch.borrow_mut() = buffer);
+    result
 }
 
 fn copy_chunks(
