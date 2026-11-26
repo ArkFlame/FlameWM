@@ -215,7 +215,7 @@ pub fn frosted_backdrop_with(
         let factor = blur_stage(
             scratch,
             |y, row| {
-                for (x, px) in row.chunks_exact_mut(4).enumerate() {
+                for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                     premultiply_pixel(&sample(x, y), px);
                 }
             },
@@ -238,7 +238,7 @@ pub fn frosted_backdrop_with(
         }
     }
     if let Some(tint) = tint {
-        for pixel in out.chunks_exact_mut(4) {
+        for pixel in out.as_chunks_mut::<4>().0 {
             composite_over(pixel, tint);
         }
     }

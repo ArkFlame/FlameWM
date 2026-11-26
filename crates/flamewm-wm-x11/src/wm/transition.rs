@@ -68,7 +68,7 @@ fn holds_off_anchor(
 
 #[cfg(test)]
 fn anchored_clients() -> usize {
-    HOLD_ANCHORS.lock().map(|guard| guard.len()).unwrap_or(0)
+    HOLD_ANCHORS.lock().map_or(0, |guard| guard.len())
 }
 
 impl<C: Connection> Wm<'_, C> {
@@ -377,7 +377,7 @@ mod linger_anchor_tests {
 
         // Past the linger deadline nothing is released twice and the table is empty again.
         let later = now + std::time::Duration::from_millis(animation::LINGER_MS + 1);
-        assert!(holds_off_anchor(later, |_| Some((5, 5, 10, 10))).is_empty());
+        assert_eq!(holds_off_anchor(later, |_| Some((5, 5, 10, 10))).len(), 0);
         assert_eq!(anchored_clients(), 0);
 
         // A client that vanished drops its hold instead of holding it forever.

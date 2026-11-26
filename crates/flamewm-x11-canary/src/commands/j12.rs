@@ -71,7 +71,7 @@ pub(crate) fn cmd_j12(canary: &Canary, args: &[String]) {
     if scenario == "all" || scenario == "chrome" {
         let (w, h) = canary.root_geometry();
         let data = canary.sample(canary.root, 0, 0, w.min(64).max(1), h.min(64).max(1));
-        let non_black = data.map(|d| !Canary::pixel_stats(&d).0).unwrap_or(false);
+        let non_black = data.is_ok_and(|d| !Canary::pixel_stats(&d).0);
         results.push(check(
             "chrome-geometry",
             w > 0 && h > 0 && non_black,
@@ -225,8 +225,7 @@ pub(crate) fn cmd_j12(canary: &Canary, args: &[String]) {
             let sh = w.height.max(1).min(32);
             let nb = canary
                 .sample(w.id, 0, 0, sw, sh)
-                .map(|d| !Canary::pixel_stats(&d).0)
-                .unwrap_or(false);
+                .is_ok_and(|d| !Canary::pixel_stats(&d).0);
             (w.width > 0 && w.height > 0, nb)
         });
         results.push(check(

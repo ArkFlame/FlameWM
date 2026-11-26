@@ -68,7 +68,7 @@ mod tests {
         let mut parser = SseParser::default();
         let mut out = Vec::new();
         parser.feed(b"data: {\"a\"", &mut out);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         parser.feed(b":1}\r\n\r\n: comment\n", &mut out);
         parser.feed(b"event: x\ndata: one\ndata: two\n\n", &mut out);
         assert_eq!(out, vec!["{\"a\":1}".to_owned(), "one\ntwo".to_owned()]);

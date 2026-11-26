@@ -26,6 +26,7 @@ const MEDIA_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 struct ConversionSlot;
 
 impl ConversionSlot {
+    #[allow(deprecated)] // `try_update` needs Rust 1.95; MSRV is 1.89.
     fn acquire() -> Result<Self, String> {
         ACTIVE_CONVERSIONS
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {

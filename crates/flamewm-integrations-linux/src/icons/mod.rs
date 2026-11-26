@@ -127,7 +127,7 @@ impl Rgba8Raster {
     #[must_use]
     pub fn to_rgb8_black_background(&self) -> Vec<u8> {
         let mut pixels = Vec::with_capacity(self.width as usize * self.height as usize * 3);
-        for rgba in self.pixels.chunks_exact(4) {
+        for rgba in self.pixels.as_chunks::<4>().0 {
             let a = u16::from(rgba[3]);
             pixels.push(((u16::from(rgba[0]) * a) / 255) as u8);
             pixels.push(((u16::from(rgba[1]) * a) / 255) as u8);
@@ -1073,7 +1073,12 @@ fn scale_to_physical(
 
 /// True when at least one pixel carries nonzero alpha.
 fn raster_has_visible_pixels(raster: &Rgba8Raster) -> bool {
-    raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0)
+    raster
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel[3] != 0)
 }
 
 fn decode_svg(

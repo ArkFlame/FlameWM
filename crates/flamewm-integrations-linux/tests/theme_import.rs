@@ -424,7 +424,7 @@ fn hardlink_to_outside_file_is_rejected() {
 fn device_and_fifo_entries_are_rejected() {
     let base = scratch("devices");
     let icons = base.join("icons");
-    for flag in [b'3', b'4', b'6'] {
+    for flag in *b"346" {
         let src = demo_with(&base, "d.tar.gz", vec![m("Demo/node", flag, b"")]);
         let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
         assert!(

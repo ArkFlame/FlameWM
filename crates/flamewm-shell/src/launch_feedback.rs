@@ -63,6 +63,7 @@ pub struct LaunchFeedback {
     scale_applied: Option<u32>,
     /// `(side, spans)` of the pending-dot `XShape`; a relaunch at the same size reuses it
     /// instead of re-sampling every pixel of the dot silhouette.
+    #[allow(clippy::type_complexity)]
     dot_mask: Option<(u32, Vec<(u32, u32, u32)>)>,
 }
 
@@ -264,13 +265,12 @@ impl LaunchFeedback {
                 .as_ref()
                 .filter(|entry| entry.0 == side)
                 .map(|entry| entry.1.clone());
-            let mask = match cached {
-                Some(spans) => spans,
-                None => {
-                    let spans = dot_shape_spans(side);
-                    self.dot_mask = Some((side, spans.clone()));
-                    spans
-                }
+            let mask = if let Some(spans) = cached {
+                spans
+            } else {
+                let spans = dot_shape_spans(side);
+                self.dot_mask = Some((side, spans.clone()));
+                spans
             };
             runtime.set_surface_shape_mask(surface, Some(mask))?;
             runtime.with_document(surface, |doc| {
@@ -378,7 +378,7 @@ impl LaunchFeedback {
                                 a: 160,
                             }
                         };
-                        doc.background(*id, color)?;
+                        doc.background(id, color)?;
                     }
                     Ok(())
                 })?;
@@ -401,12 +401,10 @@ impl LaunchFeedback {
         if moved || icon_ready || !was_visible {
             // Translucent pixels blend over the desktop behind the badge, as popups do, instead of
             // over the opaque surface fill (which reads as a black square).
-            let backdrop = runtime.desktop_backdrop((x, y, side as u32, side as u32), 100, 0);
+            let backdrop = runtime.desktop_backdrop((x, y, side, side), 100, 0);
             runtime.set_surface_backdrop(
                 surface,
-                backdrop
-                    .as_deref()
-                    .map(|words| (words, side as u32, side as u32)),
+                backdrop.as_deref().map(|words| (words, side, side)),
             )?;
             runtime.redraw(surface)?;
         }
@@ -714,7 +712,7 @@ mod tests {
         // Scaled badge keeps the mask inside the window and non-empty.
         let big = dot_shape_spans(24);
         assert!(big.iter().all(|&(y, l, r)| y < 24 && l < r && r <= 24));
-        assert!(!big.is_empty());
+        assert_ne!(big.len(), 0);
     }
 
     #[test]
@@ -740,7 +738,7 @@ mod tests {
     fn pointer_cadence_is_fast_only_while_moving() {
         assert_eq!(poll_interval(Duration::ZERO), POLL_MOVING);
         assert_eq!(
-            poll_interval(MOTION_WINDOW - Duration::from_millis(1)),
+            poll_interval(MOTION_WINDOW.checked_sub(Duration::from_millis(1)).unwrap()),
             POLL_MOVING
         );
         assert_eq!(poll_interval(MOTION_WINDOW), POLL_STILL);

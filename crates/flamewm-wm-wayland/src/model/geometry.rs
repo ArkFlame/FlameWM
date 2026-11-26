@@ -23,30 +23,6 @@ pub(super) fn clamp_into_output(rect: Rect, output: Rect) -> Rect {
     Rect::new(fitted.x, fitted.y, fitted.width, fitted.height)
 }
 
-#[cfg(test)]
-mod fit_vector_tests {
-    use super::*;
-
-    /// Same vector as the X11 `fit_restore_rect` pin: a 1300x900 origin slides back into 1280x800.
-    #[test]
-    fn clamp_into_output_matches_shared_window_core_vector() {
-        let output = Rect::new(0, 0, 1280, 800);
-        assert_eq!(
-            clamp_into_output(Rect::new(1300, 900, 500, 400), output),
-            Rect::new(780, 400, 500, 400)
-        );
-        assert_eq!(
-            clamp_into_output(Rect::new(10, 10, 0, 0), output),
-            Rect::new(10, 10, 0, 0)
-        );
-        // An output with no usable area leaves the rect unchanged.
-        assert_eq!(
-            clamp_into_output(Rect::new(5, 6, 7, 8), Rect::new(0, 0, 0, 0)),
-            Rect::new(5, 6, 7, 8)
-        );
-    }
-}
-
 /// Keeps a pointer position on the last pixel row and column of `output`.
 ///
 /// An output with no usable area leaves the point unchanged, like `clamp_into_output`.
@@ -254,5 +230,29 @@ impl ResizeEdge {
             h = MIN_CLIENT_H;
         }
         Rect::new(x, y, w, h)
+    }
+}
+
+#[cfg(test)]
+mod fit_vector_tests {
+    use super::*;
+
+    /// Same vector as the X11 `fit_restore_rect` pin: a 1300x900 origin slides back into 1280x800.
+    #[test]
+    fn clamp_into_output_matches_shared_window_core_vector() {
+        let output = Rect::new(0, 0, 1280, 800);
+        assert_eq!(
+            clamp_into_output(Rect::new(1300, 900, 500, 400), output),
+            Rect::new(780, 400, 500, 400)
+        );
+        assert_eq!(
+            clamp_into_output(Rect::new(10, 10, 0, 0), output),
+            Rect::new(10, 10, 0, 0)
+        );
+        // An output with no usable area leaves the rect unchanged.
+        assert_eq!(
+            clamp_into_output(Rect::new(5, 6, 7, 8), Rect::new(0, 0, 0, 0)),
+            Rect::new(5, 6, 7, 8)
+        );
     }
 }

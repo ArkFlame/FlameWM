@@ -277,7 +277,11 @@ fn desktop_recapture_is_throttled_for_one_interval_then_allowed() {
     let early = captured + Duration::from_millis(40);
     assert_eq!(
         cache.recapture_wait((4, 3), early),
-        Some(DESKTOP_RECAPTURE_INTERVAL - Duration::from_millis(40))
+        Some(
+            DESKTOP_RECAPTURE_INTERVAL
+                .checked_sub(Duration::from_millis(40))
+                .unwrap()
+        )
     );
     assert_eq!(
         cache.recapture_wait((4, 3), captured + DESKTOP_RECAPTURE_INTERVAL),
@@ -329,8 +333,10 @@ fn proportional_title_renders_unicode_inside_the_title_region_only() {
     let strip = (width - chrome::controls_width()) as usize;
     let mut changed = 0;
     for (index, (a, b)) in blank
-        .chunks_exact(4)
-        .zip(titled.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(titled.as_chunks::<4>().0.iter())
         .enumerate()
     {
         if a != b {
@@ -347,7 +353,7 @@ fn proportional_title_renders_unicode_inside_the_title_region_only() {
     );
     if let Ok(dir) = std::env::var("FLAMEWM_DUMP_CHROME") {
         let mut ppm = format!("P6\n{width} {TITLEBAR_HEIGHT}\n255\n").into_bytes();
-        for px in titled.chunks_exact(4) {
+        for px in titled.as_chunks::<4>().0 {
             let a = u32::from(px[3]);
             let bg = 0x40u32;
             for c in &px[..3] {

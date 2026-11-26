@@ -160,7 +160,7 @@ fn decode_dib(payload: &[u8]) -> Result<RgbaImage, String> {
     }
     // Icons store the XOR bitmap height doubled: the XOR image plus the AND mask.
     let width = stored_width as u32;
-    let height = stored_height.unsigned_abs() as u32 / 2;
+    let height = stored_height.unsigned_abs() / 2;
     if width == 0 || height == 0 || width > MAX_ENTRY_EDGE || height > MAX_ENTRY_EDGE {
         return Err(format!("icon entry {width}x{height} is out of range"));
     }
@@ -352,7 +352,7 @@ mod tests {
         large[6] = 0;
         large[7] = 0;
         assert_eq!(dimensions(&large), Some((256, 256)));
-        assert!(entries(&file).len() == 1);
+        assert_eq!(entries(&file).len(), 1);
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
         // A directory entry that claims more bytes than the file holds is dropped, never sliced.
         let mut lying = file.clone();
         lying[14..18].copy_from_slice(&9999u32.to_le_bytes());
-        assert!(entries(&lying).is_empty());
+        assert_eq!(entries(&lying), []);
         assert!(decode(&lying).is_err());
         // An unsupported depth is an error, not a panic.
         assert!(

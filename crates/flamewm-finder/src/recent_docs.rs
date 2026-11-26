@@ -181,9 +181,9 @@ mod tests {
 
     #[test]
     fn missing_or_malformed_input_lists_nothing() {
-        assert!(parse("").is_empty());
-        assert!(parse("<bookmark href=\"file:///x").is_empty());
-        assert!(load(Path::new("/nonexistent/recently-used.xbel")).is_empty());
+        assert_eq!(parse("").len(), 0);
+        assert_eq!(parse("<bookmark href=\"file:///x").len(), 0);
+        assert_eq!(load(Path::new("/nonexistent/recently-used.xbel")).len(), 0);
     }
 
     #[test]

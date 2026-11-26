@@ -186,7 +186,7 @@ fn snapshots_taken_before_rescan_stay_valid() {
     fs::remove_file(dir.join("old.desktop")).unwrap();
     shared.rescan_from_dirs(std::slice::from_ref(&dir)).unwrap();
     assert_eq!(before.entries().len(), 1);
-    assert!(shared.current().entries().is_empty());
+    assert_eq!(shared.current().entries(), []);
     let _ = fs::remove_dir_all(&dir);
 }
 

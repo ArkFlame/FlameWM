@@ -450,7 +450,7 @@ pub fn apply_power<V: UiDocumentAccess>(
 
 /// Multiplies each pixel's alpha by [`DISABLED_OPACITY`]: the icon is drawn dimmed.
 fn dimmed(mut image: RuntimeImage) -> RuntimeImage {
-    for pixel in image.pixels.chunks_exact_mut(4) {
+    for pixel in image.pixels.as_chunks_mut::<4>().0 {
         pixel[3] = (f64::from(pixel[3]) * DISABLED_OPACITY).round() as u8;
     }
     image

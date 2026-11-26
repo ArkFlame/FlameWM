@@ -598,6 +598,9 @@ mod tests {
 
     #[test]
     fn list_names_missing_dir_is_empty() {
-        assert!(list_names(Path::new("/nonexistent/flamewm-probe"), "card").is_empty());
+        assert_eq!(
+            list_names(Path::new("/nonexistent/flamewm-probe"), "card").len(),
+            0
+        );
     }
 }

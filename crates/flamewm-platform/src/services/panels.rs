@@ -414,7 +414,7 @@ mod tests {
             ],
             pending: None,
         }));
-        assert!(service.snapshot().panels.is_empty());
+        assert_eq!(service.snapshot().panels, []);
     }
 
     #[test]

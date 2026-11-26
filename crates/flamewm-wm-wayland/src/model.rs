@@ -288,7 +288,7 @@ impl WindowModel {
 
     /// Names the output whose work area the primary accessor reads.
     pub fn set_primary_output(&mut self, output: &str) {
-        self.primary_output = output.to_owned();
+        output.clone_into(&mut self.primary_output);
     }
 
     /// Last-known work area of output `output`, `None` until the shell reports it.
@@ -859,6 +859,7 @@ impl WindowModel {
 
     /// Pulls floating windows whose frame left `output` (an unplugged or shrunk output) back inside
     /// it. Returns the ids that moved so the caller can send them a configure.
+    #[cfg(test)]
     pub fn clamp_floating_into(&mut self, output: Rect) -> Vec<WindowId> {
         let mut moved = Vec::new();
         for window in self

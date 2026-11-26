@@ -190,7 +190,7 @@ fn set_primary_on_current_primary_is_conflict_and_applies_nothing() {
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
-    assert!(port.applied.is_empty());
+    assert_eq!(port.applied, []);
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn unknown_output_is_not_found_for_every_request_kind() {
             ErrorCode::NotFound
         );
     }
-    assert!(port.applied.is_empty());
+    assert_eq!(port.applied, []);
 }
 
 #[test]
@@ -354,5 +354,5 @@ fn stale_generation_is_rejected_before_apply() {
         .begin_topology(&mut port, &primary_b(), generation, 100)
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::StaleRevision);
-    assert!(port.applied.is_empty());
+    assert_eq!(port.applied, []);
 }

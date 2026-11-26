@@ -145,18 +145,24 @@ impl BlurredCanvas {
                         bottom.0 = r1;
                     }
                     let lower = if r1 == r0 { &top.1 } else { &bottom.1 };
-                    out.extend(top.1.chunks_exact(3).zip(lower.chunks_exact(3)).map(
-                        |(upper, lower)| {
-                            let mut word = 0xff00_0000u32;
-                            for channel in 0..3usize {
-                                let value =
-                                    (upper[channel] * (256 - wy) + lower[channel] * wy + (1 << 15))
+                    out.extend(
+                        top.1
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .zip(lower.as_chunks::<3>().0.iter())
+                            .map(|(upper, lower)| {
+                                let mut word = 0xff00_0000u32;
+                                for channel in 0..3usize {
+                                    let value = (upper[channel] * (256 - wy)
+                                        + lower[channel] * wy
+                                        + (1 << 15))
                                         >> 16;
-                                word |= value << (16 - 8 * channel);
-                            }
-                            word
-                        },
-                    ));
+                                    word |= value << (16 - 8 * channel);
+                                }
+                                word
+                            }),
+                    );
                 }
             }
         }
@@ -353,7 +359,7 @@ pub(super) fn store_canvas(file: &std::path::Path, root: (u32, u32), small: &[u8
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "canvas"))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
-    canvases.sort_by(|a, b| b.0.cmp(&a.0));
+    canvases.sort_by_key(|c| std::cmp::Reverse(c.0));
     for (_, stale) in canvases.into_iter().skip(CANVAS_CACHE_FILES) {
         let _ = std::fs::remove_file(stale);
     }

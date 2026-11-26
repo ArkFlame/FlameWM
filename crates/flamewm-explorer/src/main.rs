@@ -197,7 +197,7 @@ enum WorkerResult {
     Completed(Result<String,String>),
     /// Rebuilt sidebar places from the background loader; `generation` drops a stale result.
     Places {generation:u64,list:Vec<Place>},
-    /// Metadata read for the Properties dialog on a worker (stat/read_link off the UI thread).
+    /// Metadata read for the Properties dialog on a worker (`stat/read_link` off the UI thread).
     Properties(Result<properties::Properties,String>),
     /// Unmounted filesystems from lsblk.
     Devices(Vec<bookmarks::BlockDevice>),

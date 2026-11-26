@@ -748,7 +748,7 @@ mod tests {
             ranked[0], 2,
             "recently used app moves up among equal matches"
         );
-        assert!(rank_apps(&apps, "", &frecency, 0).is_empty());
+        assert_eq!(rank_apps(&apps, "", &frecency, 0).len(), 0);
     }
 
     #[test]
@@ -797,7 +797,7 @@ mod tests {
 
     #[test]
     fn actions_need_two_characters_and_match_words() {
-        assert!(actions_matching("s", true).is_empty());
+        assert_eq!(actions_matching("s", true).len(), 0);
         assert_eq!(actions_matching("lo", false)[0].label, "Lock screen");
         assert_eq!(actions_matching("sleep", false)[0].label, "Suspend");
         assert_eq!(actions_matching("sus", false)[0].label, "Suspend");
@@ -813,7 +813,7 @@ mod tests {
         assert_eq!(actions_matching("log", true)[0].label, "Log out");
         assert_eq!(actions_matching("logout", true)[0].label, "Log out");
         assert_eq!(actions_matching("sign", true)[0].label, "Log out");
-        assert!(actions_matching("out", false).is_empty());
+        assert_eq!(actions_matching("out", false).len(), 0);
     }
 
     #[test]

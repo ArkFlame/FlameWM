@@ -1003,7 +1003,7 @@ mod tests {
         let Some(enc) = encode_or_skip(b"", &[]) else {
             return;
         };
-        assert!(decode(&enc).unwrap().is_empty());
+        assert_eq!(decode(&enc).unwrap().len(), 0);
     }
 
     #[test]

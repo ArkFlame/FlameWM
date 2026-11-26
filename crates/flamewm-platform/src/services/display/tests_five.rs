@@ -74,7 +74,7 @@ fn five_output_stale_generation_is_rejected_before_any_native_apply() {
             .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), stale, 0)
             .is_err()
     );
-    assert!(port.applied.is_empty());
+    assert_eq!(port.applied, []);
     service
         .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), fresh, 0)
         .expect("fresh generation accepted");
@@ -279,7 +279,7 @@ fn invalid_superseding_request_preserves_pending_transaction() {
             code
         );
         assert_eq!(pending_of(&service).transaction, transaction);
-        assert!(port.reverted.is_empty());
+        assert_eq!(port.reverted, []);
         assert_eq!(port.output("DP-B").current, ModeId(102));
     }
     service.revert(&mut port, transaction).unwrap();

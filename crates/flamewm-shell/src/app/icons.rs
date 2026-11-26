@@ -28,7 +28,7 @@ impl ShellLoop {
         self.ensure_loader();
         self.icon_loader
             .as_ref()
-            .is_some_and(|loader| loader.wake_drain())
+            .is_some_and(crate::icon_loader::IconLoader::wake_drain)
     }
 
     pub(crate) fn drain_icons(&mut self, runtime: &mut SurfaceRuntime) {

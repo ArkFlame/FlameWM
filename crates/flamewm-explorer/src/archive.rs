@@ -11,8 +11,7 @@ pub fn find_ark_in(path_var: &OsStr) -> Option<PathBuf> {
         .map(|dir| dir.join("ark"))
         .find(|candidate| {
             std::fs::metadata(candidate)
-                .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         })
 }
 

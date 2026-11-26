@@ -155,7 +155,7 @@ fn blend_luts(color: [u8; 4], alpha: f32) -> [[u8; 256]; 4] {
 
 /// Source-over of the colour the tables were built for, one lookup per channel per pixel.
 fn blend_span(span: &mut [u8], luts: &[[u8; 256]; 4]) {
-    for pixel in span.chunks_exact_mut(4) {
+    for pixel in span.as_chunks_mut::<4>().0 {
         for (channel, lut) in pixel.iter_mut().zip(luts) {
             *channel = lut[usize::from(*channel)];
         }
@@ -214,7 +214,7 @@ pub fn fill_rounded_rect_cpu(
 /// Writes an opaque `color` over every pixel of `span`, the alpha-255 case of [`blend_span`].
 fn fill_span_solid(span: &mut [u8], color: [u8; 4]) {
     let solid = [color[0], color[1], color[2], 255];
-    for pixel in span.chunks_exact_mut(4) {
+    for pixel in span.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&solid);
     }
 }
@@ -227,7 +227,7 @@ mod tests {
     fn blend_span_reference(span: &mut [u8], color: [u8; 4], alpha: f32) {
         let inverse = 1.0 - alpha;
         let [cr, cg, cb, ca] = color.map(f32::from);
-        for pixel in span.chunks_exact_mut(4) {
+        for pixel in span.as_chunks_mut::<4>().0.iter_mut() {
             pixel[0] = (cr * alpha + f32::from(pixel[0]) * inverse).round() as u8;
             pixel[1] = (cg * alpha + f32::from(pixel[1]) * inverse).round() as u8;
             pixel[2] = (cb * alpha + f32::from(pixel[2]) * inverse).round() as u8;
@@ -477,8 +477,8 @@ mod tests {
             [255, 255, 255, 0x2e],
         )
         .expect("fill");
-        for px in pixels.chunks_exact(4) {
-            assert_eq!(px, [151, 151, 151, 255], "light fill must lighten grey");
+        for px in pixels.as_chunks::<4>().0.iter() {
+            assert_eq!(*px, [151, 151, 151, 255], "light fill must lighten grey");
         }
     }
 }

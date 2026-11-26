@@ -291,7 +291,11 @@ mod tests {
         let gate = FirstFrameGate::new();
         assert_eq!(gate.failure(Duration::ZERO), NO_FAILURE);
         assert_eq!(
-            gate.failure(FIRST_FRAME_DEADLINE - Duration::from_millis(1)),
+            gate.failure(
+                FIRST_FRAME_DEADLINE
+                    .checked_sub(Duration::from_millis(1))
+                    .unwrap()
+            ),
             NO_FAILURE
         );
         assert_eq!(gate.failure(FIRST_FRAME_DEADLINE), NO_FIRST_QUEUE);

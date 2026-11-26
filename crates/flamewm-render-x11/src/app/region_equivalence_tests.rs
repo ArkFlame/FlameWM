@@ -438,8 +438,10 @@ unsafe fn compare_region_and_full(
             let full_pixels = readback(display, &full);
             let region_pixels = readback(display, &region);
             let differing = full_pixels
-                .chunks_exact(4)
-                .zip(region_pixels.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(region_pixels.as_chunks::<4>().0.iter())
                 .filter(|(a, b)| a != b)
                 .count();
             // Proves the step changed the frame, so 0 differing px is not two blank surfaces.

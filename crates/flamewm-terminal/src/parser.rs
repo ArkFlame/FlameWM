@@ -530,6 +530,6 @@ mod tests {
     fn dcs_payload_is_ignored_until_terminator() {
         let recorder = parse(b"\x1bPq#0;2;0;0;0\x1b\\ok");
         assert_eq!(recorder.printed, "ok");
-        assert!(recorder.csi.is_empty());
+        assert_eq!(recorder.csi.len(), 0);
     }
 }

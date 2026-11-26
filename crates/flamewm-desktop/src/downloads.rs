@@ -186,7 +186,7 @@ impl Organizer {
         // out, so a settle poll allocates nothing for downloads that are still arriving.
         let mut due = Vec::new();
         let mut vanished = Vec::new();
-        for (name, entry) in self.tracked.iter_mut() {
+        for (name, entry) in &mut self.tracked {
             let stat = match fs::symlink_metadata(self.dir.join(name)) {
                 Ok(metadata) if metadata.file_type().is_file() => {
                     (metadata.len(), metadata.modified().ok())

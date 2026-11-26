@@ -216,11 +216,8 @@ pub fn mounted_block_devices(mountinfo: &str) -> Vec<(String, PathBuf)> {
 /// True when sysfs marks the block device, or its parent disk, as removable.
 #[must_use]
 pub fn is_removable_in(sys_block_root: &Path, block_name: &str) -> bool {
-    let flag = |dir: PathBuf| {
-        fs::read_to_string(dir.join("removable"))
-            .map(|v| v.trim() == "1")
-            .unwrap_or(false)
-    };
+    let flag =
+        |dir: PathBuf| fs::read_to_string(dir.join("removable")).is_ok_and(|v| v.trim() == "1");
     let dev = sys_block_root.join(block_name);
     flag(dev.clone()) || flag(dev.join(".."))
 }
@@ -428,7 +425,7 @@ mod tests {
     fn mounted_device_is_remembered_even_when_mounted_by_someone_else() {
         let plan = plan(&memory(&[], &[]), &[device("abc", "sdb1", true, true)]);
         assert_eq!(plan.remember, vec!["abc".to_owned()]);
-        assert!(plan.mount.is_empty());
+        assert_eq!(plan.mount.len(), 0);
     }
 
     #[test]
@@ -438,7 +435,7 @@ mod tests {
             &[device("abc", "sdb1", true, false)],
         );
         assert_eq!(plan.forget, vec!["abc".to_owned()]);
-        assert!(plan.mount.is_empty());
+        assert_eq!(plan.mount.len(), 0);
     }
 
     #[test]
@@ -485,7 +482,7 @@ mod tests {
     fn invalid_uuids_are_dropped_on_parse_and_duplicates_collapse() {
         let text = "abc-1\n\nbad uuid\n../etc\nabc-1\n  def  \n";
         assert_eq!(parse(text), vec!["abc-1".to_owned(), "def".to_owned()]);
-        assert!(parse(&"x".repeat(MAX_UUID_LEN + 1)).is_empty());
+        assert_eq!(parse(&"x".repeat(MAX_UUID_LEN + 1)).len(), 0);
     }
 
     #[test]

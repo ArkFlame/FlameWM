@@ -170,8 +170,7 @@ fn associated_ids(
     let mut removed = HashSet::new();
     let mut declared = Vec::with_capacity(entries.len());
     for entry in entries {
-        let supports = fs::read_to_string(entry.path()).ok()
-            .is_some_and(|text| desktop_supports_mime(&text, mime));
+        let supports = fs::read_to_string(entry.path()).is_ok_and(|text| desktop_supports_mime(&text, mime));
         declared.push(supports);
     }
     for (layer_index, layer) in layers.iter().enumerate() {
@@ -225,7 +224,7 @@ fn xdg_query(args: &[&std::ffi::OsStr]) -> Result<String, String> {
 /// answers a miss with a transparent slot; binding that raster would leave an empty square in the
 /// chooser row, so a blank raster is treated exactly like a missing icon.
 pub fn visible_raster(pixels: &[u8]) -> bool {
-    pixels.chunks_exact(4).any(|pixel| pixel[3] >= 8)
+    pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] >= 8)
 }
 
 /// Application icon raster for a chooser row. Brand marks, blank theme slots and misses yield `None`,

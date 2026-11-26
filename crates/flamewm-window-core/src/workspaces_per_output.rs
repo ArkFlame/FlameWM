@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(m.windows_visible(&"HDMI-1"), vec![2]);
 
         m.switch("eDP-1", 1);
-        assert!(m.windows_visible(&"eDP-1").is_empty());
+        assert_eq!(m.windows_visible(&"eDP-1"), []);
         assert_eq!(
             m.windows_visible(&"HDMI-1"),
             vec![2],
@@ -331,7 +331,7 @@ mod tests {
         m.move_window(1, 1);
         assert_eq!(m.windows_visible(&"eDP-1"), vec![1]);
         m.move_window(1, 0);
-        assert!(m.windows_visible(&"eDP-1").is_empty());
+        assert_eq!(m.windows_visible(&"eDP-1"), []);
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(m.window_output(&1), None);
         assert_eq!(m.window_workspace(&1), None);
         assert_eq!(m.remove_window(&1), None);
-        assert!(m.windows_visible(&"eDP-1").is_empty());
+        assert_eq!(m.windows_visible(&"eDP-1"), []);
     }
 
     #[test]

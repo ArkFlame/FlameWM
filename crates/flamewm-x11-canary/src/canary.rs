@@ -85,8 +85,7 @@ impl Canary {
                     let text = if *name == "WM_CLASS" {
                         bytes
                             .split(|b| *b == 0)
-                            .filter(|p| !p.is_empty())
-                            .next_back()
+                            .rfind(|p| !p.is_empty())
                             .map_or(String::new(), |p| String::from_utf8_lossy(p).into_owned())
                     } else {
                         String::from_utf8_lossy(&bytes)
@@ -334,7 +333,9 @@ impl Canary {
         };
         let bytes = self.prop_bytes(window, atom);
         bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     }

@@ -138,8 +138,7 @@ pub(crate) fn cmd_profile_window(canary: &Canary, args: &[String]) {
     let h = target.height.max(1).min(64);
     let (all_zero, pixels, mr, mg, mb) = canary
         .sample(target.id, 0, 0, w, h)
-        .map(|d| Canary::pixel_stats(&d))
-        .unwrap_or((true, 0, 0, 0, 0));
+        .map_or((true, 0, 0, 0, 0), |d| Canary::pixel_stats(&d));
     if has(args, "--json") {
         println!(
             "{{\"window\":{},\"name\":{},\"geom\":[{},{},{},{}],\"map_state\":{},\"pixels\":{},\"all_zero\":{},\"mean\":[{},{},{}]}}",

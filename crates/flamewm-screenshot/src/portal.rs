@@ -301,7 +301,7 @@ mod tests {
         let MessageItem::Dict(results) = &items[1] else {
             panic!("results must be a dictionary");
         };
-        assert!(results.clone().into_vec().is_empty());
+        assert_eq!(results.clone().into_vec(), []);
     }
 
     #[test]

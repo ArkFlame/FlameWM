@@ -34,7 +34,9 @@ fn frame(state: &Ribbons, quality: Quality) -> Vec<u8> {
 
 /// Pixels whose blue, green or red channel is above `threshold`.
 fn lit_pixels(buf: &[u8], threshold: u8) -> usize {
-    buf.chunks_exact(4)
+    buf.as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0].max(p[1]).max(p[2]) > threshold)
         .count()
 }
@@ -59,8 +61,10 @@ fn ribbon_width_setting_changes_rendered_stroke_area() {
 }
 
 fn changed_pixels(a: &[u8], b: &[u8]) -> usize {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0.iter())
         .filter(|(p, q)| p != q)
         .count()
 }

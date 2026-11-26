@@ -463,7 +463,10 @@ mod tests {
                 progress_visible: Some(false),
             },
         );
-        assert!(task_progress_for_entries(&entries, &window_tasks(&["a"]), &[]).is_empty());
+        assert_eq!(
+            task_progress_for_entries(&entries, &window_tasks(&["a"]), &[]).len(),
+            0
+        );
         apply_update(
             &mut entries,
             ":1.5",
@@ -473,7 +476,10 @@ mod tests {
                 progress_visible: Some(true),
             },
         );
-        assert!(task_progress_for_entries(&entries, &window_tasks(&["zzz"]), &[]).is_empty());
+        assert_eq!(
+            task_progress_for_entries(&entries, &window_tasks(&["zzz"]), &[]).len(),
+            0
+        );
         let mapped = task_progress_for_entries(&entries, &window_tasks(&["A"]), &[]);
         assert_eq!(mapped.len(), 1, "app ids compare case-insensitively");
     }
@@ -501,7 +507,7 @@ mod tests {
             }],
             pinned_apps: Vec::new(),
         };
-        assert!(task_progress_for_entries(&entries, &pinned, &[]).is_empty());
+        assert_eq!(task_progress_for_entries(&entries, &pinned, &[]).len(), 0);
     }
 
     #[test]

@@ -150,7 +150,9 @@ pub fn pixmap_to_image(pixmap: &IconPixmap) -> RuntimeImage {
     pixmap.argb.hash(&mut hasher);
     let pixels = pixmap
         .argb
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|argb| [argb[1], argb[2], argb[3], argb[0]])
         .collect();
     RuntimeImage {

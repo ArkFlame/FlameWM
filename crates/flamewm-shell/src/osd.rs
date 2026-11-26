@@ -624,7 +624,11 @@ mod tests {
         let t0 = Instant::now();
         state.observe_workspace(0, true, t0);
         state.observe_workspace(1, true, t0);
-        assert!(!state.expire(t0 + (WORKSPACE_HOLD - Duration::from_millis(1))));
+        assert!(!state.expire(
+            t0 + (WORKSPACE_HOLD
+                .checked_sub(Duration::from_millis(1))
+                .unwrap())
+        ));
         assert!(!state.expire(t0 + WORKSPACE_HOLD));
         assert!(state.expire(t0 + Duration::from_millis(800)));
         assert_eq!(state.deadline(), None);
@@ -940,7 +944,7 @@ mod tests {
         let t0 = Instant::now();
         state.observe(Level::new(40, false, 150), t0);
         state.observe(Level::new(41, false, 150), t0);
-        assert!(!state.expire(t0 + (HOLD - Duration::from_millis(1))));
+        assert!(!state.expire(t0 + (HOLD.checked_sub(Duration::from_millis(1)).unwrap())));
         assert!(!state.expire(t0 + HOLD));
         assert_eq!(state.deadline(), Some(t0 + HOLD + FADE));
         assert!(state.expire(t0 + HOLD + FADE));
@@ -955,7 +959,7 @@ mod tests {
         let t0 = Instant::now();
         state.observe(Level::new(40, false, 150), t0);
         state.observe(Level::new(41, false, 150), t0);
-        assert!(!state.expire(t0 + (HOLD - Duration::from_millis(1))));
+        assert!(!state.expire(t0 + (HOLD.checked_sub(Duration::from_millis(1)).unwrap())));
         assert!(state.expire(t0 + HOLD));
         assert_eq!(state.deadline(), None);
     }
@@ -981,7 +985,7 @@ mod tests {
         let t1 = t0 + HOLD + Duration::from_millis(50);
         assert!(state.observe(Level::new(41, true, 150), t1));
         assert_eq!(state.deadline(), Some(t1 + HOLD));
-        assert!(!state.expire(t1 + (HOLD - Duration::from_millis(1))));
+        assert!(!state.expire(t1 + (HOLD.checked_sub(Duration::from_millis(1)).unwrap())));
     }
 
     /// The backdrop/XShape mask radius is read from the document ROOT (`body`) only,

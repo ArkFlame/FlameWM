@@ -46,7 +46,9 @@ impl X11App {
             words.reserve_exact(rgba.len() / 4);
         }
         words.extend(
-            rgba.chunks_exact(4)
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])),
         );
         // SAFETY: the backbuffer and the ARGB visual belong to this app; checked above. A depth-32

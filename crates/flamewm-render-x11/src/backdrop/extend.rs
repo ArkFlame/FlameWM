@@ -38,7 +38,7 @@ pub fn edge_extend_rgba(
     for (j, row) in out.chunks_exact_mut(win.0 as usize * 4).enumerate() {
         let sy = (j as i64 + shift.1).clamp(0, sh - 1) as usize;
         let src_row = &src[sy * sw as usize * 4..(sy + 1) * sw as usize * 4];
-        for (i, px) in row.chunks_exact_mut(4).enumerate() {
+        for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let sx = (i as i64 + shift.0).clamp(0, sw - 1) as usize;
             px.copy_from_slice(&src_row[sx * 4..sx * 4 + 4]);
         }

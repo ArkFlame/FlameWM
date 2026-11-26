@@ -53,7 +53,7 @@ pub fn xrgb_to_rgba_in_place(raw: &mut [u8], width: u32, height: u32, y_invert: 
             }
         }
     }
-    for pixel in raw.chunks_exact_mut(BPP) {
+    for pixel in raw.as_chunks_mut::<BPP>().0.iter_mut() {
         pixel.swap(0, 2);
         pixel[3] = 0xff;
     }

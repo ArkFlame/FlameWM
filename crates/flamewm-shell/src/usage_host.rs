@@ -197,6 +197,6 @@ mod tests {
         drop(tx);
         host.tick(start, |_| rx);
         assert!(!host.tick(start, |_| mpsc::channel().1));
-        assert!(host.snapshots.is_empty());
+        assert_eq!(host.snapshots.len(), 0);
     }
 }

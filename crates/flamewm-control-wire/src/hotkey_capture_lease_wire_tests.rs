@@ -27,7 +27,7 @@ fn end_capture_request_and_unit_reply_round_trip_through_wire() {
     assert_eq!(decode_call(&call).expect("decode request"), request);
 
     let reply = encode_reply(&call, &ControlResponse::Unit).expect("encode reply");
-    assert!(reply.values.is_empty());
+    assert_eq!(reply.values, []);
     assert_eq!(
         decode_reply(&call, &reply).expect("decode reply"),
         ControlResponse::Unit

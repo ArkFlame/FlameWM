@@ -410,7 +410,7 @@ mod tests {
         let cover = seed_cover(&layout, "DP-1");
         assert!(cover.is_complete());
         assert!(!cover.all_surfaces());
-        assert!(cover.uncovered().is_empty());
+        assert_eq!(cover.uncovered().len(), 0);
         assert_eq!(cover.placeholder_outputs(), ["DP-1", "HDMI-A-1"]);
     }
 
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(cover.placeholder_outputs(), ["HDMI-A-1"]);
         assert!(cover.cover("HDMI-A-1"));
         assert!(cover.all_surfaces());
-        assert!(cover.placeholder_outputs().is_empty());
+        assert_eq!(cover.placeholder_outputs().len(), 0);
     }
 
     #[test]

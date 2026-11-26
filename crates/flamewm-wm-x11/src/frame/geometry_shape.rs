@@ -628,7 +628,7 @@ mod tests {
             rounded_mask_spans_exact(4, 2, 0),
             vec![(0, 0, 4), (1, 0, 4)]
         );
-        assert!(rounded_mask_spans_exact(0, 8, 4).is_empty());
+        assert_eq!(rounded_mask_spans_exact(0, 8, 4).len(), 0);
     }
 
     /// With no outline drawn nothing reserves a band (`inset == 0`, `ring == 0`) and the
@@ -847,6 +847,6 @@ mod tests {
             ]
         );
         assert_eq!(rounded_mask_spans(4, 2, 0), vec![(0, 0, 4), (1, 0, 4)]);
-        assert!(rounded_mask_spans(0, 8, 4).is_empty());
+        assert_eq!(rounded_mask_spans(0, 8, 4).len(), 0);
     }
 }

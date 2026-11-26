@@ -119,7 +119,7 @@ const STATIC_REFRESH_TICKS: u64 = 5;
 const DISCOVERY_TICKS: u64 = 5;
 
 fn discovery_due(tick: u64) -> bool {
-    tick == 1 || (tick - 1) % DISCOVERY_TICKS == 0
+    tick == 1 || (tick - 1).is_multiple_of(DISCOVERY_TICKS)
 }
 
 #[derive(Default)]
@@ -330,7 +330,9 @@ fn page_size_bytes() -> u64 {
     let Ok(auxv) = fs::read("/proc/self/auxv") else {
         return 4096;
     };
-    auxv.chunks_exact(16)
+    auxv.as_chunks::<16>()
+        .0
+        .iter()
         .find_map(|pair| {
             let key = u64::from_ne_bytes(pair[..8].try_into().ok()?);
             let value = u64::from_ne_bytes(pair[8..].try_into().ok()?);
@@ -1044,7 +1046,7 @@ mod sampling_schedule_tests {
         let mut sampler = Sampler::default();
         let _ = sampler.collect();
         let _ = sampler.collect();
-        assert!(!sampler.pids.is_empty());
+        assert_ne!(sampler.pids, [] as [u32; 0]);
         assert!(
             sampler.pids.windows(2).all(|pair| pair[0] < pair[1]),
             "the walk keeps one ascending, duplicate-free pid list"

@@ -1,15 +1,15 @@
 use super::super::*;
 
-/// Projection revision: incremented by every wake, action or key that can change chrome, rows or
-/// their inputs. A scroll wheel or a window move advances nothing, so a projection triggered only by
-/// the glide offset repaints the row window and the scrollbar instead of the whole window.
+// Projection revision: incremented by every wake, action or key that can change chrome, rows or
+// their inputs. A scroll wheel or a window move advances nothing, so a projection triggered only by
+// the glide offset repaints the row window and the scrollbar instead of the whole window.
 thread_local! {
     static STATE_EPOCH:std::cell::Cell<u64>=const { std::cell::Cell::new(0) };
 }
 pub(crate) fn note_state_change() {
     STATE_EPOCH.with(|epoch|epoch.set(epoch.get().wrapping_add(1)));
 }
-fn state_epoch()->u64 {STATE_EPOCH.with(|epoch|epoch.get())}
+fn state_epoch()->u64 {STATE_EPOCH.with(std::cell::Cell::get)}
 
 /// Identity of the last full chrome projection: the revision, the app it belongs to, and the theme
 /// colours the literal fills were written with. Equal means nothing outside the row pane changed.
@@ -61,7 +61,7 @@ struct IdTables {
     chooser:Vec<ChooserIds>,
 }
 thread_local! {
-    static ID_TABLES:RefCell<Option<Rc<IdTables>>>=RefCell::new(None);
+    static ID_TABLES:RefCell<Option<Rc<IdTables>>>=const { RefCell::new(None) };
 }
 impl IdTables {
     fn get()->Rc<IdTables> {
@@ -108,7 +108,7 @@ impl IdTables {
     }
 }
 
-/// `HOME` resolved once: `home_dir` stats the candidate, and the address bar asks on every projection.
+// `HOME` resolved once: `home_dir` stats the candidate, and the address bar asks on every projection.
 thread_local! {
     static HOME_DIR:std::cell::OnceCell<PathBuf>=const { std::cell::OnceCell::new() };
 }
@@ -116,8 +116,8 @@ fn display_home(path:&Path)->String {
     HOME_DIR.with(|cell|display_location(path,cell.get_or_init(home_dir)))
 }
 
-/// Address bar text for the last folder: `display_location` formats a new string per call and the
-/// bar is re-projected on every wake, so the same folder reuses its text.
+// Address bar text for the last folder: `display_location` formats a new string per call and the
+// bar is re-projected on every wake, so the same folder reuses its text.
 thread_local! {
     static ADDRESS_TEXT:RefCell<Option<(PathBuf,Rc<String>)>>=const { RefCell::new(None) };
 }
@@ -131,14 +131,15 @@ fn cached_address(path:&Path)->Rc<String> {
     })
 }
 
-/// Tab titles, kept per tab path so a projection does not rebuild them from `file_name` (which
-/// allocates through `to_string_lossy`) for every tab on every wake.
+// Tab titles, kept per tab path so a projection does not rebuild them from `file_name` (which
+// allocates through `to_string_lossy`) for every tab on every wake.
 thread_local! {
     static TAB_TITLES:RefCell<Vec<(PathBuf,Rc<String>)>>=const { RefCell::new(Vec::new()) };
 }
 
-/// Item count for the status strip, rebuilt only when the counts change (text_ref then skips the copy).
+// Item count for the status strip, rebuilt only when the counts change (text_ref then skips the copy).
 thread_local! {
+    #[allow(clippy::type_complexity)]
     static COUNT_TEXT:RefCell<Option<((usize,usize),Rc<String>)>>=const { RefCell::new(None) };
 }
 fn cached_count(total:usize,selected:usize)->Rc<String> {
@@ -150,7 +151,7 @@ fn cached_count(total:usize,selected:usize)->Rc<String> {
         text
     })
 }
-/// Free-space label, rebuilt only when the statvfs sample changes.
+// Free-space label, rebuilt only when the statvfs sample changes.
 thread_local! {
     static FREE_TEXT:RefCell<Option<(Option<u64>,Rc<String>)>>=const { RefCell::new(None) };
 }
@@ -188,8 +189,8 @@ fn cached_progress(snapshot:Option<&progress::Snapshot>)->Rc<ProgressLabels> {
     })
 }
 
-/// Reused sidebar row buffer: `sidebar_rows` allocated a result vector plus one index vector per
-/// group on every projection.
+// Reused sidebar row buffer: `sidebar_rows` allocated a result vector plus one index vector per
+// group on every projection.
 thread_local! {
     static SIDEBAR_ROWS:RefCell<Vec<SidebarRow>>=const { RefCell::new(Vec::new()) };
 }
@@ -213,9 +214,10 @@ fn thumb_pass_changed(tab:&flamewm_explorer::Tab,first:usize,rows:usize)->bool {
     })
 }
 
-/// Breadcrumb labels depend only on the current path: rebuilding them on every projection walked all
-/// components and allocated one string plus one ancestor path per crumb.
+// Breadcrumb labels depend only on the current path: rebuilding them on every projection walked all
+// components and allocated one string plus one ancestor path per crumb.
 thread_local! {
+    #[allow(clippy::type_complexity)]
     static CRUMBS:RefCell<Option<(PathBuf,Rc<Vec<(String,PathBuf)>>)>>=const { RefCell::new(None) };
 }
 fn breadcrumbs_cached(path:&Path)->Rc<Vec<(String,PathBuf)>> {
@@ -238,7 +240,7 @@ struct LabelKey {
 /// them per frame cost two allocations per visible row on every full projection.
 struct RowLabels { size:String, modified:String, kind:String, icon:&'static str, thumb:Option<ThumbKey> }
 thread_local! {
-    static ROW_LABELS:RefCell<Vec<Option<(LabelKey,RowLabels)>>>=RefCell::new(Vec::new());
+    static ROW_LABELS:RefCell<Vec<Option<(LabelKey,RowLabels)>>>=const { RefCell::new(Vec::new()) };
     /// Which slots held an entry in the last full projection. A glide frame moves those rows and touches
     /// nothing else, so it no longer re-filters the listing up to the scroll origin to rebuild them.
     static ROW_OCCUPANCY:RefCell<[bool;ROW_SLOTS]>=const { RefCell::new([false;ROW_SLOTS]) };
@@ -247,8 +249,8 @@ thread_local! {
     /// lookups per visible row per full projection, the largest per-row cost left in a scroll frame.
     static TYPE_ICON_SHOWN:RefCell<[Option<&'static str>;ROW_SLOTS]>=const { RefCell::new([None;ROW_SLOTS]) };
 }
-/// Local date, refreshed at most once per second: `Local::now` resolves the time zone and the date is
-/// only used to invalidate "Today"/"Yesterday" labels.
+// Local date, refreshed at most once per second: `Local::now` resolves the time zone and the date is
+// only used to invalidate "Today"/"Yesterday" labels.
 thread_local! {
     static TODAY:RefCell<Option<(Instant,chrono::NaiveDate)>>=const { RefCell::new(None) };
 }
@@ -301,7 +303,7 @@ struct MenuKey {
     place_state:Option<(bool,bool,PlaceGroup)>,
 }
 thread_local! {
-    static MENU_ENABLED:RefCell<Option<(MenuKey,Rc<Vec<bool>>)>>=RefCell::new(None);
+    static MENU_ENABLED:RefCell<Option<(MenuKey,Rc<Vec<bool>>)>>=const { RefCell::new(None) };
 }
 
 impl ExplorerApp {
@@ -383,7 +385,7 @@ impl ExplorerApp {
         let chrome=(state_epoch(),std::ptr::from_ref(self) as usize,self.chrome_colors());
         // Only a running glide projects the same window from a scroll-derived wake; every other
         // projection may carry a state change the revision already records, so keep it complete.
-        if self.glide.is_animating(Instant::now()) && CHROME_KEY.with(|key|key.get())==Some(chrome) {
+        if self.glide.is_animating(Instant::now()) && CHROME_KEY.with(std::cell::Cell::get)==Some(chrome) {
             // A wheel notch, a scrollbar drag or a glide frame only moves the row window. Repaint the
             // rows and the thumb; the sides, toolbar, tabs, status strip and popups are already right.
             self.theme.project(doc)?;
@@ -400,8 +402,7 @@ impl ExplorerApp {
             _=>{let address=cached_address(tab.path()); doc.text_ref("address-text",address.as_str())?;}
         }
         let crumbs:Option<Rc<Vec<(String,PathBuf)>>>=if self.edit.is_none() {Some(breadcrumbs_cached(tab.path()))} else {None};
-        for slot in 0..BREADCRUMB_SLOTS {
-            let id=&ids.crumbs[slot];
+        for (slot,id) in ids.crumbs.iter().enumerate().take(BREADCRUMB_SLOTS) {
             let crumb=crumbs.as_ref().and_then(|crumbs|crumbs.get(slot));
             doc.visible(id,crumb.is_some())?;
             if let Some((label,_))=crumb {doc.text_ref(id,label)?;}
@@ -585,7 +586,7 @@ impl ExplorerApp {
         // A closed menu's rows are invisible behind a hidden popup. Skipping the offer pass and its
         // `MENU_ITEMS` visibility writes keeps scrolling away from probing/formatting menu state; an
         // opening menu changes the revision, so this pass always runs before its rows are shown.
-        if let Some((x,y))=self.context {
+        if let Some((_x,_y))=self.context {
             let selected_path=self.selected();
             let many=self.model.tab().selected_paths.len()>1;
             let in_trash=self.is_trash_files(tab.path());
@@ -595,9 +596,9 @@ impl ExplorerApp {
             // can stay open across frames, and a Vec allocated on every projection.
             let mut shown=[0usize;MENU_SLOTS];
             let mut shown_len=0;
-            for index in 0..MENU_ITEMS.len() {
+            for (index,menu) in ids.menus.iter().enumerate().take(MENU_ITEMS.len()) {
                 let offered=enabled.get(index).copied().unwrap_or(false);
-                doc.visible(&ids.menus[index],offered)?;
+                doc.visible(menu,offered)?;
                 if offered {shown[shown_len]=index;shown_len+=1;}
             }
             let (x,y)=self.context.unwrap_or_default();
@@ -679,7 +680,7 @@ impl ExplorerApp {
             selected:self.theme.selected(),clear:self.theme.clear(),
             alternate:self.theme.row_alternate(),selection_fill:self.theme.selection_fill(),
         };
-        if animating && ROWS_KEY.with(|cached|cached.get())==Some(key) {
+        if animating && ROWS_KEY.with(std::cell::Cell::get)==Some(key) {
             return self.project_rows_positions(doc);
         }
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];

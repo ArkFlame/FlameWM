@@ -368,7 +368,7 @@ fn solid(width: u32, height: u32, colour: [u8; 4]) -> Option<RgbaImage> {
     // `cycle().take(count).collect()` has no exact lower size hint, so a
     // multi-monitor background can over-allocate while growing the Vec.
     let mut pixels = vec![0u8; count];
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&colour);
     }
     Some(RgbaImage {
@@ -593,7 +593,9 @@ mod region_tests {
             assert!(
                 canvas
                     .pixels
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .all(|pixel| pixel == fill.as_slice())
             );
         }

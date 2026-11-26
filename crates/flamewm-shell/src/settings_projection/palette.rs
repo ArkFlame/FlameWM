@@ -80,34 +80,6 @@ pub(super) fn start_header_ink(accent: UiColor, light: bool) -> UiColor {
         .map_or(rgb(0, 0xff), |ink| rgb(ink.0, 0xff))
 }
 
-#[cfg(test)]
-mod start_header_tests {
-    use super::*;
-
-    #[test]
-    fn light_header_ink_meets_body_contrast_and_dark_keeps_accent() {
-        let accent = UiColor {
-            a: 0xff,
-            r: 0x3d,
-            g: 0xae,
-            b: 0xe9,
-        };
-        let ink = start_header_ink(accent, true);
-        let surface = flamewm_skin::palette::Rgb(0x00eb_edee);
-        let ratio = flamewm_skin::palette::contrast_ratio(
-            flamewm_skin::palette::Rgb(
-                (u32::from(ink.r) << 16) | (u32::from(ink.g) << 8) | u32::from(ink.b),
-            ),
-            surface,
-        );
-        assert!(
-            ratio >= flamewm_skin::palette::BODY_MIN_CONTRAST,
-            "ratio {ratio}"
-        );
-        assert_eq!(start_header_ink(accent, false), accent);
-    }
-}
-
 /// `ui/shell/flamewm.css` accent-derived tokens with the alpha each keeps in its `:root` default.
 pub(super) const ACCENT_TOKEN_ALPHAS: [(&str, u8); 8] = [
     ("--accent", 0xff),
@@ -168,5 +140,33 @@ pub(super) fn rgb(value: u32, alpha: u8) -> UiColor {
         g: (value >> 8) as u8,
         b: value as u8,
         a: alpha,
+    }
+}
+
+#[cfg(test)]
+mod start_header_tests {
+    use super::*;
+
+    #[test]
+    fn light_header_ink_meets_body_contrast_and_dark_keeps_accent() {
+        let accent = UiColor {
+            a: 0xff,
+            r: 0x3d,
+            g: 0xae,
+            b: 0xe9,
+        };
+        let ink = start_header_ink(accent, true);
+        let surface = flamewm_skin::palette::Rgb(0x00eb_edee);
+        let ratio = flamewm_skin::palette::contrast_ratio(
+            flamewm_skin::palette::Rgb(
+                (u32::from(ink.r) << 16) | (u32::from(ink.g) << 8) | u32::from(ink.b),
+            ),
+            surface,
+        );
+        assert!(
+            ratio >= flamewm_skin::palette::BODY_MIN_CONTRAST,
+            "ratio {ratio}"
+        );
+        assert_eq!(start_header_ink(accent, false), accent);
     }
 }

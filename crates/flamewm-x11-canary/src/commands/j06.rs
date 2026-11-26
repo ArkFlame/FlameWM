@@ -31,7 +31,7 @@ pub(crate) fn cmd_j06(canary: &Canary, args: &[String]) {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        let toplevel = canary.stacking_order().map(|o| o.len()).unwrap_or(0);
+        let toplevel = canary.stacking_order().map_or(0, |o| o.len());
         results.push(check(
             "postreg-calendar-300",
             toplevel > 0,
@@ -45,7 +45,7 @@ pub(crate) fn cmd_j06(canary: &Canary, args: &[String]) {
         let starts = canary.find("start");
         let viewable = viewable_count(&starts);
         let active = canary.active_window();
-        let toplevel = canary.stacking_order().map(|o| o.len()).unwrap_or(0);
+        let toplevel = canary.stacking_order().map_or(0, |o| o.len());
         results.push(check(
             "postreg-start-single-surface",
             toplevel > 0,
@@ -88,7 +88,7 @@ pub(crate) fn cmd_j06(canary: &Canary, args: &[String]) {
             .next()
             .or_else(|| canary.find("icon").into_iter().next())
             .or_else(|| canary.find("flame").into_iter().next());
-        let toplevel = canary.stacking_order().map(|o| o.len()).unwrap_or(0);
+        let toplevel = canary.stacking_order().map_or(0, |o| o.len());
         let (ok, detail) = match target {
             Some(w) => {
                 let motion = canary.send_motion(w.id, 8, 8).is_ok();
@@ -214,8 +214,7 @@ pub(crate) fn cmd_j06(canary: &Canary, args: &[String]) {
         let ok = if ids.is_empty() {
             canary
                 .sample(canary.root, 0, 0, 16, 16)
-                .map(|d| !Canary::pixel_stats(&d).0)
-                .unwrap_or(false)
+                .is_ok_and(|d| !Canary::pixel_stats(&d).0)
         } else {
             j06_ledger_pass(ids.len(), delivered, non_black)
         };

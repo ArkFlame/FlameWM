@@ -194,9 +194,9 @@ mod tests {
     #[test]
     fn empty_query_and_missing_text_match_nothing() {
         let lines = vec![chars("abc")];
-        assert!(find_in(&lines, "", false).is_empty());
-        assert!(find_in(&lines, "zz", false).is_empty());
-        assert!(find_in(&lines, "abcd", false).is_empty());
+        assert_eq!(find_in(&lines, "", false).len(), 0);
+        assert_eq!(find_in(&lines, "zz", false).len(), 0);
+        assert_eq!(find_in(&lines, "abcd", false).len(), 0);
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
         let exact = find_in(&lines, "hello", true);
         assert_eq!(exact.iter().map(|m| m.col).collect::<Vec<_>>(), vec![6]);
         assert_eq!(find_in(&lines, "Hello", true)[0].col, 0);
-        assert!(find_in(&lines, "HeLLo", true).is_empty());
+        assert_eq!(find_in(&lines, "HeLLo", true).len(), 0);
     }
 
     #[test]
@@ -244,7 +244,7 @@ mod tests {
             },
         ];
         assert_eq!(line_chars(&line), vec!['漢', '\0']);
-        assert!(find_in(&[line_chars(&line)], " ", false).is_empty());
+        assert_eq!(find_in(&[line_chars(&line)], " ", false).len(), 0);
     }
 
     #[test]

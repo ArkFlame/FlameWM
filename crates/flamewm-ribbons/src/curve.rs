@@ -262,7 +262,7 @@ mod tests {
         let h = history_line(1, 1.0);
         let (mut tangents, mut out) = (Vec::new(), Vec::new());
         build_strip(&h, 0.0, 1.0, 11.0, &mut tangents, &mut out);
-        assert!(out.is_empty());
+        assert_eq!(out, []);
     }
 
     #[test]

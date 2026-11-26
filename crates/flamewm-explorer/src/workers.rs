@@ -23,7 +23,7 @@ impl JobPool {
                 .name(format!("{name}-{index}"))
                 .spawn(move||{
                     loop {
-                        let next={queue.lock().unwrap_or_else(|poisoned|poisoned.into_inner()).recv()};
+                        let next={queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv()};
                         match next {Ok(job)=>job(),Err(_)=>return}
                     }
                 });

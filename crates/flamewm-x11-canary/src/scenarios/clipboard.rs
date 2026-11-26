@@ -559,7 +559,7 @@ mod tests {
         let data = SMALL_TEXT.as_bytes();
         let parts = incr_chunks(data, 4096);
         assert_eq!(parts, vec![data]);
-        assert!(incr_chunks(&[], 4096).is_empty());
+        assert_eq!(incr_chunks(&[], 4096).len(), 0);
     }
 
     #[test]

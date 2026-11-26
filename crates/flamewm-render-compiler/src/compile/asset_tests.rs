@@ -56,7 +56,7 @@ fn compile_svg_fixture(name: &str) -> CompileOutput {
 fn mean_rgb(pixels: &[u8]) -> (f32, f32, f32) {
     let mut sum = [0u64; 3];
     let mut count = 0u64;
-    for pixel in pixels.chunks_exact(4) {
+    for pixel in pixels.as_chunks::<4>().0.iter() {
         if pixel[3] > 8 {
             sum[0] += u64::from(pixel[0]);
             sum[1] += u64::from(pixel[1]);
@@ -74,7 +74,9 @@ fn mean_rgb(pixels: &[u8]) -> (f32, f32, f32) {
 
 fn count_near(pixels: &[u8], target: [u8; 3], tol: i16) -> usize {
     pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| {
             pixel[3] > 8
                 && (i16::from(pixel[0]) - i16::from(target[0])).abs() <= tol
@@ -102,7 +104,12 @@ fn semantic_svg_accent_compiles_to_flame_red_preserving_alpha() {
     let output = compile_svg_fixture("folder.svg");
     assert_eq!(output.document.assets.len(), 1);
     let asset = &output.document.assets[0];
-    assert!(asset.pixels.chunks_exact(4).any(|p| p[3] > 8 && p[3] < 255));
+    assert!(asset
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| p[3] > 8 && p[3] < 255));
     assert!(count_near(&asset.pixels, [0xef, 0x40, 0x48], 32) > 200);
     // Dedup: same src twice in one document yields one asset, both nodes share it.
     let dup = compile_svg_html(
@@ -149,7 +156,13 @@ fn internet_svg_compiles_readable() {
     let output = compile_svg_fixture("internet-web-browser.svg");
     assert_eq!(output.document.assets.len(), 1);
     let asset = &output.document.assets[0];
-    let visible: usize = asset.pixels.chunks_exact(4).filter(|p| p[3] > 8).count();
+    let visible: usize = asset
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 8)
+        .count();
     assert!(visible > 100, "expected readable icon, visible={visible}");
     assert!(count_near(&asset.pixels, [0x19, 0x7c, 0xf1], 64) > 20);
 }

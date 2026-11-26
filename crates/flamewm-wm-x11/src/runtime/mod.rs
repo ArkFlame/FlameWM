@@ -655,7 +655,6 @@ where
 
 /// Persisted `cursorTheme` from the settings file at startup, before the session
 /// environment is applied. `None` when the file is missing or unparsable.
-#[must_use]
 fn flush_wm_changes<E>(
     host: &mut PlatformHost<E>,
     control: &ControlSlot,

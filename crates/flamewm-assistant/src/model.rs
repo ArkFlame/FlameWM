@@ -713,12 +713,13 @@ mod menu_rows_tests {
     #[test]
     fn no_match_anywhere_is_empty() {
         let (ark, proxy) = (ark(), proxy());
-        assert!(
+        assert_eq!(
             menu_rows(
                 &[(Provider::Ark, &ark), (Provider::HermesProxy, &proxy)],
                 "zzz"
             )
-            .is_empty()
+            .len(),
+            0
         );
     }
 }
@@ -754,7 +755,7 @@ mod model_filter_tests {
 
     #[test]
     fn no_match_is_empty() {
-        assert!(filter_models(&ids(), "zzz").is_empty());
+        assert_eq!(filter_models(&ids(), "zzz").len(), 0);
     }
 
     use super::{INPUT_BOX_PX, INPUT_MAX_LINES, INPUT_PX, composer};

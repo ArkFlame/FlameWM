@@ -190,7 +190,7 @@ pub(crate) fn thumb_rgba(width: u32, height: u32, bgrx: &[u8]) -> Option<Vec<u8>
         return None;
     }
     let mut out = Vec::with_capacity(len);
-    for px in bgrx.chunks_exact(4) {
+    for px in bgrx.as_chunks::<4>().0 {
         out.extend_from_slice(&[px[2], px[1], px[0], 255]);
     }
     Some(out)

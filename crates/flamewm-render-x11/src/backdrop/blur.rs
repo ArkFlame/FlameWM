@@ -37,7 +37,7 @@ pub fn blurred_argb_words(
 pub(super) fn opaque_argb_words(rgba: &[u8]) -> Vec<u32> {
     // Pre-sized: this runs once per blurred backdrop per frame over a whole window-sized image.
     let mut words = Vec::with_capacity(rgba.len() / 4);
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         words
             .push(0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]));
     }
@@ -61,11 +61,11 @@ pub(super) fn box_downscale(
     let mut out = vec![0u8; small_w * small_h * 4];
     for (sy, out_row) in out.chunks_exact_mut(small_w * 4).enumerate() {
         let (y0, y1) = (sy * f, ((sy + 1) * f).min(h));
-        for (sx, dst) in out_row.chunks_exact_mut(4).enumerate() {
+        for (sx, dst) in out_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let (x0, x1) = (sx * f, ((sx + 1) * f).min(w));
             let mut sum = [0u32; 4];
             for y in y0..y1 {
-                for px in rgba[(y * w + x0) * 4..(y * w + x1) * 4].chunks_exact(4) {
+                for px in rgba[(y * w + x0) * 4..(y * w + x1) * 4].as_chunks::<4>().0 {
                     sum[0] += u32::from(px[0]);
                     sum[1] += u32::from(px[1]);
                     sum[2] += u32::from(px[2]);
@@ -100,7 +100,7 @@ pub(super) fn bilinear_tap(len: u32, out: u32, i: u32) -> (usize, usize, u32) {
 /// One source row blended horizontally at every column tap, unrounded (`channel * 256`), so the
 /// vertical blend in [`BlurredCanvas::crop`] yields exactly the words of [`bilinear_word`].
 pub(super) fn horizontal_line(row: &[u8], cols: &[(usize, usize, u32)], line: &mut [u32]) {
-    for (&(a, b, wx), out) in cols.iter().zip(line.chunks_exact_mut(3)) {
+    for (&(a, b, wx), out) in cols.iter().zip(line.as_chunks_mut::<3>().0.iter_mut()) {
         let (a_off, b_off) = (a * 4, b * 4);
         for (channel, value) in out.iter_mut().enumerate() {
             *value =
@@ -147,8 +147,10 @@ pub(super) fn bilinear_argb_words(
         let top = &lines[(r0 & 1) as usize];
         let bottom = &lines[(r1 & 1) as usize];
         words.extend(
-            top.chunks_exact(3)
-                .zip(bottom.chunks_exact(3))
+            top.as_chunks::<3>()
+                .0
+                .iter()
+                .zip(bottom.as_chunks::<3>().0.iter())
                 .map(|(t, b)| {
                     let blend = |channel: usize| {
                         (t[channel] * (256 - wy) + b[channel] * wy + (1 << 15)) >> 16

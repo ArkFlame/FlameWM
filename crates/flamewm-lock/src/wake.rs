@@ -25,8 +25,8 @@ impl Waker {
     pub fn wake(&self) -> bool {
         // `&UnixStream` writes directly; the socket is nonblocking, so a full socket just
         // means a wake is already pending.
-        match (&*self.0).write(&[1]) {
-            Ok(_) => true,
+        match (&*self.0).write_all(&[1]) {
+            Ok(()) => true,
             Err(error) => error.kind() != std::io::ErrorKind::BrokenPipe,
         }
     }

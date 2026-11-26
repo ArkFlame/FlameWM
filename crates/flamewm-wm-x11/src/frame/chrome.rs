@@ -361,8 +361,10 @@ pub fn outline_blits(
             );
             let content_rows = titlebar_h.saturating_sub(y) as usize * w as usize;
             for (index, (pixel, material)) in rgba
-                .chunks_exact_mut(4)
-                .zip(base.chunks_exact(4))
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(base.as_chunks::<4>().0.iter())
                 .enumerate()
                 .skip(content_rows)
             {
@@ -807,7 +809,7 @@ mod tests {
         let scene = plan_scene(
             120, 100, "app", true, None, None, false, false, true, &tokens,
         );
-        assert!(outline_blits(&scene, (0, 0), (800, 600), None).is_empty());
+        assert_eq!(outline_blits(&scene, (0, 0), (800, 600), None).len(), 0);
         assert!(
             !effects_for(1, &scene)
                 .iter()
@@ -825,7 +827,7 @@ mod tests {
             true,
             &ChromeTokens::default(),
         );
-        assert!(outline_blits(&tiny, (0, 0), (800, 600), None).is_empty());
+        assert_eq!(outline_blits(&tiny, (0, 0), (800, 600), None).len(), 0);
     }
 
     #[test]
@@ -923,7 +925,7 @@ mod tests {
         // Unavailable renderer (no XRender, no display): flat opaque fill, no error.
         let px = titlebar_fill_pixels(&scene, 2, (0, 0), (800, 600));
         assert_eq!(px.len(), scene.frame_w as usize * 2 * 4);
-        assert!(px.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         assert_eq!(PANEL.0, 0x001c_1c1c);
         assert_eq!(flamewm_skin::palette::TEXT.0, 0x00f1_f2f3);
         assert_eq!(scene.title_color, (0xf1, 0xf2, 0xf3));

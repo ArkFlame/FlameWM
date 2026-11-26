@@ -205,12 +205,12 @@ mod stop_control_tests {
     fn other_signals_and_bodies_are_ignored() {
         let text = "signal time=1 sender=org.freedesktop.DBus -> destination=:1.1 serial=2 path=/org/freedesktop/DBus; interface=org.freedesktop.DBus; member=NameAcquired\n   string \":1.1\"\n\
 signal time=2 sender=:1.2 -> destination=(null destination) serial=3 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=NotificationClosed\n   uint32 5\n   uint32 2\n";
-        assert!(feed_all(&mut ActionParser::default(), text).is_empty());
+        assert_eq!(feed_all(&mut ActionParser::default(), text), []);
     }
 
     #[test]
     fn a_stale_value_line_does_not_arm_the_parser() {
         let text = "   uint32 9\n   string \"stop\"\n";
-        assert!(feed_all(&mut ActionParser::default(), text).is_empty());
+        assert_eq!(feed_all(&mut ActionParser::default(), text), []);
     }
 }

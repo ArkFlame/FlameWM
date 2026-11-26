@@ -324,9 +324,13 @@ impl RunCache {
             // A captured scroll moved every visible row up by `shift`: the runs of a row are those of the row below
             // it, so rotate the handles and rebuild only the rows the scroll exposed at the bottom. Reuse needs the
             // absolute window to have advanced by exactly that many lines; a capped scrollback drops lines and keeps
-            // the index, which renumbers the selection, so that case rebuilds.
+            // the index, which renumbers the selection, so that case rebuilds. A scrolled-back window also rebuilds:
+            // its top row moves from the live grid into packed scrollback, whose trimmed trailing cells no longer
+            // match a row shaped from the live line.
             if shift > 0
                 && shift < rows
+                && options.view_offset == 0
+                && self.changed.is_empty()
                 && self
                     .top
                     .is_some_and(|old| old.checked_add(shift) == Some(top))
@@ -387,15 +391,14 @@ impl RunCache {
         for row in (0..rows).filter(|&row| stale[row]) {
             let index = top + row;
             // A live row is handed over borrowed; only a scrollback line is decoded, into the reused buffer.
-            let line: &[Cell] = match screen.live_line(index) {
-                Some(line) => line,
-                None => {
-                    if !screen.line_abs_into(index, &mut decoded) {
-                        self.rows[row] = Row::from(Vec::new());
-                        continue;
-                    }
-                    &decoded
+            let line: &[Cell] = if let Some(line) = screen.live_line(index) {
+                line
+            } else {
+                if !screen.line_abs_into(index, &mut decoded) {
+                    self.rows[row] = Row::from(Vec::new());
+                    continue;
                 }
+                &decoded
             };
             self.rows[row] = Row::from(runs_for_line(line, screen, palette, options, index, row));
         }

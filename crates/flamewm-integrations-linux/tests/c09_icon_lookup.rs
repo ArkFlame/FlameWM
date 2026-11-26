@@ -16,8 +16,7 @@ fn test_dir(name: &str) -> PathBuf {
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|v| v.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |v| v.as_nanos())
     ));
     fs::create_dir_all(&dir).expect("temp dir");
     dir
@@ -87,7 +86,7 @@ fn no_rescan_after_remove_dir_without_invalidation() {
     let file = dir.join("icons/Snap/16x16/apps/c09-snap2.ppm");
     write_ppm(&file, [10, 200, 10]);
     let resolver = IconResolver::new(dir.clone(), vec!["Snap".to_owned()], vec![dir.clone()], 0);
-    assert!(!resolver.shared_index().lookup("c09-snap2", 16).0.is_empty());
+    assert_ne!(resolver.shared_index().lookup("c09-snap2", 16).0.len(), 0);
     fs::remove_dir_all(dir.join("icons/Snap/16x16")).expect("remove dir");
     let (paths, hit) = resolver.shared_index().lookup("c09-snap2", 16);
     assert!(hit, "snapshot selection without rescan");

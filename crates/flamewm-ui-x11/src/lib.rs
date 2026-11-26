@@ -769,9 +769,9 @@ mod tests {
         nodes[0].first_child = Some(1);
         nodes[1].parent = Some(0);
         nodes[1].first_child = Some(2);
-        for index in 2..=6usize {
-            nodes[index].parent = Some(1);
-            nodes[index].next_sibling = (index < 6).then_some(index as u32 + 1);
+        for (index, node) in nodes.iter_mut().enumerate().take(7).skip(2) {
+            node.parent = Some(1);
+            node.next_sibling = (index < 6).then_some(index as u32 + 1);
         }
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
@@ -900,14 +900,13 @@ mod tests {
         let mut document = window_document();
         let mut router = KeyboardRouter::default();
         route_focus(&mut document, key("Tab", UiKeyPhase::Press, &[], None));
-        assert!(
-            !router
-                .route(
-                    &mut document,
-                    key("Return", UiKeyPhase::Press, &[], Some("\r")),
-                    false
-                )
-                .is_empty()
+        assert_ne!(
+            router.route(
+                &mut document,
+                key("Return", UiKeyPhase::Press, &[], Some("\r")),
+                false
+            ),
+            Vec::new()
         );
         assert_eq!(
             router.route(&mut document, typed("\r"), false),
@@ -919,14 +918,13 @@ mod tests {
             vec![typed("x")],
             "later text flows"
         );
-        assert!(
-            !router
-                .route(
-                    &mut document,
-                    key("Escape", UiKeyPhase::Press, &[], None),
-                    false
-                )
-                .is_empty()
+        assert_ne!(
+            router.route(
+                &mut document,
+                key("Escape", UiKeyPhase::Press, &[], None),
+                false
+            ),
+            Vec::new()
         );
         assert_eq!(
             router.route(&mut document, typed("y"), false),
@@ -960,14 +958,15 @@ mod tests {
     #[test]
     fn uncaptured_window_routes_tab_and_escape_as_before() {
         let mut document = window_document();
-        assert!(
+        assert_eq!(
             KeyboardRouter::default()
                 .route(
                     &mut document,
                     key("Tab", UiKeyPhase::Press, &[], None),
                     false
                 )
-                .is_empty()
+                .len(),
+            0
         );
         assert_eq!(document.focus(), Some(1));
         let escape = key("Escape", UiKeyPhase::Press, &[], None);

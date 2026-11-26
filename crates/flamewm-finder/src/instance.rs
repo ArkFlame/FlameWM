@@ -18,6 +18,7 @@ pub fn pid_path(runtime_dir: Option<&Path>, cache_dir: Option<&Path>) -> Option<
 
 /// True when `pid` is alive and its command name is the finder program.
 #[must_use]
+#[cfg(test)]
 pub fn is_live_finder(pid: i32, proc_root: &Path) -> bool {
     flamewm_integrations_core::single_instance::is_live_program(pid, proc_root, PROGRAM)
 }

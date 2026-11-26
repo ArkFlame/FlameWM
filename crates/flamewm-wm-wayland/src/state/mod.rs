@@ -3,6 +3,11 @@
 
 mod focus;
 mod frame_pacing;
+#[cfg(feature = "drm")]
+pub(crate) use frame_pacing::{
+    FrameDecision, GpuProbe, OutputFrames, SYNC_WAIT_BUDGET, SceneBuild, SyncWait, pick_gpu,
+    retry_owed, scan_failed, scene_build, sync_wait_decision,
+};
 mod outputs;
 mod process;
 mod redraw;
@@ -744,11 +749,7 @@ impl State {
             states
                 .data_map
                 .get::<LayerSurfaceData>()
-                .is_none_or(|data| {
-                    data.lock()
-                        .map(|d| d.initial_configure_sent)
-                        .unwrap_or(true)
-                })
+                .is_none_or(|data| data.lock().map_or(true, |d| d.initial_configure_sent))
         })
     }
 
@@ -857,7 +858,7 @@ mod dock_work_area_tests {
         assert_eq!(work_area(OUTPUT, &[], None), OUTPUT);
     }
 
-    /// KWin's `Workspace::rearrange` keeps one client area per screen and reports only the
+    /// `KWin`'s `Workspace::rearrange` keeps one client area per screen and reports only the
     /// screens whose area changed. A panel on output B must reflow B alone, not output A.
     #[test]
     fn strut_on_the_secondary_output_reflows_only_that_output() {
@@ -982,8 +983,8 @@ mod missing_client_state_tests {
 
     #[test]
     fn missing_client_data_falls_back_to_one_shared_default() {
-        let first = missing_client_compositor_state() as *const _;
-        let second = missing_client_compositor_state() as *const _;
+        let first = std::ptr::from_ref(missing_client_compositor_state());
+        let second = std::ptr::from_ref(missing_client_compositor_state());
         assert_eq!(first, second);
     }
 }

@@ -35,6 +35,7 @@ pub fn is_live_program(pid: i32, proc_root: &Path, comm: &str) -> bool {
 }
 
 /// Stops the open instance named by `path` if there is one, otherwise records this process as the open one.
+#[must_use]
 pub fn claim(path: &Path, proc_root: &Path, comm: &str) -> Claim {
     let me = std::process::id();
     if let Some(pid) = fs::read_to_string(path)

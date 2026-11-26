@@ -106,7 +106,7 @@ pub(super) fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> 
         .or_else(|| outputs.iter().position(|output| output.primary))
 }
 
-/// Direction the monitor actions cycle outputs, in RandR output order.
+/// Direction the monitor actions cycle outputs, in `RandR` output order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MonitorStep {
     Next,

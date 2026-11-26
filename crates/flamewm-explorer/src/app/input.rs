@@ -329,7 +329,8 @@ impl ExplorerApp {
             "delete"=>self.action_menu("trash"),
             "return"|"enter" if alt=>if let Some(path)=self.selected(){self.open_properties(path)},
             "backspace"=>self.history_navigation(flamewm_explorer::Tab::up),
-            "escape"=>{if self.busy {self.cancel_job();return;}if self.search_rows.is_some() {self.clear_search();self.model.status="Search cleared".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
+            "escape"=>{if self.busy {self.cancel_job();return;}
+            if self.search_rows.is_some() {self.clear_search();self.model.status="Search cleared".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
             "return"|"enter"=>if let Some(path)=self.selected(){self.open(&path)},
             "left" if alt=>self.history_navigation(flamewm_explorer::Tab::back),
             "right" if alt=>self.history_navigation(flamewm_explorer::Tab::forward),

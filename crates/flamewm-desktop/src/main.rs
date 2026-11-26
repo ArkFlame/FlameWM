@@ -89,7 +89,7 @@ mod wallpaper_stamp;
 mod widgets;
 mod workspace_sync;
 
-use drag::{commit_item_drag, hide_drag_ghost, show_drag_ghost, sync_drag_ghost};
+use drag::{commit_item_drag, hide_drag_ghost, sync_drag_ghost};
 #[cfg(test)]
 use output_layout::PROJECTED_CELLS_CALLS;
 use output_layout::{

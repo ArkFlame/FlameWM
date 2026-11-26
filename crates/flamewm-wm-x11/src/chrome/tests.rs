@@ -16,7 +16,12 @@ fn circle_hover_has_fractional_edge_alpha_and_preserves_centre() {
     assert_eq!(glyph.pixels[(8 * 16 + 8) * 4 + 3], 255);
     assert_eq!(glyph.pixels[3], 0);
     assert!(
-        glyph.pixels.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255),
+        glyph
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[3] > 0 && p[3] < 255),
         "the hover disk must anti-alias its circumference"
     );
 }
@@ -370,7 +375,7 @@ fn frame_backplates_blend_over_wallpaper_and_leave_adjacent_pixels_unchanged() {
         "right edge filled below outer corner"
     );
     assert!(
-        pixels.chunks_exact(4).all(|p| p[3] == 255),
+        pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
         "opaque wallpaper composite keeps opaque alpha"
     );
     let mut clean = [30, 40, 50, 255].repeat(400 * 31);
@@ -709,7 +714,14 @@ fn installed_control_fallback_is_visible_for_every_role() {
         let raster =
             fallback_control_glyph(role, 16, [242, 242, 242, 255]).expect("native fallback");
         assert_eq!((raster.width, raster.height), (16, 16));
-        assert!(raster.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(
+            raster
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] > 0)
+        );
     }
 }
 
@@ -724,7 +736,14 @@ fn control_glyphs_render_from_breeze_assets() {
         let image = control_glyph_raster(role, 16, ControlMaterial::Rest, ControlLook::default())
             .expect("breeze control svg");
         assert_eq!((image.width, image.height), (16, 16));
-        assert!(image.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(
+            image
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] > 0)
+        );
     }
     assert!(
         control_glyph_raster(
@@ -890,7 +909,9 @@ fn minimize_and_maximize_hover_rasters_invert_to_white_disk_with_dark_glyph() {
         // Some glyph pixel must be dark, i.e. the glyph is not white-on-white.
         let darkest = raster
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 200)
             .map(|p| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]))
             .min()

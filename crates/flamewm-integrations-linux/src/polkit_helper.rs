@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn line_buffer_keeps_partial_tail() {
         let mut buf = LineBuffer::default();
-        assert!(buf.push(b"PAM_PROMPT_ECHO_").is_empty());
+        assert_eq!(buf.push(b"PAM_PROMPT_ECHO_").len(), 0);
         assert_eq!(
             buf.push(b"OFF x\nSUC"),
             vec!["PAM_PROMPT_ECHO_OFF x".to_owned()]

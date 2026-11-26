@@ -218,6 +218,6 @@ mod tests {
         let _ = controller.reconcile();
         assert!(controller.player_vanished("org.mpris.MediaPlayer2.a"));
         let _ = controller.reconcile();
-        assert!(controller.snapshot().active_bus_name.is_empty());
+        assert_eq!(controller.snapshot().active_bus_name.len(), 0);
     }
 }

@@ -53,7 +53,7 @@ fn classify(r: u8, g: u8, b: u8) -> StickyPixel {
 
 fn color_bounds(data: &[u8], width: u16, height: u16, color: StickyPixel) -> Option<ColorBounds> {
     let mut bounds: Option<ColorBounds> = None;
-    for (index, pixel) in data.chunks_exact(4).enumerate() {
+    for (index, pixel) in data.as_chunks::<4>().0.iter().enumerate() {
         let x = index % usize::from(width.max(1));
         let y = index / usize::from(width.max(1));
         if y >= usize::from(height) {
@@ -151,7 +151,9 @@ fn pager_cell_center(canary: &crate::Canary, target: u32) -> Option<(i16, i16)> 
     let atom = canary.intern("FLAMEWM_PAGER_CELLS")?;
     let values: Vec<u32> = canary
         .prop_bytes(panel.id, atom)
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
     let base = (target as usize).checked_mul(4)?;
@@ -374,8 +376,7 @@ fn ewmh_request(canary: &crate::Canary, wid: u32, kind: &str, data0: u32, data1:
     canary
         .conn
         .send_event(false, canary.root, EventMask::SUBSTRUCTURE_REDIRECT, ev)
-        .map(|c| c.check().is_ok())
-        .unwrap_or(false)
+        .is_ok_and(|c| c.check().is_ok())
         && canary.conn.flush().is_ok()
 }
 
@@ -387,7 +388,7 @@ fn has_state(canary: &crate::Canary, wid: u32, state: &str) -> bool {
     let bytes = canary.prop_bytes(wid, canary.intern("_NET_WM_STATE").unwrap_or(needle));
     let horz = (state == "_NET_WM_STATE_MAXIMIZED_VERT")
         .then(|| canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0));
-    bytes.chunks_exact(4).any(|c| {
+    bytes.as_chunks::<4>().0.iter().any(|c| {
         let atom = u32::from_ne_bytes([c[0], c[1], c[2], c[3]]);
         atom == needle || Some(atom) == horz
     })
@@ -440,8 +441,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                 .width(u32::from(rw / 2))
                 .height(u32::from(rh)),
         )
-        .map(|c| c.check().is_ok())
-        .unwrap_or(false);
+        .is_ok_and(|c| c.check().is_ok());
     let _ = canary.conn.flush();
     std::thread::sleep(std::time::Duration::from_millis(250));
     let snapped = canary.by_id(t.id).is_some_and(|w| {
@@ -535,7 +535,9 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             let states = canary.prop_bytes(w.id, state_atom);
             let is_sticky = sticky != 0
                 && states
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) == sticky);
             if on_ws == ws || is_sticky {
                 visible += 1;

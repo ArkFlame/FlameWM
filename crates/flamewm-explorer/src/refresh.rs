@@ -186,7 +186,9 @@ mod tests {
         assert!(!burst_forced(None, t0 + Duration::from_secs(5)));
         assert!(!burst_forced(
             Some(t0),
-            t0 + MAX_WAIT - Duration::from_millis(1)
+            (t0 + MAX_WAIT)
+                .checked_sub(Duration::from_millis(1))
+                .unwrap()
         ));
         assert!(burst_forced(Some(t0), t0 + MAX_WAIT));
         // Max-wait counts from the first batch of the burst, so continuous `MODIFY` events

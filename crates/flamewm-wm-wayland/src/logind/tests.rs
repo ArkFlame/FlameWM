@@ -460,7 +460,7 @@ pub(super) fn ack_pause_sends_pause_device_complete_exactly_once() {
     assert_eq!(fake.pause_acks(), vec![(1, 2)]);
     assert!(session.ack_pause(1, 2).is_err());
     assert_eq!(fake.pause_acks(), vec![(1, 2)]);
-    assert!(session.pending_devices().is_empty());
+    assert_eq!(session.pending_devices().len(), 0);
 }
 
 #[test]
@@ -470,9 +470,9 @@ pub(super) fn force_and_gone_send_no_ack() {
     fake.signal_pause(3, 4, PauseKind::Gone);
     assert_eq!(session.take_events().len(), 2);
     assert!(fake.pause_acks().is_empty(), "{:?}", fake.calls());
-    assert!(session.pending_devices().is_empty());
+    assert_eq!(session.pending_devices().len(), 0);
     assert!(session.ack_pause(1, 2).is_err());
-    assert!(fake.pause_acks().is_empty());
+    assert_eq!(fake.pause_acks().len(), 0);
 }
 
 #[test]
@@ -485,7 +485,7 @@ pub(super) fn two_paused_devices_get_two_acks() {
     session.ack_pause(3, 4).expect("ack second device");
     session.ack_pause(1, 2).expect("ack first device");
     assert_eq!(fake.pause_acks(), vec![(3, 4), (1, 2)]);
-    assert!(session.pending_devices().is_empty());
+    assert_eq!(session.pending_devices().len(), 0);
 }
 
 #[test]
@@ -513,7 +513,7 @@ pub(super) fn resume_carries_the_received_fd() {
         other => panic!("expected one Resume event, got {other:?}"),
     }
     // A resume never needs a pause reply.
-    assert!(fake.pause_acks().is_empty());
+    assert_eq!(fake.pause_acks().len(), 0);
 }
 
 /// A per-device pause (keyboard, touchpad) is per-device state: it must never clear session
@@ -532,7 +532,7 @@ pub(super) fn device_pause_does_not_clear_session_activation() {
     assert_eq!(session.paused_devices(), vec![(13, 5), (13, 6)]);
     session.ack_pause(13, 6).expect("ack the paused touchpad");
     assert_eq!(fake.pause_acks(), vec![(13, 6)]);
-    assert!(session.pending_devices().is_empty());
+    assert_eq!(session.pending_devices().len(), 0);
     assert_eq!(session.paused_devices(), vec![(13, 5), (13, 6)]);
 }
 
@@ -553,7 +553,7 @@ pub(super) fn resume_drops_paused_device_state_without_reactivating_a_session() 
         fd: OwnedFd::from(File::open("/dev/null").expect("/dev/null")),
     });
     session.take_events();
-    assert!(session.paused_devices().is_empty());
+    assert_eq!(session.paused_devices().len(), 0);
     assert!(
         !session.is_active_flag(),
         "a device resume is not a session activation"
@@ -569,7 +569,7 @@ pub(super) fn gone_devices_are_not_tracked_as_paused() {
     let (session, fake) = session();
     fake.signal_pause(226, 0, PauseKind::Gone);
     session.take_events();
-    assert!(session.paused_devices().is_empty());
+    assert_eq!(session.paused_devices().len(), 0);
     assert!(session.is_active_flag());
     assert!(fake.pause_acks().is_empty(), "{:?}", fake.calls());
 }

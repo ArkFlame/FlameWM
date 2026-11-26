@@ -52,7 +52,7 @@ fn outside_press_closes_menus_and_clears_pending_delete() {
         &mut pending,
     )
     .expect("close");
-    assert!(rects.is_empty());
+    assert_eq!(rects, [] as [flamewm_api::Rect; 0]);
     assert!(
         menu.is_none(),
         "outside press must release the semantic menu, not just hide it"

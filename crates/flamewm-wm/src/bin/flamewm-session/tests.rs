@@ -331,10 +331,9 @@ fn scan_exits_reports_every_exited_child_before_blocking() {
     assert_eq!(mixed, vec![(2, 2), (0, 0)]);
     let both = scan_exits(2, |index| Ok(Some(index as i32))).unwrap();
     assert_eq!(both, vec![(1, 1), (0, 0)]);
-    assert!(
-        scan_exits(2, |_| Ok::<Option<i32>, String>(None))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        scan_exits(2, |_| Ok::<Option<i32>, String>(None)).unwrap(),
+        [] as [(usize, i32); 0]
     );
     assert_eq!(
         scan_exits(2, |_| Err::<Option<i32>, _>("poll".to_owned())),
@@ -356,7 +355,7 @@ fn allocator_tuning_fills_only_unset_keys() {
     let user_arena = allocator_tuning_defaults(|key| key == "MALLOC_ARENA_MAX");
     assert_eq!(user_arena.len(), 2);
     assert!(user_arena.iter().all(|(key, _)| *key != "MALLOC_ARENA_MAX"));
-    assert!(allocator_tuning_defaults(|_| true).is_empty());
+    assert_eq!(allocator_tuning_defaults(|_| true), [] as [(&str, &str); 0]);
 }
 
 #[test]

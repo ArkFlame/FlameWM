@@ -331,6 +331,7 @@ fn shared_catalog_cell() -> &'static std::sync::OnceLock<SharedApplicationCatalo
 /// Process-wide catalog shared by launch paths; refreshed by `rescan_installed_applications`.
 /// Initializing it parses every `.desktop` file, so first use should come from
 /// [`warm_application_catalog_in_background`] rather than a UI thread.
+#[must_use]
 pub fn shared_application_catalog() -> &'static SharedApplicationCatalog {
     shared_catalog_cell().get_or_init(|| {
         let dirs = cached_application_dirs();

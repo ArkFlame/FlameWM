@@ -153,7 +153,9 @@ impl XdndState {
 fn longs(bytes: &[u8]) -> Vec<u64> {
     const WIDTH: usize = std::mem::size_of::<c_long>();
     bytes
-        .chunks_exact(WIDTH)
+        .as_chunks::<WIDTH>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut raw = [0u8; WIDTH];
             raw.copy_from_slice(chunk);

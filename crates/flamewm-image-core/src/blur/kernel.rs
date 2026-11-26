@@ -206,10 +206,10 @@ pub(super) fn box_horizontal(buf: &mut [f32], line: &mut Vec<f32>, w: usize, r: 
         let (head, rest) = line.split_at_mut(pad);
         let (body, tail) = rest.split_at_mut(stride);
         body.copy_from_slice(row);
-        for chunk in head.chunks_exact_mut(4) {
+        for chunk in head.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&row[..4]);
         }
-        for chunk in tail.chunks_exact_mut(4) {
+        for chunk in tail.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&row[stride - 4..]);
         }
         // Indexed loops, not iterator chains: the fast profile (opt-level 1) does not inline

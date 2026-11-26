@@ -40,7 +40,7 @@ fn crop_clamps_to_the_output_and_samples_the_reduced_capture() {
     let clamped = decorations
         .crop((100, 100), 2, 2, 1.0)
         .expect("desktop set");
-    let reds: Vec<u8> = clamped.chunks_exact(4).map(|px| px[0]).collect();
+    let reds: Vec<u8> = clamped.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
     assert_eq!(reds, vec![31, 31, 31, 31]);
 }
 

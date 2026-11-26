@@ -731,13 +731,11 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         return x03_gone(pinned, "frame_gone_after_establish", &logs);
     }
     let selected_before = prepare_native_measurement(canary, &floating);
-    let maximized_once = if reset {
+    let maximized_once = reset && {
         match x03_maximize(canary, pinned, &mut logs) {
             Ok(()) => wait_until(500, || maximized(canary, pinned.client)),
             Err(error) => return x03_failure(pinned, error, &logs),
         }
-    } else {
-        false
     };
     settle_frame(canary, pinned.frame);
     let Some(max_surface) = child_of(canary, pinned.frame, canary.root) else {

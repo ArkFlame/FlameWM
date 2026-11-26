@@ -479,14 +479,17 @@ macro_rules! document_access_methods {
             self.document.set_text_ref(id, text)
         }
 
+        #[allow(clippy::mut_mut)]
         fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
             replace_rgba8(&mut self.document, id, image)
         }
 
+        #[allow(clippy::mut_mut)]
         fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
             replace_rgba8(&mut self.document, id, image)
         }
 
+        #[allow(clippy::mut_mut)]
         fn image_rgba8_shared(
             &mut self,
             id: &str,
@@ -506,6 +509,7 @@ macro_rules! document_access_methods {
             self.document.set_visible(id, visible)
         }
 
+        #[allow(clippy::mut_mut)]
         fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
             set_toggle(&mut self.document, track_id, knob_id, checked)
         }
@@ -918,7 +922,13 @@ mod tests {
         doc.image_rgba8("icon", px("m", [255, 0, 255, 255]))
             .expect("magenta replace");
         let (_, _, _, _, pixels) = doc.document.image_for_node(0).expect("override present");
-        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255)
+        );
         assert!(doc.document.document.assets[0].is_fully_opaque());
     }
 
@@ -1069,7 +1079,7 @@ mod tests {
     #[test]
     fn rounded_mask_degrades_to_full_rect_for_small_radius() {
         assert_eq!(rounded_rect_mask_spans(4, 2, 0), vec![(0, 0, 4), (1, 0, 4)]);
-        assert!(rounded_rect_mask_spans(0, 8, 4).is_empty());
+        assert_eq!(rounded_rect_mask_spans(0, 8, 4), []);
     }
 
     fn el_color(id: &str, parent: Option<u32>, color: flamewm_render_core::Color) -> CompiledNode {

@@ -38,7 +38,7 @@ fn trace_paint(message: impl FnOnce() -> String) {
 /// `[r, g, b, a]` bytes per pixel of ARGB words: the layout kept in [`SurfaceBackdrop::rgba`].
 pub(crate) fn argb_to_rgba(argb: &[u32]) -> Vec<u8> {
     let mut rgba = vec![0u8; argb.len() * 4];
-    for (dst, &w) in rgba.chunks_exact_mut(4).zip(argb) {
+    for (dst, &w) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(argb) {
         dst.copy_from_slice(&[(w >> 16) as u8, (w >> 8) as u8, w as u8, (w >> 24) as u8]);
     }
     rgba

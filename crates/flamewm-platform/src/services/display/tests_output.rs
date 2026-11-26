@@ -241,7 +241,7 @@ fn fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_sna
     for now_ms in [0, 1, 5_000, 14_999] {
         assert!(!service.tick(&mut port, now_ms).expect("pre-deadline tick"));
     }
-    assert!(port.reverted.is_empty());
+    assert_eq!(port.reverted, []);
 
     assert!(service.tick(&mut port, 15_000).expect("deadline tick"));
     assert_eq!(port.reverted.len(), 1, "reverted exactly once");
@@ -351,7 +351,7 @@ fn keep_clears_pending_and_never_auto_reverts() {
     service.keep(&mut port, transaction, 0).expect("keep");
     assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
     assert!(!service.tick(&mut port, 15_000).expect("tick after keep"));
-    assert!(port.reverted.is_empty());
+    assert_eq!(port.reverted, []);
     assert_eq!(port.output("DP-B").current, ModeId(112));
 }
 
@@ -384,7 +384,7 @@ fn output_disconnect_refresh_clears_pending_without_native_revert() {
     );
     assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
     assert!(!service.tick(&mut port, 15_000).expect("nothing pending"));
-    assert!(port.reverted.is_empty());
+    assert_eq!(port.reverted, []);
 }
 
 #[test]

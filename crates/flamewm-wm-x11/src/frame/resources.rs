@@ -268,7 +268,7 @@ mod tests {
     fn register_lookup_remove_roundtrip() {
         let mut reg = FrameRegistry::new();
         let res = sample(100, 1000);
-        assert!(reg.register(res).is_empty());
+        assert_eq!(reg.register(res).len(), 0);
         assert_eq!(reg.lookup_by_client(100), Some(res));
         let target = reg.lookup_by_xid(1008).expect("title child");
         assert_eq!(target.client, 100);
@@ -295,7 +295,7 @@ mod tests {
         assert!(reg.lookup_by_client(2).is_some());
         assert!(reg.lookup_by_xid(208).is_some());
         // Unknown client removes nothing.
-        assert!(reg.remove_client(999).is_empty());
+        assert_eq!(reg.remove_client(999).len(), 0);
         assert_eq!(reg.xid_count(), 12);
     }
 

@@ -616,7 +616,7 @@ impl<T: ControlTransport> SettingsClient<T> {
 
     pub fn set_shell_scale(&mut self, percent: u16) -> Result<(), ControlError> {
         if !(DISPLAY_SCALE_MIN..=DISPLAY_SCALE_MAX).contains(&percent)
-            || (percent - DISPLAY_SCALE_MIN) % DISPLAY_SCALE_STEP != 0
+            || !(percent - DISPLAY_SCALE_MIN).is_multiple_of(DISPLAY_SCALE_STEP)
         {
             return Err(ControlError {
                 name: "com.arkflame.FlameWM1.Error.InvalidArgument",

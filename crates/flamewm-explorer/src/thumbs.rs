@@ -236,7 +236,9 @@ fn centre_on_canvas(image: &RgbaImage) -> Vec<u8> {
 #[must_use]
 pub fn visible_canvas(canvas: &[u8]) -> bool {
     canvas
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|pixel| pixel[3] >= MIN_VISIBLE_ALPHA)
 }
 

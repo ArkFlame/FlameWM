@@ -371,6 +371,50 @@ impl DockStrut {
     }
 }
 
+impl SurfaceId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceControllerEvent {
+    pub surface: SurfaceId,
+    pub event: ActionEvent,
+}
+
+impl Default for X11Config {
+    fn default() -> Self {
+        Self {
+            width: 1350,
+            height: 641,
+            x: 0,
+            y: 0,
+            title: "FlameWM Render 0.0.9".to_string(),
+            role: X11WindowRole::Normal,
+            identity: None,
+            backdrop: None,
+            file_drag: None,
+        }
+    }
+}
+
+impl From<SurfaceConfig> for X11Config {
+    fn from(config: SurfaceConfig) -> Self {
+        Self {
+            width: config.width,
+            height: config.height,
+            x: config.x,
+            y: config.y,
+            title: config.title,
+            role: config.role.into(),
+            identity: None,
+            backdrop: None,
+            file_drag: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod dock_strut_tests {
     use super::*;
@@ -489,49 +533,5 @@ mod dock_strut_tests {
         assert!(
             DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, 0, 1080, 1920, 44).is_none()
         );
-    }
-}
-
-impl SurfaceId {
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct SurfaceControllerEvent {
-    pub surface: SurfaceId,
-    pub event: ActionEvent,
-}
-
-impl Default for X11Config {
-    fn default() -> Self {
-        Self {
-            width: 1350,
-            height: 641,
-            x: 0,
-            y: 0,
-            title: "FlameWM Render 0.0.9".to_string(),
-            role: X11WindowRole::Normal,
-            identity: None,
-            backdrop: None,
-            file_drag: None,
-        }
-    }
-}
-
-impl From<SurfaceConfig> for X11Config {
-    fn from(config: SurfaceConfig) -> Self {
-        Self {
-            width: config.width,
-            height: config.height,
-            x: config.x,
-            y: config.y,
-            title: config.title,
-            role: config.role.into(),
-            identity: None,
-            backdrop: None,
-            file_drag: None,
-        }
     }
 }

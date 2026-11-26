@@ -330,7 +330,7 @@ impl ThemeStore {
                     .and_then(|text| theme_from_toml(&text).ok())
             })
             .collect();
-        themes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        themes.sort_by_key(|a| a.name.to_lowercase());
         themes
     }
 
@@ -450,7 +450,7 @@ mod tests {
     fn toml_reader_reports_bad_lines() {
         assert!(parse_toml("novalue").is_err());
         assert!(parse_toml("k = \"open").is_err());
-        assert!(parse_toml("# only a comment\n\n").unwrap().is_empty());
+        assert_eq!(parse_toml("# only a comment\n\n").unwrap().len(), 0);
     }
 
     #[test]

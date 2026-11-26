@@ -726,7 +726,7 @@ mod tests {
         let now = Instant::now();
         let _ = handle_agent_call(&prompt_calls()[1], &mut queue, now);
         assert_eq!(
-            queue.expire(now + (PROMPT_TIMEOUT - Duration::from_secs(1))),
+            queue.expire(now + (PROMPT_TIMEOUT.checked_sub(Duration::from_secs(1)).unwrap())),
             0
         );
         assert_eq!(queue.next_deadline(), Some(now + PROMPT_TIMEOUT));

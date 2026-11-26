@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn zero_refresh_does_not_divide_by_zero() {
-        assert_eq!(refresh_period(0), Duration::from_nanos(1_000_000_000_000));
+        assert_eq!(refresh_period(0), Duration::from_secs(1_000));
     }
 
     #[test]
@@ -373,7 +373,7 @@ mod tests {
     fn unchanged_scale_sends_nothing() {
         let outputs = [("out", 1.25)];
         let surfaces = [(1, "out"), (2, "out")];
-        assert!(notices(&outputs, &outputs, &surfaces, &surfaces).is_empty());
+        assert_eq!(notices(&outputs, &outputs, &surfaces, &surfaces).len(), 0);
     }
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
         let outputs = [("a", 1.5), ("b", 1.5)];
         let before = [(1, "a")];
         let after = [(1, "b")];
-        assert!(notices(&outputs, &outputs, &before, &after).is_empty());
+        assert_eq!(notices(&outputs, &outputs, &before, &after).len(), 0);
     }
 
     #[test]
@@ -419,7 +419,7 @@ mod tests {
         let outputs = [("out", 1.0)];
         let before: [(u32, &str); 0] = [];
         let after = [(1, "out")];
-        assert!(notices(&outputs, &outputs, &before, &after).is_empty());
+        assert_eq!(notices(&outputs, &outputs, &before, &after).len(), 0);
     }
 
     #[test]

@@ -94,7 +94,7 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
             0.0
         };
         let row = gradient_at(t);
-        for (x, px) in out_row.chunks_exact_mut(4).enumerate() {
+        for (x, px) in out_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let mut c = row;
             for (blob, (cols, rows, opacity)) in BLOBS.iter().zip(&blob_terms) {
                 let u = cols[x] + rows[y];
@@ -133,7 +133,7 @@ pub fn post_process(
     }
     if dim_percent > 0 {
         let keep = 1.0 - f64::from(dim_percent.min(80)) / 100.0;
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             for channel in &mut pixel[..3] {
                 *channel = (f64::from(*channel) * keep).round() as u8;
             }
@@ -219,7 +219,7 @@ mod tests {
             let buf = reference_navy(w, h);
             assert_eq!(buf.len(), w as usize * h as usize * 4);
         }
-        assert!(reference_navy(0, 0).is_empty());
+        assert_eq!(reference_navy(0, 0).len(), 0);
         assert!(gradient_at(0.5).iter().all(|c| c.is_finite()));
     }
 

@@ -126,7 +126,7 @@ pub fn rgba_to_argb_owned(
     if buf.len() != pixel_count * 4 {
         return Err("capture: RGBA buffer length mismatch".to_string());
     }
-    for px in buf.chunks_exact_mut(4) {
+    for px in buf.as_chunks_mut::<4>().0 {
         let a = px[3];
         let packed = (u32::from(a) << 24)
             | (premultiply(px[0], a) << 16)
@@ -249,7 +249,12 @@ fn embed_subrect_argb(
     for (row, src) in pixels.chunks_exact(row_bytes).enumerate() {
         let dst_at = ((vy as usize + row) * width as usize + vx as usize) * 4;
         let dst = argb.get_mut(dst_at..dst_at + row_bytes)?;
-        for (out, px) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        for (out, px) in dst
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<4>().0.iter())
+        {
             let a = px[3];
             let packed = (u32::from(a) << 24)
                 | (premultiply(px[0], a) << 16)
@@ -464,7 +469,7 @@ mod tests {
     /// The pre-optimization conversion, kept as the bit-exact oracle.
     fn reference_rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
         let mut argb = Vec::with_capacity(rgba.len());
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0.iter() {
             let a = px[3];
             let packed = (u32::from(a) << 24)
                 | (premultiply(px[0], a) << 16)

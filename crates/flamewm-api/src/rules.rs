@@ -203,11 +203,11 @@ pub struct MonitorRule {
     pub x: Option<i32>,
     /// Y origin in the shared desktop coordinate space.
     pub y: Option<i32>,
-    /// HiDPI scale factor.
+    /// `HiDPI` scale factor.
     pub scale: Option<f64>,
     /// Requested panel rotation.
     pub rotation: Option<MonitorRotation>,
-    /// Mark as the RandR primary output for XWayland clients.
+    /// Mark as the `RandR` primary output for `XWayland` clients.
     pub primary: Option<bool>,
     /// Disable the output.
     pub disabled: Option<bool>,
@@ -501,8 +501,8 @@ mod tests {
     #[test]
     fn empty_rules_config_resolves_to_nothing() {
         let config: RulesConfig = toml::from_str("").expect("empty document is valid");
-        assert!(config.window_rules.is_empty());
-        assert!(config.monitor_rules.is_empty());
+        assert_eq!(config.window_rules, []);
+        assert_eq!(config.monitor_rules, []);
         assert!(
             config
                 .resolve_window(&WindowCandidate {

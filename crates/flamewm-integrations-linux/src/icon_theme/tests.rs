@@ -112,7 +112,7 @@ fn cycle_terminates() {
     assert_eq!(chain.first().map(String::as_str), Some("A"));
     assert!(chain.contains(&"B".to_owned()));
     assert_eq!(chain.last().map(String::as_str), Some("hicolor"));
-    assert!(chain.iter().filter(|n| *n == "A").count() == 1);
+    assert_eq!(chain.iter().filter(|n| *n == "A").count(), 1);
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn exists_cache_frees_a_dead_generation_before_live_entries() {
     }
     // The bumped generation's entries survive; the dead generation is not
     // keeping stale keys at the cost of live ones.
-    assert!(caches.exists.get(&1).is_none(), "dead generation is freed");
+    assert!(!caches.exists.contains_key(&1), "dead generation is freed");
     assert_eq!(caches.len(), EXISTS_CAP);
     assert_eq!(caches.cached_exists(old, 2), None);
 }
@@ -508,9 +508,9 @@ fn sorted_name_index_finds_first_middle_last_and_misses() {
     assert_eq!(hit("mid"), vec![base.join("16x16/apps/mid.PNG")]);
     // One best file per theme: PNG outranks SVG at the same size.
     assert_eq!(hit("zeta"), vec![base.join("16x16/apps/zeta.png")]);
-    assert!(hit("0before").is_empty());
-    assert!(hit("beta").is_empty());
-    assert!(hit("zz").is_empty());
+    assert_eq!(hit("0before").len(), 0);
+    assert_eq!(hit("beta").len(), 0);
+    assert_eq!(hit("zz").len(), 0);
     let _ = fs::remove_dir_all(&data);
 }
 
@@ -598,14 +598,14 @@ fn shared_listings_select_same_paths_as_fresh_build() {
             hits += usize::from(expected.1);
         }
     }
-    let read_dirs = listings.by_dir.lock().map(|map| map.len()).unwrap_or(0);
+    let read_dirs = listings.by_dir.lock().map_or(0, |map| map.len());
     // A second one-shot build over the same listings must read nothing new.
     let again = IconLookupIndex::build_shared(&names, &roots, 1, &listings);
     assert_eq!(
         again.lookup("shared-app", 16),
         fresh.lookup("shared-app", 16)
     );
-    let read_dirs_after = listings.by_dir.lock().map(|map| map.len()).unwrap_or(0);
+    let read_dirs_after = listings.by_dir.lock().map_or(0, |map| map.len());
     let _ = fs::remove_dir_all(&data);
     assert!(hits > 0, "fixture must resolve some icons");
     assert!(read_dirs > 0, "shared scan must record its directory reads");

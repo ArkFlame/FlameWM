@@ -27,13 +27,13 @@ mod cases {
         };
         time("premultiply_grid", &mut |s| {
             fit_f32(&mut s.work, pw * ph * 4);
-            for (i, px) in src.chunks_exact(4).enumerate() {
+            for (i, px) in src.as_chunks::<4>().0.iter().enumerate() {
                 premultiply_pixel(px, &mut s.work[i * 4..i * 4 + 4]);
             }
         });
         time("box_h_x3", &mut |s| {
             fit_f32(&mut s.work, pw * ph * 4);
-            for (i, px) in src.chunks_exact(4).enumerate() {
+            for (i, px) in src.as_chunks::<4>().0.iter().enumerate() {
                 premultiply_pixel(px, &mut s.work[i * 4..i * 4 + 4]);
             }
             for r in box_radii(radius / 2.0) {
@@ -44,7 +44,7 @@ mod cases {
         });
         time("blur_all_passes", &mut |s| {
             fit_f32(&mut s.work, pw * ph * 4);
-            for (i, px) in src.chunks_exact(4).enumerate() {
+            for (i, px) in src.as_chunks::<4>().0.iter().enumerate() {
                 premultiply_pixel(px, &mut s.work[i * 4..i * 4 + 4]);
             }
             blur_boxes(&mut s.work, &mut s.line, &mut s.band, pw, ph, radius / 2.0);

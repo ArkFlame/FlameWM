@@ -270,7 +270,7 @@ fn rename_into(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
 fn staging_path(to: &Path) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let name = to.file_name().map_or_else(|| "item".into(), |n| n.to_string_lossy().into_owned());
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     to.with_file_name(format!(".flamewm-part-{}-{stamp}-{seq}-{name}", std::process::id()))
 }

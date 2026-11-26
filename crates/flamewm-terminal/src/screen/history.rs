@@ -100,13 +100,12 @@ impl History {
 
     /// The line's cells, borrowed when stored plain and decoded otherwise.
     pub(super) fn cells(&self) -> Cow<'_, Line> {
-        match self {
-            Self::Plain(line) => Cow::Borrowed(line),
-            _ => {
-                let mut out = Line::new();
-                self.cells_into(&mut out);
-                Cow::Owned(out)
-            }
+        if let Self::Plain(line) = self {
+            Cow::Borrowed(line)
+        } else {
+            let mut out = Line::new();
+            self.cells_into(&mut out);
+            Cow::Owned(out)
         }
     }
 

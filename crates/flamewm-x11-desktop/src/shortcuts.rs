@@ -898,7 +898,7 @@ mod tests {
             .commit(&mut backend)
             .expect_err("required conflict must fail");
         assert_eq!(error.code, ErrorCode::Conflict);
-        assert!(grabs.active().is_empty());
+        assert_eq!(grabs.active(), []);
         assert!(
             backend.held.is_empty(),
             "optional grab released on rollback"
@@ -1050,7 +1050,7 @@ mod tests {
         assert_eq!(table.keycodes_for(0xff1b), vec![8]);
         assert_eq!(table.keycodes_for(0x41), vec![9]);
         assert_eq!(table.keycodes_for(0xff51), vec![10]);
-        assert!(table.keycodes_for(0x62).is_empty());
+        assert_eq!(table.keycodes_for(0x62), []);
     }
 
     #[test]

@@ -19,7 +19,7 @@ fn breadcrumb_paths_are_bounded_and_preserve_native_components() {
     assert_eq!(long.len(),BREADCRUMB_SLOTS);
     assert_eq!(long[0].1,Path::new("/a/b"));
     assert_eq!(long.last().unwrap().1,Path::new("/a/b/c/d/e/f/g"));
-    assert!(breadcrumbs(Path::new("sftp://u@host/path")).is_empty());
+    assert_eq!(breadcrumbs(Path::new("sftp://u@host/path")).len(), 0);
 }
 
 #[test]

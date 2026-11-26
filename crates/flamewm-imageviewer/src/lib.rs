@@ -612,7 +612,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let app = App::new(SettingsSnapshot::new(0), tx, Some(opened.as_path()));
         // App::new returns with only the opened file; the listing comes back later as a reply.
-        assert_eq!(app.images, [opened.clone()]);
+        assert_eq!(app.images, std::slice::from_ref(&opened));
         let queued: Vec<Job> = rx.try_iter().collect();
         assert!(
             queued

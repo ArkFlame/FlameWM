@@ -85,7 +85,7 @@ fn project_idle() -> Recorder {
 #[test]
 fn task_menu_projection_touches_only_existing_roots() {
     let recorder = project_idle();
-    assert!(!recorder.writes.is_empty());
+    assert_ne!(recorder.writes.len(), 0);
     for (method, id) in &recorder.writes {
         assert!(
             id == "task-menu" || TASK_MENU_HTML.contains(&format!("id=\"{id}\"")),

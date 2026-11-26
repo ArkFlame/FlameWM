@@ -778,8 +778,7 @@ fn preview_border_only(canary: &crate::Canary, window: &crate::WinInfo) -> (usiz
     }
     let center = canary
         .sample(window.id, width / 2 - 2, height / 2 - 2, 4, 4)
-        .ok()
-        .is_some_and(|data| crate::Canary::pixel_stats(&data).0);
+        .is_ok_and(|data| crate::Canary::pixel_stats(&data).0);
     (delivered, accent_border, center)
 }
 

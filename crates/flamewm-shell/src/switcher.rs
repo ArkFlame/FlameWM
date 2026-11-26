@@ -155,7 +155,7 @@ impl SwitcherPreview {
 fn take_preview(thumb: &mut SwitcherThumb) -> Option<SwitcherPreview> {
     let pixels = Arc::new(std::mem::take(&mut thumb.rgba));
     let expected = u64::from(thumb.width) * u64::from(thumb.height) * 4;
-    (thumb.width > 0 && thumb.height > 0 && pixels.len() as u64 == expected).then(|| {
+    (thumb.width > 0 && thumb.height > 0 && pixels.len() as u64 == expected).then_some({
         SwitcherPreview {
             width: thumb.width,
             height: thumb.height,

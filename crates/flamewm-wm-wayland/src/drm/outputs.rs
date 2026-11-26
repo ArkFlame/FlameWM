@@ -30,8 +30,7 @@ pub(super) fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<
         let connected = d
             .device
             .get_connector(connector, false)
-            .map(|info| info.state() == connector::State::Connected)
-            .unwrap_or(false);
+            .is_ok_and(|info| info.state() == connector::State::Connected);
         if connected {
             index += 1;
             continue;
@@ -149,14 +148,11 @@ pub(super) fn scan_connectors(d: &mut Drm, state: &mut State) -> Result<(), Box<
 /// True when the DRM driver identifies as NVIDIA; anvil disables overlay planes for that driver
 /// because using them breaks the atomic commit and the first frame never reaches the panel.
 pub(super) fn is_nvidia(device: &DrmDevice) -> bool {
-    device
-        .get_driver()
-        .map(|driver| {
-            let name = driver.name().to_string_lossy().to_lowercase();
-            let description = driver.description().to_string_lossy().to_lowercase();
-            name.contains("nvidia") || description.contains("nvidia")
-        })
-        .unwrap_or(false)
+    device.get_driver().is_ok_and(|driver| {
+        let name = driver.name().to_string_lossy().to_lowercase();
+        let description = driver.description().to_string_lossy().to_lowercase();
+        name.contains("nvidia") || description.contains("nvidia")
+    })
 }
 
 /// The first CRTC one of this connector's encoders can drive that no output uses yet.

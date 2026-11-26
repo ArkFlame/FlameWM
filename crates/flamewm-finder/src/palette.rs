@@ -152,7 +152,7 @@ mod tests {
         assert_eq!(all.len(), COMMANDS.len());
         let grid: Vec<&str> = command_matches("grid view").iter().map(|c| c.id).collect();
         assert_eq!(grid, ["grid"]);
-        assert!(command_matches("grid nonsense").is_empty());
+        assert_eq!(command_matches("grid nonsense").len(), 0);
     }
 
     #[test]
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].query, "in:~/Documents ");
         // Folders that do not exist are not offered.
-        assert!(scope_choices(&home_text, "music").is_empty());
+        assert_eq!(scope_choices(&home_text, "music").len(), 0);
         let _ = std::fs::remove_dir_all(&home);
     }
 }

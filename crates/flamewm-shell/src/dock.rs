@@ -611,8 +611,8 @@ pub fn project_dock(
     }
     // Hide the unused slot buttons only: effective visibility walks ancestors, so hiding the
     // slot hides its icon and dot with two fewer document writes per empty slot.
-    for i in count..MAX_SLOTS {
-        document.visible(ids.slot[i].as_str(), false)?;
+    for slot in &ids.slot[count..MAX_SLOTS] {
+        document.visible(slot.as_str(), false)?;
     }
     let (bx, by, bw, bh) = rect_to_css(frame.bar);
     document.position("dock-bar", bx, by)?;
@@ -832,6 +832,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assert_is_empty)]
     fn separator_sits_on_group_boundary_only() {
         let split = dock_frame(&[true, true, false], Some(1), None, 44.0, Edge::Bottom);
         let sep = split.separators.first().copied().expect("separator");
@@ -971,7 +972,7 @@ mod menu_label_tests {
             menu_label(DockMenuAction::CloseWindows),
         ];
         for (i, label) in labels.iter().enumerate() {
-            assert!(!label.is_empty());
+            assert_ne!(label.len(), 0);
             assert!(!labels[..i].contains(label), "duplicate label {label}");
         }
     }

@@ -1106,7 +1106,10 @@ fn two_outputs_two_panels_yield_one_context_per_output() {
         contexts[1].work_area,
         flamewm_api::Rect::new(1920, 0, 1280, 980)
     );
-    assert!(panel_contexts_for_snapshot(&snapshot, PanelEdge::Top).is_empty());
+    assert_eq!(
+        panel_contexts_for_snapshot(&snapshot, PanelEdge::Top).len(),
+        0
+    );
 }
 
 // REGRESSION (A12-1): a context menu opened near the bottom panel must be

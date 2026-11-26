@@ -393,10 +393,10 @@ fn read_offer(
             .primary_offer
             .clone()
             .ok_or("primary selection vanished")?;
-        offer.receive(mime().into(), wr.as_fd());
+        offer.receive(mime(), wr.as_fd());
     } else {
         let offer = app.selection.clone().ok_or("selection vanished")?;
-        offer.receive(mime().into(), wr.as_fd());
+        offer.receive(mime(), wr.as_fd());
     }
     conn.flush()?;
     drop(wr);
@@ -443,7 +443,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 queue.roundtrip(&mut app)?;
             }
             let source = ddm.create_data_source(&qh, ());
-            source.offer(mime().into());
+            source.offer(mime());
             let ddev = app.ddev.clone().ok_or("no data device")?;
             ddev.set_selection(Some(&source), app.key_serial.unwrap_or_default());
             queue.roundtrip(&mut app)?;
@@ -481,7 +481,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (r, w) = std::io::pipe()?;
                 (r, w.into())
             };
-            offer.receive(mime().into(), wr.as_fd());
+            offer.receive(mime(), wr.as_fd());
             conn.flush()?;
             drop(wr);
             let mut text = String::new();
@@ -495,7 +495,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let serial = await_keyboard_serial(&mut queue, &mut app)?;
             let pm = app.pm.clone().ok_or("no zwp_primary_selection_device_manager_v1")?;
             let source = pm.create_source(&qh, ());
-            source.offer(mime().into());
+            source.offer(mime());
             let device = app.pdevice.clone().ok_or("no primary selection device")?;
             device.set_selection(Some(&source), serial);
             queue.roundtrip(&mut app)?;

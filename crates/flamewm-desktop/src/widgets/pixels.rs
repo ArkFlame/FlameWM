@@ -91,6 +91,7 @@ pub(crate) fn analog_face_pixels(size: u32, time: WallTime, hands: Rgb, accent: 
     // resolved once per face instead of once per pixel (60 ticks x sin/cos over the whole face
     // was the dominant cost of a seconds clock).
     let ring_min = radius * 0.82 - 1.0;
+    #[allow(clippy::type_complexity)]
     let ticks: Vec<((f32, f32), (f32, f32), f32)> = (0..60)
         .map(|minute| {
             let turn = minute as f32 / 60.0;
@@ -102,6 +103,7 @@ pub(crate) fn analog_face_pixels(size: u32, time: WallTime, hands: Rgb, accent: 
             (point(turn, inner), point(turn, radius), half)
         })
         .collect();
+    #[allow(clippy::type_complexity)]
     let hands_geom: Vec<(Rgb, (f32, f32), (f32, f32), f32)> = hand_specs
         .iter()
         .map(|&(color, turn, from, to, half)| {

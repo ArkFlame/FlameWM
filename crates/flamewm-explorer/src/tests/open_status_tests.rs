@@ -11,5 +11,5 @@ fn open_resolved_clears_the_opening_status_once_the_file_opens() {
         path: PathBuf::from("/tmp/report.pdf"),
         result: Ok(true),
     });
-    assert!(app.model.status.is_empty());
+    assert_eq!(app.model.status.len(), 0);
 }

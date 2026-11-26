@@ -120,7 +120,7 @@ impl MediaStore {
     /// Copies `src` into the store and returns the managed copy.
     pub fn import(&self, src: &Path, kind: MediaKind) -> Result<ImportedMedia, MediaError> {
         let file = open_source(src)?;
-        let hint = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+        let hint = file.metadata().map_or(0, |meta| meta.len());
         let bytes = read_source_hinted(file, hint)?;
         self.import_bytes(&bytes, kind)
     }
@@ -431,18 +431,17 @@ fn sha256_hex(data: &[u8]) -> String {
         0x1f83_d9ab,
         0x5be0_cd19,
     ];
-    let mut blocks = data.chunks_exact(64);
-    for block in &mut blocks {
+    let (blocks, rest) = data.as_chunks::<64>();
+    for block in blocks {
         sha256_compress(&mut state, block);
     }
-    let rest = blocks.remainder();
     let mut tail = [0u8; 128];
     tail[..rest.len()].copy_from_slice(rest);
     tail[rest.len()] = 0x80;
     let tail_len = if rest.len() < 56 { 64 } else { 128 };
     let bit_len = (data.len() as u64).wrapping_mul(8);
     tail[tail_len - 8..tail_len].copy_from_slice(&bit_len.to_be_bytes());
-    for block in tail[..tail_len].chunks_exact(64) {
+    for block in tail[..tail_len].as_chunks::<64>().0 {
         sha256_compress(&mut state, block);
     }
     state.iter().map(|word| format!("{word:08x}")).collect()
@@ -450,7 +449,7 @@ fn sha256_hex(data: &[u8]) -> String {
 
 fn sha256_compress(state: &mut [u32; 8], block: &[u8]) {
     let mut w = [0u32; 64];
-    for (index, word) in block.chunks_exact(4).enumerate() {
+    for (index, word) in block.as_chunks::<4>().0.iter().enumerate() {
         w[index] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
     }
     for index in 16..64 {

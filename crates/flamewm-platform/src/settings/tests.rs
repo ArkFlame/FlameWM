@@ -245,7 +245,7 @@ fn legacy_hermes_url_key_is_ignored_and_never_written() {
     let parsed = load("assistant.hermesUrl=http://127.0.0.1:8642\nassistant.enabled=1\n")
         .expect("legacy key tolerated");
     assert!(!parsed.unknown_keys.contains_key("assistant.hermesUrl"));
-    assert!(parsed.assistant_api_key.is_empty());
+    assert_eq!(parsed.assistant_api_key.len(), 0);
     let text = assert_round_trip(&parsed);
     assert!(!text.contains("hermesUrl"));
 }
@@ -625,7 +625,7 @@ fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
     assert_eq!(defaults.accent_opacity, 100);
     assert_eq!(defaults.decoration, "rounded");
     assert_eq!(defaults.titlebar_button_style, "circle");
-    assert!(defaults.cursor_theme.is_empty());
+    assert_eq!(defaults.cursor_theme.len(), 0);
     assert_eq!(defaults.animation_speed, 100);
     assert_eq!(defaults.start_animation, AnimationStyle::None);
     assert_eq!(defaults.minimize_animation, AnimationStyle::None);
@@ -1178,7 +1178,7 @@ fn time_zone_names_accept_iana_shapes_and_reject_paths() {
 fn weather_keys_default_on_without_location_and_write_nothing() {
     let defaults = ProductSettings::default();
     assert!(defaults.weather_enabled);
-    assert!(defaults.weather_location.is_empty());
+    assert_eq!(defaults.weather_location.len(), 0);
     assert_eq!(defaults.weather_units, "celsius");
     assert!(defaults.auto_location_enabled);
     assert!(defaults.auto_time_zone_enabled);
@@ -1225,7 +1225,7 @@ fn weather_keys_are_typed_stable_rows_and_round_trip() {
     let mut settings = parsed.clone();
     (stable("weatherLocation").set)(&mut settings, &defaults, None, "weatherLocation")
         .expect("clearing location");
-    assert!(settings.weather_location.is_empty());
+    assert_eq!(settings.weather_location.len(), 0);
 }
 
 #[test]

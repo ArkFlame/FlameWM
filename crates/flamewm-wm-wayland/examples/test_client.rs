@@ -119,7 +119,9 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
                 // Each state is a native-endian u32 in the byte array.
                 let has = |want: xdg_toplevel::State| {
                     states
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .any(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) == want as u32)
                 };
                 state.pending_configure = Some((

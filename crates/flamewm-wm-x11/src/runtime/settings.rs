@@ -1,5 +1,6 @@
 use super::*;
 
+#[must_use]
 pub fn persisted_cursor_theme() -> Option<String> {
     persisted_settings().map(|settings| settings.cursor_theme)
 }

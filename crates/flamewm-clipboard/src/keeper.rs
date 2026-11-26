@@ -69,8 +69,10 @@ fn advertised(clipboard: &Clipboard, targets: Atom) -> Option<Vec<Atom>> {
         .ok()??;
     Some(
         bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_ne_bytes(*c))
             .collect(),
     )
 }

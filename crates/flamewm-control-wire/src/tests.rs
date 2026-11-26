@@ -173,7 +173,7 @@ fn reset_section_reuses_atomic_settings_transaction() {
         panic!("wrong request");
     };
     assert_eq!(transaction.reset_section.as_deref(), Some("appearance"));
-    assert!(transaction.changes.is_empty());
+    assert_eq!(transaction.changes, []);
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn t12_apply_settings_failure_emits_no_success_signal() {
         Ok(other) => panic!("unexpected successful response: {other:?}"),
         Err(_) => Vec::<WireSignal>::new(),
     };
-    assert!(signals.is_empty());
+    assert_eq!(signals, []);
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn screensaver_preview_session_action_round_trips_additively() {
     let call = assert_request_round_trip(&request);
     assert_eq!(call.interface, IFACE_SESSION);
     assert_eq!(call.member, "ScreensaverPreview");
-    assert!(call.args.is_empty());
+    assert_eq!(call.args, []);
     assert_ne!(
         decode_call(&WireCall::new(IFACE_SESSION, "LockPreview", Vec::new())).expect("decode"),
         request
@@ -860,7 +860,7 @@ fn start_menu_toggle_requested_round_trips_through_wire() {
     let wire = encode_signal(&signal);
     assert_eq!(wire.interface, IFACE_ROOT);
     assert_eq!(wire.member, "StartMenuToggleRequested");
-    assert!(wire.args.is_empty());
+    assert_eq!(wire.args, []);
     assert_eq!(decode_signal(&wire), Ok(signal));
 
     let with_payload = WireSignal {
@@ -878,7 +878,7 @@ fn launcher_toggle_requested_round_trips_through_wire() {
     let wire = encode_signal(&signal);
     assert_eq!(wire.interface, IFACE_ROOT);
     assert_eq!(wire.member, "LauncherToggleRequested");
-    assert!(wire.args.is_empty());
+    assert_eq!(wire.args, []);
     assert_eq!(decode_signal(&wire), Ok(signal));
 
     let with_payload = WireSignal {

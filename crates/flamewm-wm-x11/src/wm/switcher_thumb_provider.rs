@@ -306,7 +306,7 @@ mod tests {
         p.request(key(9));
         let mut b = CaptureBudget::new(1);
         assert_eq!(turn(&mut p, &mut s, &mut b), 0);
-        assert!(s.captures.is_empty());
+        assert_eq!(s.captures.len(), 0);
         assert_eq!(p.pending_len(), 0);
     }
 

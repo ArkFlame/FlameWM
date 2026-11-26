@@ -1,4 +1,4 @@
-//! Monitor actions for the X11 WM: move the active window between RandR outputs and move input
+//! Monitor actions for the X11 WM: move the active window between `RandR` outputs and move input
 //! focus between outputs. Geometry policy lives in `flamewm_window_core::monitor` so the Wayland
 //! backend can reuse it.
 
@@ -21,7 +21,7 @@ impl<C: Connection> Wm<'_, C> {
 
     /// Moves the active window to the adjacent output, keeping its relative position and its
     /// workspace. Maximized and snapped clients are re-laid out in the target work area by
-    /// `reconcile_work_area`, the same path a RandR topology change uses.
+    /// `reconcile_work_area`, the same path a `RandR` topology change uses.
     pub(super) fn move_window_to_monitor(&mut self, step: MonitorStep) -> Result<(), ReplyError> {
         let Some(client) = self.active else {
             return Ok(());

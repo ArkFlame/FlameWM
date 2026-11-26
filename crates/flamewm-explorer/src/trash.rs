@@ -279,7 +279,7 @@ mod tests {
         let restored = restore(&entries[0]).unwrap();
         assert_eq!(restored, file);
         assert_eq!(fs::read(&file).unwrap(), b"keep me");
-        assert!(list(&base).unwrap().is_empty());
+        assert_eq!(list(&base).unwrap().len(), 0);
         let _ = fs::remove_dir_all(&root);
     }
 

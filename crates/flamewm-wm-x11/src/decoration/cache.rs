@@ -22,7 +22,9 @@ pub fn catalog_icon_image(
     // Miss keeps the empty slot, never brand artwork.
     let argb = raster
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| {
             u32::from(pixel[3]) << 24
                 | u32::from(pixel[0]) << 16

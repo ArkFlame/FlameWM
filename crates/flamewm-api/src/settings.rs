@@ -23,17 +23,12 @@ pub fn parse_zoom_level(text: &str) -> Option<f64> {
         .map(|value| value.clamp(ZOOM_LEVEL_MIN, ZOOM_LEVEL_MAX))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppearanceMode {
     System,
     Light,
+    #[default]
     Dark,
-}
-
-impl Default for AppearanceMode {
-    fn default() -> Self {
-        Self::Dark
-    }
 }
 
 impl AppearanceMode {

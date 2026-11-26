@@ -145,7 +145,7 @@ fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDo
         let raw = reader.take(byte_count)?;
         let pixels = if bytes_per_pixel == 3 {
             let mut rgba = Vec::with_capacity(raw.len() / 3 * 4);
-            for rgb in raw.chunks_exact(3) {
+            for rgb in raw.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
             Cow::Owned(rgba)

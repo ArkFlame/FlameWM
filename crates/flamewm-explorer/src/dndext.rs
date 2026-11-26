@@ -186,7 +186,7 @@ pub fn run_with_timeout(
                         .min(CANCEL_POLL);
                     let wait = Timespec {
                         tv_sec: wait.as_secs() as _,
-                        tv_nsec: wait.subsec_nanos() as _,
+                        tv_nsec: wait.subsec_nanos().into(),
                     };
                     let mut fds = [PollFd::new(fd, PollFlags::IN)];
                     match poll(&mut fds, Some(&wait)) {
@@ -237,8 +237,7 @@ pub fn free_name(dir: &Path, name: &str) -> String {
 fn nonce() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_nanos())
 }
 
 /// Moves each top-level entry of `stage` into `dest` under a free name. Never

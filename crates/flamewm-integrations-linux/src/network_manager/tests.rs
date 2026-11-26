@@ -81,7 +81,7 @@ fn method_call_helpers_match_direct_construction() {
         devices.interface().map(|i| i.to_string()).as_deref(),
         Some(NETWORK_MANAGER_INTERFACE)
     );
-    assert!(devices.get_items().is_empty());
+    assert_eq!(devices.get_items().len(), 0);
 }
 
 #[test]
@@ -191,6 +191,7 @@ fn secret_agent_parser_marks_hintless_get_secrets_as_empty_key() {
     items[3] = MessageItem::from(&[] as &[&str]);
     let message = secret_agent_call_with(SECRET_AGENT_INTERFACE, GET_SECRETS, &items);
     match parse_secret_agent_call(&message).expect("valid SecretAgent call") {
+        #[allow(clippy::assert_is_empty)]
         SecretAgentCall::GetSecrets { secret_key, .. } => assert!(secret_key.is_empty()),
         SecretAgentCall::CancelGetSecrets { .. } => panic!("GetSecrets parsed as cancel"),
         SecretAgentCall::SendReply { .. } => panic!("GetSecrets parsed as reply"),
@@ -682,7 +683,7 @@ fn assert_empty_return(message: &Message) {
     match parse_secret_agent_call(message).expect("call is not fatal") {
         SecretAgentCall::SendReply { reply: Some(reply) } => {
             assert_eq!(reply.msg_type(), MessageType::MethodReturn);
-            assert!(reply.get_items().is_empty());
+            assert_eq!(reply.get_items().len(), 0);
         }
         _ => panic!("call must produce an empty method return"),
     }

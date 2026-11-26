@@ -155,7 +155,7 @@ mod tests {
             assert_eq!(view.condition_text, NO_DATA_TEXT);
             assert_eq!(view.temperature, "--");
             assert!(view.attribution.is_none());
-            assert!(view.days.is_empty());
+            assert_eq!(view.days, []);
         }
     }
 
@@ -227,7 +227,7 @@ mod tests {
         ));
         assert_eq!(view.condition_text, "Loading...");
         assert_eq!(view.range, "H:-- L:--");
-        assert!(view.days.is_empty());
+        assert_eq!(view.days, []);
         assert!(view.attribution.is_none());
     }
 }

@@ -123,7 +123,10 @@ fn removable_devices_reports_mount_state_and_removable_flag() {
 
 #[test]
 fn uuid_blocks_is_empty_for_a_missing_directory() {
-    assert!(uuid_blocks(Path::new("/nonexistent/flamewm/by-uuid")).is_empty());
+    assert_eq!(
+        uuid_blocks(Path::new("/nonexistent/flamewm/by-uuid")).len(),
+        0
+    );
 }
 
 #[test]
@@ -206,6 +209,7 @@ fn lsblk_hides_loop_and_tiny_system_partitions() {
 }
 
 #[test]
+#[allow(clippy::assert_is_empty)]
 fn lsblk_json_lists_unmounted_filesystems_on_internal_and_removable_disks() {
     let sample = r#"{"blockdevices": [
         {"name":"sda","rm":false,"hotplug":false,"fstype":null,"mountpoint":null,"label":null,
@@ -249,7 +253,7 @@ fn lsblk_json_lists_unmounted_filesystems_on_internal_and_removable_disks() {
             },
         ]
     );
-    assert!(parse_lsblk("not json").is_empty());
+    assert_eq!(parse_lsblk("not json").len(), 0);
     assert!(
         parse_lsblk(r#"{"blockdevices": [{"name":"sdf","rm":true,"fstype":"vfat"}"#).is_empty()
     );
@@ -564,7 +568,7 @@ fn eject_refuses_an_internal_drive_unless_the_user_confirmed_it() {
         Ok(String::new())
     });
     assert!(outcome.unwrap_err().contains("confirm"));
-    assert!(calls.is_empty());
+    assert_eq!(calls.len(), 0);
     // The sidebar/menu click is the explicit confirmation, so the same device may be ejected then.
     let confirmed = eject_device_in(&root, "", "/dev/nvme0n1p1", true, |action, device| {
         calls.push(format!("{action} {device}"));

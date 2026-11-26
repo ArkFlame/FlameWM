@@ -394,7 +394,7 @@ mod tests {
         )
         .expect("stale check ok");
         assert!(!completed, "epoch bump stales the late completion");
-        assert!(doc.images.is_empty());
+        assert_eq!(doc.images.len(), 0);
         let repainted =
             apply_cached_binding(&mut doc, IconTarget::TaskSlot(1), 25).expect("cached repaint ok");
         assert!(repainted, "cached raster for the bound key must repaint");

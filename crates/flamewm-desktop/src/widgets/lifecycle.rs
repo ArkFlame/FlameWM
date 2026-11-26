@@ -2,7 +2,7 @@ use super::*;
 
 /// What a change of the window's fully-obscured state asks the widget loop to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VisibilityEffect {
+pub(super) enum VisibilityEffect {
     Suspend,
     Resume,
 }
