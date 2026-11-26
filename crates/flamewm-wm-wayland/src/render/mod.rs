@@ -539,9 +539,9 @@ fn layer_elements(
 
 pub fn render_frame(state: &mut State) {
     let _span = crate::profile::render();
-    // A host-drawn pointer means the window paints the cursor itself, so a pointer-motion request
-    // only sets the redraw flag (`request_cursor_paint`), never the scene flag. Painting then
-    // rebuilt the whole element list, re-checked both backdrop captures and submitted a
+    // A host-drawn pointer means the host window draws the cursor itself, so a pointer-motion
+    // request only sets the redraw flag (`request_cursor_paint`), never the scene flag. Painting
+    // then rebuilt the whole element list, re-checked both backdrop captures and submitted a
     // byte-identical frame. Consume the scene flag and skip that paint: every path that changes
     // pixels calls `request_paint`/`request_redraw` and sets it again. A dump arms its own scene
     // flag through `request_redraw`, and the lock screen never takes this path.
