@@ -418,6 +418,25 @@ mod mirror_extend_tests {
     const SRC: [u32; 6] = [1, 2, 3, 4, 5, 6];
 
     #[test]
+    fn a_sub_rect_matches_the_full_canvas_at_the_same_coordinates() {
+        // A grow-only resize fills two strips; each must equal the full mirror there.
+        let full = mirror_extend_argb(&SRC, 3, 2, (11, 9), (2, 3));
+        for rect in [(3, 0, 8, 9), (0, 3, 11, 6), (5, 4, 2, 3), (0, 0, 11, 9)] {
+            let patch = mirror_extend_argb_rect(&SRC, 3, 2, (2, 3), rect);
+            let (x, y, w, h) = rect;
+            for j in 0..h {
+                for i in 0..w {
+                    let [want, got] = [
+                        full[(y + j) as usize * 11 + (x + i) as usize],
+                        patch[j as usize * w as usize + i as usize],
+                    ];
+                    assert_eq!(got, want, "rect={rect:?} at ({i},{j})");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn grow_right_mirrors_the_right_edge_outward() {
         // 3x2 -> 5x2, origin 0: column 3 reflects column 2, column 4 reflects column 1.
         let out = mirror_extend_argb(&SRC, 3, 2, (5, 2), (0, 0));

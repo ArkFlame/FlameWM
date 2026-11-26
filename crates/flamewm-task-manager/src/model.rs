@@ -124,7 +124,6 @@ struct Cached {
     seen: u64,
     refreshed: u64,
     name: Arc<str>,
-    uid: u32,
     user: Arc<str>,
     command: Arc<str>,
     /// Last full `stat` sample, reused between rotating reads.

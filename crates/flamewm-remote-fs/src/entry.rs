@@ -159,7 +159,6 @@ fn civil_to_epoch(year: i64, month: i64, day: i64, hour: i64, minute: i64) -> i6
     days * 86_400 + hour * 3600 + minute * 60
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

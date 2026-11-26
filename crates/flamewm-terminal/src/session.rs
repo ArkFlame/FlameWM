@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use crate::parser::Parser;
@@ -25,6 +25,8 @@ pub struct Session {
     /// Cached line-discipline flags `(canonical, echoing)`, refreshed per output batch and per key press. The prompt
     /// check reads this instead of issuing an ioctl, so an idle repaint costs no syscall.
     modes: (bool, bool),
+    /// Output buffers the UI has finished parsing, so the reader reuses an allocation instead of making one per event.
+    recycle: Sender<Vec<u8>>,
 }
 
 impl Session {
@@ -42,9 +44,10 @@ impl Session {
         let reader = pty.take_reader().ok_or("pty reader missing")?;
         let notice_wake = wake.try_clone().map_err(|error| error.to_string())?;
         let pacer = spawn_pacer(wake)?;
+        let (recycle, recycled) = mpsc::channel::<Vec<u8>>();
         std::thread::Builder::new()
             .name(format!("flamewm-terminal-read-{id}"))
-            .spawn(move || read_loop(id, reader, events, pacer, notice_wake))
+            .spawn(move || read_loop(id, reader, events, pacer, notice_wake, recycled))
             .map_err(|error| error.to_string())?;
         let modes = pty.line_modes();
         Ok(Self {
@@ -53,6 +56,7 @@ impl Session {
             parser: Parser::new(),
             screen: Screen::new(size.cols as usize, size.rows as usize, scrollback),
             modes,
+            recycle,
         })
     }
 
@@ -72,11 +76,25 @@ impl Session {
         let _parse = flamewm_profiler::start("terminal.parse");
         self.parser.advance(bytes, &mut self.screen);
         // A line editor toggles ICANON and ECHO around its prompt, always with output; sampling here keeps the cached
-        // prompt check current without paying per frame.
-        self.modes = self.pty.line_modes();
+        // prompt check current without paying per frame. A flood batch skips the ioctl: a program emitting tens of KiB
+        // at once is not sitting at a prompt, and the next small batch (the prompt echo) samples the pair again.
+        if bytes.len() <= PROMPT_SAMPLE_BYTES {
+            self.modes = self.pty.line_modes();
+        }
         let replies = self.screen.take_replies();
         if !replies.is_empty() {
             let _ = self.pty.write(replies);
+        }
+    }
+
+    /// Returns an output buffer the UI finished parsing. The reader reuses it for the next batch, so a flood does not
+    /// allocate a fresh batch buffer per event. Oversized buffers are dropped: the cap keeps memory bounded.
+    pub fn recycle(&self, mut bytes: Vec<u8>) {
+        const KEEP: usize = 2 * BATCH_BYTES;
+        if bytes.capacity() <= KEEP {
+            bytes.clear();
+            // Unbounded channel: `send` only fails after the reader stopped, which is harmless here.
+            let _ = self.recycle.send(bytes);
         }
     }
 
@@ -124,6 +142,10 @@ pub const FRAME: Duration = Duration::from_millis(16);
 /// allocation, one channel message and one banner check per batch instead of one per few-KiB read.
 const BATCH_BYTES: usize = 32 * 1024;
 
+/// Batches at or below this size sample the line-discipline flags: smaller output is where a prompt echo arrives, and
+/// a flood batch would otherwise pay an ioctl per 32 KiB just to read flags a running program is not changing.
+const PROMPT_SAMPLE_BYTES: usize = 4096;
+
 /// Owns the wake socket and turns "output queued" signals into at most one wake per `FRAME`. A signal after idle
 /// wakes at once, so a keystroke echo is not delayed; a signal inside the window sleeps to its end, then one wake
 /// covers everything queued meanwhile, so trailing output is never stranded.
@@ -157,6 +179,7 @@ fn read_loop(
     events: Sender<SessionEvent>,
     pacer: Sender<()>,
     notice_wake: UnixStream,
+    recycled: Receiver<Vec<u8>>,
 ) {
     let _notice = ExitNotice {
         id,
@@ -183,10 +206,12 @@ fn read_loop(
                         Ok(extra) => batch.extend_from_slice(&buffer[..extra]),
                     }
                 }
-                // Send the filled batch and pre-size the next one to the same length: a flood then allocates once
-                // per event instead of regrowing from an empty `Vec`, while prompt echoes stay tiny.
+                // Send the filled batch and take a buffer the UI handed back: a flood then reuses allocations instead
+                // of growing a fresh `Vec` for every event. A missing recycled buffer keeps the old pre-sizing.
                 let next = batch.len().min(BATCH_BYTES);
-                let bytes = std::mem::replace(&mut batch, Vec::with_capacity(next));
+                let mut fresh = recycled.try_recv().unwrap_or_default();
+                fresh.reserve(next);
+                let bytes = std::mem::replace(&mut batch, fresh);
                 if events.send(SessionEvent::Output { id, bytes }).is_err() {
                     return;
                 }

@@ -109,9 +109,15 @@ impl App {
         // The row list is reused across frames: the projector hands it back after writing the document, so a frame
         // allocates no container once the window has been drawn at this size.
         let mut rows = std::mem::take(&mut self.frame_rows);
+        // Row 0 is the tab bar. Its runs are rebuilt each frame but almost never change, so keep the previous
+        // allocation when they match and skip both the `Arc` allocation and the projector's re-comparison.
+        let previous_bar = rows.first().cloned();
         rows.clear();
         let (bar, _) = self.tab_bar();
-        rows.push(Row::from(bar));
+        rows.push(match previous_bar {
+            Some(previous) if previous[..] == bar[..] => previous,
+            _ => Row::from(bar),
+        });
         match &self.view {
             View::Terminal => {
                 // The banner takes the top rows of the grid; the grid's bottom rows give way to it.

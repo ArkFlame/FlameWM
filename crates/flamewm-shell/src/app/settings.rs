@@ -82,17 +82,27 @@ impl ShellLoop {
     /// Automatic location tick: one lookup on the cadence, then the fix is written as the
     /// weather location and cached zone. Failures keep the last values and are not fatal.
     pub(super) fn tick_auto_location(&mut self) {
-        let Some(enabled) = self.settings_cache.as_ref().map(|s| {
-            flamewm_shell::weather_auto::flag(s, flamewm_shell::weather_auto::AUTO_LOCATION_KEY)
-        }) else {
+        // The setting only moves with a settings snapshot. Cache it, and while it is off skip the
+        // whole turn (no hash lookups, no clock read, no waker clone on every pointer event). The
+        // change turn still runs once so a disabled host drops any in-flight lookup.
+        let key = (self.settings_revision, self.settings_cache.is_some());
+        if self.auto_location_key != Some(key) {
+            self.auto_location_key = Some(key);
+            self.auto_location_enabled = self.settings_cache.as_ref().is_some_and(|snapshot| {
+                flamewm_shell::weather_auto::flag(
+                    snapshot,
+                    flamewm_shell::weather_auto::AUTO_LOCATION_KEY,
+                )
+            });
+        } else if !self.auto_location_enabled {
             return;
-        };
+        }
         let online = self.shell.snapshot().system.network.availability
             == flamewm_api::system::ServiceAvailability::Available;
         let waker = self.result_wake.waker();
         let Some(result) =
             self.auto_lookup
-                .tick(std::time::Instant::now(), enabled, online, || {
+                .tick(std::time::Instant::now(), self.auto_location_enabled, online, || {
                     flamewm_shell::weather_auto::spawn_ip_lookup(waker)
                 })
         else {

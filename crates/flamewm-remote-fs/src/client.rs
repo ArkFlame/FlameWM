@@ -254,12 +254,7 @@ impl RemoteFs {
             }
             let from_path = from.remote_path();
             let to_path = to.remote_path();
-            mutate(
-                sh,
-                &from,
-                &shell::rename(&from_path, &to_path),
-                &from_path,
-            )?;
+            mutate(sh, &from, &shell::rename(&from_path, &to_path), &from_path)?;
             invalidate_both(sh, &to);
             Ok(())
         })

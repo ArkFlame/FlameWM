@@ -311,7 +311,7 @@ pub fn main() -> Result<(), String> {
             flamewm_ui_x11::release_free_heap,
         )
         .map_err(|error| format!("register startup heap trim: {error}"))?;
-    sticky::attach_persist_wake(&mut state_cell.borrow_mut().sticky, &reactor);
+    sticky::attach_persist_wake(&mut state_cell.borrow_mut().sticky, &mut reactor);
     {
         let wake = reactor.owned_wake_deadline();
         let mut state = state_cell.borrow_mut();
@@ -493,7 +493,11 @@ pub fn main() -> Result<(), String> {
                 // Live toggle: the setting snapshot is the authority; watch add/remove follows it.
                 let organize_wanted = setting_bool(&state.settings, "organizeDownloads", false);
                 state.downloads.set_enabled(organize_wanted);
-                state.downloads.tick(std::time::Instant::now());
+                // Only an enabled organizer can act; its own early return also needs a clock read,
+                // so the common disabled flush (the default) pays neither.
+                if state.downloads.is_enabled() {
+                    state.downloads.tick(std::time::Instant::now());
+                }
                 if state.downloads.take_notice()
                     && let Err(error) = show_downloads_notice(document, &mut state)
                 {
@@ -761,11 +765,11 @@ fn register_downloads(
     reactor: &mut Reactor,
     state_cell: &std::rc::Rc<std::cell::RefCell<DesktopState>>,
 ) -> Result<(), String> {
-    // Downloads organizer: the same reactor owns its watch fd; the wake slot is shared with
-    // sticky persistence, so the organizer only ever publishes its own settle deadline.
+    // Downloads organizer: the same reactor owns its watch fd; the wake slot is its own, so the
+    // settle deadline can never overwrite (or clear) sticky persistence's deadline.
     let downloads_source = {
         let mut state = state_cell.borrow_mut();
-        state.downloads.attach_wake(reactor.wake_deadline());
+        state.downloads.attach_wake(reactor.owned_wake_deadline());
         state.downloads.take_source()
     };
     if let Some(source) = downloads_source {

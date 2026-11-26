@@ -62,6 +62,9 @@ pub struct OutlineOverlay {
     origin: (i32, i32),
     size: (u32, u32),
     lsb_first: bool,
+    /// Strips exactly as last uploaded, in present order: `(x, y, width, height, premultiplied)`.
+    /// A move of the frame keeps them all, so those uploads are skipped.
+    uploaded: Vec<(u32, u32, u32, u32, Vec<u8>)>,
 }
 
 impl OutlineOverlay {
@@ -134,6 +137,7 @@ impl OutlineOverlay {
             origin,
             size: (width, height),
             lsb_first: unsafe { XImageByteOrder(display) } == LSB_FIRST,
+            uploaded: Vec::new(),
         };
         // The empty input region is mandatory: without it the full-rect ring window would swallow
         // every click meant for the frame or its client. XShape unavailable fails creation (the
@@ -185,13 +189,25 @@ impl OutlineOverlay {
     }
 
     /// Writes the shared ring strips (`(x, y, width, height, straight RGBA)`) into the window.
-    pub fn present(&self, strips: &[(u32, u32, u32, u32, Vec<u8>)]) -> Result<(), String> {
+    ///
+    /// Strips identical to the last present are neither re-premultiplied nor re-uploaded: moving a
+    /// frame only reconfigures the ring window, and a resize changes just the bands it grew.
+    pub fn present(&mut self, strips: &[(u32, u32, u32, u32, Vec<u8>)]) -> Result<(), String> {
         if self.display.is_null() || self.window == 0 {
             return Err("outline overlay is not attached to a display".to_string());
         }
-        for (x, y, width, height, rgba) in strips {
+        for (index, (x, y, width, height, rgba)) in strips.iter().enumerate() {
             let (w, h) = (*width, *height);
             if w == 0 || h == 0 {
+                continue;
+            }
+            let unchanged = self
+                .uploaded
+                .get(index)
+                .is_some_and(|(cx, cy, cw, ch, bytes)| {
+                    (cx, cy, cw, ch) == (x, y, width, height) && bytes.as_slice() == rgba.as_slice()
+                });
+            if unchanged {
                 continue;
             }
             let mut bytes = premultiplied_pixels(rgba, self.lsb_first)?;
@@ -235,7 +251,12 @@ impl OutlineOverlay {
                 (*(image.cast::<crate::xlib::XImageHead>())).data = ptr::null_mut();
                 XDestroyImage(image);
             }
+            match self.uploaded.get_mut(index) {
+                Some(slot) => *slot = (*x, *y, w, h, bytes),
+                None => self.uploaded.push((*x, *y, w, h, bytes)),
+            }
         }
+        self.uploaded.truncate(strips.len());
         // A client raise can reorder the frame's children; keep the ring above its siblings.
         // SAFETY: the display/window pair is live (checked above).
         unsafe { XRaiseWindow(self.display, self.window) };
@@ -243,7 +264,11 @@ impl OutlineOverlay {
     }
 
     /// Hides the ring (an unmapped frame keeps no outline on screen).
-    pub fn hide(&self) {
+    ///
+    /// An unmapped window's contents are not guaranteed to survive, so the uploaded strips are
+    /// forgotten and the next present paints the ring again.
+    pub fn hide(&mut self) {
+        self.uploaded.clear();
         if self.display.is_null() || self.window == 0 {
             return;
         }

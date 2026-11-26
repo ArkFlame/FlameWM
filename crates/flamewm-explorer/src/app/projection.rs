@@ -1,5 +1,37 @@
 use super::super::*;
 
+/// Projection revision: incremented by every wake, action or key that can change chrome, rows or
+/// their inputs. A scroll wheel or a window move advances nothing, so a projection triggered only by
+/// the glide offset repaints the row window and the scrollbar instead of the whole window.
+thread_local! {
+    static STATE_EPOCH:std::cell::Cell<u64>=const { std::cell::Cell::new(0) };
+}
+pub(crate) fn note_state_change() {
+    STATE_EPOCH.with(|epoch|epoch.set(epoch.get().wrapping_add(1)));
+}
+fn state_epoch()->u64 {STATE_EPOCH.with(std::cell::Cell::get)}
+
+/// Identity of the last full chrome projection: the revision, the app it belongs to, and the theme
+/// colours the literal fills were written with. Equal means nothing outside the row pane changed.
+type ChromeKey=(u64,usize,[flamewm_ui_x11::UiColor;4]);
+thread_local! {
+    static CHROME_KEY:std::cell::Cell<Option<ChromeKey>>=const { std::cell::Cell::new(None) };
+}
+
+/// Everything a full row pass renders beyond the entry text: the window it filled, the day its
+/// relative dates were built for, the column widths and the literal theme fills. Equal means a new
+/// full pass only has to move the rows the last one filled to the current glide offset.
+#[derive(Clone,Copy,PartialEq)]
+struct RowsKey {
+    epoch:u64, origin:usize, rows:usize, first:usize, day:chrono::NaiveDate,
+    window_w:f32, name_w:f32, mod_w:f32, size_w:f32, kind_w:f32, kind_shown:bool,
+    selected:flamewm_ui_x11::UiColor, clear:flamewm_ui_x11::UiColor,
+    alternate:flamewm_ui_x11::UiColor, selection_fill:flamewm_ui_x11::UiColor,
+}
+thread_local! {
+    static ROWS_KEY:std::cell::Cell<Option<RowsKey>>=const { std::cell::Cell::new(None) };
+}
+
 /// Tab strip slots compiled into the template (`tab-0`…`tab-4`).
 const TAB_SLOTS:usize=5;
 
@@ -210,6 +242,10 @@ thread_local! {
     /// Which slots held an entry in the last full projection. A glide frame moves those rows and touches
     /// nothing else, so it no longer re-filters the listing up to the scroll origin to rebuild them.
     static ROW_OCCUPANCY:RefCell<[bool;ROW_SLOTS]>=const { RefCell::new([false;ROW_SLOTS]) };
+    /// Type-icon family each slot currently shows. `show_type_icon` hides every other family before it
+    /// shows one; skipping that pass when the family is unchanged removes `ROW_ICONS.len()` document
+    /// lookups per visible row per full projection, the largest per-row cost left in a scroll frame.
+    static TYPE_ICON_SHOWN:RefCell<[Option<&'static str>;ROW_SLOTS]>=const { RefCell::new([None;ROW_SLOTS]) };
 }
 /// Local date, refreshed at most once per second: `Local::now` resolves the time zone and the date is
 /// only used to invalidate "Today"/"Yesterday" labels.
@@ -344,6 +380,16 @@ impl ExplorerApp {
     }
 
     pub(crate) fn project(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
+        let chrome=(state_epoch(),std::ptr::from_ref(self) as usize,self.chrome_colors());
+        // Only a running glide projects the same window from a scroll-derived wake; every other
+        // projection may carry a state change the revision already records, so keep it complete.
+        if self.glide.is_animating(Instant::now()) && CHROME_KEY.with(|key|key.get())==Some(chrome) {
+            // A wheel notch, a scrollbar drag or a glide frame only moves the row window. Repaint the
+            // rows and the thumb; the sides, toolbar, tabs, status strip and popups are already right.
+            self.theme.project(doc)?;
+            self.project_rows(doc,true)?;
+            return self.project_scroll(doc);
+        }
         self.theme.project(doc)?;
         let ids=IdTables::get();
         let tab=self.model.tab();
@@ -486,22 +532,7 @@ impl ExplorerApp {
             doc.visible(&ids.sort_desc[i],active&&self.column_sort.descending)?;
         }
         self.project_rows(doc,true)?;
-        // Scrollbar: drawn only while some entries are outside the window; thumb size and position follow the window.
-        let rows=self.visible_rows();
-        let origin=self.origin(rows);
-        let (track_top,track_h)=self.scrollbar_track();
-        let track_x=self.window.0-SCROLLBAR_TRACK_WIDTH;
-        if let Some((thumb_top,thumb_len)) = scroll::thumb_geometry(track_h,self.scroll_total(),rows,origin) {
-            doc.position("scroll-track",track_x,track_top)?;
-            doc.size("scroll-track",SCROLLBAR_TRACK_WIDTH,track_h)?;
-            doc.visible("scroll-track",true)?;
-            doc.position("scroll-thumb",track_x+SCROLLBAR_THUMB_INSET,track_top+thumb_top)?;
-            doc.size("scroll-thumb",SCROLLBAR_THUMB_WIDTH,thumb_len)?;
-            doc.visible("scroll-thumb",true)?;
-        } else {
-            doc.visible("scroll-track",false)?;
-            doc.visible("scroll-thumb",false)?;
-        }
+        self.project_scroll(doc)?;
         self.project_rubber(doc)?;
         // Empty list space under the rows is the background context surface (rubber band and background menu).
         doc.visible("list-surface",true)?;
@@ -550,21 +581,25 @@ impl ExplorerApp {
         self.project_chooser(doc)?;
         self.project_convert_picker(doc)?;
         self.project_dialog(doc)?;
-        let selected_path=self.selected();
-        let many=self.model.tab().selected_paths.len()>1;
-        let in_trash=self.is_trash_files(tab.path());
-        let searching=self.search_rows.is_some();
-        let enabled=self.menu_enabled(selected_path.as_deref(),many,in_trash,searching);
-        // Offered indices, in menu order. A fixed array keeps this pass allocation-free: the menu
-        // can stay open across frames, and a Vec allocated on every projection.
-        let mut shown=[0usize;MENU_SLOTS];
-        let mut shown_len=0;
-        for index in 0..MENU_ITEMS.len() {
-            let offered=enabled.get(index).copied().unwrap_or(false);
-            doc.visible(&ids.menus[index],offered)?;
-            if offered {shown[shown_len]=index;shown_len+=1;}
-        }
-        if let Some((x,y))=self.context {
+        // A closed menu's rows are invisible behind a hidden popup. Skipping the offer pass and its
+        // `MENU_ITEMS` visibility writes keeps scrolling away from probing/formatting menu state; an
+        // opening menu changes the revision, so this pass always runs before its rows are shown.
+        if self.context.is_some() {
+            let selected_path=self.selected();
+            let many=self.model.tab().selected_paths.len()>1;
+            let in_trash=self.is_trash_files(tab.path());
+            let searching=self.search_rows.is_some();
+            let enabled=self.menu_enabled(selected_path.as_deref(),many,in_trash,searching);
+            // Offered indices, in menu order. A fixed array keeps this pass allocation-free: the menu
+            // can stay open across frames, and a Vec allocated on every projection.
+            let mut shown=[0usize;MENU_SLOTS];
+            let mut shown_len=0;
+            for index in 0..MENU_ITEMS.len() {
+                let offered=enabled.get(index).copied().unwrap_or(false);
+                doc.visible(&ids.menus[index],offered)?;
+                if offered {shown[shown_len]=index;shown_len+=1;}
+            }
+            let (x,y)=self.context.unwrap_or_default();
             // Shared desktop context-menu metrics; hidden actions consume no space.
             let metrics=flamewm_ui_core::context_menu::MenuMetrics::canonical();
             let row_h=metrics.row_height as f32;
@@ -580,6 +615,34 @@ impl ExplorerApp {
             let left=if self.menu_overflow {x-210.0} else {x};
             doc.position("context-popup",left.min(self.window.0-210.0).max(0.0),y.min(self.window.1-height).max(0.0))?;
         }
+        CHROME_KEY.with(|key|key.set(Some(chrome)));
+        Ok(())
+    }
+
+    /// Literal row fills derived from the theme. A settings snapshot changes these without changing the
+    /// projection revision, so they are part of both projection keys.
+    fn chrome_colors(&self)->[flamewm_ui_x11::UiColor;4] {
+        [self.theme.selected(),self.theme.clear(),self.theme.row_alternate(),self.theme.selection_fill()]
+    }
+
+    /// Scrollbar geometry: drawn only while some entries are outside the window; thumb size and position
+    /// follow the window. Kept separate so a rows-only projection still updates the thumb.
+    fn project_scroll(&self, doc:&mut impl UiDocumentAccess)->Result<(),String> {
+        let rows=self.visible_rows();
+        let origin=self.origin(rows);
+        let (track_top,track_h)=self.scrollbar_track();
+        let track_x=self.window.0-SCROLLBAR_TRACK_WIDTH;
+        if let Some((thumb_top,thumb_len)) = scroll::thumb_geometry(track_h,self.scroll_total(),rows,origin) {
+            doc.position("scroll-track",track_x,track_top)?;
+            doc.size("scroll-track",SCROLLBAR_TRACK_WIDTH,track_h)?;
+            doc.visible("scroll-track",true)?;
+            doc.position("scroll-thumb",track_x+SCROLLBAR_THUMB_INSET,track_top+thumb_top)?;
+            doc.size("scroll-thumb",SCROLLBAR_THUMB_WIDTH,thumb_len)?;
+            doc.visible("scroll-thumb",true)?;
+        } else {
+            doc.visible("scroll-track",false)?;
+            doc.visible("scroll-thumb",false)?;
+        }
         Ok(())
     }
 
@@ -594,26 +657,28 @@ impl ExplorerApp {
         let glide=self.glide.offset(Instant::now());
         // A glide frame moves only the rows the last full pass filled: their text, icons and backgrounds
         // are already right, so the listing is not filtered again up to the scroll origin or even walked.
-        if !full {
-            let ids=IdTables::get();
-            return ROW_OCCUPANCY.with(|occupancy|->Result<(),String>{
-                for (slot,occupied) in occupancy.borrow().iter().enumerate() {
-                    if !*occupied {continue;}
-                    let row=&ids.rows[slot];
-                    let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
-                    let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
-                    doc.visible(&row.row,in_view)?;
-                    doc.position(&row.row,SIDEBAR_WIDTH,y)?;
-                }
-                Ok(())
-            });
-        }
+        if !full {return self.project_rows_positions(doc);}
         let tab=self.model.tab();
         let kind_shown=self.show_type;
         let rows=self.visible_rows();
         let origin=self.origin(rows);
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
+        let today=today_cached();
+        // A scroll wheel repeats a full projection for the same window on every glide tick, and a drag
+        // re-projects the same rows on every motion. This key records everything the last full pass
+        // rendered; when nothing but the glide offset moved, only the row positions need repainting.
+        let total=self.window.0-SIDEBAR_WIDTH;
+        let key=RowsKey{
+            epoch:state_epoch(),origin,rows,first,day:today,window_w:self.window.0,
+            name_w:self.widths.name_width(total,kind_shown),mod_w:self.widths.modified,
+            size_w:self.widths.size,kind_w:self.widths.kind,kind_shown,
+            selected:self.theme.selected(),clear:self.theme.clear(),
+            alternate:self.theme.row_alternate(),selection_fill:self.theme.selection_fill(),
+        };
+        if self.glide.is_animating(Instant::now()) && ROWS_KEY.with(|cached|cached.get())==Some(key) {
+            return self.project_rows_positions(doc);
+        }
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
         match self.search_rows.as_ref() {
             Some(results)=>{
@@ -653,7 +718,6 @@ impl ExplorerApp {
             });
         }
         let ids=IdTables::get();
-        let today=today_cached();
         let occupancy=ROW_LABELS.with(|cell|->Result<[bool;ROW_SLOTS],String>{
             let mut labels=cell.borrow_mut();
             let mut occupancy=[false;ROW_SLOTS];
@@ -671,7 +735,6 @@ impl ExplorerApp {
                     doc.size(&row.row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
                     let text=row_labels(&mut labels,slot,entry,today);
 
-                    doc.text_ref(&row.name,&entry.name)?;
                     doc.text_ref(&row.size,&text.size)?;
                     doc.text_ref(&row.modified,&text.modified)?;
                     doc.text_ref(&row.kind,&text.kind)?;
@@ -681,10 +744,11 @@ impl ExplorerApp {
                     doc.visible(&row.kind,kind_shown)?;
                     // Dot files show the dimmed name twin (`name-dim-*`, CSS colour). Foreground overrides cannot reach a
                     // text child, and the icon raster is shared, so the icon stays full strength.
+                    // Only the visible twin is rebound: the hidden one is refreshed the next time it shows.
                     let dim=entry.name.starts_with('.');
                     doc.visible(&row.name,!dim)?;
                     doc.visible(&row.name_dim,dim)?;
-                    doc.text_ref(&row.name_dim,&entry.name)?;
+                    if dim {doc.text_ref(&row.name_dim,&entry.name)?;} else {doc.text_ref(&row.name,&entry.name)?;}
                     // Inline rename: the name cell shows the field with its caret; a selected stem is highlighted.
                     if matches!(self.edit,Some(EditMode::Rename)) && self.rename_target.as_ref()==Some(&entry.path) {
                         doc.visible(&row.name,true)?;
@@ -702,7 +766,28 @@ impl ExplorerApp {
             Ok(occupancy)
         })?;
         ROW_OCCUPANCY.with(|cell|*cell.borrow_mut()=occupancy);
+        ROWS_KEY.with(|cell|cell.set(Some(key)));
         Ok(())
+    }
+
+    /// Positions only: the rows the last full pass filled, moved to the current glide offset. Used by
+    /// glide frames and by a repeated full pass for the same window.
+    fn project_rows_positions(&self, doc:&mut impl UiDocumentAccess)->Result<(),String> {
+        let top=list_top(self.model.tabs.len()>1);
+        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
+        let glide=self.glide.offset(Instant::now());
+        let ids=IdTables::get();
+        ROW_OCCUPANCY.with(|occupancy|->Result<(),String>{
+            for (slot,occupied) in occupancy.borrow().iter().enumerate() {
+                if !*occupied {continue;}
+                let row=&ids.rows[slot];
+                let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
+                let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+                doc.visible(&row.row,in_view)?;
+                doc.position(&row.row,SIDEBAR_WIDTH,y)?;
+            }
+            Ok(())
+        })
     }
 
     pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry, in_view:bool, icon:&'static str, thumb:Option<&ThumbKey>)->Result<(),String> {
@@ -720,7 +805,6 @@ impl ExplorerApp {
                 // ROW_ICON_BOX explicitly, which overrides the stylesheet's larger `.row-thumb` rule:
                 // the name cell never jumps when a thumbnail arrives, and the 24px rule can never
                 // squeeze the 18px glyph out of its cell.
-                doc.size(&ids.ico_thumb,ROW_ICON_BOX,ROW_ICON_BOX)?;
                 let mut bound=self.thumb_bound.borrow_mut();
                 if bound[slot]!=Some(id) {
                     // A document that rejects the raster must not blank the row (or abort the whole
@@ -729,9 +813,11 @@ impl ExplorerApp {
                     let bound_ok=doc.image_rgba8_shared(&ids.ico_thumb,format!("explorer-thumb-{id}"),THUMB_SIZE,THUMB_SIZE,pixels).is_ok();
                     bound[slot]=bound_ok.then_some(id);
                     if !bound_ok {drop(bound);return self.show_type_icon(doc,slot,icon);}
+                    doc.size(&ids.ico_thumb,ROW_ICON_BOX,ROW_ICON_BOX)?;
+                    for icon_id in &ids.ico {doc.visible(icon_id,false)?;}
+                    doc.visible(&ids.ico_thumb,true)?;
+                    TYPE_ICON_SHOWN.with(|shown|shown.borrow_mut()[slot]=None);
                 }
-                for icon_id in &ids.ico {doc.visible(icon_id,false)?;}
-                doc.visible(&ids.ico_thumb,true)?;
             }
             RowIcon::Type(icon)=>self.show_type_icon(doc,slot,icon)?,
         }
@@ -742,6 +828,11 @@ impl ExplorerApp {
     /// comes from `view::file_icon`, whose values are the compiled `ROW_ICONS`. The glyph is sized
     /// explicitly so it stays visible even if the stylesheet's `.row-ico` box changes.
     pub(crate) fn show_type_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, icon:&'static str)->Result<(),String> {
+        // A full projection re-renders every visible row; most rows keep the same family, so the
+        // hide-all/show-one pass is skipped unless the slot's icon or its thumbnail binding changed.
+        let unchanged=self.thumb_bound.borrow()[slot].is_none()
+            && TYPE_ICON_SHOWN.with(|shown|shown.borrow()[slot])==Some(icon);
+        if unchanged {return Ok(());}
         self.thumb_bound.borrow_mut()[slot]=None;
         let ids=IdTables::get();
         let ids=&ids.rows[slot];
@@ -751,6 +842,7 @@ impl ExplorerApp {
             doc.visible(icon_id,shown)?;
             if shown {doc.size(icon_id,ROW_ICON_BOX,ROW_ICON_BOX)?;}
         }
+        TYPE_ICON_SHOWN.with(|shown|shown.borrow_mut()[slot]=Some(icon));
         Ok(())
     }
 

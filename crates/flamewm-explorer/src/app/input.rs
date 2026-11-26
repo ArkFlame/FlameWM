@@ -18,6 +18,13 @@ impl ExplorerApp {
 
     pub(crate) fn event(&mut self,e:&UiActionEvent) {
         let action=e.action.as_str();
+        // A wheel notch or a scrollbar drag moves only the row window and the thumb. Everything else
+        // can change chrome, so it advances the projection revision and forces the next full pass.
+        // Wheel over an open menu scrolls its rows, which is a chrome change.
+        let rows_only=matches!(action,"scroll"|"explorer.scroll.track"|"explorer.scroll.thumb") && self.context.is_none();
+        if !rows_only {
+            super::projection::note_state_change();
+        }
         if let Some(divider)=action.strip_prefix("explorer.colgrip.") {
             let divider=match divider {"mod"=>Some(Divider::Modified),"size"=>Some(Divider::Size),"kind"=>Some(Divider::Kind),_=>None};
             if let Some(divider)=divider {self.column_grip(divider,e);}
@@ -232,6 +239,7 @@ impl ExplorerApp {
     }
 
     pub(crate) fn key(&mut self,key:&UiKeyEvent) {
+        super::projection::note_state_change();
         self.key_inner(key);
         self.write_debug_field();
     }
@@ -374,6 +382,9 @@ impl ExplorerApp {
     }
 
     pub(crate) fn wake(&mut self,event:WorkerResult){
+        // A glide tick repaints only the rows; every other worker message can change chrome or the
+        // listing and advances the projection revision.
+        if !matches!(&event,WorkerResult::ScrollTick) {super::projection::note_state_change();}
         match event {
             WorkerResult::ChooserReady{request,chooser}=>{
                 if request!=self.chooser_request || !self.chooser_loading {return;}

@@ -35,36 +35,63 @@ impl History {
     /// Packs `line` (already trimmed, see `history_len`) into the smaller of the three forms. Borrowed so the live row's buffer is reused.
     pub(super) fn pack(line: &[Cell]) -> Self {
         let mut text = String::with_capacity(line.len());
-        // Ordinary output has a handful of runs; starting small avoids reserving a run per column for every line.
-        let mut runs: Vec<StyleRun> = Vec::with_capacity(line.len().min(8));
+        // The run list is built only when a second style appears: ordinary output is one style per line, so the
+        // common case allocates no `Vec` at all, and the trailing run stays in `style`/`len` until the end.
+        let mut runs: Vec<StyleRun> = Vec::new();
+        let mut style: Option<(Color, Color, u16)> = None;
+        let mut len = 0_u32;
         for cell in line {
             text.push(cell.ch);
-            match runs.last_mut() {
-                Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.attrs == cell.attrs => {
-                    run.len += 1;
+            let next = (cell.fg, cell.bg, cell.attrs);
+            match style {
+                Some(current) if current == next => len += 1,
+                Some(current) => {
+                    if runs.is_empty() {
+                        runs.reserve(8);
+                    }
+                    runs.push(StyleRun {
+                        len,
+                        fg: current.0,
+                        bg: current.1,
+                        attrs: current.2,
+                    });
+                    style = Some(next);
+                    len = 1;
                 }
-                _ => runs.push(StyleRun {
-                    len: 1,
-                    fg: cell.fg,
-                    bg: cell.bg,
-                    attrs: cell.attrs,
-                }),
+                None => {
+                    style = Some(next);
+                    len = 1;
+                }
             }
+        }
+        // One style across the whole line: shell and build output, stored as text with no run list.
+        if runs.is_empty() {
+            if let Some(current) = style {
+                let packed = text.len() + size_of::<StyleRun>();
+                if packed < std::mem::size_of_val(line) {
+                    return Self::Uniform {
+                        text: text.into_boxed_str(),
+                        fg: current.0,
+                        bg: current.1,
+                        attrs: current.2,
+                    };
+                }
+            }
+            return Self::Plain(line.to_vec());
+        }
+        if let Some(current) = style {
+            runs.push(StyleRun {
+                len,
+                fg: current.0,
+                bg: current.1,
+                attrs: current.2,
+            });
         }
         let packed = text.len() + runs.len() * size_of::<StyleRun>();
         if packed < std::mem::size_of_val(line) {
-            if let [run] = runs.as_slice() {
-                Self::Uniform {
-                    text: text.into_boxed_str(),
-                    fg: run.fg,
-                    bg: run.bg,
-                    attrs: run.attrs,
-                }
-            } else {
-                Self::Packed {
-                    text: text.into_boxed_str(),
-                    runs: runs.into_boxed_slice(),
-                }
+            Self::Packed {
+                text: text.into_boxed_str(),
+                runs: runs.into_boxed_slice(),
             }
         } else {
             Self::Plain(line.to_vec())

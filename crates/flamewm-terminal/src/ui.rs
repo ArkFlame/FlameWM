@@ -32,7 +32,7 @@ pub struct UiCache {
     /// Per pooled slot: the last attributes written (indexed `row * pool.runs + slot`).
     slots: Vec<SlotState>,
     /// The row handed to rows past the frame's end, kept so a frame allocates no empty row.
-    empty: Row,
+    empty: Option<Row>,
     /// Reused no-break-space text buffer for one run, so a projected row allocates no string per run.
     text: String,
 }
@@ -128,7 +128,10 @@ impl UiCache {
         if self.slots.len() != slots {
             self.slots = vec![SlotState::default(); slots];
         }
-        let empty = self.empty.clone();
+        let empty = self
+            .empty
+            .get_or_insert_with(|| Row::from(Vec::new()))
+            .clone();
         for row in 0..pool.rows {
             self.project_row(doc, pool, cell, row, frame.get(row).unwrap_or(&empty))?;
         }

@@ -279,11 +279,12 @@ enum StickyGestureMode {
     Resize(ResizeCorner),
 }
 
-/// Shares the reactor wake deadline with sticky state. No timer is registered: while
-/// nothing is pending the reactor blocks indefinitely, and a pending save wakes it at
-/// its due time.
-pub(crate) fn attach_persist_wake(state: &mut StickyState, reactor: &Reactor) {
-    state.wake = reactor.wake_deadline();
+/// Gives sticky state its own reactor wake slot. No timer is registered: while nothing is
+/// pending the slot stays unset and the reactor blocks indefinitely, and a pending save wakes it
+/// at its due time. An owned slot keeps a cleared or re-armed save from overwriting another
+/// owner's deadline in the shared slot.
+pub(crate) fn attach_persist_wake(state: &mut StickyState, reactor: &mut Reactor) {
+    state.wake = reactor.owned_wake_deadline();
 }
 
 pub(crate) fn poll_persist(
@@ -300,6 +301,10 @@ pub(crate) fn flush_persist_if_due(
     _document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
+    // Only a pending or armed save can be due; the common turn then pays no clock read.
+    if !state.sticky.persist_pending && state.sticky.persist_due.is_none() {
+        return Ok(());
+    }
     let now = Instant::now();
     if !state.sticky.take_due(now) {
         return Ok(());

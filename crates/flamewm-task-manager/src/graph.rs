@@ -263,4 +263,94 @@ mod tests {
         blend(&mut pixels, 1, 0, [200, 100, 50, 255]);
         assert_eq!(&pixels[4..8], &[200, 100, 50, 255]);
     }
+
+    fn pixel_at(pixels: &[u8], x: usize, y: usize) -> [u8; 4] {
+        let index = (y * WIDTH as usize + x) * 4;
+        [
+            pixels[index],
+            pixels[index + 1],
+            pixels[index + 2],
+            pixels[index + 3],
+        ]
+    }
+
+    #[test]
+    fn column_fill_stores_empty_pixels_and_blends_onto_existing_ones() {
+        let mut pixels = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
+        fill_below(&mut pixels, 3, 1, [10, 20, 30, 52]);
+        assert_eq!(pixel_at(&pixels, 3, 0), [0, 0, 0, 0], "fill starts at `top`");
+        assert_eq!(pixel_at(&pixels, 3, 1), [10, 20, 30, 52]);
+        assert_eq!(pixel_at(&pixels, 3, HEIGHT as usize - 1), [10, 20, 30, 52]);
+        // A non-empty target (a grid dot) keeps the source-over path.
+        fill_below(&mut pixels, 3, 1, [200, 100, 50, 52]);
+        assert_ne!(pixel_at(&pixels, 3, 1), [200, 100, 50, 52]);
+        // The line pass is a straight overwrite.
+        store(&mut pixels, 3, 1, [1, 2, 3, 255]);
+        assert_eq!(pixel_at(&pixels, 3, 1), [1, 2, 3, 255]);
+    }
 }
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::time::Instant;
+
+    /// cargo test -p flamewm-task-manager --release `bench_graph_raster` -- --ignored --nocapture
+    /// One raster per card per sample: this is the render share the 1 s tick pays for the three
+    /// graph cards, measured alone (no document, no X11) so it can be compared with the sampler.
+    #[test]
+    #[ignore = "measurement only"]
+    fn bench_graph_raster_per_sample() {
+        const TICKS: u32 = 300;
+        let history = |modulus: u32| {
+            let mut history = History::default();
+            for index in 0..TICKS {
+                history.push((index % modulus) as f32);
+            }
+            history
+        };
+        let (cpu, download, upload) = (history(40), history(20), history(7));
+        let (mut cpu_pixels, mut mem_pixels, mut net_pixels) = (Vec::new(), Vec::new(), Vec::new());
+        let started = Instant::now();
+        for _ in 0..TICKS {
+            render_into(
+                &[Series {
+                    history: &cpu,
+                    rgb: 0x003d_aee9,
+                    filled: true,
+                }],
+                100.0,
+                &mut cpu_pixels,
+            );
+            render_into(
+                &[Series {
+                    history: &cpu,
+                    rgb: 0x00b7_7ee0,
+                    filled: true,
+                }],
+                100.0,
+                &mut mem_pixels,
+            );
+            render_into(
+                &[
+                    Series {
+                        history: &download,
+                        rgb: 0x004f_d18b,
+                        filled: true,
+                    },
+                    Series {
+                        history: &upload,
+                        rgb: 0x00f4_a259,
+                        filled: false,
+                    },
+                ],
+                4096.0,
+                &mut net_pixels,
+            );
+            std::hint::black_box((&cpu_pixels, &mem_pixels, &net_pixels));
+        }
+        let per_sample_ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(TICKS);
+        println!("bench graph cards=3 per_sample_ms={per_sample_ms:.3}");
+    }
+}
+

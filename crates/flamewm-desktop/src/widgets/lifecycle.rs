@@ -56,6 +56,14 @@ pub(crate) fn poll(
         state.widgets.wake.set(None);
         return Ok(());
     }
+    // Deadlines and a media update are the only reasons to act. Without one, skip the clock read
+    // entirely: a widget-free desktop then pays nothing per event flush.
+    if state.widgets.sample_due.is_none()
+        && state.widgets.due.is_none()
+        && !state.widgets.media_dirty
+    {
+        return Ok(());
+    }
     let now = Instant::now();
     let sampling = state.widgets.sample_due.is_some_and(|due| now >= due);
     let ticking = state.widgets.due.is_some_and(|due| now >= due);

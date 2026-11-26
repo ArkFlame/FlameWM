@@ -63,11 +63,67 @@ pub(crate) struct MirrorKey {
     pub(crate) origin: (i64, i64),
 }
 
-/// Cached mirrored fill: the pixmap is `key`-sized and holds `mirror_extend_argb` of the snapshot.
+/// Cached mirrored fill: the pixmap holds `mirror_extend_argb` of the snapshot.
+///
+/// `capacity` is the pixmap's pixel size and never shrinks, so a resize grows only the strips it
+/// added instead of reallocating and re-uploading the whole window per frame. `filled` is the
+/// top-left area already written for this origin; every pixel in it stays correct regardless of
+/// the key, because the mirror of a pixel depends on its own coordinates and the origin only.
 #[derive(Debug)]
 pub(crate) struct MirrorFill {
     pub(crate) key: MirrorKey,
+    pub(crate) capacity: (u32, u32),
+    pub(crate) filled: (u32, u32),
     pub(crate) pixmap: Pixmap,
+}
+
+/// Pixmap size chosen for `size`: the window plus a quarter, so a drag that grows the window
+/// reallocates a handful of times instead of on every frame.
+#[must_use]
+pub(crate) fn mirror_capacity(size: (u32, u32)) -> (u32, u32) {
+    let grow = |v: u32| v.saturating_add((v / 4).max(64));
+    (grow(size.0), grow(size.1))
+}
+
+/// Pixmap regions that a crop moved from `old_root` to `new_root` does not already hold, as
+/// `(x, y, width, height)` in window pixels. Empty when the rects do not overlap; `None` when the
+/// shift covers the whole window and a full upload is simpler.
+#[must_use]
+pub(crate) fn shift_patches(
+    old_root: (i32, i32),
+    new_root: (i32, i32),
+    size: (u32, u32),
+) -> Option<Vec<(u32, u32, u32, u32)>> {
+    let (w, h) = (i64::from(size.0), i64::from(size.1));
+    let dx = i64::from(new_root.0) - i64::from(old_root.0);
+    let dy = i64::from(new_root.1) - i64::from(old_root.1);
+    if (dx, dy) == (0, 0) || dx.abs() >= w || dy.abs() >= h {
+        return None;
+    }
+    let mut patches = Vec::with_capacity(2);
+    if dx > 0 {
+        patches.push((0, 0, dx as u32, size.1));
+    } else if dx < 0 {
+        patches.push(((w + dx) as u32, 0, (-dx) as u32, size.1));
+    }
+    if dy > 0 {
+        patches.push((0, 0, size.0, dy as u32));
+    } else if dy < 0 {
+        patches.push((0, (h + dy) as u32, size.0, (-dy) as u32));
+    }
+    Some(patches)
+}
+
+/// Copies one `(x, y, width, height)` sub-rect of `width`-wide words.
+#[must_use]
+pub(crate) fn crop_words(src: &[u32], src_width: u32, rect: (u32, u32, u32, u32)) -> Vec<u32> {
+    let (x, y, w, h) = rect;
+    let mut out = Vec::with_capacity(w as usize * h as usize);
+    for row in 0..h {
+        let start = (y + row) as usize * src_width as usize + x as usize;
+        out.extend_from_slice(&src[start..start + w as usize]);
+    }
+    out
 }
 
 /// What a requested backdrop change does to the installed one. `None` means the installed backdrop
@@ -145,10 +201,13 @@ impl X11App {
     }
 
     /// The window moved or resized: the snapshot is recropped on the next paint.
+    ///
+    /// The generation is not bumped here: a recapture that lands the same pixels at the same size
+    /// and root leaves the installed backdrop valid, so a retained backbuffer may still be reused.
+    /// `capture_window_backdrop` bumps it exactly when the cropped pixels change.
     pub(crate) fn mark_window_backdrop_stale(&mut self) {
         if let Some(state) = self.window_backdrop.as_mut() {
             state.stale = true;
-            state.generation += 1;
         }
     }
 
@@ -292,6 +351,13 @@ impl X11App {
         if unchanged {
             return Ok(());
         }
+        // A moved window re-crops the same canvas: upload only the strips the shift exposed
+        // instead of the whole snapshot, since the retained pixmap already holds the overlap.
+        if let Some(epoch) = canvas_epoch
+            && unsafe { self.patch_moved_window_backdrop(&words, (rx, ry), epoch)? }
+        {
+            return Ok(());
+        }
         self.drop_mirror_fill();
         let upload_span = flamewm_profiler::start("render.backdrop.upload");
         let reuse = self
@@ -335,6 +401,77 @@ impl X11App {
             unsafe { crate::native::xresource::free_pixmap_raw(self.display, old.pixmap) };
         }
         Ok(())
+    }
+
+    /// A same-size crop that moved on the canvas: uploads only the strips the shift exposed and
+    /// keeps the retained pixmap for the overlap, so a drag repaints no full-window snapshot.
+    ///
+    /// Returns whether the retained snapshot was patched; `false` sends the caller through the
+    /// full upload (a shrink, a jump of a whole window, or no matching retained pixmap).
+    ///
+    /// # Safety
+    ///
+    /// Must run on the app's display thread, before the scene is cleared for a paint.
+    pub(crate) unsafe fn patch_moved_window_backdrop(
+        &mut self,
+        words: &[u32],
+        root: (i32, i32),
+        epoch: u64,
+    ) -> Result<bool, String> {
+        let (width, height) = (self.width, self.height);
+        if words.len() != width as usize * height as usize {
+            return Ok(false);
+        }
+        let Some(pixmap) = self
+            .window_backdrop_pixmap
+            .as_ref()
+            .filter(|backdrop| (backdrop.width, backdrop.height) == (width, height))
+            .map(|backdrop| backdrop.pixmap)
+        else {
+            return Ok(false);
+        };
+        let Some(old_root) = self
+            .window_backdrop
+            .as_ref()
+            .and_then(|state| state.captured.as_ref())
+            .filter(|old| {
+                old.canvas_epoch == Some(epoch) && (old.width, old.height) == (width, height)
+            })
+            .map(|old| old.root)
+        else {
+            return Ok(false);
+        };
+        let Some(patches) = shift_patches(old_root, root, (width, height)) else {
+            return Ok(false);
+        };
+        let visual = self.backdrop_argb_visual()?;
+        for (x, y, w, h) in &patches {
+            let strip = crop_words(words, width, (*x, *y, *w, *h));
+            unsafe {
+                self.upload_argb32_words_at(
+                    pixmap,
+                    visual,
+                    &strip,
+                    *w,
+                    *h,
+                    (*x as i32, *y as i32),
+                )?;
+            }
+        }
+        self.drop_mirror_fill();
+        if let Some(state) = self.window_backdrop.as_mut() {
+            // The pixels at a moved root position differ, so the backbuffer no longer holds this
+            // backdrop.
+            state.generation += 1;
+            state.captured = Some(CapturedSnapshot {
+                words: words.to_vec(),
+                width,
+                height,
+                root,
+                canvas_epoch: Some(epoch),
+            });
+        }
+        Ok(true)
     }
 
     /// What lies behind the window at root `rect`, composed live from the desktop and the frames
@@ -427,16 +564,22 @@ impl X11App {
     }
 
     /// Retains `fill` as the cached mirror, freeing the pixmap it replaces.
+    ///
+    /// A grown fill keeps its pixmap, so the replaced entry may hold the same handle; only a
+    /// different, dropped pixmap is freed.
     pub(crate) fn store_mirror_fill(&mut self, fill: MirrorFill) {
         let display = self.display;
+        let new_pixmap = fill.pixmap;
         match self.window_backdrop.as_mut() {
             Some(state) => {
-                if let Some(old) = state.mirror.replace(fill) {
+                if let Some(old) = state.mirror.replace(fill)
+                    && old.pixmap != new_pixmap
+                {
                     unsafe { crate::native::xresource::free_pixmap_raw(display, old.pixmap) };
                 }
             }
             None => {
-                unsafe { crate::native::xresource::free_pixmap_raw(display, fill.pixmap) };
+                unsafe { crate::native::xresource::free_pixmap_raw(display, new_pixmap) };
             }
         }
     }

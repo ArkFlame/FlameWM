@@ -39,9 +39,7 @@ fn find_tool() -> Result<PathBuf> {
         })
     })
     .clone()
-    .ok_or_else(|| {
-        ArchiveError::Unsupported("7z archives need 7zz or 7z on PATH".to_owned())
-    })
+    .ok_or_else(|| ArchiveError::Unsupported("7z archives need 7zz or 7z on PATH".to_owned()))
 }
 
 /// Runs the tool to completion, polling `cancel`. Returns stdout; a non-zero exit is an error.

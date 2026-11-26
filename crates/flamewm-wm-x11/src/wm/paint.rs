@@ -452,9 +452,10 @@ impl<C: Connection> Wm<'_, C> {
         let Some(overlay) = self.outline_overlays.get_mut(&client) else {
             return;
         };
-        let painted = overlay
-            .configure((0, 0), (width, height), radius)
-            .and_then(|()| overlay.present(&strips));
+        let painted = match overlay.configure((0, 0), (width, height), radius) {
+            Ok(()) => overlay.present(&strips),
+            Err(error) => Err(error),
+        };
         if let Err(error) = painted {
             eprintln!("FLAMEWM_OUTLINE_OVERLAY_PAINT_FAILED client={client} reason={error}");
             self.outline_overlays.remove(&client);

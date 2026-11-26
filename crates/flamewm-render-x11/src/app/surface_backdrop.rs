@@ -16,6 +16,12 @@ use flamewm_render_core::lower::node_backdrop_clip;
 use super::X11App;
 use super::window_backdrop::{MirrorFill, MirrorKey};
 
+/// Upload work for the retained mirrored fill: only the strips a grow added, or the whole key area.
+enum MirrorPlan {
+    Patches(Vec<((i32, i32), (u32, u32), Vec<u32>)>),
+    Full(Vec<u32>),
+}
+
 /// Debug trace for backdrop painting, enabled by `FLAMEWM_DEBUG_BACKDROP=1` (stderr).
 /// The message is built only when tracing is enabled, so disabled tracing allocates nothing.
 fn trace_paint(message: impl FnOnce() -> String) {
@@ -136,9 +142,36 @@ impl X11App {
         unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
     }
 
+    /// Like [`Self::upload_argb_pixmap`], but allocates a `capacity`-sized pixmap and uploads only
+    /// the `width` x `height` top-left region. The mirrored fill grows inside one allocation.
+    ///
+    /// # Safety
+    ///
+    /// The app's display must be live and this app must own its drawables.
+    pub(crate) unsafe fn upload_argb_pixmap_sized(
+        &mut self,
+        argb: &[u32],
+        width: u32,
+        height: u32,
+        capacity: (u32, u32),
+    ) -> Result<Pixmap, String> {
+        let visual = self.backdrop_argb_visual()?;
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let (cap_w, cap_h) = (capacity.0.max(width).max(1), capacity.1.max(height).max(1));
+        let pixmap = unsafe { XCreatePixmap(self.display, root, cap_w, cap_h, 32) };
+        if pixmap == 0 {
+            return Err("backdrop: XCreatePixmap failed".to_string());
+        }
+        if let Err(error) = unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) } {
+            unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
+            return Err(error);
+        }
+        Ok(pixmap)
+    }
+
     /// The ARGB visual the app resolved once at startup. The server's visual set is immutable for
     /// a display, so matching it again on every backdrop upload only costs a round trip.
-    fn backdrop_argb_visual(&self) -> Result<*mut Visual, String> {
+    pub(crate) fn backdrop_argb_visual(&self) -> Result<*mut Visual, String> {
         self.argb_visual
             .ok_or_else(|| "backdrop: no 32-bit TrueColor visual".to_string())
     }
@@ -154,8 +187,9 @@ impl X11App {
     /// from where it sits in root coordinates, so the grown strip continues the existing content
     /// instead of showing the cleared (black) scene.
     ///
-    /// The mirrored pixmap is cached for one (scene size, snapshot origin) key. A repaint with the
-    /// same key blits the cached pixmap; only a new key recomputes and uploads it.
+    /// One pixmap is retained per origin and capacity. A repaint with the same key blits it; a
+    /// grow-only drag uploads just the strips it added, because the mirror of a pixel depends on
+    /// its own coordinates and the origin alone, never on the canvas size.
     ///
     /// # Safety
     ///
@@ -192,36 +226,120 @@ impl X11App {
                 i64::from(captured_root.1) - i64::from(ry),
             ),
         };
-        let cached = self
+        let retained = self
             .window_backdrop
             .as_ref()
             .and_then(|s| s.mirror.as_ref())
-            .filter(|fill| fill.key == key)
-            .map(|fill| fill.pixmap);
-        let pixmap = match cached {
-            Some(pixmap) => pixmap,
-            None => {
-                let words = {
-                    let Some(captured) = self
-                        .window_backdrop
-                        .as_ref()
-                        .and_then(|s| s.captured.as_ref())
-                    else {
-                        return Ok(());
-                    };
-                    crate::backdrop::mirror_extend_argb(
-                        &captured.words,
-                        captured.width,
-                        captured.height,
-                        (width, height),
-                        key.origin,
-                    )
-                };
-                let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
-                self.store_mirror_fill(MirrorFill { key, pixmap });
-                pixmap
+            .map(|fill| (fill.key, fill.capacity, fill.filled, fill.pixmap));
+        if let Some((old, _, _, pixmap)) = retained
+            && old == key
+        {
+            return unsafe { self.blit_mirror(pixmap, width, height) };
+        }
+        let plan = {
+            let Some(captured) = self
+                .window_backdrop
+                .as_ref()
+                .and_then(|s| s.captured.as_ref())
+            else {
+                return Ok(());
+            };
+            let src = (&captured.words, captured.width, captured.height);
+            match retained {
+                Some((old, capacity, filled, _))
+                    if old.origin == key.origin
+                        && capacity.0 >= key.width
+                        && capacity.1 >= key.height =>
+                {
+                    let mut strips = Vec::new();
+                    if key.width > filled.0 && filled.1 > 0 {
+                        let strip_h = filled.1.min(key.height);
+                        let w = key.width - filled.0;
+                        let words = crate::backdrop::mirror_extend_argb_rect(
+                            src.0,
+                            src.1,
+                            src.2,
+                            key.origin,
+                            (filled.0, 0, w, strip_h),
+                        );
+                        strips.push(((filled.0 as i32, 0), (w, strip_h), words));
+                    }
+                    if key.height > filled.1 {
+                        let h = key.height - filled.1;
+                        let words = crate::backdrop::mirror_extend_argb_rect(
+                            src.0,
+                            src.1,
+                            src.2,
+                            key.origin,
+                            (0, filled.1, key.width, h),
+                        );
+                        strips.push(((0, filled.1 as i32), (key.width, h), words));
+                    }
+                    MirrorPlan::Patches(strips)
+                }
+                _ => MirrorPlan::Full(crate::backdrop::mirror_extend_argb(
+                    src.0,
+                    src.1,
+                    src.2,
+                    (width, height),
+                    key.origin,
+                )),
             }
         };
+        let visual = self.backdrop_argb_visual()?;
+        let (pixmap, capacity, filled) = match (retained, plan) {
+            (Some((_, capacity, filled, pixmap)), MirrorPlan::Patches(strips)) => {
+                for (at, (w, h), words) in strips {
+                    unsafe {
+                        self.upload_argb32_words_at(pixmap, visual, &words, w, h, at)?;
+                    }
+                }
+                (pixmap, capacity, (width.max(filled.0), height.max(filled.1)))
+            }
+            (retained, MirrorPlan::Full(words)) => {
+                let reuse = retained.filter(|(_, cap, _, _)| cap.0 >= width && cap.1 >= height);
+                match reuse {
+                    Some((_, capacity, _, pixmap)) => {
+                        unsafe {
+                            self.upload_argb32_words_at(
+                                pixmap,
+                                visual,
+                                &words,
+                                width,
+                                height,
+                                (0, 0),
+                            )?;
+                        }
+                        (pixmap, capacity, (width, height))
+                    }
+                    None => {
+                        let capacity = super::window_backdrop::mirror_capacity((width, height));
+                        let pixmap = unsafe {
+                            self.upload_argb_pixmap_sized(&words, width, height, capacity)
+                        }?;
+                        (pixmap, capacity, (width, height))
+                    }
+                }
+            }
+            (None, MirrorPlan::Patches(_)) => {
+                return Err("window backdrop: mirror patch without a retained pixmap".to_string());
+            }
+        };
+        self.store_mirror_fill(MirrorFill {
+            key,
+            capacity,
+            filled,
+            pixmap,
+        });
+        unsafe { self.blit_mirror(pixmap, width, height) }
+    }
+
+    /// Blits a retained mirrored pixmap at its key size.
+    ///
+    /// # Safety
+    ///
+    /// `pixmap` must be a live depth-32 pixmap on this app's display.
+    unsafe fn blit_mirror(&mut self, pixmap: Pixmap, width: u32, height: u32) -> Result<(), String> {
         match self.xrender.as_mut() {
             Some(xrender) => unsafe { xrender.blit_argb32_over(pixmap, 0, 0, width, height) },
             None => Ok(()),

@@ -113,6 +113,19 @@ fn uses_wall_time(widget: &Widget) -> bool {
     )
 }
 
+/// Placeholder wall time for a desktop whose widgets never render time. Nothing formats it and
+/// the sync key stores `None`, so `chrono::Local::now()` (a timezone lookup) is only read when a
+/// clock, calendar or custom template actually consumes the wall clock.
+const NO_WALL_TIME: WallTime = WallTime {
+    year: 1970,
+    month: 1,
+    day: 1,
+    weekday: 0,
+    hour: 0,
+    minute: 0,
+    second: 0,
+};
+
 pub(crate) fn sync_widgets(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -121,10 +134,14 @@ pub(crate) fn sync_widgets(
     if state.widgets.obscured {
         return Ok(());
     }
-    let time = local_wall_time();
     // Wall time only reaches the document through time-showing widgets; without one, a
-    // second-by-second clock must not force a sync.
+    // second-by-second clock must not force a sync and the local time need not be read at all.
     let needs_time = state.widgets.store.widgets().iter().any(uses_wall_time);
+    let time = if needs_time {
+        local_wall_time()
+    } else {
+        NO_WALL_TIME
+    };
     // Compare the stored key field by field before formatting anything: an unchanged turn then
     // costs no settings/widget snapshot clone, no date/time formatting and no allocation.
     let time_key = needs_time.then_some(time);

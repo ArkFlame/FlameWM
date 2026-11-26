@@ -208,6 +208,10 @@ pub(crate) struct ShellLoop {
     pub(crate) media_focus: Option<usize>,
     /// Automatic location lookup cadence (opt-in via `autoLocationEnabled`).
     pub(crate) auto_lookup: flamewm_shell::weather_auto::AutoLookup,
+    /// Settings revision and whether a snapshot was present when `autoLocationEnabled` was last
+    /// read; while the cached flag is off an idle turn does no lookup work at all.
+    pub(crate) auto_location_key: Option<(u64, bool)>,
+    pub(crate) auto_location_enabled: bool,
     /// Completion wake shared by the weather and IP-lookup workers; the reactor watches its reader.
     pub(crate) result_wake: flamewm_shell::weather_host::ResultWake,
     /// The reactor's single shared wake slot; the tick publishes the earliest pending deadline.
@@ -321,6 +325,8 @@ impl ShellLoop {
             usage_focus: None,
             media_focus: None,
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
+            auto_location_key: None,
+            auto_location_enabled: false,
             result_wake,
             wake: None,
             auto_time_zone_applied: None,

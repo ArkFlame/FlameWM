@@ -312,6 +312,8 @@ impl App {
             SessionEvent::Output { id, bytes } => {
                 if let Some(pane) = self.pane_mut(id) {
                     pane.session.feed(&bytes);
+                    // Hand the buffer back so the reader's next batch reuses it instead of allocating again.
+                    pane.session.recycle(bytes);
                 }
                 self.update_banner();
             }

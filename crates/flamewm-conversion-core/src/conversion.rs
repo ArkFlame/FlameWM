@@ -52,10 +52,10 @@ fn available_converter() -> Option<PathBuf> {
 /// provider on each open (`ffmpeg` several times through `offered_tools`), and
 /// each miss used to re-read `PATH` and `stat` every directory on the UI side.
 /// Caching keeps one filesystem sweep for the life of the process.
-fn program_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>>,
-    > = std::sync::OnceLock::new();
+type ProgramCache = std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>>;
+
+fn program_cache() -> &'static ProgramCache {
+    static CACHE: std::sync::OnceLock<ProgramCache> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 

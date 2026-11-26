@@ -82,14 +82,14 @@ impl Organizer {
         Rc::clone(&self.queue)
     }
 
-    /// Shares the reactor wake slot so pending settle checks wake the loop.
+    /// Private reactor wake slot, so a settle deadline never clobbers another owner's deadline.
     pub fn attach_wake(&mut self, wake: WakeDeadline) {
         self.wake = wake;
     }
 
-    #[cfg(test)]
+    /// True while the kernel watch is installed and the organizer can act on notes.
     #[must_use]
-    pub const fn enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 
@@ -253,27 +253,20 @@ impl Organizer {
         }
     }
 
-    /// Publishes the next settle check to the shared reactor wake slot while files are pending.
+    /// Publishes the next settle check to this organizer's own reactor wake slot while files are
+    /// pending. The slot is private, so it is simply replaced or cleared without reading back.
     fn arm(&mut self, now: Instant) {
         if self.tracked.is_empty() {
             self.disarm();
             return;
         }
         let due = now + POLL;
-        // Only another owner's future deadline is kept; our own previous value is replaced.
-        let other = self
-            .wake
-            .get()
-            .filter(|value| Some(*value) != self.armed && *value > now);
-        let next = other.map_or(due, |other| other.min(due));
-        self.wake.set(Some(next));
-        self.armed = Some(next);
+        self.wake.set(Some(due));
+        self.armed = Some(due);
     }
 
     fn disarm(&mut self) {
-        if self.armed.is_some() && self.wake.get() == self.armed {
-            self.wake.set(None);
-        }
+        self.wake.set(None);
         self.armed = None;
     }
 }
@@ -477,7 +470,7 @@ mod tests {
             root.join("Documents").exists()
         }));
         assert!(harness.root.join("quiet.pdf").exists());
-        assert!(!harness.organizer.enabled());
+        assert!(!harness.organizer.is_enabled());
     }
 
     #[test]
@@ -489,7 +482,7 @@ mod tests {
             root.join("Documents").exists()
         }));
         harness.organizer.set_enabled(true);
-        assert!(harness.organizer.enabled());
+        assert!(harness.organizer.is_enabled());
     }
 
     #[test]

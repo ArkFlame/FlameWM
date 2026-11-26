@@ -130,6 +130,26 @@ pub(crate) unsafe fn upload_words_image(
     size: (u32, u32),
     what: &str,
 ) -> Result<(), String> {
+    unsafe { upload_words_image_at(display, pixmap, visual, depth, argb, size, (0, 0), what) }
+}
+
+/// [`upload_words_image`] into the pixmap region whose top-left is `at` in pixmap pixels.
+///
+/// A moved or grew backdrop patches only its exposed strips, so the image keeps its own extent and
+/// lands at the retained pixmap's offset instead of re-uploading the whole area.
+///
+/// # Safety
+/// Same as [`upload_words_image`]; `at` plus `size` must lie inside the pixmap.
+pub(crate) unsafe fn upload_words_image_at(
+    display: *mut Display,
+    pixmap: Pixmap,
+    visual: *mut Visual,
+    depth: u32,
+    argb: &[u32],
+    size: (u32, u32),
+    at: (i32, i32),
+    what: &str,
+) -> Result<(), String> {
     let (width, height) = size;
     if visual.is_null() {
         return Err(format!("{what}: ARGB32 visual is NULL"));
@@ -159,7 +179,7 @@ pub(crate) unsafe fn upload_words_image(
     }
     unsafe {
         XPutImage(
-            display, pixmap, pixmap_gc, ximage, 0, 0, 0, 0, width, height,
+            display, pixmap, pixmap_gc, ximage, 0, 0, at.0, at.1, width, height,
         );
         XFreeGC(display, pixmap_gc);
         XDestroyImage(ximage);
@@ -477,6 +497,38 @@ impl X11App {
                 width,
                 height,
                 "ARGB32 upload",
+            )
+        }
+    }
+
+    /// Uploads `width * height` `0xAARRGGBB` words into the pixmap region at `at`.
+    ///
+    /// # Safety
+    ///
+    /// `pixmap` must be a live 32-bit pixmap on this app's display and the region must lie inside
+    /// it.
+    pub(crate) unsafe fn upload_argb32_words_at(
+        &mut self,
+        pixmap: Pixmap,
+        visual: *mut Visual,
+        argb: &[u32],
+        width: u32,
+        height: u32,
+        at: (i32, i32),
+    ) -> Result<(), String> {
+        if visual.is_null() {
+            return Err("ARGB32 visual is NULL".to_string());
+        }
+        unsafe {
+            upload_words_image_at(
+                self.display,
+                pixmap,
+                visual,
+                32,
+                argb,
+                (width, height),
+                at,
+                "ARGB32 patch",
             )
         }
     }
