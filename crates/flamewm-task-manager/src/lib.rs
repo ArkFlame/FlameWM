@@ -1314,7 +1314,7 @@ pub fn run() -> Result<(), String> {
                 UiControllerEvent::Visibility { obscured } => {
                     hidden.store(*obscured, Ordering::Relaxed);
                     visibility_gate.set_visible(!*obscured);
-                    event_window.borrow_mut().window_visible = !*obscured;
+                    app.window_visible = !*obscured;
                     // Interrupt the sampler's 1 s wait: a hide parks it now, an uncover samples now.
                     let _ = visibility_tx.try_send(WorkerMsg::VisibilityChanged);
                     Ok(())
