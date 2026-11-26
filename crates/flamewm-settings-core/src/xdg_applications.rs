@@ -794,10 +794,7 @@ mod tests {
         )
         .unwrap();
         let present = settings.stamp();
-        assert_ne!(
-            present, absent,
-            "a new autostart entry must move the stamp"
-        );
+        assert_ne!(present, absent, "a new autostart entry must move the stamp");
         assert_eq!(
             settings.stamp(),
             present,
