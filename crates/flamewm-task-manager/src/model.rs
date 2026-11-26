@@ -875,6 +875,29 @@ mod tests {
         );
     }
     #[test]
+    fn cpu_share_is_the_busy_delta_over_the_total_delta() {
+        // 150 busy ticks out of 200 elapsed is 75% of one core.
+        assert!(
+            (percent(
+                Cpu {
+                    total: 1_200,
+                    busy: 550
+                },
+                Cpu {
+                    total: 1_000,
+                    busy: 400
+                }
+            ) - 75.0)
+                .abs()
+                < 1e-9
+        );
+        // A counters file that went backwards saturates instead of underflowing.
+        assert_eq!(
+            percent(Cpu { total: 5, busy: 5 }, Cpu { total: 9, busy: 9 }),
+            0.0
+        );
+    }
+    #[test]
     fn net_dev_totals_skip_loopback_and_header() {
         let text = "Inter-|   Receive |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes\n    lo: 500 5 0 0 0 0 0 0 500 5 0 0 0 0 0 0\n  eth0: 1000 10 0 0 0 0 0 0 250 3 0 0 0 0 0 0\n wlan0: 24 1 0 0 0 0 0 0 6 1 0 0 0 0 0 0\n";
         assert_eq!(parse_net_dev(text), (1024, 256));

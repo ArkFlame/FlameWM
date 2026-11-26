@@ -347,29 +347,6 @@ fn cache_is_bounded_lru_and_caches_failures() {
 }
 
 #[test]
-fn cache_evicts_by_pixel_bytes_before_the_entry_count_cap() {
-    let mut cache = Thumbnails::default();
-    // 64 KiB each: five fit CACHE_CAPACITY entries but only four fit CACHE_BYTES,
-    // so the byte cap alone must drop the least recently used thumbnail.
-    let pixels = vec![0u8; 64 * 1024];
-    for i in 0..5 {
-        cache.complete(key(&format!("big{i}"), 1), Some(pixels.clone()));
-    }
-    assert!(
-        cache.bytes <= CACHE_BYTES,
-        "retained {} bytes stayed within the {CACHE_BYTES}-byte cap",
-        cache.bytes
-    );
-    assert_eq!(
-        cache.entries.len(),
-        CACHE_BYTES / pixels.len(),
-        "the oldest thumbnail is evicted once the byte budget is exceeded"
-    );
-    assert!(matches!(cache.lookup(&key("big0", 1)), Lookup::Missing));
-    assert!(matches!(cache.lookup(&key("big4", 1)), Lookup::Ready(..)));
-}
-
-#[test]
 fn cache_evicts_least_recently_used_at_the_pixel_byte_budget() {
     let mut cache = Thumbnails::default();
     // Four thumbnails fill the pixel budget exactly.

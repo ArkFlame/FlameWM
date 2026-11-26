@@ -534,7 +534,6 @@ impl IconLoader {
 
     /// Drains wake bytes. Returns `false` when the writer side is gone: EOF is the only signal a
     /// dead worker gives, and the reactor must stop watching the fd instead of spinning on it.
-    #[must_use]
     pub fn wake_drain(&self) -> bool {
         use std::io::Read;
         // The reader is set nonblocking once in `spawn`; re-arming it per tick was one fcntl

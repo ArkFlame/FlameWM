@@ -144,9 +144,11 @@ impl ExplorerApp {
         // Existing names need one answer for the whole batch; the default keeps both. A paste into
         // the folder on screen already knows its rows, so a multi-item selection costs no per-source
         // stat on the UI thread; other destinations still stat, and the worker re-checks each target.
+        // The rows answer only once the listing is complete: a loading tab shows streamed batches,
+        // so a name missing from it may still exist on disk (an overwrite would go unprompted).
         let count={
             let current=self.model.tab();
-            if directory.as_path()==current.path() {
+            if directory.as_path()==current.path() && !current.loading {
                 let existing:HashSet<&str>=current.entries.iter().map(|entry|entry.name.as_str()).collect();
                 sources.iter().filter(|s|s.file_name().is_some_and(|n|{
                     let name=n.to_string_lossy();

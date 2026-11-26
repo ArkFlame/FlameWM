@@ -140,9 +140,13 @@ fn reap(child: Child) {
 }
 
 fn wait_on_own_thread(mut child: Child) {
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    // A refused waiter thread must not panic the window that opened the link. The child is left
+    // to init, which reaps it when this process exits.
+    let _ = std::thread::Builder::new()
+        .name("flamewm-terminal-wait".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
 }
 
 /// The shared reaper, created on the first opened link; `None` when its thread cannot start.

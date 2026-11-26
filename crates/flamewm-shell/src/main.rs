@@ -920,9 +920,16 @@ fn execute() -> Result<(), String> {
     reactor
         .register_raw_fd_with_action(settings_fd, calloop::Interest::READ, move |_, _| {
             let mut buffer = [0_u8; 8];
-            while let Ok(n) = settings_ready.read(&mut buffer) {
-                if n < buffer.len() {
-                    break;
+            let mut eof = false;
+            loop {
+                match settings_ready.read(&mut buffer) {
+                    Ok(0) => {
+                        eof = true;
+                        break;
+                    }
+                    Ok(n) if n < buffer.len() => break,
+                    Ok(_) => {}
+                    Err(_) => break,
                 }
             }
             if let Ok(snapshot) = startup_settings_rx.try_recv() {
@@ -930,7 +937,13 @@ fn execute() -> Result<(), String> {
                     .borrow_mut()
                     .apply_settings_snapshot(snapshot);
             }
-            flamewm_reactor::FdAction::Continue
+            // The one-shot settings worker is finished: its closed write end reads EOF forever,
+            // so the fd must be unregistered or the reactor would wake on it every loop.
+            if eof {
+                flamewm_reactor::FdAction::Remove
+            } else {
+                flamewm_reactor::FdAction::Continue
+            }
         })
         .map_err(|error| format!("register settings source: {error}"))?;
     if let Some(dispatcher) = state.borrow().dispatcher.as_ref() {

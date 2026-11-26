@@ -230,13 +230,17 @@ fn commit_changes_pixels(surface: &WlSurface) -> bool {
         surface,
         (),
         |_, _, ()| TraversalAction::DoChildren(()),
-        |_, states, ()| {
+        |child, states, ()| {
             let mut guard = states.cached_state.get::<SurfaceAttributes>();
             let attrs = guard.current();
             let shows = attrs.buffer.is_some()
                 || !attrs.damage.is_empty()
                 || !attrs.frame_callbacks.is_empty();
-            visible.set(visible.get() || shows);
+            // A parent with children can move pixels without a buffer, damage or callback: an
+            // applied `wl_subsurface.set_position` (and every synchronized child state) takes
+            // effect on the parent's commit, and that commit carries none of the three itself.
+            // Surfaces without children (panels, X11 windows) keep the damage-only gate.
+            visible.set(visible.get() || shows || child != surface);
         },
         // One visible surface is enough to answer; stopping prunes the rest of the subtree.
         |_, _, ()| !visible.get(),

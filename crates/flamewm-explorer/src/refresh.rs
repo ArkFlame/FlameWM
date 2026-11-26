@@ -184,7 +184,10 @@ mod tests {
     fn a_burst_that_never_goes_quiet_repaints_every_max_wait() {
         let t0 = Instant::now();
         assert!(!burst_forced(None, t0 + Duration::from_secs(5)));
-        assert!(!burst_forced(Some(t0), t0 + MAX_WAIT - Duration::from_millis(1)));
+        assert!(!burst_forced(
+            Some(t0),
+            t0 + MAX_WAIT - Duration::from_millis(1)
+        ));
         assert!(burst_forced(Some(t0), t0 + MAX_WAIT));
         // Max-wait counts from the first batch of the burst, so continuous `MODIFY` events
         // (a large copy) still repaint instead of deferring until the copy ends.

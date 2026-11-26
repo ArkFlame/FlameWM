@@ -134,19 +134,21 @@ pub fn run_with_timeout(
     // after `try_wait` acknowledged the exit deadlocked on a child that writes
     // more than one pipe buffer (64 KiB): the child blocked in write, the parent
     // waited for the exit, and the timeout had to kill a call that had succeeded.
-    let mut out_reader = child.stdout.take().map(|mut pipe| {
-        thread::spawn(move || {
+    // A refused drain thread must not panic the extraction worker: the pipe closes instead and
+    // the child sees EPIPE, which the outcome already reports as a failed extraction.
+    let mut out_reader = child.stdout.take().and_then(|mut pipe| {
+        thread::Builder::new().name("flamewm-explorer-ark-out".into()).spawn(move || {
             let mut text = String::new();
             let _ = pipe.read_to_string(&mut text);
             text
-        })
+        }).ok()
     });
-    let mut err_reader = child.stderr.take().map(|mut pipe| {
-        thread::spawn(move || {
+    let mut err_reader = child.stderr.take().and_then(|mut pipe| {
+        thread::Builder::new().name("flamewm-explorer-ark-err".into()).spawn(move || {
             let mut text = String::new();
             let _ = pipe.read_to_string(&mut text);
             text
-        })
+        }).ok()
     });
     let deadline = Instant::now() + timeout;
     loop {
