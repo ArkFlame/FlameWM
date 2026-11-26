@@ -19,8 +19,8 @@ use flamewm_control_core::{
     ControlError, ControlRequest, ControlResponse, Dispatcher, OBJECT_PATH,
 };
 use flamewm_control_wire::{
-    WireCall, WireReply, WireSignal, WireValue, decode_call, decode_reply, decode_signal_owned,
-    encode_call, encode_reply, encode_signal,
+    WireCall, WireReply, WireValue, decode_call, decode_reply, decode_signal_owned, encode_call,
+    encode_reply, encode_signal,
 };
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
 use flamewm_platform::host::PlatformHost;
@@ -161,7 +161,7 @@ fn handle_call<E: EnginePorts>(
     } else {
         let reply = encode_reply(&call, &response).map_err(to_flame_error)?;
         let mut output = message.method_return();
-        append_wire_values(&mut output, &reply.values)?;
+        append_wire_values(&mut output, reply.values)?;
         Some(output)
     };
     let mut signals = match (settings_keys, response) {
@@ -362,7 +362,7 @@ fn send_signal(pump: &BusPump, signal: &ControlSignal) -> FlameResult<()> {
     let signal = encode_signal(signal);
     let mut message = Message::new_signal(OBJECT_PATH, &signal.interface, &signal.member)
         .map_err(|error| FlameError::invalid(&error))?;
-    append_wire_values(&mut message, &signal.args)?;
+    append_wire_values(&mut message, signal.args)?;
     pump.send(message).map(|_| ())
 }
 
@@ -406,7 +406,7 @@ impl ControlClient {
         request: &ControlRequest,
         timeout: Duration,
     ) -> Result<flamewm_control_core::ControlResponse, ControlError> {
-        let call = encode_call(request)?;
+        let mut call = encode_call(request)?;
         let mut message = Message::new_method_call(
             flamewm_control_core::BUS_NAME,
             OBJECT_PATH,
@@ -414,7 +414,9 @@ impl ControlClient {
             &call.member,
         )
         .map_err(|error| FlameError::invalid(&error))?;
-        append_wire_values(&mut message, &call.args)?;
+        // Decoding the reply needs only the interface/member, so the request arguments move into
+        // the outgoing message instead of being cloned first.
+        append_wire_values(&mut message, std::mem::take(&mut call.args))?;
         let reply = self
             .pump
             .send_with_reply(message, timeout)
@@ -492,9 +494,13 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     // borrowed `WireSignal` first: every signal carries a full dictionary on the hot path.
     decode_signal_owned(interface, member, args).ok()
 }
-fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResult<()> {
+/// Appends already-encoded wire values, moving them into `MessageItem`s.
+///
+/// `encode_*` already produced an owned copy of the snapshot; taking it by value avoids a second
+/// deep clone of every string on the way out (the previous signature cloned the whole payload).
+fn append_wire_values(message: &mut Message, values: Vec<WireValue>) -> FlameResult<()> {
     let items = values
-        .iter()
+        .into_iter()
         .map(to_item)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| FlameError::invalid(&error))?;
@@ -502,21 +508,18 @@ fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResul
     Ok(())
 }
 
-fn to_item(value: &WireValue) -> Result<MessageItem, String> {
+fn to_item(value: WireValue) -> Result<MessageItem, String> {
     match value {
-        WireValue::Bool(v) => Ok(MessageItem::Bool(*v)),
-        WireValue::U32(v) => Ok(MessageItem::UInt32(*v)),
-        WireValue::U64(v) => Ok(MessageItem::UInt64(*v)),
-        WireValue::I32(v) => Ok(MessageItem::Int32(*v)),
-        WireValue::I64(v) => Ok(MessageItem::Int64(*v)),
-        WireValue::String(v) => Ok(MessageItem::Str(v.clone())),
-        WireValue::StringArray(v) => array(
-            v.iter().map(|v| MessageItem::Str(v.clone())).collect(),
-            "as",
-        ),
-        WireValue::Bytes(v) => array(v.iter().map(|b| MessageItem::Byte(*b)).collect(), "ay"),
+        WireValue::Bool(v) => Ok(MessageItem::Bool(v)),
+        WireValue::U32(v) => Ok(MessageItem::UInt32(v)),
+        WireValue::U64(v) => Ok(MessageItem::UInt64(v)),
+        WireValue::I32(v) => Ok(MessageItem::Int32(v)),
+        WireValue::I64(v) => Ok(MessageItem::Int64(v)),
+        WireValue::String(v) => Ok(MessageItem::Str(v)),
+        WireValue::StringArray(v) => array(v.into_iter().map(MessageItem::Str).collect(), "as"),
+        WireValue::Bytes(v) => array(v.into_iter().map(MessageItem::Byte).collect(), "ay"),
         WireValue::Array(v) => {
-            let items = v.iter().map(to_item).collect::<Result<Vec<_>, _>>()?;
+            let items = v.into_iter().map(to_item).collect::<Result<Vec<_>, _>>()?;
             // The element signature follows the items (dict rows, or `u` for occupancy counts);
             // an empty array keeps the dict-row default.
             let element = items
@@ -525,7 +528,7 @@ fn to_item(value: &WireValue) -> Result<MessageItem, String> {
             array(items, &format!("a{element}"))
         }
         WireValue::Dict(v) => {
-            MessageItem::from_dict(v.iter().map(|(k, v)| to_item(v).map(|v| (k.clone(), v))))
+            MessageItem::from_dict(v.into_iter().map(|(k, v)| to_item(v).map(|v| (k, v))))
                 .map_err(|error| error.to_string())
         }
     }
@@ -666,7 +669,7 @@ fn error_code_for_name(name: &str) -> Option<ErrorCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_control_wire::{SwitcherEntry, decode_signal, system_dict};
+    use flamewm_control_wire::{SwitcherEntry, WireSignal, decode_signal, system_dict};
 
     #[test]
     fn non_string_element_in_string_array_is_an_error_not_a_panic() {
@@ -705,7 +708,7 @@ mod tests {
     fn wire_signal_message(wire: &WireSignal) -> Message {
         let mut message =
             Message::new_signal(OBJECT_PATH, &wire.interface, &wire.member).expect("signal");
-        append_wire_values(&mut message, &wire.args).expect("args");
+        append_wire_values(&mut message, wire.args.clone()).expect("args");
         message
     }
 
@@ -830,7 +833,7 @@ mod tests {
             .expect("encode reply");
         let mut message =
             Message::new_signal(OBJECT_PATH, "org.flamewm.Test", "Bootstrap").expect("signal");
-        append_wire_values(&mut message, &reply.values).expect("append");
+        append_wire_values(&mut message, reply.values.clone()).expect("append");
         let values = wire_args(message.get_items()).expect("decode items");
         let decoded =
             flamewm_control_wire::decode_reply(&call, &WireReply { values }).expect("decode reply");
