@@ -143,9 +143,22 @@ impl ShellLoop {
                         .as_ref()
                         .map(crate::entry::settings_projection::clock_display)
                         .unwrap_or_default();
+                    let date = (now.year(), now.month() as u8, now.day() as u8);
+                    let date_changed = self.date_tracker.date_changed(date);
+                    if date_changed {
+                        self.local_date = date;
+                    }
+                    // The date text changes at midnight, and a forced tick re-applies the
+                    // configured date visibility; every other tick writes only the time, so
+                    // seconds mode does not format the unchanged date string once per second.
+                    let write_date = date_changed || clock_forced;
                     for (handle, _) in self.surfaces.panel_outputs() {
                         runtime.with_document(handle, |document| {
-                            projection::project_clock_at(document, now, clock)
+                            if write_date {
+                                projection::project_clock_at(document, now, clock)
+                            } else {
+                                projection::project_clock_time_at(document, now, clock)
+                            }
                         })?;
                         runtime.redraw(handle)?;
                     }
@@ -161,11 +174,6 @@ impl ShellLoop {
                         flamewm_ui_x11::release_free_heap();
                     }
                 });
-
-                let date = (now.year(), now.month() as u8, now.day() as u8);
-                if self.date_tracker.date_changed(date) {
-                    self.local_date = date;
-                }
             }
         }
         // Steady state never polls: reconcile signal-flagged domains at most

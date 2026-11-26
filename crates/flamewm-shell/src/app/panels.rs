@@ -10,16 +10,18 @@ impl ShellLoop {
     /// Entries are in workspace-index order (`index 0..count` -> its cell node),
     /// not cell order, so consumers that address the array by workspace index
     /// keep working; each entry stays 4 CARDINAL values (x, y, width, height).
-    pub(crate) fn publish_pager_cells(&self, runtime: &mut SurfaceRuntime) {
+    pub(crate) fn publish_pager_cells(&self, runtime: &mut SurfaceRuntime) -> bool {
         let count = self
             .shell
             .snapshot()
             .workspaces
             .as_ref()
             .map_or(0, |workspaces| workspaces.count);
+        let mut all_published = true;
         for panel in self.surfaces.panel_handles() {
             let Ok(origin) = runtime.surface_device_rect(panel) else {
                 eprintln!("flamewm-shell: pager cells skipped (stage=panel-origin)");
+                all_published = false;
                 continue;
             };
             let mut cells: Vec<[u64; 4]> = Vec::with_capacity(count);
@@ -44,9 +46,13 @@ impl ShellLoop {
                     eprintln!(
                         "flamewm-shell: pager cells publish failed (stage=x11-property): {error:?}"
                     );
+                    all_published = false;
                 }
+            } else {
+                all_published = false;
             }
         }
+        all_published
     }
 
     /// Signal-driven dynamic refresh (§6): reconcile snapshot domains flagged
@@ -221,7 +227,15 @@ impl ShellLoop {
             for (handle, _) in &panel_outputs {
                 let _ = runtime.redraw(*handle);
             }
-            self.publish_pager_cells(runtime);
+            // Pager cell rects move only with panel geometry and the workspace
+            // set. A system/clock/tray-only tick still projects the tray (and
+            // paints only if a node value changed), but rewriting the
+            // `FLAMEWM_PAGER_CELLS` property plus its XFlush per panel there is
+            // pure churn, so publish once and then only on pager-relevant changes.
+            if !self.pager_cells_published || changed.panels || changed.workspaces {
+                // Retry on a later tick if a panel was not laid out yet.
+                self.pager_cells_published = self.publish_pager_cells(runtime);
+            }
         }
         projected.is_ok()
     }

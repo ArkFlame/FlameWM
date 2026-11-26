@@ -122,6 +122,10 @@ pub(crate) struct ShellLoop {
     >,
     pub(crate) local_date: (i32, u8, u8),
     pub(crate) date_tracker: ClockDateTracker,
+    /// True once the pager cell rects were published on the X panels. Later
+    /// publishes happen only when panels or workspaces change, so a tray- or
+    /// clock-only system tick does not rewrite the property and flush X.
+    pub(crate) pager_cells_published: bool,
     /// Instant the panel clock must next repaint, or `None` while the taskbar clock
     /// item is hidden. Seconds mode arms every second, otherwise every minute.
     pub(crate) clock_next_at: Option<Instant>,
@@ -275,6 +279,7 @@ impl ShellLoop {
             bluetooth_agent: None,
             local_date: projection::local_date(),
             date_tracker: ClockDateTracker::new(projection::local_date()),
+            pager_cells_published: false,
             clock_next_at: None,
             clock_settings_key: None,
             clock_projected_sec: None,

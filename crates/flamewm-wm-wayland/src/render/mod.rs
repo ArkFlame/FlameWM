@@ -645,6 +645,11 @@ fn layer_elements(
 
 pub fn render_frame(state: &mut State) {
     let _span = crate::profile::render();
+    // The host handed out a frame opportunity whether or not this turn paints, so the pacing
+    // interval starts here. Stamping only after the scene gate left `winit_frame_at` stale on a
+    // skipped frame, and the next burst of requests then saw `elapsed >= WINIT_FRAME_INTERVAL` and
+    // bypassed the gate on every one of them.
+    state.note_winit_frame();
     // A host-drawn pointer means the host window draws the cursor itself, so a pointer-motion
     // request only sets the redraw flag (`request_cursor_paint`), never the scene flag. Painting
     // then rebuilt the whole element list, re-checked both backdrop captures and submitted a
@@ -661,12 +666,18 @@ pub fn render_frame(state: &mut State) {
     let Some(mut backend) = state.backend.take() else {
         return;
     };
-    state.note_winit_frame();
     state.flush_pending_configure();
     if let Err(error) = render_into(state, &mut backend) {
         eprintln!("flamewm-wayland: frame failed: {error}");
     }
     state.backend = Some(backend);
+    // Work finished during the paint (a switcher thumbnail, a screencopy readback) calls
+    // `request_redraw` while `backend` is taken, so `request_winit_frame` found no window to ask
+    // and its frame request was skipped. The scene flag is set again, so ask for that frame now
+    // instead of leaving the new pixels waiting for an unrelated host event.
+    if state.take_scene_dirty() {
+        state.request_paint();
+    }
 }
 
 fn render_into(

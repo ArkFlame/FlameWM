@@ -45,7 +45,10 @@ pub use audio::{project_audio, project_audio_focus, project_audio_full};
 pub use bluetooth::project_bluetooth;
 pub use calendar::project_calendar;
 use clock::month_name;
-pub use clock::{clock_time_text, local_date, project_clock, project_clock_at, ClockDisplay};
+pub use clock::{
+    clock_time_text, local_date, project_clock, project_clock_at, project_clock_time_at,
+    ClockDisplay,
+};
 pub use context_menu::project_context_menu;
 pub use media::{project_media, project_media_focus, MEDIA_STOP_IDS};
 pub use network::{

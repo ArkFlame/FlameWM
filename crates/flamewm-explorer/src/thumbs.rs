@@ -1,6 +1,7 @@
 //! Row thumbnails for image, SVG, ICO and `.desktop` rows. Decoding and downscaling run on a
 //! worker; the UI only reads the bounded LRU cache, keyed by path plus the entry's mtime and size,
-//! so an edited file gets a fresh thumbnail.
+//! so an edited file gets a fresh thumbnail. A row that leaves the view while its decode is running
+//! is abandoned at the next read/decode stage instead of finishing into a cache nobody reads.
 //!
 //! A row slot shows either a thumbnail or the embedded type icon (`row-*.svg`), never nothing:
 //! every miss, failure, oversized source, corrupt file or fully transparent result is cached as a
@@ -546,14 +547,11 @@ impl ThumbQueue {
                 .in_flight
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match in_flight.as_ref() {
-                Some(key) if !keep(key) => {
-                    let key = key.clone();
-                    *in_flight = None;
-                    Some(key)
-                }
-                _ => None,
+            let key = in_flight.as_ref().filter(|key| !keep(key)).cloned();
+            if key.is_some() {
+                *in_flight = None;
             }
+            key
         };
         let mut jobs = self
             .jobs

@@ -1119,10 +1119,9 @@ pub fn project_battery_tray(
     let tray = tray_visible(power, items.battery, items.battery_only_when_relevant);
     document.visible("tray-battery", tray)?;
     project_tray_button(document, "tray-battery", tray)?;
-    for (candidate, (plain_id, charging_id)) in
-        crate::taskbar::status::battery::BATTERY_GLYPHS
-            .iter()
-            .zip(BATTERY_TRAY_GLYPH_IDS)
+    for (candidate, (plain_id, charging_id)) in crate::taskbar::status::battery::BATTERY_GLYPHS
+        .iter()
+        .zip(BATTERY_TRAY_GLYPH_IDS)
     {
         let shown = *candidate == glyph;
         document.visible(plain_id, shown && !charging)?;

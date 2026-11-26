@@ -53,6 +53,17 @@ pub fn project_clock_at(
     Ok(())
 }
 
+/// Time text only, for a tick that did not cross midnight and did not change the
+/// clock settings. The date string then stays in the document, so a seconds-mode
+/// clock does not format and rewrite the unchanged date once per second.
+pub fn project_clock_time_at(
+    document: &mut impl UiDocumentAccess,
+    now: DateTime<Local>,
+    display: ClockDisplay,
+) -> Result<(), String> {
+    document.text("clock-time", clock_time_text(display, now))
+}
+
 #[must_use]
 pub fn local_date() -> (i32, u8, u8) {
     let now = Local::now();
