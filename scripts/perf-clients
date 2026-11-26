@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Scoped idle composition of each FlameWM app inside a private nested compositor. Pure bash.
+# Usage: [SETTLE=8] scripts/perf-clients [app...]   (default: explorer terminal task-manager shell; SETTLE = seconds before sampling)
+# Prints per app: threads, RSS, raw CPU ticks in a 2 s idle window (100 ticks = 1 s), thread shares.
+# Never touches the host session: winit-nested compositor, private socket, autostart off, 60 s hard cap.
+set -Eeuo pipefail
+T=${CARGO_TARGET_DIR:-$HOME/.cache/cargo-target}/release
+here=$(cd "$(dirname "$0")" && pwd)
+apps=("$@"); ((${#apps[@]})) || apps=(explorer terminal task-manager shell)
+sock=wayland-flame-perfc-$$
+pids=()
+cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
+trap cleanup EXIT
+FLAMEWM_WAYLAND_BACKEND=winit FLAMEWM_WAYLAND_SOCKET=$sock FLAMEWM_WAYLAND_AUTOSTART='' \
+  timeout --kill-after=2s 60s "$T/flamewm-wayland" >/dev/null 2>&1 & pids+=($!)
+wait_s() { read -rt "$1" <> <(:) || true; }
+wait_s 3
+ticks() { awk '{s=$0;sub(/^.*\) /,"",s);split(s,f," ");t+=f[12]+f[13]} END{print t+0}' /proc/$1/task/*/stat; }
+for app in "${apps[@]}"; do
+  bin="$T/flamewm-$app"; [[ -x $bin ]] || { echo "$app: no release binary"; continue; }
+  XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=$sock timeout --kill-after=2s 30s "$bin" >/dev/null 2>&1 & p=$!
+  pids+=($p); wait_s "${SETTLE:-8}"
+  pid=$(pgrep -P "$p" | head -1); pid=${pid:-$p}
+  [[ -d /proc/$pid ]] || { echo "$app: exited early"; continue; }
+  a=$(ticks "$pid"); wait_s 2; b=$(ticks "$pid")
+  printf "== %s: startup_ticks=%s threads=%s rss_kb=%s idle_ticks_2s=%s\n" "$app" "$a" "$(ls /proc/$pid/task | wc -l)" \
+    "$(awk '/VmRSS/{print $2}' /proc/$pid/status)" "$((b-a))"
+  "$here/perf-compose" "$pid" 2 2>/dev/null | head -4 | sed 's/^/     /'
+  kill "$p" 2>/dev/null || true
+done
