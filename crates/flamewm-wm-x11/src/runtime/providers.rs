@@ -41,6 +41,14 @@ pub(super) fn advance_power_cpu_sampling(
     }
 }
 
+/// Whether the armed CPU-sample deadline moved. The hook writes the reactor wake slot only when
+/// this is true, so a turn that leaves the menu closed (or between two samples) does not dirty the
+/// reactor's earliest-wake cache.
+#[must_use]
+pub(super) fn cpu_deadline_moved(previous: Option<Instant>, next: Option<Instant>) -> bool {
+    previous != next
+}
+
 pub(super) fn register_provider(
     reactor: &Rc<RefCell<Reactor>>,
     integrations: &Rc<RefCell<LinuxIntegrationRuntime>>,
@@ -98,4 +106,33 @@ pub(super) fn interest_for(events: FdEvents) -> Interest {
 /// the delay here.
 pub(super) fn profile_report_interval() -> std::time::Duration {
     std::time::Duration::from_secs(flamewm_profiler::profile_interval_secs())
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// A closed menu and an interval between two samples leave the deadline untouched, so the
+    /// reactor slot is not rewritten on those turns.
+    #[test]
+    fn the_reactor_deadline_is_only_rewritten_when_it_moves() {
+        let t0 = Instant::now();
+        let (sample, closed) = advance_power_cpu_sampling(false, None, t0);
+        assert!(!sample);
+        assert!(!cpu_deadline_moved(None, closed));
+
+        let (sample, open) = advance_power_cpu_sampling(true, None, t0);
+        assert!(sample);
+        assert!(cpu_deadline_moved(None, open));
+
+        let half = t0 + POWER_CPU_SAMPLE_INTERVAL / 2;
+        let (sample, unchanged) = advance_power_cpu_sampling(true, open, half);
+        assert!(!sample);
+        assert!(!cpu_deadline_moved(open, unchanged));
+
+        let (sample, ticked) =
+            advance_power_cpu_sampling(true, open, t0 + POWER_CPU_SAMPLE_INTERVAL);
+        assert!(sample);
+        assert!(cpu_deadline_moved(open, ticked));
+    }
 }

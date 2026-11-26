@@ -2,6 +2,25 @@ use super::*;
 use flamewm_skin::recipes::decoration::ChromeTokens;
 use x11rb::protocol::xproto::ImageFormat;
 
+/// INTERNAL dev-only tune file variable. The tune state owner (`crate::outline_tune`) parses the
+/// file; this module only caches whether the gate is configured at all.
+const OUTLINE_TUNE_ENV: &str = "FLAMEWM_OUTLINE_TUNE";
+
+/// Pure gate over a cached environment value: a tune is configured only for a non-empty path.
+#[must_use]
+pub(crate) fn outline_tune_configured(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty())
+}
+
+/// Process-wide gate for the dev-only tune. The environment cannot change after exec, so an
+/// unset variable costs one lookup per session instead of a `getenv` on every chrome paint (and
+/// on every loop turn, which polls the tune file).
+fn outline_tune_gate() -> bool {
+    static CONFIGURED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CONFIGURED
+        .get_or_init(|| outline_tune_configured(std::env::var_os(OUTLINE_TUNE_ENV).as_deref()))
+}
+
 /// Titlebar repaint cadence during an interactive move (about 60 Hz). The frame still follows
 /// every motion; only the chrome repaint is paced.
 pub(super) const MOVE_CHROME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
@@ -259,9 +278,12 @@ impl<C: Connection> Wm<'_, C> {
     ///
     /// Re-applies a changed `FLAMEWM_OUTLINE_TUNE` file to every managed frame: the scene cache is
     /// dropped (the radius is not a settings token), the shape is forced (a radius change must
-    /// re-shape the frame and the client, not just repaint) and the chrome is repainted. Costs one
-    /// env lookup per tick and nothing else when the variable is unset.
+    /// re-shape the frame and the client, not just repaint) and the chrome is repainted. Unset is
+    /// decided once per session, so a normal session does no env lookup or stat per turn.
     pub(super) fn poll_outline_tune(&mut self) -> Result<(), ReplyError> {
+        if !outline_tune_gate() {
+            return Ok(());
+        }
         if crate::outline_tune::poll().is_none() {
             return Ok(());
         }
@@ -361,8 +383,12 @@ impl<C: Connection> Wm<'_, C> {
     /// Chrome tokens for the outline: the settings-derived tokens with the INTERNAL live tune
     /// applied. One owner, so the frame band, the shape and the overlay see the same numbers.
     ///
-    /// INTERNAL: dev-only live outline tuning; remove or keep behind the env gate.
+    /// INTERNAL: dev-only live outline tuning; unset is cached for the session, so the paint hot
+    /// path never pays an env lookup or a tune-file `stat`.
     pub(super) fn outline_tokens(&self) -> ChromeTokens {
+        if !outline_tune_gate() {
+            return self.decoration_tokens;
+        }
         let tune = crate::outline_tune::current();
         let mut tokens = self.decoration_tokens;
         tokens.surface_outline_alpha = tune.alpha.unwrap_or(tokens.surface_outline_alpha);
@@ -533,6 +559,23 @@ impl<C: Connection> Wm<'_, C> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod outline_tune_gate_tests {
+    use super::outline_tune_configured;
+    use std::ffi::OsStr;
+
+    /// The gate is the whole polling decision: unset or empty means no env lookup, no stat and no
+    /// repaint per turn; a named path keeps the live tuning behaviour.
+    #[test]
+    fn only_a_non_empty_env_path_enables_the_tune() {
+        assert!(!outline_tune_configured(None));
+        assert!(!outline_tune_configured(Some(OsStr::new(""))));
+        assert!(outline_tune_configured(Some(OsStr::new(
+            "/tmp/flamewm-outline"
+        ))));
     }
 }
 

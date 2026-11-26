@@ -519,15 +519,19 @@ fn run_session(
                 &integrations_for_hook,
                 &provider_error_for_hook,
             )?;
-            // Battery-menu CPU sampling: deadline armed only while the menu is open (zero idle wakeups).
+            // Battery-menu CPU sampling: deadline armed only while the menu is open (zero idle
+            // wakeups), and rewritten only when it moves so an idle turn leaves the reactor's
+            // earliest-wake cache clean.
             let (changed, next_cpu_due) = tick_power_cpu(
                 battery_menu_open_for_hook.get(),
                 power_cpu_due_for_hook.get(),
                 Instant::now(),
                 || integrations_for_hook.borrow_mut().sample_power_cpu(),
             );
-            power_cpu_due_for_hook.set(next_cpu_due);
-            reactor_for_hook.borrow().wake_deadline().set(next_cpu_due);
+            let previous_cpu_due = power_cpu_due_for_hook.replace(next_cpu_due);
+            if cpu_deadline_moved(previous_cpu_due, next_cpu_due) {
+                reactor_for_hook.borrow().wake_deadline().set(next_cpu_due);
+            }
             if changed
                 && host
                     .system_mut()
