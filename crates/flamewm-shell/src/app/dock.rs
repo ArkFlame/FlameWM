@@ -439,7 +439,9 @@ impl ShellLoop {
             .dock_stage
             .label_shown
             .as_ref()
-            .is_some_and(|(shown_name, position)| shown_name.as_str() == name && *position == (x, y))
+            .is_some_and(|(shown_name, position)| {
+                shown_name.as_str() == name && *position == (x, y)
+            })
         {
             return;
         }

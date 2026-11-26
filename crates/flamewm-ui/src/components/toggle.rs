@@ -1,5 +1,4 @@
 use crate::{UiEvent, WidgetId};
-use flamewm_ui_core::controls::ToggleState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toggle {
@@ -15,11 +14,11 @@ impl Toggle {
         }
     }
     pub fn set_checked(&mut self, checked: bool) -> bool {
-        let mut state = ToggleState::default();
-        let _ = state.set_checked(self.checked);
-        let changed = state.set_checked(checked);
-        self.checked = state.checked();
-        changed
+        if self.checked == checked {
+            return false;
+        }
+        self.checked = checked;
+        true
     }
     pub fn toggle(&mut self) -> bool {
         self.set_checked(!self.checked)

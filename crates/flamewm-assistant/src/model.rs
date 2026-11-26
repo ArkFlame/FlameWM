@@ -594,11 +594,7 @@ mod tests {
     fn budget_limits_rows_when_bubbles_are_tall() {
         let mut store = Fake::new(40);
         let history = History::open(&mut store, 40).unwrap();
-        let heights: usize = history
-            .rows()
-            .iter()
-            .map(|row| bubble_px(row.text))
-            .sum();
+        let heights: usize = history.rows().iter().map(|row| bubble_px(row.text)).sum();
         assert!(heights <= LIST_BUDGET);
         assert!(
             history.rows().len() < SLOTS,

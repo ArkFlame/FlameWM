@@ -312,8 +312,7 @@ pub fn load_cache(path: &Path) -> Option<Index> {
     // One reused line buffer: `lines()` allocated a String per entry, and a full cache holds
     // hundreds of thousands of lines per launch.
     let mut line = String::new();
-    if reader.read_line(&mut line).ok()? == 0
-        || line.trim_end_matches(['\n', '\r']) != CACHE_HEADER
+    if reader.read_line(&mut line).ok()? == 0 || line.trim_end_matches(['\n', '\r']) != CACHE_HEADER
     {
         return None;
     }

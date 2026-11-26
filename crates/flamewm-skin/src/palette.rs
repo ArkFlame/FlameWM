@@ -296,7 +296,13 @@ fn srgb_to_linear() -> &'static [f64; 256] {
 /// WCAG 2.x contrast ratio between two opaque colours, in `1.0..=21.0`.
 #[must_use]
 pub fn contrast_ratio(a: Rgb, b: Rgb) -> f64 {
-    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    contrast_from_luminance(relative_luminance(a), b)
+}
+
+/// The same ratio when the caller has already solved `a`'s luminance: contrast solves that try
+/// many bases against one fixed ink (scrim binary searches, ink polarity) recompute it otherwise.
+fn contrast_from_luminance(la: f64, b: Rgb) -> f64 {
+    let lb = relative_luminance(b);
     let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
     (hi + 0.05) / (lo + 0.05)
 }
@@ -335,7 +341,10 @@ fn on_accent_cache() -> &'static Mutex<HashMap<Rgb, Rgb>> {
 
 fn on_accent_uncached(accent: Rgb) -> Rgb {
     const WHITE: Rgb = Rgb(0x00ff_ffff);
-    if contrast_ratio(accent, WHITE) >= contrast_ratio(accent, LIGHT_TEXT) {
+    let accent_luminance = relative_luminance(accent);
+    if contrast_from_luminance(accent_luminance, WHITE)
+        >= contrast_from_luminance(accent_luminance, LIGHT_TEXT)
+    {
         WHITE
     } else {
         LIGHT_TEXT
@@ -375,8 +384,9 @@ fn ink_palette_cache() -> &'static Mutex<HashMap<Rgb, Palette>> {
 }
 
 fn ink_palette_on_uncached(surface: Rgb) -> Palette {
-    if contrast_ratio(surface, Palette::RWR_0_0_9.text)
-        >= contrast_ratio(surface, Palette::LIGHT.text)
+    let surface_luminance = relative_luminance(surface);
+    if contrast_from_luminance(surface_luminance, Palette::RWR_0_0_9.text)
+        >= contrast_from_luminance(surface_luminance, Palette::LIGHT.text)
     {
         Palette::RWR_0_0_9
     } else {
@@ -432,9 +442,12 @@ pub fn scrim_alpha_floor(ink: Rgb, base: Rgb, target: f64) -> Option<u8> {
 /// [`scrim_alpha_floor`] with the scrim colour fixed by the caller, so several inks share one scrim.
 #[must_use]
 pub fn scrim_alpha_floor_with(ink: Rgb, base: Rgb, scrim: Rgb, target: f64) -> Option<u8> {
+    // `ink` is fixed across the whole search, so solve its luminance once instead of once per
+    // probe (the binary search runs about eight composites, and two floors run per glass surface).
+    let ink_luminance = relative_luminance(ink);
     let meets = |alpha: u8| {
-        contrast_ratio(
-            ink,
+        contrast_from_luminance(
+            ink_luminance,
             composite(
                 AlphaColor {
                     color: scrim,

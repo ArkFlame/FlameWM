@@ -40,7 +40,8 @@ pub fn validate(
     // Both passes dedup with a hash set: a select-all of 100k rows made the old linear
     // `seen.contains` / `runnable.contains` scans quadratic (billions of path comparisons) on the
     // UI thread before a trash/delete/copy. A `HashSet` keeps the same first-seen order and result.
-    let mut seen: std::collections::HashSet<&Path> = std::collections::HashSet::with_capacity(sources.len());
+    let mut seen: std::collections::HashSet<&Path> =
+        std::collections::HashSet::with_capacity(sources.len());
     let mut kept: Vec<PathBuf> = Vec::new();
     for source in sources {
         if !source.exists || !seen.insert(source.path.as_path()) {
@@ -60,7 +61,10 @@ pub fn validate(
     let kept_set: std::collections::HashSet<&Path> = kept.iter().map(PathBuf::as_path).collect();
     let mut run_seen: std::collections::HashSet<&Path> = std::collections::HashSet::new();
     let mut runnable = Vec::new();
-    for source in sources.iter().filter(|s| kept_set.contains(s.path.as_path())) {
+    for source in sources
+        .iter()
+        .filter(|s| kept_set.contains(s.path.as_path()))
+    {
         if !run_seen.insert(source.path.as_path()) {
             continue;
         }

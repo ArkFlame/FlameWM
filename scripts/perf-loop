@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Reusable perf-loop helper for every agent. Pure bash + git + cargo + rg: no python, no temp scripts.
+#   scripts/perf-loop status            open units, minutes since last build, dirty file count
+#   scripts/perf-loop wait [SECONDS]    block (no sleep, no polling child) until the open-unit count changes or timeout
+#   scripts/perf-loop sync "message"    fmt, commit tracked changes + docs/perf-loop, push with retry
+#   scripts/perf-loop check             one workspace cargo check; prints only error lines, exit code is cargo's
+#   scripts/perf-loop built             stamp the build clock (docs/perf-loop/LASTBUILD)
+set -Eeuo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+UNITS=docs/perf-loop/units
+open_units() { rg -l '^OPEN' "$UNITS" 2>/dev/null | wc -l; }
+since_build() { local t=0; [[ -f docs/perf-loop/LASTBUILD ]] && t=$(<docs/perf-loop/LASTBUILD); echo $(( ($(date +%s) - t) / 60 )); }
+dirty() { git status --short | rg -vc '^\?\?' || true; }
+# Blocks on a never-written fd with a timeout: no sleep binary, no process spawn per tick.
+nap() { read -rt "$1" <> <(:) || true; }
+
+case "${1:-status}" in
+  status) echo "min_since_build=$(since_build) open_units=$(open_units) dirty_files=$(dirty)" ;;
+  wait)
+    limit=${2:-110}; start=$(open_units); end=$(( SECONDS + limit ))
+    while (( SECONDS < end )) && [[ "$(open_units)" == "$start" ]]; do nap 5; done
+    "$0" status ;;
+  sync)
+    msg=${2:?commit message required}
+    git add -u crates Cargo.toml Cargo.lock 2>/dev/null || true
+    git add docs/perf-loop scripts 2>/dev/null || true
+    git diff --cached --quiet || git commit -q -m "$msg" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+    # Workers edit while the pre-push hook checks formatting, so format and push back to back.
+    for _ in 1 2 3 4 5; do
+      cargo fmt --all
+      out=$(git push 2>&1) && { echo pushed; exit 0; }
+      rg -q 'main -> main|up-to-date' <<<"$out" && { echo pushed; exit 0; }
+      nap 3
+    done
+    echo "push failed" >&2; exit 1 ;;
+  check)
+    log=$(mktemp -p "${TMPDIR:-/tmp}" perf-check.XXXXXX); trap 'rm -f "$log"' EXIT
+    rc=0; cargo check --workspace --all-targets --message-format=short >"$log" 2>&1 || rc=$?
+    rg 'error(\[|:)' "$log" | cut -c1-230 | head -40; echo "exit=$rc"; exit "$rc" ;;
+  built) date +%s > docs/perf-loop/LASTBUILD ;;
+  *) echo "usage: $0 status|wait [s]|sync msg|check|built" >&2; exit 2 ;;
+esac
