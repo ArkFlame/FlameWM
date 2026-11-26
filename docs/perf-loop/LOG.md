@@ -25,3 +25,5 @@
 ## Composition #3 (scripts/compose-scenario, u92) is INVALID as an active-use measurement: nested XWayland ready on :2 and client targeted :2 (not the real :0), but the terminal client log stops at FLAMEWM_RENDER_* startup lines and the compositor stayed 99.8% wait, so no load reached it. Do not cite these shares. Unit u93 must make the load real (client maps a window, output visible in client log, non-wait share > 5%).
 
 ## Build 9: cargo check --workspace --all-targets green, 0 fixes. Batches 12-13, u92, u93 landed.
+
+## u94 verdict (code-read, not yet run): NOT a bug that X11 updates are dropped; 99% wait is the compositor parked while the X11 client paints in its own process. Two real defects fixed in wm-wayland: (1) frame requests during a paint were dropped (render_frame takes state.backend), (2) skipped paint left the 16 ms winit pacing clock stale. Nested paints measured 100-280 ms, dominated by blocking host swap_buffers in smithay winit => the nested harness cannot give a steady ACTIVE composition; do not tune compositor CPU from it. Active-use composition needs the real DRM session or a headless backend.
