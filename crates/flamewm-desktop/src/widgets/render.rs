@@ -11,6 +11,9 @@ pub(crate) struct WidgetSurface {
 /// Cards without `surface` (the default) draw no fill and request no backdrop blur, so their
 /// content sits on the wallpaper. Inheriting cards take the global surface fill and blur;
 /// others use their own options.
+// The live sync resolves the settings once per sync (`surface_key`); this remains the
+// one-shot resolver the surface tests compare against.
+#[cfg(test)]
 pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> WidgetSurface {
     widget_surface_from(widget, &surface_key(settings))
 }

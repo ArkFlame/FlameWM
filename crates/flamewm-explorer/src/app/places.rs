@@ -52,6 +52,23 @@ impl ExplorerApp {
         else if let Some(device)=place.device {self.device_action("mount",device,place.name);}
     }
 
+    /// Free/total bytes of the filesystem behind `path` from the last off-thread sample. A missing
+    /// or stale sample queues exactly one worker `statvfs`; the projection never touches the disk
+    /// itself, so a stale network mount cannot block a frame.
+    pub(crate) fn space_for(&self,path:&Path)->Option<(u64,u64)> {
+        let now=Instant::now();
+        let (value,request)={
+            let mut cache=self.space.borrow_mut();
+            let value=cache.get(path);
+            let request=if self.events.is_some() {cache.request(path,now)} else {None};
+            (value,request)
+        };
+        if let Some(request)=request {
+            self.spawn_background(move||WorkerResult::Space{path:request.clone(),value:view::fs_space(&request)});
+        }
+        value
+    }
+
     /// Sidebar button at the right of a device row: eject when mounted, mount when not.
     pub(crate) fn place_button(&mut self,index:usize) {
         let Some(place)=self.places.get(index).cloned() else {return};

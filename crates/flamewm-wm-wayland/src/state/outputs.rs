@@ -10,11 +10,17 @@ impl State {
         let key = smithay::reexports::wayland_server::Resource::id(surface);
         self.surface_outputs
             .output_of(&key)
-            .map_or_else(|| self.output.name(), str::to_owned)
+            .map_or_else(|| self.primary_name.clone(), str::to_owned)
     }
 
     /// Output handle for a connector name; the primary output when the name is not driven.
+    ///
+    /// The cached primary name answers the common case without cloning every output's name just to
+    /// compare it: `Output::name` allocates a `String` from its lock on each call.
     pub fn output_handle(&self, name: &str) -> Output {
+        if name == self.primary_name {
+            return self.output.clone();
+        }
         self.output_handles
             .iter()
             .find(|out| out.name() == name)
@@ -24,7 +30,21 @@ impl State {
 
     /// Output handle a surface sits on, the primary output when unmapped.
     pub fn output_handle_of(&self, surface: &WlSurface) -> Output {
-        self.output_handle(&self.output_name_of(surface))
+        let key = smithay::reexports::wayland_server::Resource::id(surface);
+        // Every commit resolves this. The two lookups stay reference-only: the home name is compared
+        // against the cached primary name first (no allocation, and it is where most surfaces live),
+        // and only a real secondary output pays for the handle scan.
+        let Some(name) = self.surface_outputs.output_of(&key) else {
+            return self.output.clone();
+        };
+        if name == self.primary_name {
+            return self.output.clone();
+        }
+        self.output_handles
+            .iter()
+            .find(|out| out.name() == name)
+            .unwrap_or(&self.output)
+            .clone()
     }
 
     /// Records the output a surface sits on. Sends `wl_surface.leave` on the output it left and
@@ -112,10 +132,11 @@ impl State {
             self.apply_geometry(*id);
         }
         let primary = self.output.clone();
+        let primary_name = self.primary_name.clone();
         for layer in layers {
             layer_map_for_output(out).unmap_layer(&layer);
             let _ = layer_map_for_output(&primary).map_layer(&layer);
-            self.set_surface_output(layer.wl_surface(), primary.name());
+            self.set_surface_output(layer.wl_surface(), primary_name.clone());
         }
     }
 
@@ -123,7 +144,6 @@ impl State {
     /// surfaces whose output scale changed. With no placed row (nested) every window stays primary.
     pub fn refresh_window_outputs(&mut self) {
         let before = crate::presentation_scale::scale_snapshot(self);
-        let primary = self.output.name();
         let homes: Vec<(WlSurface, String)> = self
             .toplevels
             .iter()
@@ -133,7 +153,7 @@ impl State {
                     &self.pointer_layout,
                     &self.layout_outputs,
                     rect,
-                    &primary,
+                    &self.primary_name,
                 );
                 Some((top.wl_surface().clone(), name.to_owned()))
             })
@@ -158,7 +178,7 @@ impl State {
     pub fn output_name_under_pointer(&self) -> String {
         crate::output_layout::output_at(&self.pointer_layout, self.pointer.x, self.pointer.y)
             .and_then(|index| self.layout_outputs.get(index).cloned())
-            .unwrap_or_else(|| self.output.name())
+            .unwrap_or_else(|| self.primary_name.clone())
     }
 
     /// Output scale factor (1.0 by default). Layout is logical; rendering multiplies by this.

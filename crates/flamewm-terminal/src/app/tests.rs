@@ -53,6 +53,9 @@ fn test_app() -> App {
     let mut app = App {
         tabs: Vec::new(),
         frame_rows: Vec::new(),
+        scroll: crate::scroll::ScrollGlide::default(),
+        scroll_timer: None,
+        scroll_ticking: false,
         active: 0,
         next_id: 1,
         cols: 80,

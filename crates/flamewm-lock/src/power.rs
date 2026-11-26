@@ -10,6 +10,8 @@ use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 
+use crate::wake::Waker;
+
 const CAPABILITIES_TIMEOUT: Duration = Duration::from_secs(2);
 const PERFORM_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a failure message stays visible.
@@ -80,30 +82,35 @@ impl PowerPort for ControlPower {
 /// Runs `action` on a fresh worker thread and reports the outcome as
 /// [`PowerEvent::Result`]. The UI thread never waits on the control bus. A failed
 /// action or a thread that cannot start is reported as an error; the lock stays up.
-pub fn perform_on_worker(action: SessionAction, events: Sender<PowerEvent>) {
-    let fallback = events.clone();
+/// `wake` nudges the lock loop so the result is applied before its next idle tick.
+pub fn perform_on_worker(action: SessionAction, events: Sender<PowerEvent>, wake: Waker) {
+    let fallback_events = events.clone();
+    let fallback_wake = wake.clone();
     let spawned = thread::Builder::new()
         .name("flamewm-lock-power".to_string())
         .spawn(move || {
             let outcome = ControlPower::connect(BusKind::Session).perform(action);
             // The receiver lives as long as the lock loop; a send error means it is gone.
             let _ = events.send(PowerEvent::Result(outcome));
+            let _ = wake.wake();
         });
     if spawned.is_err() {
-        let _ = fallback.send(PowerEvent::Result(Err(
+        let _ = fallback_events.send(PowerEvent::Result(Err(
             "cannot start power action".to_string()
         )));
+        let _ = fallback_wake.wake();
     }
 }
 
 /// Reads the session capabilities on a worker thread. Until the answer arrives the
 /// lock assumes none, so every power action stays disabled (fail closed).
-pub fn fetch_capabilities_on_worker(events: Sender<PowerEvent>) {
+pub fn fetch_capabilities_on_worker(events: Sender<PowerEvent>, wake: Waker) {
     let _ = thread::Builder::new()
         .name("flamewm-lock-caps".to_string())
         .spawn(move || {
             let capabilities = ControlPower::connect(BusKind::Session).capabilities();
             let _ = events.send(PowerEvent::Capabilities(capabilities));
+            let _ = wake.wake();
         });
 }
 

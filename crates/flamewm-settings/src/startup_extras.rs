@@ -64,6 +64,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Feeds typed text into the command draft, submitting through the startup-page facade.
     pub(crate) fn startup_command_text(&mut self, text: &str) {
         type_command(&mut self.startup_command, text, startup_page::add_command);
+        // A submitted command may have added an autostart entry; the next repaint re-reads.
+        self.xdg_cache.borrow_mut().clear();
     }
 
     /// Projects the picker's current candidate and the command field from the candidates the

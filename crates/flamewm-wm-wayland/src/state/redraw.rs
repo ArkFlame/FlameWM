@@ -149,6 +149,7 @@ impl State {
                 WINIT_FRAME_INTERVAL - elapsed,
             ),
             |_, (), state| {
+                let _span = crate::profile::timer();
                 state.winit_frame_armed.set(false);
                 if let Some(backend) = state.backend.as_ref() {
                     backend.window().request_redraw();

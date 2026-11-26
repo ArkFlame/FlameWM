@@ -4,30 +4,6 @@ pub const MAX_TEMPLATE_LINES: usize = 6;
 pub const MAX_LINE_SPANS: usize = 6;
 pub const MAX_TEMPLATE_CHARS: usize = 600;
 
-const WEEKDAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WallTime {
     pub year: i32,
@@ -42,12 +18,12 @@ pub struct WallTime {
 impl WallTime {
     #[must_use]
     pub fn weekday_name(self) -> &'static str {
-        WEEKDAYS[usize::from(self.weekday % 7)]
+        flamewm_api::format::weekday_name(self.weekday)
     }
 
     #[must_use]
     pub fn month_name(self) -> &'static str {
-        MONTHS[usize::from(self.month.clamp(1, 12) - 1)]
+        flamewm_api::format::month_name(self.month)
     }
 }
 

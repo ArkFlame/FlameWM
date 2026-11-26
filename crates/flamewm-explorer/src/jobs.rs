@@ -1,9 +1,10 @@
 //! File-operation job owner: cancellable crash-safe copy, no-replace publish,
 //! verified cross-device moves, conflict policy and the undo journal.
 //! All filesystem I/O runs on the worker thread; the UI only sends requests.
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -14,7 +15,13 @@ use rustix::io::Errno;
 
 use crate::{destination_for, duplicate_destination, validate_transfer_destination, BatchReport};
 
-const CHUNK: usize = 256 * 1024;
+const CHUNK_FALLBACK: usize = 256 * 1024;
+/// A rotating disk only reaches its throughput with large sequential requests.
+const CHUNK_ROTATIONAL: usize = 1024 * 1024;
+/// Flash is already past the syscall-overhead knee here.
+const CHUNK_SOLID: usize = 256 * 1024;
+/// Unknown or virtual device: never read more than the copy asks for.
+const CHUNK_UNKNOWN: usize = 128 * 1024;
 /// Guards against huge or deeply nested trees while counting on the worker.
 pub const MAX_COUNT_ITEMS: u64 = 1_000_000;
 pub const MAX_COUNT_DEPTH: usize = 128;
@@ -273,22 +280,81 @@ fn remove_entry(path: &Path) -> io::Result<()> {
     if meta.is_dir() { fs::remove_dir_all(path) } else { fs::remove_file(path) }
 }
 
+/// Copy chunk for the block device behind `dev`, resolved once per device from sysfs. A rotating
+/// disk gains from larger sequential reads and writes; flash is saturated well below 1 MiB; an
+/// unknown or virtual device keeps the smaller buffer so it never over-reads a short source.
+fn chunk_for_device(dev: u64) -> usize {
+    static CACHE: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = cache.lock()
+        && let Some(&size) = map.get(&dev)
+    {
+        return size;
+    }
+    let size = match rotational(dev) {
+        Some(true) => CHUNK_ROTATIONAL,
+        Some(false) => CHUNK_SOLID,
+        None => CHUNK_UNKNOWN,
+    };
+    if let Ok(mut map) = cache.lock() {
+        map.insert(dev, size);
+    }
+    size
+}
+
+/// `Some` when sysfs reports the device's rotational flag. A partition has no queue of its own,
+/// so the search walks up from the resolved block device to the disk that owns it.
+fn rotational(dev: u64) -> Option<bool> {
+    let link = format!(
+        "/sys/dev/block/{}:{}",
+        rustix::fs::major(dev),
+        rustix::fs::minor(dev)
+    );
+    let resolved = fs::canonicalize(link).ok()?;
+    let mut dir = Some(resolved.as_path());
+    while let Some(current) = dir {
+        if let Ok(text) = fs::read_to_string(current.join("queue/rotational")) {
+            return Some(text.trim() == "1");
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+/// Chunk for a copy from `from` into directory `to`: the larger of the two devices' sizes, so a
+/// spinning destination still gets large writes and a spinning source gets large reads. Falls back
+/// to a fixed 256 KiB when neither device can be identified.
+fn copy_chunk(from: &Path, to: &Path) -> usize {
+    let source = fs::symlink_metadata(from).ok().map(|m| chunk_for_device(m.dev()));
+    let target = to
+        .parent()
+        .and_then(|parent| fs::symlink_metadata(parent).ok())
+        .map(|m| chunk_for_device(m.dev()));
+    source
+        .iter()
+        .chain(target.iter())
+        .copied()
+        .max()
+        .unwrap_or(CHUNK_FALLBACK)
+}
+
 /// Copies into a fresh staging entry. Symlinks are recreated, never followed.
 /// Permissions are preserved; hardlinks become independent copies. The returned
 /// totals describe exactly what was written, so a cross-device move can verify
 /// the copy without walking the destination a second time.
 fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, sink: &mut impl TransferSink) -> io::Result<Totals> {
-    // One transfer buffer per top-level copy: a fresh 256 KiB zeroed `Vec` per file was the largest
+    // One transfer buffer per top-level copy: a fresh zeroed `Vec` per file was the largest
     // allocation cost when copying trees of many small files. It is filled on first use, so a
-    // directory-only copy allocates nothing.
+    // directory-only copy allocates nothing. The size follows the block devices involved.
+    let chunk = copy_chunk(from, to);
     let mut buffer = Vec::new();
     let mut totals = Totals::default();
-    copy_tree_with(from, to, cancel, sink, &mut buffer, &mut totals)?;
+    copy_tree_with(from, to, cancel, sink, &mut buffer, &mut totals, chunk)?;
     Ok(totals)
 }
 
 fn copy_tree_with(from: &Path, to: &Path, cancel: &CancellationToken,
-    sink: &mut impl TransferSink, buffer: &mut Vec<u8>, totals: &mut Totals) -> io::Result<()> {
+    sink: &mut impl TransferSink, buffer: &mut Vec<u8>, totals: &mut Totals, chunk: usize) -> io::Result<()> {
     if cancel.is_cancelled() { return Err(cancelled()); }
     let meta = fs::symlink_metadata(from)?;
     totals.items += 1;
@@ -297,17 +363,23 @@ fn copy_tree_with(from: &Path, to: &Path, cancel: &CancellationToken,
     }
     if meta.is_dir() {
         fs::create_dir(to)?;
+        // Reuse one path buffer per side instead of `join`ing two fresh `PathBuf`s per child.
+        let mut from_child = from.to_path_buf();
+        let mut to_child = to.to_path_buf();
         for child in fs::read_dir(from)? {
             let child = child?;
-            let name = child.file_name();
-            copy_tree_with(&from.join(&name), &to.join(&name), cancel, sink, buffer, totals)?;
+            from_child.push(child.file_name());
+            to_child.push(child.file_name());
+            copy_tree_with(&from_child, &to_child, cancel, sink, buffer, totals, chunk)?;
+            from_child.pop();
+            to_child.pop();
         }
         return fs::set_permissions(to, meta.permissions());
     }
     if !meta.is_file() {
         return Err(io::Error::new(io::ErrorKind::Unsupported, "not a regular file"));
     }
-    if buffer.is_empty() { buffer.resize(CHUNK, 0); }
+    if buffer.len() != chunk { buffer.resize(chunk, 0); }
     let mut input = File::open(from)?;
     let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)?;
     let mut written = 0_u64;
@@ -507,7 +579,7 @@ fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Confli
     } else if fs::symlink_metadata(&dest).is_ok() {
         match conflict {
             Conflict::KeepBoth => dest = destination_for(source, directory),
-            Conflict::Duplicate => unreachable!("handled above"),
+            Conflict::Duplicate => dest = duplicate_destination(source, directory),
             Conflict::Skip => return Ok(Step::Skipped),
             Conflict::Replace => replace = true,
             Conflict::Cancel => { cancel.cancel(); return Err(cancelled()); }
@@ -852,5 +924,18 @@ mod tests {
         assert_eq!(count_tree(&dir, &cancel).unwrap(), Totals { items: 3, bytes: 5, errors: 0 });
         cancel.cancel();
         assert!(count_tree(&dir, &cancel).is_err());
+    }
+
+    #[test]
+    fn copy_chunk_is_bounded_and_power_of_two() {
+        // An unmapped device number falls back to the unknown-device chunk.
+        let chunk = chunk_for_device(u64::MAX);
+        assert!((CHUNK_UNKNOWN..=CHUNK_ROTATIONAL).contains(&chunk));
+        assert!(chunk.is_power_of_two());
+        // A real scratch path resolves through sysfs or falls back, but never leaves the bounds.
+        let scratch = Scratch::new("chunk");
+        let chunk = copy_chunk(scratch.path(), scratch.path());
+        assert!((CHUNK_UNKNOWN..=CHUNK_ROTATIONAL).contains(&chunk));
+        assert!(chunk.is_power_of_two());
     }
 }

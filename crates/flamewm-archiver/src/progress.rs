@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::error::{ArchiveError, Result};
 
@@ -54,6 +55,8 @@ pub struct Summary {
 const MIN_BYTE_STEP: u64 = 64 * 1024;
 /// Emissions per operation when the totals are known (the bar moves in 1% steps).
 const EMISSIONS_PER_OPERATION: u64 = 100;
+/// Minimum spacing between two emissions; a fast archive is capped at ten updates a second.
+const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Running totals plus cancel check for one operation.
 ///
@@ -72,6 +75,8 @@ pub struct Reporter<'a> {
     byte_step: u64,
     /// Entry step between emissions; never zero.
     entry_step: usize,
+    /// When the sink last received a snapshot; the constructor's initial one counts.
+    last_emit: Option<Instant>,
 }
 
 impl<'a> Reporter<'a> {
@@ -95,6 +100,7 @@ impl<'a> Reporter<'a> {
             pending_entries: 0,
             byte_step: (bytes_total / EMISSIONS_PER_OPERATION).max(MIN_BYTE_STEP),
             entry_step: (entries_total / EMISSIONS_PER_OPERATION as usize).max(1),
+            last_emit: Some(Instant::now()),
         }
     }
 
@@ -131,14 +137,25 @@ impl<'a> Reporter<'a> {
     fn maybe_emit(&mut self) {
         let complete = self.state.bytes_done >= self.state.bytes_total
             && self.state.entries_done >= self.state.entries_total;
-        if complete
-            || self.pending_bytes >= self.byte_step
-            || self.pending_entries >= self.entry_step
-        {
-            self.pending_bytes = 0;
-            self.pending_entries = 0;
-            (self.sink)(self.state);
+        let stepped =
+            self.pending_bytes >= self.byte_step || self.pending_entries >= self.entry_step;
+        if !complete && !stepped {
+            return;
         }
+        let now = Instant::now();
+        // Completion always reports; an intermediate step waits out the interval, so a fast
+        // archive cannot wake the window more than ten times a second.
+        if !complete
+            && self
+                .last_emit
+                .is_some_and(|last| now.duration_since(last) < MIN_INTERVAL)
+        {
+            return;
+        }
+        self.last_emit = Some(now);
+        self.pending_bytes = 0;
+        self.pending_entries = 0;
+        (self.sink)(self.state);
     }
 }
 
@@ -216,5 +233,92 @@ fn copy_chunks(
         dst.write_all(&buffer[..n]).map_err(|err| rep.fail(err))?;
         rep.add_bytes(n as u64);
         total += n as u64;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reporter_opens_with_a_zero_snapshot_and_suppresses_sub_step_updates() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.borrow_mut().push(progress);
+            // Entries: 500 gives an entry step of 5, so one finished entry is below the step.
+            let mut reporter = Reporter::new(1_000_000, 500, &cancel, &mut sink);
+            assert_eq!(
+                seen.borrow().len(),
+                1,
+                "the constructor emits one starting snapshot"
+            );
+            assert_eq!(
+                seen.borrow()[0],
+                Progress {
+                    bytes_done: 0,
+                    bytes_total: 1_000_000,
+                    entries_done: 0,
+                    entries_total: 500,
+                }
+            );
+            reporter.add_bytes(1024);
+            reporter.finish_entry();
+            assert_eq!(
+                seen.borrow().len(),
+                1,
+                "updates below both the byte and the entry step are coalesced"
+            );
+        }
+    }
+
+    #[test]
+    fn reporter_reports_completion_even_inside_the_minimum_interval() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.borrow_mut().push(progress);
+            let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
+            // Completion bypasses the step and the 100 ms interval: a finished
+            // operation always reports its final totals.
+            reporter.finish_entry();
+            assert_eq!(seen.borrow().len(), 2);
+            assert_eq!(
+                seen.borrow()[1],
+                Progress {
+                    bytes_done: 0,
+                    bytes_total: 0,
+                    entries_done: 1,
+                    entries_total: 0,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cancel_is_visible_to_the_reporter_and_maps_io_failures_to_cancelled() {
+        let cancel = CancelToken::new();
+        let mut sink = |_progress: Progress| {};
+        let mut reporter = Reporter::new(0, 0, &cancel, &mut sink);
+        assert!(reporter.check().is_ok());
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Io(_)
+        ));
+        cancel.cancel();
+        assert!(reporter.check().is_err(), "cancel stops the copy loop");
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Cancelled
+        ));
+
+        // A failure with no cancellation keeps its I/O cause.
+        let fresh = CancelToken::new();
+        let mut sink = |_progress: Progress| {};
+        let reporter = Reporter::new(0, 0, &fresh, &mut sink);
+        assert!(matches!(
+            reporter.fail(io::Error::other("disk")),
+            ArchiveError::Io(_)
+        ));
     }
 }

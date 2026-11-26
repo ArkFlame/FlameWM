@@ -59,10 +59,17 @@ impl App {
         // `Line` per selected line.
         let mut decoded = crate::screen::Line::new();
         for index in span.start.0..=span.end.0 {
-            if !screen.line_abs_into(index, &mut decoded) {
-                continue;
-            }
-            let line = decoded.as_slice();
+            // A live row is borrowed straight from the grid; only a scrollback line is decoded into the reused buffer,
+            // so copying the visible screen no longer duplicates its cells first.
+            let line: &[crate::screen::Cell] = match screen.live_line(index) {
+                Some(line) => line,
+                None => {
+                    if !screen.line_abs_into(index, &mut decoded) {
+                        continue;
+                    }
+                    decoded.as_slice()
+                }
+            };
             if !first {
                 out.push('\n');
             }

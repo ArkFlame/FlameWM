@@ -2,18 +2,35 @@
 
 use super::*;
 
-pub(super) fn directory_distance(
-    index: &IconLookupIndex,
-    file: IndexedIconFile,
-    physical: u32,
-) -> u64 {
-    let meta = index.files().meta(file);
-    let dirs = index
+/// Explicit-extension split without allocation for bare names:
+/// `foo.png` -> `(owned foo-base, Some("png"))`, `foo` -> borrowed `foo`.
+fn normalize_parts(name: &str) -> (std::borrow::Cow<'_, str>, Option<String>) {
+    if let Some((base, ext)) = split_icon_filename(name)
+        && IconLookupIndex::EXTENSIONS.contains(&ext.as_str())
+    {
+        return (std::borrow::Cow::Owned(base), Some(ext));
+    }
+    (std::borrow::Cow::Borrowed(name), None)
+}
+
+/// Per-lookup view of the theme chain: `dir_entries` addressed by rank keeps
+/// directory metadata lookup off the string-hash path for every candidate file.
+fn chain_indexes(index: &IconLookupIndex) -> Vec<Option<&IconThemeIndex>> {
+    index
         .ordered_themes
+        .iter()
+        .map(|theme| index.indexes().get(theme).and_then(Option::as_ref))
+        .collect()
+}
+
+fn entry_distance(chain: &[Option<&IconThemeIndex>], meta: IconDirMeta, physical: u32) -> u64 {
+    chain
         .get(meta.theme_rank as usize)
-        .and_then(|theme| index.indexes().get(theme)?.as_ref());
-    dirs.and_then(|d| d.dirs.get(d.directories.get(meta.directory_rank as usize)?))
-        .map_or(u64::MAX / 2, |e| e.distance(physical))
+        .copied()
+        .flatten()
+        .and_then(|theme| theme.dir_entries.get(meta.directory_rank as usize))
+        .and_then(Option::as_ref)
+        .map_or(u64::MAX / 2, |entry| entry.distance(physical))
 }
 
 /// Directory scan result: base icon name -> files found by reading each
@@ -359,12 +376,8 @@ impl IconLookupIndex {
     /// `(base, Option<explicit ext>)`. Explicit ext pins the filename.
     #[must_use]
     pub fn normalize_name(name: &str) -> (String, Option<String>) {
-        if let Some((base, ext)) = split_icon_filename(name)
-            && Self::EXTENSIONS.contains(&ext.as_str())
-        {
-            return (base, Some(ext));
-        }
-        (name.to_owned(), None)
+        let (base, explicit) = normalize_parts(name);
+        (base.into_owned(), explicit)
     }
 
     /// Memory-only lookup: normalized -> files -> global exact-size first
@@ -373,10 +386,11 @@ impl IconLookupIndex {
     /// recorded at build (`indexed_hit` means the file exists in snapshot).
     #[must_use]
     pub fn lookup(&self, name: &str, physical: u32) -> (Vec<PathBuf>, bool) {
-        let (base, explicit) = Self::normalize_name(name);
-        let Some(entries) = self.files().get(&base) else {
+        let (base, explicit) = normalize_parts(name);
+        let files = self.files();
+        let Some(entries) = files.get(&*base) else {
             let mut tail = Vec::new();
-            if let Some(found) = self.pixmaps().get(&base) {
+            if let Some(found) = self.pixmaps().get(&*base) {
                 tail.extend(child_filter(found, explicit.as_deref()));
             }
             let hit = !tail.is_empty();
@@ -387,51 +401,51 @@ impl IconLookupIndex {
         // (distance 0) matches anywhere in the chain win in chain order,
         // remaining per-theme bests follow in theme-rank order.
         let want = explicit.as_deref();
-        let mut theme_best: HashMap<u32, (&IndexedIconFile, u64, u32)> = HashMap::new();
+        let physical = physical.max(1);
+        let chain = chain_indexes(self);
+        // Rank-indexed slots: no hash map or sort, the chain order is the vec.
+        let mut best: Vec<Option<(&IndexedIconFile, u64, u32)>> = vec![None; chain.len()];
         for file in entries {
-            if !want.is_none_or(|want| self.files().ext(*file).eq_ignore_ascii_case(want)) {
+            if !want.is_none_or(|want| files.ext(*file).eq_ignore_ascii_case(want)) {
                 continue;
             }
-            let distance = directory_distance(self, *file, physical.max(1));
-            let meta = self.files().meta(*file);
-            let better = match theme_best.get(&meta.theme_rank) {
+            let meta = files.meta(*file);
+            let Some(slot) = best.get_mut(meta.theme_rank as usize) else {
+                continue;
+            };
+            let distance = entry_distance(&chain, meta, physical);
+            let better = match *slot {
                 None => true,
                 Some((cur, cur_d, cur_dir)) => {
                     (distance, meta.directory_rank, file.format_rank)
-                        < (*cur_d, *cur_dir, cur.format_rank)
+                        < (cur_d, cur_dir, cur.format_rank)
                 }
             };
             if better {
-                theme_best.insert(meta.theme_rank, (file, distance, meta.directory_rank));
+                *slot = Some((file, distance, meta.directory_rank));
             }
         }
-        let mut best: Vec<(u32, &IndexedIconFile, u64)> = theme_best
-            .into_iter()
-            .map(|(rank, (file, distance, _))| (rank, file, distance))
-            .collect();
-        best.sort_by_key(|(rank, _, _)| *rank);
         // Global exact-first mirrors resolver precedence: exact-size
         // (distance 0) matches anywhere in the chain win in chain order,
         // remaining per-theme bests follow in theme-rank order.
-        let mut ordered = Vec::new();
-        for &(_, file, distance) in &best {
-            if distance == 0 {
-                ordered.push(self.files().path(&base, *file));
+        let mut ordered = Vec::with_capacity(best.len());
+        for entry in best.iter().flatten() {
+            if entry.1 == 0 {
+                ordered.push(files.path(&*base, *entry.0));
             }
         }
-        for &(_, file, distance) in &best {
-            if distance != 0 {
-                ordered.push(self.files().path(&base, *file));
+        for entry in best.iter().flatten() {
+            if entry.1 != 0 {
+                ordered.push(files.path(&*base, *entry.0));
             }
         }
-        let mut out = ordered;
-        if out.is_empty()
-            && let Some(found) = self.pixmaps().get(&base)
+        if ordered.is_empty()
+            && let Some(found) = self.pixmaps().get(&*base)
         {
-            out.extend(child_filter(found, explicit.as_deref()));
+            ordered.extend(child_filter(found, explicit.as_deref()));
         }
-        let hit = !out.is_empty();
-        (out, hit)
+        let hit = !ordered.is_empty();
+        (ordered, hit)
     }
 
     /// At most one watch-set mtime check per 5s. When the watched directory

@@ -186,7 +186,7 @@
     }
     #[test] fn stale_worker_reply_is_discarded() {
         let mut model=Explorer::new(PathBuf::from("/tmp"));let old=model.generation;model.next_generation();
-        assert!(!model.apply_listing(old,Path::new("/tmp"),Ok(Vec::new())));
+        assert!(!model.apply_listing(old,Path::new("/tmp"),Ok(Vec::new()),view::ColumnSort::default()));
     }
     #[test] fn move_refuses_existing_destination_and_preserves_both_files() {
         let base = std::env::temp_dir().join(format!("flamewm-explorer-noreplace-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
@@ -234,9 +234,31 @@
         let mut model=Explorer::new(PathBuf::from("/tmp"));
         model.tab_mut().select_one(PathBuf::from("/tmp/gone"));
         let generation=model.generation;
-        assert!(model.apply_listing(generation,Path::new("/tmp"),Ok(vec![])));
+        assert!(model.apply_listing(generation,Path::new("/tmp"),Ok(vec![]),view::ColumnSort::default()));
         assert!(model.tab().selected_paths.is_empty());
         assert!(model.tab().selected.is_none());
+    }
+    #[test] fn refresh_merges_by_path_and_keeps_the_revision_when_nothing_changed() {
+        let entry=|name:&str,size:u64|Entry::new(PathBuf::from("/tmp").join(name),name.into(),false,false,size,None);
+        let mut tab=Tab::new(PathBuf::from("/tmp"));
+        tab.set_entries(vec![entry("a",1),entry("b",2)]);
+        let revision=tab.revision();
+        // The watcher reporting the listing on screen must not invalidate label or thumbnail caches.
+        assert!(!tab.apply_refresh(vec![entry("a",1),entry("b",2)],view::ColumnSort::default()));
+        assert_eq!(tab.revision(),revision);
+        assert!(tab.apply_refresh(vec![entry("a",1),entry("b",3),entry("c",4)],view::ColumnSort::default()));
+        assert_eq!(tab.revision(),revision+1);
+        assert_eq!(tab.entries.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),["a","b","c"]);
+        assert_eq!(tab.entries[1].size,3);
+        assert!(tab.apply_refresh(vec![entry("b",3)],view::ColumnSort::default()));
+        assert_eq!(tab.entries.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),["b"]);
+    }
+    #[test] fn refresh_replaces_a_listing_that_is_not_in_the_display_order() {
+        let entry=|name:&str|Entry::new(PathBuf::from("/tmp").join(name),name.into(),false,false,0,None);
+        let mut tab=Tab::new(PathBuf::from("/tmp"));
+        tab.set_entries(vec![entry("b"),entry("a")]);
+        assert!(tab.apply_refresh(vec![entry("a"),entry("b")],view::ColumnSort::default()));
+        assert_eq!(tab.entries.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),["a","b"]);
     }
     #[test] fn drop_noop_rules_cover_self_descendant_and_same_folder() {
         let folder=PathBuf::from("/home/u/projects/app");

@@ -462,8 +462,22 @@ struct Changed {
 }
 
 impl ChangedPaths {
+    /// Distinct names recorded before the set is abandoned for a full re-check. A watcher burst
+    /// larger than this costs as much as rescanning every launcher, so the bounded set is dropped
+    /// and `overflow` forces the same complete pass instead of growing without limit.
+    const NAMES_CAP: usize = 1024;
+
     pub(crate) fn note(&self, name: &std::ffi::OsStr) {
-        self.lock().names.insert(name.to_os_string());
+        let mut changed = self.lock();
+        if changed.overflow {
+            return;
+        }
+        if changed.names.len() >= Self::NAMES_CAP {
+            changed.names.clear();
+            changed.overflow = true;
+            return;
+        }
+        changed.names.insert(name.to_os_string());
     }
 
     pub(crate) fn note_overflow(&self) {

@@ -1,3 +1,4 @@
+#[cfg(test)]
 pub(super) fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start = source
         .find(start)
@@ -9,6 +10,7 @@ pub(super) fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a
     &body[..end]
 }
 
+#[cfg(test)]
 pub(super) fn signal_callback_source() -> &'static str {
     let source = include_str!("main.rs");
     source_between(
@@ -18,6 +20,7 @@ pub(super) fn signal_callback_source() -> &'static str {
     )
 }
 
+#[cfg(test)]
 fn settings_projection_source() -> &'static str {
     source_between(
         include_str!("refresh.rs"),

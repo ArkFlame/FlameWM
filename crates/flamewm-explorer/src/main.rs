@@ -16,7 +16,7 @@ use std::time::{Duration,Instant};
 
 use flamewm_clipboard::{Clipboard,FileOp};
 use flamewm_explorer::clipboard::{resolve_paste,settle_cut};
-use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,fill_sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed_cancellable,sort_listing,parse_address,places};
+use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,sidebar_rows,fill_sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory_streamed_cancellable,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort};
 use flamewm_explorer::thumbs::{self,Lookup,ThumbKey,Thumbnails,THUMB_SIZE};
 use flamewm_explorer::columns::{Divider,Widths};
@@ -137,7 +137,7 @@ impl RowDrag {
 }
 
 enum WorkerJob {
-    Scan {generation:u64,path:PathBuf,hidden:bool,sort:SortBy},
+    Scan {generation:u64,path:PathBuf,hidden:bool,sort:ColumnSort,stream:bool},
     Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict,cancel:CancellationToken},
     Drop {sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool,cancel:CancellationToken},
     Trash {paths:Vec<PathBuf>},
@@ -201,6 +201,8 @@ enum WorkerResult {
     Properties(Result<properties::Properties,String>),
     /// Unmounted filesystems from lsblk.
     Devices(Vec<bookmarks::BlockDevice>),
+    /// Free/total bytes of the filesystem behind `path`, sampled on a worker; `None` when statvfs failed.
+    Space{path:PathBuf,value:Option<(u64,u64)>},
     /// A block device or mount-table change arrived from the kernel; the sidebar reloads.
     DevicesChanged,
     /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
@@ -288,9 +290,6 @@ struct ExplorerApp {
     convert_picker:Option<PathBuf>,
     context:Option<(f32,f32)>, edit:Option<EditMode>, field:flamewm_explorer::TextField, rename_target:Option<PathBuf>, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<progress::Snapshot>,
-    /// Set when the user closed the window: the running job is cancelled, and the
-    /// process exits once its staging output is gone.
-    closing:bool,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>,
     /// Ark drag-out extractions in flight; polled from the event loop.
@@ -308,12 +307,17 @@ struct ExplorerApp {
     scroll_drag:Option<(f32,usize)>,
     column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
     dialog:Option<Dialog>, dialog_focus:usize, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
+    /// True between a job's start and its `Done`, so re-committing the identical query does not restart the walk.
+    search_running:bool,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>, device_watch:Option<DeviceWatch>,
     context_place:Option<usize>, trash_base:PathBuf,
     /// Latest sidebar rebuild requested; a worker result with an older id is ignored.
     places_gen:u64,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
     unmounted:Vec<bookmarks::BlockDevice>,
+    /// UI-side free-space sample for the status strip. The projection only reads it; `statvfs`
+    /// runs on a background lane, so a stale network mount can never stall a frame.
+    space:RefCell<view::SpaceCache>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
     events:Option<(Sender<WorkerResult>,UnixStream)>,
     /// Cut sources the explorer already moved; the system clipboard still lists them, so they are not pasted twice.
@@ -354,11 +358,15 @@ fn run()->Result<(),String>{
     if flamewm_profiler::enabled() {
         // No reactor timer in this process: a plain thread drains the span window every interval.
         let interval=std::time::Duration::from_secs(flamewm_profiler::profile_interval_secs());
-        std::thread::spawn(move||loop{std::thread::sleep(interval);let _=flamewm_profiler::report_window();});
+        // A refused thread only costs profiling samples, never the window.
+        let _=std::thread::Builder::new().name("flamewm-explorer-profiler".into())
+            .spawn(move||loop{std::thread::sleep(interval);let _=flamewm_profiler::report_window();});
     }
     // One-shot: startup's scan and decode temporaries stay free-but-resident in the malloc arena.
     // A single sleeping thread hands them back; no periodic wake is added.
-    std::thread::spawn(||{std::thread::sleep(std::time::Duration::from_secs(10));flamewm_ui_x11::release_free_heap();});
+    // Heap trimming is optional: a refused thread keeps the memory but must not panic the window.
+    let _=std::thread::Builder::new().name("flamewm-explorer-trim".into())
+        .spawn(||{std::thread::sleep(std::time::Duration::from_secs(10));flamewm_ui_x11::release_free_heap();});
     let args=std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.iter().any(|a|matches!(a.to_string_lossy().as_ref(),"--help"|"-h")) {println!("FlameWM Explorer — usage: flamewm-explorer [DIRECTORY]");return Ok(());}
     let path=args.first().map_or_else(home_dir, PathBuf::from);
@@ -387,32 +395,42 @@ fn run()->Result<(),String>{
     let app_events=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let (search_tx,search_wake)=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let search=SearchWorker::spawn(move||{if search_tx.send(WorkerResult::SearchTick).is_ok() {let _=(&search_wake).write_all(&[1]);}}).map_err(|e|e.to_string())?;
+    let settings_wake=writer.try_clone().map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
+    // The session-bus settings round trip (up to its full timeout when the control service is
+    // slow) runs on a worker and is applied from the wake socket, so it never adds to
+    // first-paint time; the first frame uses the default theme and no backdrop.
+    let (settings_tx,settings_rx)=mpsc::sync_channel::<SettingsSnapshot>(1);
+    std::thread::Builder::new().name("flamewm-explorer-settings".into())
+        .spawn(move||{
+            let Some(snapshot)=initial_settings() else {return;};
+            if settings_tx.try_send(snapshot).is_ok() {let _=(&settings_wake).write_all(&[1]);}
+        })
+        .map_err(|e|e.to_string())?;
     let (window_w,window_h,window_y)=window_frame(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
-    let backdrop:Option<flamewm_ui_x11::backdrop::WindowBackdrop>;
     {
         let mut app=app.borrow_mut();
         app.window=(window_w as f32,window_h as f32);
         app.events=Some(app_events);
         app.thumb_queue=Some(thumb_queue);
         app.search=Some(search);
-        let settings=initial_settings();
-        app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);
-        backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&flamewm_api::paths::workspace_packaged_root()));
-        let saved=prefs::load(&prefs::config_dir());
+    }
+    // The listing starts before the template decodes, so rows stream in while the window is built.
+    app.borrow_mut().scan();
+    let mut doc=decode_document(UI)?.with_file_drop_target();
+    let saved=prefs::load(&prefs::config_dir());
+    {
+        let mut app=app.borrow_mut();
         app.model.hidden=saved.show_hidden;
         app.show_type=saved.show_type;
         app.widths=Widths{modified:saved.col_modified as f32,size:saved.col_size as f32,kind:saved.col_kind as f32}.clamped();
     }
-    app.borrow_mut().scan();
-    // Present-but-unmounted devices arrive from lsblk on a worker; without this they only show after a reload.
+    app.borrow().project(&mut doc)?;
+    // Present-but-unmounted devices arrive from lsblk on a worker, and the udev watch follows;
+    // both start after the first paint so device enumeration never delays the window.
     app.borrow().refresh_devices();
     app.borrow_mut().watch_devices();
-    let mut doc=decode_document(UI)?.with_file_drop_target();
-    // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
-    if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
-    app.borrow().project(&mut doc)?;
     let event_app=Rc::clone(&app);
     let wake_app=Rc::clone(&app);
     let fd=reader.as_raw_fd();
@@ -427,7 +445,7 @@ fn run()->Result<(),String>{
             }).is_ok(){UiWakeDrain::Keep}else{UiWakeDrain::Retire}
         }) as Box<dyn FnMut()->UiWakeDrain>)
     });
-    run_with_controller_events_role_and_two_readable_fds(
+    let outcome = run_with_controller_events_role_and_two_readable_fds(
         doc,
         UiWindowConfig{width:window_w,height:window_h,x:80,y:window_y,title:"FlameWM Explorer".into(),identity:Some(flamewm_ui_x11::X11WindowIdentity{
             // Matches flamewm-explorer.desktop (StartupWMClass) so the taskbar resolves the app icon.
@@ -489,7 +507,21 @@ fn run()->Result<(),String>{
         },
         move |document|{
             let mut app=wake_app.borrow_mut();
-            let snapshot_changed=match wake_snapshots.borrow_mut().take(){Some(snapshot)=>{app.theme=ExplorerTheme::from_snapshot(&snapshot);true},None=>false};
+            let root=flamewm_api::paths::workspace_packaged_root();
+            // The startup answer arrives after the first frame; a live signal reuses this path.
+            let mut snapshot_changed=match settings_rx.try_recv(){
+                Ok(snapshot)=>{
+                    app.theme=ExplorerTheme::from_snapshot(&snapshot);
+                    document.request_window_backdrop(Some(theme::window_backdrop(&snapshot,&root)));
+                    true
+                },
+                Err(_)=>false,
+            };
+            if let Some(snapshot)=wake_snapshots.borrow_mut().take(){
+                app.theme=ExplorerTheme::from_snapshot(&snapshot);
+                document.request_window_backdrop(Some(theme::window_backdrop(&snapshot,&root)));
+                snapshot_changed=true;
+            }
             // Every X wake (a pure window move included) lands here. Project only when something this
             // closure owns changed: a worker message, a settings snapshot, the list origin, or a running glide.
             let mut changed=snapshot_changed;
@@ -525,11 +557,13 @@ fn run()->Result<(),String>{
             if app.glide.is_animating(Instant::now()) {return app.project_rows(document,false);}
             Ok(())
         },
-    )?;
+    );
     // Closing the window cancels a running transfer and waits for its staging
     // output to be gone before the process exits, so no partial file survives.
+    // This runs on every exit path, including a failed event loop: a broken window
+    // must not leave half-published staging entries behind.
     Rc::clone(&app).borrow_mut().close();
-    Ok(())
+    outcome
 }
 
 

@@ -179,6 +179,11 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
 pub fn running_apps(windows: &[WindowSnapshot]) -> Vec<String> {
     let mut apps: Vec<String> = Vec::with_capacity(windows.len().min(MAX_SLOTS));
     for window in windows.iter().filter(|window| !window.skip_taskbar) {
+        // Only the first `MAX_SLOTS` entries can ever be projected, so stop scanning (and
+        // cloning app ids) once the visible slots are full.
+        if apps.len() >= MAX_SLOTS {
+            break;
+        }
         let id = window.app_id.as_str();
         // A taskbar lists at most a couple of dozen apps, so a linear scan over the result
         // beats allocating and hashing a `HashSet` on every layout pass.
@@ -192,11 +197,14 @@ pub fn running_apps(windows: &[WindowSnapshot]) -> Vec<String> {
 /// Dock layout for the current settings and windows.
 #[must_use]
 pub fn layout_for(settings: &DockSettings, windows: &[WindowSnapshot]) -> DockLayout {
-    let mut layout = merge_dock(
-        &settings.pinned,
-        &running_apps(windows),
-        settings.show_running,
-    );
+    // `merge_dock` ignores the running list when `show_running` is off, so skip scanning the
+    // window list (and cloning app ids) entirely in that case.
+    let running = if settings.show_running {
+        running_apps(windows)
+    } else {
+        Vec::new()
+    };
+    let mut layout = merge_dock(&settings.pinned, &running, settings.show_running);
     if settings.show_trash {
         // Trash is the last slot, after its own separator (drawn in addition to any group separator).
         layout.trash_separator_after = layout.entries.len().checked_sub(1);
@@ -231,23 +239,34 @@ pub fn trash_files_dir() -> std::path::PathBuf {
 /// launch an app with no window. Uses the most recent focused window first.
 #[must_use]
 pub fn click_request(app_id: &str, windows: &[WindowSnapshot]) -> ControlRequest {
-    let candidates = || {
-        windows
-            .iter()
-            .filter(|w| !w.skip_taskbar && w.app_id.as_str() == app_id)
-    };
-    let window = candidates()
-        .find(|w| w.focused)
-        .or_else(|| candidates().next());
-    match window {
-        Some(window) if window.state == WindowState::Minimized => {
-            ControlRequest::RestoreWindow(window.reference)
+    // One pass: take the focused match immediately, else remember the first candidate. The old
+    // two-pass form re-scanned every window when no focused window matched.
+    let mut fallback = None;
+    for window in windows
+        .iter()
+        .filter(|w| !w.skip_taskbar && w.app_id.as_str() == app_id)
+    {
+        if window.focused {
+            return activate_or_restore(window);
         }
-        Some(window) => ControlRequest::ActivateWindow(window.reference),
-        None => ControlRequest::LaunchApplication {
+        if fallback.is_none() {
+            fallback = Some(window);
+        }
+    }
+    fallback.map_or_else(
+        || ControlRequest::LaunchApplication {
             app: flamewm_api::DesktopAppId::new(app_id),
             options: ApplicationLaunchOptions::default(),
         },
+        activate_or_restore,
+    )
+}
+
+fn activate_or_restore(window: &WindowSnapshot) -> ControlRequest {
+    if window.state == WindowState::Minimized {
+        ControlRequest::RestoreWindow(window.reference)
+    } else {
+        ControlRequest::ActivateWindow(window.reference)
     }
 }
 
@@ -350,6 +369,14 @@ pub fn dock_frame(
     let mut icons = Vec::with_capacity(count);
     let mut dots = Vec::with_capacity(count);
     let mut labels = Vec::with_capacity(count);
+    // Invariants across slots: the label row and both centred insets depend only on the bar.
+    let label_y = if edge == Edge::Bottom {
+        bar.y - LABEL_GAP - LABEL_H
+    } else {
+        bar.y + bar.h + LABEL_GAP
+    };
+    let dot_inset = (slot - DOT) / 2.0;
+    let label_inset = slot / 2.0 - LABEL_W / 2.0;
     for (i, running) in running.iter().take(count).enumerate() {
         let along = PAD + i as f32 * slot;
         let s = map(along, PAD, slot, slot);
@@ -364,13 +391,13 @@ pub fn dock_frame(
             if vertical {
                 Rect {
                     x: s.x + 1.0,
-                    y: s.y + (slot - DOT) / 2.0,
+                    y: s.y + dot_inset,
                     w: DOT,
                     h: DOT,
                 }
             } else {
                 Rect {
-                    x: s.x + (slot - DOT) / 2.0,
+                    x: s.x + dot_inset,
                     y: s.y + slot - DOT - 1.0,
                     w: DOT,
                     h: DOT,
@@ -386,13 +413,8 @@ pub fn dock_frame(
             }
         } else {
             // Window-space rect: above the bar on bottom, below it on top (outside the window).
-            let label_y = if edge == Edge::Bottom {
-                bar.y - LABEL_GAP - LABEL_H
-            } else {
-                bar.y + bar.h + LABEL_GAP
-            };
             Rect {
-                x: s.x + slot / 2.0 - LABEL_W / 2.0,
+                x: s.x + label_inset,
                 y: label_y,
                 w: LABEL_W,
                 h: LABEL_H,
@@ -560,16 +582,12 @@ pub fn project_dock(
     squared: bool,
 ) -> Result<(), String> {
     let ids = dock_node_ids();
-    for i in 0..MAX_SLOTS {
+    let count = frame.slots.len().min(MAX_SLOTS);
+    for i in 0..count {
+        let slot = frame.slots[i];
         let slot_id = ids.slot[i].as_str();
         let icon_id = ids.icon[i].as_str();
         let dot_id = ids.dot[i].as_str();
-        let Some(slot) = frame.slots.get(i).copied() else {
-            for id in [slot_id, icon_id, dot_id] {
-                document.visible(id, false)?;
-            }
-            continue;
-        };
         let (x, y, w, h) = rect_to_css(slot);
         document.visible(slot_id, true)?;
         document.position(slot_id, x, y)?;
@@ -590,6 +608,11 @@ pub fn project_dock(
             }
             None => document.visible(dot_id, false)?,
         }
+    }
+    // Hide the unused slot buttons only: effective visibility walks ancestors, so hiding the
+    // slot hides its icon and dot with two fewer document writes per empty slot.
+    for i in count..MAX_SLOTS {
+        document.visible(ids.slot[i].as_str(), false)?;
     }
     let (bx, by, bw, bh) = rect_to_css(frame.bar);
     document.position("dock-bar", bx, by)?;

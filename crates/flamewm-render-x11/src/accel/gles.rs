@@ -238,7 +238,9 @@ impl GpuBlur {
     }
 
     unsafe fn shader(&self, kind: GlEnum, source: &str) -> Result<GlUint, String> {
-        let source = CString::new(source).expect("shader source is static and NUL-free");
+        let Ok(source) = CString::new(source) else {
+            return Err("shader source contains an interior NUL".to_string());
+        };
         // SAFETY: a context is current; the source pointer stays alive for the call.
         unsafe {
             let shader = (self.gl.create_shader)(kind);

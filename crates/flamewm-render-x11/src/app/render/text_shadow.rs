@@ -130,8 +130,10 @@ impl X11App {
             return Ok(None);
         }
         let pad = shadow_pad(radius);
+        let Some(xft) = self.xft.as_mut() else {
+            return Ok(None);
+        };
         let dims = {
-            let xft = self.xft.as_mut().expect("checked Xft");
             unsafe { xft.set_preferred_family(family) };
             unsafe { xft.text_alpha_mask(size, weight, text, pad, &mut scratch.mask) }
         };
@@ -162,8 +164,11 @@ impl X11App {
         let family = document.ui_font_family();
         let mut runs: Vec<(f32, u16, u32, std::sync::Arc<str>)> = Vec::new();
         for index in 0..count {
+            let Some(command) = self.retained_command(index) else {
+                continue;
+            };
             // SAFETY: index is below the retained count; no cache replacement happens here.
-            let command = unsafe { &*self.retained_command(index) };
+            let command = unsafe { &*command };
             if let PaintCommand::TextShadow {
                 size,
                 weight,

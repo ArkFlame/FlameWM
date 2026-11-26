@@ -77,6 +77,12 @@ pub struct Screen {
     /// Live-grid rows written since the last `take_dirty`; `dirty_all` covers wholesale changes.
     dirty_rows: Vec<bool>,
     dirty_all: bool,
+    /// Lines captured into scrollback since the last `take_scroll_shift`: every visible row moved up by this many,
+    /// so a renderer reuses its previous rows instead of rebuilding them.
+    scroll_shift: usize,
+    /// Lines dropped from the front of a capped scrollback. Every absolute line index renumbers down by this much
+    /// without `total_lines` changing, so a renderer must not trust an unchanged window index after it moves.
+    scrollback_drops: u64,
     /// Last graphic character printed, the source for REP (`CSI b`).
     last_char: Option<char>,
 }
@@ -127,6 +133,8 @@ impl Screen {
             replies: Vec::new(),
             dirty_rows: vec![false; rows],
             dirty_all: true,
+            scroll_shift: 0,
+            scrollback_drops: 0,
             last_char: None,
         }
     }
@@ -191,11 +199,9 @@ impl Screen {
     /// changed. `out` is cleared first, so a renderer keeps one buffer and a frame allocates nothing for the list.
     pub fn take_dirty_into(&mut self, out: &mut Vec<usize>) -> bool {
         out.clear();
-        if std::mem::take(&mut self.dirty_all) {
-            // The per-row list is unused behind `All`, so skip the scan.
-            self.dirty_rows.fill(false);
-            return true;
-        }
+        let all = std::mem::take(&mut self.dirty_all);
+        // Collect the per-row list even behind `All`: a scroll reuses the shifted rows, and the rows edited in the
+        // same batch must still be rebuilt at their new positions.
         out.extend(
             self.dirty_rows
                 .iter()
@@ -203,10 +209,19 @@ impl Screen {
                 .filter_map(|(row, dirty)| dirty.then_some(row)),
         );
         self.dirty_rows.fill(false);
-        false
+        all
+    }
+
+    /// Lines captured into scrollback since the last take. The rows shown last frame moved up by this many, so only
+    /// the rows the scroll exposed at the bottom are new; taking it resets the count.
+    pub fn take_scroll_shift(&mut self) -> usize {
+        std::mem::take(&mut self.scroll_shift)
     }
 
     fn mark_all(&mut self) {
+        // A wholesale change (resize, mode switch, reset) may remap every line, so a pending scroll shift no longer
+        // describes the visible rows.
+        self.scroll_shift = 0;
         self.dirty_all = true;
     }
 
@@ -229,6 +244,13 @@ impl Screen {
         } else {
             self.scrollback.len()
         }
+    }
+
+    /// How many lines a capped scrollback has dropped from its front. Absolute line indices move down by the
+    /// increase, even though `total_lines` stays the same.
+    #[must_use]
+    pub fn scrollback_drops(&self) -> u64 {
+        self.scrollback_drops
     }
 
     #[must_use]
@@ -296,9 +318,19 @@ impl Screen {
         if cols == self.cols && rows == self.rows {
             return;
         }
-        for grid in [&mut self.primary, &mut self.alt] {
-            for line in grid.iter_mut() {
-                line.resize(cols, Cell::blank(Color::Default));
+        let cols_changed = cols != self.cols;
+        // Width padding and truncation only when the column count moves. The alternate grid is blanked and sized on
+        // activation (`switch_alt`), so an inactive one keeps its old width instead of paying the same per-line pass
+        // on every ConfigureNotify; a height-only resize touches no line buffer at all.
+        if cols_changed {
+            let blank = Cell::blank(Color::Default);
+            for line in &mut self.primary {
+                line.resize(cols, blank);
+            }
+            if self.alt_active {
+                for line in &mut self.alt {
+                    line.resize(cols, blank);
+                }
             }
         }
         match rows.cmp(&self.rows) {
@@ -306,13 +338,14 @@ impl Screen {
                 let excess = self.rows - rows;
                 let shift = excess.min(self.row);
                 if shift > 0 {
-                    // One drain instead of `shift` front removals, each of which moved the whole grid.
-                    let dropped: Vec<Line> = self.primary.drain(0..shift).collect();
-                    for line in &dropped {
+                    // One drain, packing each departing top line into scrollback as it leaves. The drain borrows only
+                    // the primary grid, so the drops need no temporary list of removed lines.
+                    for line in self.primary.drain(0..shift) {
                         self.scrollback
-                            .push_back(History::pack(&line[..history_len(line)]));
+                            .push_back(History::pack(&line[..history_len(&line)]));
                         if self.scrollback.len() > self.scrollback_limit {
                             self.scrollback.pop_front();
+                            self.scrollback_drops = self.scrollback_drops.saturating_add(1);
                         }
                     }
                     self.primary
@@ -322,7 +355,8 @@ impl Screen {
             }
             Ordering::Greater => {
                 let grow = rows - self.rows;
-                let mut pulled = Vec::new();
+                // One capacity for the whole batch: growing the window never reallocates the pull list per row.
+                let mut pulled = Vec::with_capacity(grow);
                 if !self.alt_active {
                     for _ in 0..grow {
                         let Some(history) = self.scrollback.pop_back() else {
@@ -353,9 +387,15 @@ impl Screen {
         self.alt.truncate(rows);
         self.cols = cols;
         self.rows = rows;
-        self.dirty_rows = vec![false; rows];
+        // Reuse the damage bitmap: `take_dirty_into` clears it behind `All`, so only its capacity is carried over.
+        self.dirty_rows.clear();
+        self.dirty_rows.resize(rows, false);
         self.mark_all();
-        self.tabs = default_tabs(cols);
+        // Tab stops depend on the column count alone: a height-only resize keeps them, including any stop the
+        // program set with HTS, so no tab list is rebuilt.
+        if cols_changed {
+            self.tabs = default_tabs(cols);
+        }
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.row = self.row.min(rows - 1);
@@ -375,10 +415,13 @@ impl Screen {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let capture = self.full_region() && !self.alt_active;
         let blank = self.blank();
+        let moved = count.min(bottom - top + 1);
         // Rotate the region and blank the row that wrapped to the bottom in place: no per-line row allocation.
-        // A captured line shifts the window a scrolled-back view shows, so that case still rebuilds everything.
+        // A captured line shifts the window a scrolled-back view shows; record how far so the renderer moves its
+        // rows instead of rebuilding them.
         if capture {
             self.dirty_all = true;
+            self.scroll_shift = self.scroll_shift.saturating_add(moved);
         } else {
             // Only the scrolled region changed; rows outside it (a status line, a fixed header) stay clean.
             self.dirty_rows[top..=bottom].fill(true);
@@ -388,8 +431,14 @@ impl Screen {
         } else {
             &mut self.primary
         };
-        for _ in 0..count.min(bottom - top + 1) {
+        for _ in 0..moved {
             grid[top..=bottom].rotate_left(1);
+            if capture {
+                // The damage bitmap follows the content: a row written before the scroll must be rebuilt where it
+                // moved to, and the row the scroll blanked is new.
+                self.dirty_rows[top..=bottom].rotate_left(1);
+                self.dirty_rows[bottom] = true;
+            }
             let row = &mut grid[bottom];
             let packed = capture.then(|| History::pack(&row[..history_len(row)]));
             row.fill(blank);
@@ -397,6 +446,7 @@ impl Screen {
                 self.scrollback.push_back(history);
                 if self.scrollback.len() > self.scrollback_limit {
                     self.scrollback.pop_front();
+                    self.scrollback_drops = self.scrollback_drops.saturating_add(1);
                 }
             }
         }

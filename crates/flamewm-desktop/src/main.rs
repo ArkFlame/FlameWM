@@ -808,7 +808,16 @@ fn register_icon_and_wallpaper_wakes(
         reactor.register_raw_fd_with_action(wallpaper_fd, calloop::Interest::READ, move |_, _| {
             let mut state = wallpaper_cell.borrow_mut();
             state.wallpaper_loader.wake_drain();
-            state.settings_visual_dirty = true;
+            // Admit the completion here so a wake that carries nothing new (a stale generation
+            // superseded by a newer request, or an already-drained wake) does not arm the full
+            // settings projection pass. Only an applied image or a new diagnostic repaints.
+            let outcome = state.wallpaper_loader.poll();
+            if !matches!(
+                outcome,
+                wallpaper_loader::PollOutcome::Idle | wallpaper_loader::PollOutcome::Stale { .. }
+            ) {
+                state.settings_visual_dirty = true;
+            }
             FdAction::Continue
         });
     warn_degraded("wallpaper completion", registration);

@@ -143,24 +143,37 @@ fn push_run(runs: &mut Vec<Run>, start: u32, len: u32, coverage: f32) {
 /// Runs covering one row of a filled `width x height` rounded rect.
 pub(crate) fn fill_row_runs(width: u32, height: u32, radius: u32, row: u32) -> Vec<Run> {
     let mut runs = Vec::new();
+    fill_row_runs_into(&mut runs, width, height, radius, row);
+    runs
+}
+
+/// [`fill_row_runs`] into a reusable buffer: the paint loop clears and refills one scratch
+/// vector instead of allocating a `Vec` per corner row.
+pub(crate) fn fill_row_runs_into(
+    runs: &mut Vec<Run>,
+    width: u32,
+    height: u32,
+    radius: u32,
+    row: u32,
+) {
+    runs.clear();
     if corner_edges(height, radius, row).is_none() {
-        push_run(&mut runs, 0, width, 1.0);
-        return runs;
+        push_run(runs, 0, width, 1.0);
+        return;
     }
     let (lo, full) = left_run(height, radius, row);
     for col in lo..full {
-        push_run(&mut runs, col, 1, left_alpha(height, radius, row, col));
+        push_run(runs, col, 1, left_alpha(height, radius, row, col));
     }
-    push_run(&mut runs, full, width.saturating_sub(full * 2), 1.0);
+    push_run(runs, full, width.saturating_sub(full * 2), 1.0);
     for col in (lo..full).rev() {
         push_run(
-            &mut runs,
+            runs,
             width - 1 - col,
             1,
             left_alpha(height, radius, row, col),
         );
     }
-    runs
 }
 
 /// Runs covering one row of a stroked rounded rect: outer boundary minus the
@@ -172,13 +185,29 @@ pub(crate) fn stroke_row_runs(
     thickness: u32,
     row: u32,
 ) -> Vec<Run> {
+    let mut runs = Vec::new();
+    stroke_row_runs_into(&mut runs, width, height, radius, thickness, row);
+    runs
+}
+
+/// [`stroke_row_runs`] into a reusable buffer (see [`fill_row_runs_into`]).
+pub(crate) fn stroke_row_runs_into(
+    runs: &mut Vec<Run>,
+    width: u32,
+    height: u32,
+    radius: u32,
+    thickness: u32,
+    row: u32,
+) {
     let inner_present = row >= thickness
         && row < height.saturating_sub(thickness)
         && width > thickness * 2
         && height > thickness * 2;
     if !inner_present {
-        return fill_row_runs(width, height, radius, row);
+        fill_row_runs_into(runs, width, height, radius, row);
+        return;
     }
+    runs.clear();
     let inner_h = height - thickness * 2;
     let inner_r = radius.saturating_sub(thickness);
     let inner_row = row - thickness;
@@ -194,14 +223,12 @@ pub(crate) fn stroke_row_runs(
         };
         (outer - inner).clamp(0.0, 1.0)
     };
-    let mut runs = Vec::new();
     for col in 0..ring_hi {
-        push_run(&mut runs, col, 1, ring_alpha(col));
+        push_run(runs, col, 1, ring_alpha(col));
     }
     for col in (0..ring_hi).rev() {
-        push_run(&mut runs, width - 1 - col, 1, ring_alpha(col));
+        push_run(runs, width - 1 - col, 1, ring_alpha(col));
     }
-    runs
 }
 
 /// Scales the straight-alpha fill by boundary coverage; full coverage is unchanged.
@@ -244,15 +271,72 @@ pub(crate) unsafe fn fill_rounded_rect(
         // SAFETY: validated inputs above.
         unsafe { fill_box(backend, x, y + radius as i32, width, middle_height, color)? };
     }
+    // One scratch vector for both corner rows of this rect instead of one `Vec` per row.
+    let mut runs = Vec::new();
     for row in 0..radius {
         let bottom_row = height - 1 - row;
-        let runs = fill_row_runs(width, height, radius, row);
+        fill_row_runs_into(&mut runs, width, height, radius, row);
         // SAFETY: validated inputs above.
         unsafe { paint_runs(backend, (x, y), row, &runs, color)? };
         if bottom_row != row {
-            let runs = fill_row_runs(width, height, radius, bottom_row);
+            fill_row_runs_into(&mut runs, width, height, radius, bottom_row);
             // SAFETY: validated inputs above.
             unsafe { paint_runs(backend, (x, y), bottom_row, &runs, color)? };
+        }
+    }
+    Ok(())
+}
+
+/// Paints one run list repeated over `height` consecutive rows starting at `row`: one rect per
+/// run instead of one rect per run per row. `clip` cuts the span vertically and each run
+/// horizontally exactly as the per-row loop did.
+///
+/// # Safety
+///
+/// Same contract as `fill_box`; `backend` holds live Xlib/XRender handles.
+unsafe fn paint_span(
+    backend: &mut XRenderBackend,
+    (x, y): (i32, i32),
+    row: u32,
+    height: u32,
+    runs: &[Run],
+    clip: Option<Rect>,
+    color: Color,
+) -> Result<(), String> {
+    let top = y.saturating_add(row as i32);
+    let mut py = top;
+    let mut visible_height = height;
+    if let Some(clip) = clip {
+        let clip_top = clip.y.ceil() as i32;
+        let clip_bottom = (clip.y + clip.height).floor() as i32;
+        let bottom = top.saturating_add(height as i32);
+        py = py.max(clip_top);
+        let visible_bottom = bottom.min(clip_bottom);
+        if visible_bottom <= py {
+            return Ok(());
+        }
+        visible_height = (visible_bottom - py) as u32;
+    }
+    for &(start, len, coverage) in runs {
+        let run_color = scaled(color, coverage);
+        if let Some(clip) = clip {
+            let Some((left, visible)) = clipped_run(x + start as i32, len, clip) else {
+                continue;
+            };
+            // SAFETY: clipping a run only reduces the destination region.
+            unsafe { fill_box(backend, left, py, visible, visible_height, run_color)? };
+        } else {
+            // SAFETY: validated inputs above.
+            unsafe {
+                fill_box(
+                    backend,
+                    x + start as i32,
+                    py,
+                    len,
+                    visible_height,
+                    run_color,
+                )?
+            };
         }
     }
     Ok(())
@@ -293,27 +377,44 @@ pub(crate) unsafe fn stroke_rounded_rect_clipped(
     let radius =
         crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
 
-    for row in 0..height {
-        let py = y + row as i32;
-        if let Some(clip) = clip
-            && (py < clip.y.ceil() as i32 || py >= (clip.y + clip.height).floor() as i32)
-        {
-            continue;
-        }
-        let runs = stroke_row_runs(width, height, radius, thickness, row);
-        if let Some(clip) = clip {
-            for &(start, len, coverage) in &runs {
-                if let Some((left, visible)) = clipped_run(x + start as i32, len, clip) {
-                    // SAFETY: clipping a row run only reduces the destination region.
-                    unsafe { fill_box(backend, left, py, visible, 1, scaled(color, coverage))? };
-                }
-            }
-        } else {
+    // Rows in the straight middle of a rounded rect share one run list. Painting them row by
+    // row issued one XRender request per run per row; equal consecutive rows merge into a
+    // single rect of the span, which is pixel-equal (same x, width, color, adjacent rows).
+    let mut current = Vec::new();
+    let mut next = Vec::new();
+    stroke_row_runs_into(&mut current, width, height, radius, thickness, 0);
+    let mut span_start = 0u32;
+    for row in 1..height {
+        stroke_row_runs_into(&mut next, width, height, radius, thickness, row);
+        if next != current {
             // SAFETY: validated inputs above.
-            unsafe { paint_runs(backend, (x, y), row, &runs, color)? };
+            unsafe {
+                paint_span(
+                    backend,
+                    (x, y),
+                    span_start,
+                    row - span_start,
+                    &current,
+                    clip,
+                    color,
+                )?
+            };
+            std::mem::swap(&mut current, &mut next);
+            span_start = row;
         }
     }
-    Ok(())
+    // SAFETY: validated inputs above.
+    unsafe {
+        paint_span(
+            backend,
+            (x, y),
+            span_start,
+            height - span_start,
+            &current,
+            clip,
+            color,
+        )
+    }
 }
 
 #[cfg(test)]

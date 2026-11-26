@@ -174,18 +174,54 @@ pub struct Tab {
     pub scroll: usize,
     pub search: String,
     pub loading: bool,
+    /// True while a load started from an empty listing paints streamed batches. A live refresh keeps
+    /// the rows on screen and applies one diff when the complete listing lands.
+    streaming: bool,
     /// Bumped by every entries mutation; with the query it keys `filter_cache`.
     revision: u64,
     filter_cache: RefCell<Option<(u64, String, usize)>>,
 }
 impl Tab {
-    #[must_use] pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, revision:0, filter_cache:RefCell::new(None) } }
+    #[must_use] pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, streaming:true, revision:0, filter_cache:RefCell::new(None) } }
     /// Replaces the listing; the filtered-count cache is invalidated.
     pub fn set_entries(&mut self, items: Vec<Entry>) { self.entries=items; self.revision+=1; }
     pub fn extend_entries(&mut self, items: Vec<Entry>) { self.entries.extend(items); self.revision+=1; }
     pub fn clear_entries(&mut self) { self.entries.clear(); self.revision+=1; }
     /// Frees the listing of a hidden tab (capacity included). Path, selection and scroll are kept.
     pub fn release_entries(&mut self) { self.entries=Vec::new(); self.revision+=1; }
+    /// Applies a complete, already sorted listing onto the rows a tab already shows. Rows are matched
+    /// by path (their stable id), so the common watcher event — nothing changed — keeps every `Entry`,
+    /// the revision and the projection caches keyed on it (row labels, thumbnail pass). Only added,
+    /// removed or changed rows shift. `sort` is the display order both listings share; when either
+    /// list is not in that order the listing is replaced instead of merged. Selection is reconciled
+    /// against the new rows. Returns true when any row changed or was added or removed.
+    pub fn apply_refresh(&mut self, items: Vec<Entry>, sort: view::ColumnSort) -> bool {
+        let changed=if !view::is_sorted_by(&self.entries,sort) || !view::is_sorted_by(&items,sort) {
+            self.set_entries(items);
+            true
+        } else {
+            let changed=merge_refresh(&mut self.entries,items,sort);
+            if changed { self.revision+=1; }
+            changed
+        };
+        self.reconcile_selection();
+        changed
+    }
+    /// Drops selected and anchor paths that the listing no longer contains.
+    fn reconcile_selection(&mut self) {
+        // A small selection (the usual one or two rows) is resolved by scanning the listing, which
+        // avoids building a path set of every entry; a large one (Select All) uses the set.
+        if self.selected_paths.len() > 32 {
+            let present=self.entries.iter().map(|entry|entry.path.as_path()).collect::<HashSet<_>>();
+            self.selected_paths.retain(|path|present.contains(path.as_path()));
+        } else if !self.selected_paths.is_empty() {
+            self.selected_paths.retain(|path|self.entries.iter().any(|entry|entry.path.as_path()==path.as_path()));
+        }
+        if !self.selected.as_ref().is_some_and(|path|self.selected_paths.contains(path)) {
+            self.selected=self.selected_paths.iter().min().cloned();
+        }
+        if !self.anchor.as_ref().is_some_and(|path|self.selected_paths.contains(path)) {self.anchor=self.selected.clone();}
+    }
     pub fn path(&self) -> &Path { &self.history[self.cursor] }
     /// Listing generation. Projection caches that key on the entry set (thumbnail pass) compare it.
     #[must_use] pub fn revision(&self) -> u64 { self.revision }
@@ -204,7 +240,7 @@ impl Tab {
         if let Some(p)=self.path().parent().map(Path::to_path_buf) && p != self.path() { self.visit(p); return true; } false }
     pub fn can_back(&self) -> bool { self.cursor > 0 }
     pub fn can_forward(&self) -> bool { self.cursor + 1 < self.history.len() }
-    fn reset(&mut self) { self.clear_entries(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; }
+    fn reset(&mut self) { self.clear_entries(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; self.streaming=true; }
     /// Filter once per request, retaining at most the currently rendered page.
     /// Avoid allocating a Vec of every match on each UI projection.
     pub fn select_one(&mut self, path: PathBuf) {
@@ -319,13 +355,49 @@ impl Tab {
         count
     }
 }
+/// Merge-joins a sorted listing into the sorted rows on screen, matching by path. Unchanged rows keep
+/// their `Entry` (and its allocations); added rows are moved in, removed rows skipped. Both lists are
+/// in the same total display order, so this is one linear pass with no per-path map.
+fn merge_refresh(rows: &mut Vec<Entry>, items: Vec<Entry>, sort: view::ColumnSort) -> bool {
+    let mut changed = rows.len() != items.len();
+    let old = std::mem::take(rows);
+    let mut merged = Vec::with_capacity(items.len().max(old.len()));
+    let mut old = old.into_iter().peekable();
+    let mut new = items.into_iter().peekable();
+    loop {
+        match (old.peek().is_some(), new.peek().is_some()) {
+            (false, false) => break,
+            (true, false) => { changed = true; old.next(); }
+            (false, true) => { changed = true; merged.extend(new); break; }
+            (true, true) => {
+                let order = view::column_order(
+                    old.peek().expect("peeked row"),
+                    new.peek().expect("peeked row"),
+                    sort,
+                );
+                match order {
+                    std::cmp::Ordering::Less => { changed = true; old.next(); }
+                    std::cmp::Ordering::Greater => { changed = true; merged.extend(new.next()); }
+                    std::cmp::Ordering::Equal => {
+                        let previous = old.next().expect("peeked row");
+                        let next = new.next().expect("peeked row");
+                        if previous == next { merged.push(previous); } else { changed = true; merged.push(next); }
+                    }
+                }
+            }
+        }
+    }
+    *rows = merged;
+    changed
+}
+
 #[derive(Debug)]
 pub struct Explorer {
     pub tabs: Vec<Tab>, pub active: usize, pub generation: u64,
-    pub hidden: bool, pub sort: SortBy, pub status: String, pub clipboard: Option<(Vec<PathBuf>, bool)>,
+    pub hidden: bool, pub status: String, pub clipboard: Option<(Vec<PathBuf>, bool)>,
 }
 impl Explorer {
-    #[must_use] pub fn new(path: PathBuf) -> Self { Self { tabs: vec![Tab::new(path)], active:0, generation:1, hidden:false, sort:SortBy::Name, status:"Loading…".into(), clipboard:None } }
+    #[must_use] pub fn new(path: PathBuf) -> Self { Self { tabs: vec![Tab::new(path)], active:0, generation:1, hidden:false, status:"Loading…".into(), clipboard:None } }
     #[must_use] pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
     /// Activates `index`. The tab left behind drops its listing (the caller rescans the new active tab);
@@ -338,17 +410,27 @@ impl Explorer {
     }
     pub fn close_tab(&mut self) { if self.tabs.len()>1 {self.tabs.remove(self.active);self.active=self.active.min(self.tabs.len()-1);} }
     pub fn new_tab(&mut self) { let path=self.tab().path().to_path_buf(); self.tabs.push(Tab::new(path)); self.active=self.tabs.len()-1; self.generation+=1; }
-    pub fn next_generation(&mut self) -> u64 { self.generation+=1; self.tab_mut().loading=true; self.generation }
+    pub fn next_generation(&mut self) -> u64 { self.begin_listing(true) }
+    /// Bumps the generation for a live refresh: the rows stay on screen and the worker sends one
+    /// complete listing to merge, instead of batches the UI would clear and repaint.
+    pub fn refresh_generation(&mut self) -> u64 { self.begin_listing(false) }
+    fn begin_listing(&mut self, stream:bool) -> u64 {
+        self.generation+=1;
+        let tab=self.tab_mut();
+        tab.loading=true;
+        tab.streaming=stream;
+        self.generation
+    }
     /// Appends one streamed remote chunk when the listing is still the current one.
     pub fn append_listing(&mut self, generation:u64, dir:&Path, items:Vec<Entry>) -> bool {
         if generation!=self.generation || self.tab().path()!=dir { return false; }
         self.tab_mut().extend_entries(items);
         true
     }
-    /// Adds one sorted batch of a local listing that is still loading. Refresh batches (the tab is no
-    /// longer loading) and stale generations are ignored; `first` restarts the rows of a fresh load.
+    /// Adds one sorted batch of a local listing that is still loading. Refresh batches (a live refresh
+    /// never streams) and stale generations are ignored; `first` restarts the rows of a fresh load.
     pub fn append_scan(&mut self, generation:u64, dir:&Path, first:bool, items:Vec<Entry>) -> bool {
-        if generation!=self.generation || self.tab().path()!=dir || !self.tab().loading { return false; }
+        if generation!=self.generation || self.tab().path()!=dir || !self.tab().loading || !self.tab().streaming { return false; }
         let tab=self.tab_mut();
         if first { tab.clear_entries(); }
         tab.extend_entries(items);
@@ -361,27 +443,21 @@ impl Explorer {
         self.status.clear();
         true
     }
-    pub fn apply_listing(&mut self, generation:u64, dir:&Path, listing:io::Result<Vec<Entry>>) -> bool {
+    pub fn apply_listing(&mut self, generation:u64, dir:&Path, listing:io::Result<Vec<Entry>>, sort:view::ColumnSort) -> bool {
         if generation!=self.generation || self.tab().path()!=dir { return false; }
         match listing {
             Ok(items) => {
                 // The status strip shows the count itself (view::items_text), so the message stays free for results.
                 self.status.clear();
                 let tab=self.tab_mut();
-                // A live refresh re-applies the whole listing on every watcher event. A small
-                // selection (the usual one or two rows) is resolved by scanning the listing, which
-                // avoids building a path set of every entry; a large one (Select All) uses the set.
-                if tab.selected_paths.len() > 32 {
-                    let present=items.iter().map(|e|e.path.as_path()).collect::<HashSet<_>>();
-                    tab.selected_paths.retain(|path|present.contains(path.as_path()));
-                } else if !tab.selected_paths.is_empty() {
-                    tab.selected_paths.retain(|path|items.iter().any(|entry|entry.path.as_path()==path.as_path()));
+                if tab.streaming {
+                    // A fresh load already shows the streamed batches: install the complete listing.
+                    tab.set_entries(items);
+                    tab.reconcile_selection();
+                } else {
+                    // A live refresh: merge the complete sorted listing into the rows on screen.
+                    tab.apply_refresh(items,sort);
                 }
-                if !tab.selected.as_ref().is_some_and(|p|tab.selected_paths.contains(p)) {
-                    tab.selected=tab.selected_paths.iter().min().cloned();
-                }
-                if !tab.anchor.as_ref().is_some_and(|p|tab.selected_paths.contains(p)) {tab.anchor=tab.selected.clone();}
-                tab.set_entries(items);
             }
             Err(e) => self.status=format!("Cannot read directory: {e}"),
         }
@@ -439,13 +515,20 @@ pub fn fill_sidebar_rows(rows:&mut Vec<SidebarRow>, places:&[Place]) {
         }
     }
 }
-pub fn home_dir() -> PathBuf {std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
-pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
-    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
-    let content=fs::read_to_string(base.join("user-dirs.dirs")).unwrap_or_default();
+pub fn home_dir() -> PathBuf {flamewm_api::paths::home_dir().filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
+/// XDG config root (`XDG_CONFIG_HOME`, else `~/.config`).
+fn config_base(home:&Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from)
+}
+/// One read of `user-dirs.dirs`; the sidebar resolves every user directory from the same text.
+fn user_dirs_text(config:&Path) -> String {fs::read_to_string(config.join("user-dirs.dirs")).unwrap_or_default()}
+/// Resolves `name` in already-read `user-dirs.dirs` content. The key compare is allocation-free:
+/// a per-line `format!` built a throwaway key for every directive on each sidebar rebuild.
+fn user_dir_from(content:&str,name:&str,fallback:&str,home:&Path) -> PathBuf {
     for line in content.lines() {
         if let Some((key,val))=line.trim().split_once('=')
-            && key==format!("XDG_{name}_DIR") {
+            && let Some(constant)=key.strip_prefix("XDG_").and_then(|k|k.strip_suffix("_DIR"))
+            && constant==name {
                 let v=val.trim().trim_matches('"');
                 if v=="$HOME" {return home.to_path_buf();}
                 if let Some(r)=v.strip_prefix("$HOME/") && !r.split('/').any(|p|p=="..") {return home.join(r);}
@@ -455,7 +538,7 @@ pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
 }
 pub fn add_bookmark(path:&Path,home:&Path)->io::Result<()> {
     use std::fs::OpenOptions;
-    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
+    let base=config_base(home);
     let dest=base.join("gtk-3.0/bookmarks");
     let escaped=path.to_string_lossy().bytes().map(|b|if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {(b as char).to_string()}else{format!("%{b:02X}")}).collect::<String>();
     let uri=format!("file://{escaped}");
@@ -484,13 +567,17 @@ fn favorite(name:&str,path:PathBuf,icon:&'static str)->Place {
 /// Sidebar places: built-in folders, bookmarks, mounted removable media (from mountinfo) and
 /// removable block devices that are present but not mounted (from `lsblk`, passed in by the caller).
 pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
-    let mut places=vec![favorite("Home",home.to_path_buf(),"home")];
+    // One config-root and one `user-dirs.dirs` read for the whole sidebar build; each user
+    // directory used to open and parse the same file again.
+    let config=config_base(home);
+    let user_dirs=user_dirs_text(&config);
+    let mut places=Vec::with_capacity(16);
+    places.push(favorite("Home",home.to_path_buf(),"home"));
     for (id,name,dir,icon) in [("DESKTOP","Desktop","Desktop","desktop"),("DOCUMENTS","Documents","Documents","documents"),("DOWNLOAD","Downloads","Downloads","downloads"),("MUSIC","Music","Music","music"),("PICTURES","Pictures","Pictures","pictures"),("VIDEOS","Videos","Videos","videos")] {
-        places.push(favorite(name,user_dir(id,dir,home),icon));
+        places.push(favorite(name,user_dir_from(&user_dirs,id,dir,home),icon));
     }
     places.push(Place{name:"Local Disk".into(),path:PathBuf::from("/"),removable:false,group:PlaceGroup::Devices,icon:"drive",device:None});
-    let base=std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from);
-    if let Ok(source)=fs::read_to_string(base.join("gtk-3.0/bookmarks")) {
+    if let Ok(source)=fs::read_to_string(config.join("gtk-3.0/bookmarks")) {
         for line in source.lines().take(128) {
             let mut words=line.splitn(2,' ');
             if let Some(path)=words.next().and_then(unescape_uri).filter(|p|p.is_dir()) {

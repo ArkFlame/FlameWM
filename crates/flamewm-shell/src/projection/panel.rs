@@ -283,7 +283,7 @@ pub(crate) fn tray_any_visible(
     system: &flamewm_api::system::SystemSnapshot,
     items: TaskbarItems,
 ) -> bool {
-    let status = crate::taskbar::status::project(system).views;
+    let status = crate::taskbar::status::views(system);
     let media = status.media.visible
         && matches!(
             system.media.playback,
@@ -378,25 +378,28 @@ fn project_pager_layout(
         scaled(pager_width(columns)),
         taskbar_scale::node_height(taskbar_scale::factor()),
     )?;
+    // One reused buffer for every column and cell id: the layout pass runs on each panel
+    // projection and no longer allocates a `String` per node.
+    let mut id = String::with_capacity(24);
     for column in 0..PAGER_COLUMNS {
-        let column_id = format!("workspace-column-{}", column + 1);
+        id.clear();
+        let _ = write!(id, "workspace-column-{}", column + 1);
         if column < columns {
-            document.position(&column_id, scaled(cell_left(column)), 0.0)?;
+            document.position(&id, scaled(cell_left(column)), 0.0)?;
             document.size(
-                &column_id,
+                &id,
                 scaled(PAGER_CELL_WIDTH),
                 scaled(2.0 * PAGER_CELL_HEIGHT + PAGER_CELL_GAP),
             )?;
-            document.visible(&column_id, true)?;
+            document.visible(&id, true)?;
         } else {
-            document.visible(&column_id, false)?;
+            document.visible(&id, false)?;
         }
     }
     for cell in 1..=PAGER_CELLS {
-        document.visible(
-            &format!("workspace-{cell}"),
-            cells.iter().any(|(occupied, _)| *occupied == cell),
-        )?;
+        id.clear();
+        let _ = write!(id, "workspace-{cell}");
+        document.visible(&id, cells.iter().any(|(occupied, _)| *occupied == cell))?;
     }
     Ok(())
 }
@@ -432,8 +435,10 @@ pub(crate) fn project_pager(
 ) -> Result<(), String> {
     let cells = pager_cells(snapshot);
     project_pager_layout(document, snapshot, &cells)?;
+    let mut cell_id = String::with_capacity(16);
     for (cell, workspace) in cells {
-        let cell_id = format!("workspace-{cell}");
+        cell_id.clear();
+        let _ = write!(cell_id, "workspace-{cell}");
         document.size(
             &cell_id,
             scaled(PAGER_CELL_WIDTH),
@@ -742,21 +747,28 @@ pub fn project_panel(
     let capacity = task_slot_capacity_for_view(&view);
     let (rendered, overflow) = task_slot_split(states.len(), view.items.activities, capacity);
     let states = &states[..rendered];
-    let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
-        (String::new(), String::new(), String::new(), String::new());
+    let (mut slot_id, mut icon_id, mut label_id, mut line_id, mut progress_id) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
     for index in 0..TASK_SLOT_COUNT {
         let n = index + 1;
         slot_id.clear();
-        write!(slot_id, "task-slot-{n}").expect("write to String is infallible");
+        let _ = write!(slot_id, "task-slot-{n}");
         icon_id.clear();
-        write!(icon_id, "task-slot-{n}-icon").expect("write to String is infallible");
+        let _ = write!(icon_id, "task-slot-{n}-icon");
         label_id.clear();
-        write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
+        let _ = write!(label_id, "task-slot-{n}-label");
         line_id.clear();
-        write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
+        let _ = write!(line_id, "task-slot-{n}-line");
+        progress_id.clear();
+        let _ = write!(progress_id, "task-slot-{n}-progress");
         project_task_progress(
             document,
-            index,
+            &progress_id,
             states.get(index).map(|state| &state.id),
             view.task_progress,
         )?;
@@ -992,20 +1004,21 @@ pub(crate) fn project_task_line(
 /// Projects a determinate background fill behind one task slot, clearing stale fills when
 /// identity disappears or no provider reports progress. The fill covers the slot's full height
 /// and grows left to right with the reported percent; CSS paints it behind the icon and label.
+/// `fill_id` is `task-slot-<n>-progress`, built by the caller in its reused id buffer so a task
+/// slot pass allocates no id per slot.
 pub(crate) fn project_task_progress(
     document: &mut impl UiDocumentAccess,
-    index: usize,
+    fill_id: &str,
     task_id: Option<&flamewm_api::TaskEntryId>,
     progress: &[flamewm_api::panels::TaskProgressEntry],
 ) -> Result<(), String> {
-    let fill_id = format!("task-slot-{}-progress", index + 1);
     let percent = task_id
         .and_then(|id| progress.iter().find(|entry| &entry.task_id == id))
         .map(|entry| entry.progress.percent());
-    document.visible(&fill_id, percent.is_some())?;
-    document.position(&fill_id, 0.0, 0.0)?;
+    document.visible(fill_id, percent.is_some())?;
+    document.position(fill_id, 0.0, 0.0)?;
     document.size(
-        &fill_id,
+        fill_id,
         percent.map_or(0.0, |percent| {
             scaled(TASK_SLOT_WIDTH) * f32::from(percent) / 100.0
         }),
@@ -1049,7 +1062,7 @@ pub(crate) fn project_status_tray(
         document.visible("tray-usage", fits)?;
         project_tray_button(document, "tray-usage", fits)?;
     }
-    let status = crate::taskbar::status::project(system).views;
+    let status = crate::taskbar::status::views(system);
     let media = status.media.visible
         && matches!(
             system.media.playback,
@@ -1089,6 +1102,22 @@ pub(crate) fn project_status_tray(
     Ok(())
 }
 
+/// Tray battery glyph node ids in `BATTERY_GLYPHS` order: `(plain, charging)`.
+/// Static so a tray projection writes visibility without formatting an id per
+/// candidate on every system snapshot change.
+const BATTERY_TRAY_GLYPH_IDS: [(&str, &str); 10] = [
+    ("tray-battery-caution", "tray-battery-caution-charging"),
+    ("tray-battery-020", "tray-battery-020-charging"),
+    ("tray-battery-030", "tray-battery-030-charging"),
+    ("tray-battery-040", "tray-battery-040-charging"),
+    ("tray-battery-050", "tray-battery-050-charging"),
+    ("tray-battery-060", "tray-battery-060-charging"),
+    ("tray-battery-070", "tray-battery-070-charging"),
+    ("tray-battery-080", "tray-battery-080-charging"),
+    ("tray-battery-090", "tray-battery-090-charging"),
+    ("tray-battery-100", "tray-battery-100-charging"),
+];
+
 /// Tray battery: visibility and glyph come from the pure `battery` rules. Exactly
 /// one glyph node is shown; the charging variant only while Charging.
 pub fn project_battery_tray(
@@ -1103,27 +1132,13 @@ pub fn project_battery_tray(
     let tray = tray_visible(power, items.battery, items.battery_only_when_relevant);
     document.visible("tray-battery", tray)?;
     project_tray_button(document, "tray-battery", tray)?;
-    project_glyph_nodes(document, "tray-battery-", glyph, charging)
-}
-
-/// Shows only `glyph` under `prefix`, using the charging variant while charging.
-fn project_glyph_nodes(
-    document: &mut impl UiDocumentAccess,
-    prefix: &str,
-    glyph: crate::taskbar::status::battery::BatteryGlyph,
-    charging: bool,
-) -> Result<(), String> {
-    use crate::taskbar::status::battery::BATTERY_GLYPHS;
-    for candidate in BATTERY_GLYPHS {
-        let shown = candidate == glyph;
-        document.visible(
-            &format!("{prefix}{}", candidate.id_suffix()),
-            shown && !charging,
-        )?;
-        document.visible(
-            &format!("{prefix}{}-charging", candidate.id_suffix()),
-            shown && charging,
-        )?;
+    for (candidate, (plain_id, charging_id)) in crate::taskbar::status::battery::BATTERY_GLYPHS
+        .iter()
+        .zip(BATTERY_TRAY_GLYPH_IDS)
+    {
+        let shown = *candidate == glyph;
+        document.visible(plain_id, shown && !charging)?;
+        document.visible(charging_id, shown && charging)?;
     }
     Ok(())
 }
@@ -1150,8 +1165,40 @@ pub fn project_battery_menu(
         progress_width(power.percent, track_width),
         BATTERY_PROGRESS_HEIGHT,
     )?;
-    project_glyph_nodes(document, "battery-icon-", glyph, charging)
+    project_glyph_nodes(document, glyph, charging)
 }
+
+/// Shows only `glyph` in the battery menu, using the charging variant while charging.
+/// The popup path may run per system change while open; static menu ids keep a glyph pass
+/// allocation-free, matching the tray path.
+fn project_glyph_nodes(
+    document: &mut impl UiDocumentAccess,
+    glyph: crate::taskbar::status::battery::BatteryGlyph,
+    charging: bool,
+) -> Result<(), String> {
+    use crate::taskbar::status::battery::BATTERY_GLYPHS;
+    for (candidate, (plain_id, charging_id)) in BATTERY_GLYPHS.iter().zip(BATTERY_MENU_GLYPH_IDS) {
+        let shown = *candidate == glyph;
+        document.visible(plain_id, shown && !charging)?;
+        document.visible(charging_id, shown && charging)?;
+    }
+    Ok(())
+}
+
+/// Battery menu glyph node ids in `BATTERY_GLYPHS` order: `(plain, charging)`.
+/// Static so an open menu does not format an id per candidate on every repaint.
+const BATTERY_MENU_GLYPH_IDS: [(&str, &str); 10] = [
+    ("battery-icon-caution", "battery-icon-caution-charging"),
+    ("battery-icon-020", "battery-icon-020-charging"),
+    ("battery-icon-030", "battery-icon-030-charging"),
+    ("battery-icon-040", "battery-icon-040-charging"),
+    ("battery-icon-050", "battery-icon-050-charging"),
+    ("battery-icon-060", "battery-icon-060-charging"),
+    ("battery-icon-070", "battery-icon-070-charging"),
+    ("battery-icon-080", "battery-icon-080-charging"),
+    ("battery-icon-090", "battery-icon-090-charging"),
+    ("battery-icon-100", "battery-icon-100-charging"),
+];
 
 /// Height of the battery menu progress fill (matches ui/shell/battery.html).
 pub const BATTERY_PROGRESS_HEIGHT: f32 = 8.0;

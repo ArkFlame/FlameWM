@@ -106,11 +106,11 @@ pub fn project_start_unified(
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
         button_id.clear();
-        write!(button_id, "start-app-slot-{slot}").expect("write to String is infallible");
+        let _ = write!(button_id, "start-app-slot-{slot}");
         label_id.clear();
-        write!(label_id, "start-app-slot-{slot}-label").expect("write to String is infallible");
+        let _ = write!(label_id, "start-app-slot-{slot}-label");
         icon_id.clear();
-        write!(icon_id, "start-app-slot-{slot}-icon").expect("write to String is infallible");
+        let _ = write!(icon_id, "start-app-slot-{slot}-icon");
         match window.get(index) {
             // Header: letter as the row label, no icon. Slot nodes are reused, so no new ids are
             // needed; the click path maps header rows to no application.

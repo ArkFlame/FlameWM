@@ -42,21 +42,37 @@ fn pass_start_drops_queued_jobs_and_frees_their_keys() {
 }
 
 #[test]
-fn in_flight_decode_keeps_its_pending_mark_until_complete() {
+fn in_flight_decode_keeps_its_pending_mark_while_its_row_stays_shown() {
     let queue = ThumbQueue::default();
     let mut cache = Thumbnails::default();
     let key = key_at(7);
     assert!(cache.begin(&key));
     queue.push(key.clone());
-    // The decoder takes the job: it is no longer queued, so a pass start does not touch it.
+    // The decoder takes the job: it is no longer queued, so a pass that keeps its row leaves it alone.
     assert_eq!(queue.pop(), key);
-    assert_eq!(cache.start_pass(&queue), 0);
+    assert_eq!(
+        cache.start_pass_keeping(&queue, |candidate| candidate.path == key.path),
+        0
+    );
     assert!(
         !cache.begin(&key),
         "an in-flight decode is not requested twice"
     );
     cache.complete(key.clone(), None);
     assert!(matches!(cache.lookup(&key), Lookup::Failed));
+}
+
+#[test]
+fn in_flight_decode_dropped_by_a_pass_frees_its_pending_mark() {
+    let queue = ThumbQueue::default();
+    let mut cache = Thumbnails::default();
+    let key = key_at(8);
+    assert!(cache.begin(&key));
+    queue.push(key.clone());
+    assert_eq!(queue.pop(), key);
+    // The row left the view: the worker abandons it and the key is requestable again when it returns.
+    assert_eq!(cache.start_pass(&queue), 1);
+    assert!(cache.begin(&key), "the cancelled row is requestable again");
 }
 
 #[test]
@@ -93,4 +109,43 @@ fn retain_keeps_matching_jobs_in_order() {
     assert_eq!(dropped.len(), 4);
     assert_eq!(queue.pop().path, PathBuf::from("img-000.png"));
     assert_eq!(queue.pop().path, PathBuf::from("img-002.png"));
+}
+
+#[test]
+fn wants_tracks_queued_and_in_flight_jobs() {
+    let queue = ThumbQueue::default();
+    let (first, second) = (key_at(1), key_at(2));
+    queue.push(first.clone());
+    queue.push(second.clone());
+    assert!(
+        queue.wants(&first) && queue.wants(&second),
+        "queued jobs are wanted"
+    );
+    let popped = queue.pop();
+    assert!(queue.wants(&popped), "the in-flight job stays wanted");
+    queue.release(&popped);
+    assert!(!queue.wants(&popped), "a released job is no longer wanted");
+    assert!(
+        queue.wants(&second),
+        "the remaining queued job is still wanted"
+    );
+}
+
+#[test]
+fn pass_cancels_an_in_flight_decode_only_when_its_row_left_the_view() {
+    let queue = ThumbQueue::default();
+    let key = key_at(3);
+    queue.push(key.clone());
+    assert_eq!(queue.pop(), key);
+    // A later pass still shows the row: the decode keeps running.
+    assert_eq!(
+        queue.retain(|candidate| candidate.path == key.path).len(),
+        0
+    );
+    assert!(queue.wants(&key));
+    // The row scrolled away: the worker sees the cancel at its next stage check, and the pass
+    // reports the abandoned key so its pending mark is freed for a later re-request.
+    assert_eq!(queue.retain(|_| false).len(), 1);
+    assert!(!queue.wants(&key), "a scrolled-away decode is abandoned");
+    queue.release(&key);
 }

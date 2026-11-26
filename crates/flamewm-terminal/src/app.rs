@@ -7,6 +7,7 @@ mod layout;
 mod overlay;
 mod pointer;
 mod preferences;
+mod scroll;
 mod selection;
 mod tabs;
 #[cfg(test)]
@@ -148,6 +149,12 @@ pub struct App {
     grid_inputs: Vec<Vec<(crate::view::Row, Rect)>>,
     /// Row list of the last projected frame, handed back by the projector so a frame allocates no row container.
     pub frame_rows: Vec<crate::view::Row>,
+    /// Scrollback offset glide for the last wheel step. Only runs while frames are requested.
+    pub(crate) scroll: crate::scroll::ScrollGlide,
+    /// Frame ticker for the glide, created on the first animated step.
+    scroll_timer: Option<Sender<()>>,
+    /// Whether one glide frame request is in flight, so a frame does not queue a second.
+    scroll_ticking: bool,
     /// Startup banner shown above the first tab until its output scrolls.
     banner: bool,
     /// Window size in logical px, as last reported by the window. Grid and PTY size follow it.
@@ -201,6 +208,9 @@ impl App {
             grid_composed: Vec::new(),
             grid_inputs: Vec::new(),
             frame_rows: Vec::new(),
+            scroll: crate::scroll::ScrollGlide::default(),
+            scroll_timer: None,
+            scroll_ticking: false,
             menu: None,
             rename: None,
             history: History::open_default(),
@@ -324,6 +334,7 @@ impl App {
                     return true;
                 }
             }
+            SessionEvent::Tick => {}
         }
         false
     }
@@ -343,8 +354,5 @@ impl App {
 
 /// The user's home directory, when it exists.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_dir())
+    flamewm_api::paths::home_dir().filter(|dir| dir.is_dir())
 }

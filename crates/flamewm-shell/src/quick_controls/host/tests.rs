@@ -36,6 +36,59 @@ fn system_snapshot_update_is_direct_and_deduplicated() {
 }
 
 #[test]
+fn system_reprojection_only_for_the_open_popup_domains() {
+    use flamewm_api::system::SystemSnapshot;
+    let before = SystemSnapshot::default();
+    let mut battery_only = before.clone();
+    battery_only.revision = 3;
+    battery_only.power.percent = 42;
+    assert!(!system_reprojection_needed(
+        QuickControlKind::Audio,
+        &before,
+        &battery_only
+    ));
+    assert!(!system_reprojection_needed(
+        QuickControlKind::Network,
+        &before,
+        &battery_only
+    ));
+    assert!(!system_reprojection_needed(
+        QuickControlKind::Calendar,
+        &before,
+        &battery_only
+    ));
+    assert!(!system_reprojection_needed(
+        QuickControlKind::Weather,
+        &before,
+        &battery_only
+    ));
+    assert!(system_reprojection_needed(
+        QuickControlKind::Battery,
+        &before,
+        &battery_only
+    ));
+
+    let mut network_only = before.clone();
+    network_only.network.generation = 4;
+    network_only.network.label = "wlan0".to_owned();
+    assert!(system_reprojection_needed(
+        QuickControlKind::Network,
+        &before,
+        &network_only
+    ));
+    assert!(!system_reprojection_needed(
+        QuickControlKind::Audio,
+        &before,
+        &network_only
+    ));
+    assert!(!system_reprojection_needed(
+        QuickControlKind::Battery,
+        &before,
+        &network_only
+    ));
+}
+
+#[test]
 fn filtered_sorted_scrolled_network_slot_resolves_the_projected_ap() {
     use flamewm_api::system::{NetworkAccessPointSnapshot, ServiceAvailability, SystemAction};
 

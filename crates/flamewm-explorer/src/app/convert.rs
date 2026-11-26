@@ -77,7 +77,7 @@ impl ExplorerApp {
             return;
         };
         self.model.status = format!("Converting to {}…", format.to_ascii_uppercase());
-        std::thread::spawn(move || {
+        aux_pool().submit(move || {
             let outcome = convert_file(&path, format);
             if tx.send(WorkerResult::Converted(outcome)).is_ok() {
                 let _ = wake.write_all(&[1]);

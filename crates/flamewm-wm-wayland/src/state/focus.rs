@@ -10,12 +10,17 @@ impl State {
             return;
         }
         let previous = self.focused;
-        let stack_before = self.model.visible_top_first();
+        // Only the top of the visible stack can change when one window is raised to the end of the
+        // stacking vector: a hidden window (minimised or on another workspace) leaves the visible
+        // order alone, and a window already on top keeps it. Comparing that one id is exactly the
+        // full `visible_top_first` list comparison the two `Vec<WindowId>` copies used to do, with
+        // no allocation and no O(windows) walk per focus event.
+        let top_before = self.model.visible_top_first_iter().next();
         self.focused = id;
         if let Some(id) = id {
             self.model.raise(id);
         }
-        let stack_changed = stack_before != self.model.visible_top_first();
+        let stack_changed = self.model.visible_top_first_iter().next() != top_before;
         if let Some(prev) = previous.filter(|prev| Some(*prev) != id) {
             self.apply_geometry(prev);
         }
@@ -57,7 +62,7 @@ impl State {
 
     /// Focuses the topmost visible window, or clears focus when the workspace is empty.
     pub fn refocus(&mut self) {
-        let next = self.model.visible_top_first().first().copied();
+        let next = self.model.visible_top_first_iter().next();
         self.set_focus(next);
     }
 

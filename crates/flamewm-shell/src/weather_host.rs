@@ -92,12 +92,20 @@ pub fn spawn_worker<T: Send + 'static>(
 ) -> mpsc::Receiver<T> {
     let (tx, rx) = mpsc::channel();
     let guard = waker.map(WakeOnDrop);
-    let _ = std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name(name.to_owned())
         .spawn(move || {
             let _wake = guard;
             let _ = tx.send(work());
         });
+    // A refused thread leaves a closed channel: the caller reports `Transport` and keeps
+    // running. Say it once instead of failing silently on every refresh.
+    if spawned.is_err() {
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            eprintln!("flamewm-shell: {name} worker could not start; that feature stays offline");
+        }
+    }
     rx
 }
 

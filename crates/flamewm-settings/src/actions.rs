@@ -182,22 +182,9 @@ pub(crate) enum SettingsAction {
     NativeKeyEvent,
 }
 pub(crate) fn accent_color(value: &str) -> Result<UiColor, String> {
-    let digits = value
-        .strip_prefix('#')
-        .filter(|digits| digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    let (r, g, b) = flamewm_api::color::parse_hex_rgb(value)
         .ok_or_else(|| format!("accent is not a #RRGGBB value: '{value}'"))?;
-    let channel = |range: std::ops::Range<usize>, name: &str| {
-        digits
-            .get(range)
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-            .ok_or_else(|| format!("invalid accent {name}"))
-    };
-    Ok(UiColor {
-        r: channel(0..2, "red")?,
-        g: channel(2..4, "green")?,
-        b: channel(4..6, "blue")?,
-        a: 56,
-    })
+    Ok(UiColor { r, g, b, a: 56 })
 }
 
 pub(crate) fn page(value: &str) -> Option<SettingsPage> {

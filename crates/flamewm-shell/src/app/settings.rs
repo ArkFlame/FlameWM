@@ -4,7 +4,9 @@ use super::popups::quick_kind_shown;
 use super::*;
 
 impl ShellLoop {
-    pub(crate) fn apply_settings_snapshot(&mut self, snapshot: SettingsSnapshot) {
+    /// Applies a settings snapshot. Borrowed so a stale snapshot (the common repeated revision
+    /// case) costs no deep clone before the revision guard rejects it.
+    pub(crate) fn apply_settings_snapshot(&mut self, snapshot: &SettingsSnapshot) {
         if self
             .settings_cache
             .as_ref()
@@ -13,14 +15,14 @@ impl ShellLoop {
             return;
         }
         self.settings_revision = snapshot.revision;
-        flamewm_ui_x11::apply_render_acceleration(&snapshot);
-        self.cursor_theme.sync_snapshot(&snapshot);
+        flamewm_ui_x11::apply_render_acceleration(snapshot);
+        self.cursor_theme.sync_snapshot(snapshot);
         self.weather
             .apply_settings(flamewm_weather::weather::WeatherSettings::from_snapshot(
-                &snapshot,
+                snapshot,
             ));
         self.weather_feed_pending = true;
-        let theme = crate::entry::settings_projection::icon_theme_name(Some(&snapshot));
+        let theme = crate::entry::settings_projection::icon_theme_name(Some(snapshot));
         if let Some(loader) = self.icon_loader.as_mut() {
             if loader.set_theme(&theme) {
                 // Re-prime task slots so they re-request under the new theme.
@@ -35,22 +37,22 @@ impl ShellLoop {
             self.audio_settings.raise_maximum = *raise;
         }
         self.start_model.show_all_by_default =
-            crate::settings_projection::start_show_all_by_default(Some(&snapshot));
+            crate::settings_projection::start_show_all_by_default(Some(snapshot));
         // A hidden taskbar item closes its open quick-control popup.
-        let items = crate::entry::settings_projection::taskbar_items(Some(&snapshot));
+        let items = crate::entry::settings_projection::taskbar_items(Some(snapshot));
         if self
             .quick_kind_open
             .is_some_and(|kind| !quick_kind_shown(kind, items))
         {
             self.close_quick_control_nonfatal();
         }
-        let desired_zone = flamewm_shell::weather_auto::desired_time_zone(&snapshot);
+        let desired_zone = flamewm_shell::weather_auto::desired_time_zone(snapshot);
         self.start_model
             .set_favorites(crate::entry::settings_projection::start_favorites(Some(
-                &snapshot,
+                snapshot,
             )));
         self.leave_empty_favorites_category();
-        self.settings_cache = Some(snapshot);
+        self.settings_cache = Some(snapshot.clone());
         self.settings_projection_pending = true;
         self.settings_full_reprojection = true;
         self.set_auto_time_zone(desired_zone);

@@ -310,24 +310,34 @@ pub fn output_lock_elements(
 }
 
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
-    let scale = state.output_scale();
     let mut out: Vec<Elem> = Vec::new();
+    build_elements_into(state, renderer, &mut out);
+    out
+}
+
+/// [`build_elements`] appending into `out`, so a frame builder keeps one element buffer instead of
+/// allocating a second Vec and copying every element into it on each painted frame.
+pub fn build_elements_into(state: &State, renderer: &mut GlowRenderer, out: &mut Vec<Elem>) {
+    let scale = state.output_scale();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
     // Topmost: the snap preview is drawn over every window while a move grab targets a snap.
     out.extend(state.snap_preview.elements(renderer, scale));
-    out.extend(scene_elements(
+    // Append straight into `out`: a per-frame intermediate `Vec` here cost one allocation plus a
+    // full element copy on every painted frame in both backends.
+    scene_elements_into(
         state,
         renderer,
         &mut decorations,
         crate::scene::front_to_back(state),
         false,
-    ));
-    out
+        out,
+    );
 }
 
 /// Elements for `items` in front-to-back order. `capture` builds the scene under a Dock backdrop:
 /// it produces no backdrop elements, so a translucent surface never captures another one.
+/// Owned result for callers that cannot append into an existing buffer.
 fn scene_elements(
     state: &State,
     renderer: &mut GlowRenderer,
@@ -335,11 +345,112 @@ fn scene_elements(
     items: impl IntoIterator<Item = crate::scene::SceneItem>,
     capture: bool,
 ) -> Vec<Elem> {
+    let mut out: Vec<Elem> = Vec::new();
+    scene_elements_into(state, renderer, decorations, items, capture, &mut out);
+    out
+}
+
+/// Whether `outer` fully contains `inner`, so every pixel of `inner` has an opaque `outer` pixel
+/// in front of it.
+fn covers(outer: Rectangle<i32, Physical>, inner: Rectangle<i32, Physical>) -> bool {
+    inner.size.w > 0
+        && inner.size.h > 0
+        && outer.loc.x <= inner.loc.x
+        && outer.loc.y <= inner.loc.y
+        && outer.loc.x.saturating_add(outer.size.w) >= inner.loc.x.saturating_add(inner.size.w)
+        && outer.loc.y.saturating_add(outer.size.h) >= inner.loc.y.saturating_add(inner.size.h)
+}
+
+/// Collects the opaque areas the just-built elements of one owner paint, so a lower window that
+/// is fully covered can skip building its own surface, decoration and backdrop elements.
+///
+/// Memory elements (titlebar and outline strips) are never treated as occluders: they carry
+/// rounded, antialiased and translucent chrome, so a buffer that claims its whole rect would
+/// wrongly hide a window behind a glass bar. Solid bodies and client surfaces report their true
+/// opaque regions, which is exactly what the renderer may rely on.
+fn collect_occluders(elements: &[Elem], scale: f64, occluders: &mut Vec<Rectangle<i32, Physical>>) {
+    /// Bounded so a frame with many windows cannot grow the list without limit; a scene past the
+    /// cap simply keeps building the lowest windows, which is only a missed optimisation.
+    const MAX_OCCLUDERS: usize = 64;
+    for element in elements {
+        if occluders.len() >= MAX_OCCLUDERS {
+            return;
+        }
+        let regions = match element {
+            Elem::Solid(solid) => solid.opaque_regions(scale.into()),
+            Elem::Surface(surface) => surface.opaque_regions(scale.into()),
+            Elem::Rounded(rounded) => rounded.opaque_regions(scale.into()),
+            Elem::Memory(_) | Elem::_GenericCatcher(_) => continue,
+        };
+        // `Element::opaque_regions` is element-local, as the renderer expects: shift each region
+        // by this element's placed geometry so the stored rects are in output space.
+        let origin = element.geometry(scale.into()).loc;
+        for mut region in regions {
+            if region.size.w > 0 && region.size.h > 0 {
+                region.loc += origin;
+                occluders.push(region);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod occluder_tests {
+    use super::covers;
+    use smithay::utils::{Physical, Rectangle};
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn a_larger_rect_covers_a_smaller_one() {
+        assert!(covers(rect(0, 0, 100, 80), rect(10, 10, 40, 40)));
+    }
+
+    #[test]
+    fn an_equal_rect_covers_itself() {
+        assert!(covers(rect(5, 7, 30, 20), rect(5, 7, 30, 20)));
+    }
+
+    #[test]
+    fn a_partial_overlap_is_not_coverage() {
+        // One pixel of the inner rect sticks out on the right and bottom.
+        assert!(!covers(rect(0, 0, 101, 60), rect(10, 10, 92, 40)));
+        assert!(!covers(rect(0, 0, 100, 80), rect(10, 10, 40, 80)));
+    }
+
+    #[test]
+    fn a_disjoint_rect_is_not_covered() {
+        assert!(!covers(rect(0, 0, 50, 50), rect(60, 60, 10, 10)));
+    }
+
+    #[test]
+    fn an_empty_rect_is_never_culled() {
+        assert!(!covers(rect(0, 0, 100, 100), rect(10, 10, 0, 0)));
+    }
+}
+
+/// [`scene_elements`] appending into `out`, so a frame builder reuses its element buffer.
+fn scene_elements_into(
+    state: &State,
+    renderer: &mut GlowRenderer,
+    decorations: &mut Decorations,
+    items: impl IntoIterator<Item = crate::scene::SceneItem>,
+    capture: bool,
+    out: &mut Vec<Elem>,
+) {
     use crate::scene::SceneItem;
 
     let scale = state.output_scale();
-    let mut out: Vec<Elem> = Vec::new();
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
+    // Physical area this output shows. A managed window whose whole frame misses it (another
+    // output of the layout, or dragged past the edge) cannot contribute a pixel, so its element
+    // list is skipped rather than built and clipped away by the renderer.
+    let visible = client_backdrop_rect(state.output_rect(), scale);
+    // Opaque areas already drawn in front of the current item. The traversal is front to back, so
+    // a window whose frame fits inside one of these is fully hidden and needs no element work.
+    let mut occluders: Vec<Rectangle<i32, Physical>> = Vec::new();
     for item in items {
         match item {
             SceneItem::Layer { surface, .. } => {
@@ -404,22 +515,32 @@ fn scene_elements(
                 ));
             }
             SceneItem::Managed(id) => {
-                let Some(managed) = state.model.get(id).cloned() else {
+                // Borrow, never clone: this runs once per visible window on every painted frame, and
+                // `Managed` carries a dozen rects and modes. Nothing below mutates the window model.
+                let Some(managed) = state.model.get(id) else {
                     continue;
                 };
                 let Some(surface) = state.window_wl_surface(id) else {
                     continue;
                 };
+                let frame = managed.frame();
+                let frame_rect = client_backdrop_rect(frame, scale);
+                if !frame_rect.overlaps(visible)
+                    || occluders.iter().any(|outer| covers(*outer, frame_rect))
+                {
+                    continue;
+                }
+                let first = out.len();
                 // Front-to-back list: the outline comes first in this window's group, so the ring
                 // sits above the client and the titlebar and above every window behind it.
                 out.extend(decorations.outline_elements(
                     renderer,
                     id,
-                    managed.frame(),
-                    outline_radius(&managed),
+                    frame,
+                    outline_radius(managed),
                     scale,
                 ));
-                let radii = client_corner_radii(&managed, managed.titlebars)
+                let radii = client_corner_radii(managed, managed.titlebars)
                     .map(|radius| physical_radius(radius, scale));
                 let program = if radii.iter().any(|radius| *radius > 0) {
                     decorations.clip_program(renderer)
@@ -448,7 +569,6 @@ fn scene_elements(
                     // through the gap (KWin and xfwm4 paint a decorated window's body the same way).
                     // Pushed after the surface, so it sits below the client and the titlebar.
                     out.push(Elem::Solid(client_backdrop(managed.rect, scale)));
-                    let frame = managed.frame();
                     let focused = state.focused == Some(id);
                     let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
                     let hovered = match hovered_button {
@@ -484,6 +604,9 @@ fn scene_elements(
                         out.push(element);
                     }
                 }
+                // Everything this window paints is now in `out`; its opaque areas hide whatever
+                // lower windows are fully behind it.
+                collect_occluders(&out[first..], scale, &mut occluders);
             }
         }
     }
@@ -501,7 +624,6 @@ fn scene_elements(
             Kind::Unspecified,
         )));
     }
-    out
 }
 
 fn layer_elements(
@@ -522,15 +644,40 @@ fn layer_elements(
 }
 
 pub fn render_frame(state: &mut State) {
+    let _span = crate::profile::render();
+    // The host handed out a frame opportunity whether or not this turn paints, so the pacing
+    // interval starts here. Stamping only after the scene gate left `winit_frame_at` stale on a
+    // skipped frame, and the next burst of requests then saw `elapsed >= WINIT_FRAME_INTERVAL` and
+    // bypassed the gate on every one of them.
+    state.note_winit_frame();
+    // A host-drawn pointer means the host window draws the cursor itself, so a pointer-motion
+    // request only sets the redraw flag (`request_cursor_paint`), never the scene flag. Painting
+    // then rebuilt the whole element list, re-checked both backdrop captures and submitted a
+    // byte-identical frame. Consume the scene flag and skip that paint: every path that changes
+    // pixels calls `request_paint`/`request_redraw` and sets it again. A dump arms its own scene
+    // flag through `request_redraw`, and the lock screen never takes this path.
+    if !state.take_scene_dirty()
+        && state.dump.is_none()
+        && !state.session_locked
+        && State::host_draws_pointer_status(&state.cursor_status)
+    {
+        return;
+    }
     let Some(mut backend) = state.backend.take() else {
         return;
     };
-    state.note_winit_frame();
     state.flush_pending_configure();
     if let Err(error) = render_into(state, &mut backend) {
         eprintln!("flamewm-wayland: frame failed: {error}");
     }
     state.backend = Some(backend);
+    // Work finished during the paint (a switcher thumbnail, a screencopy readback) calls
+    // `request_redraw` while `backend` is taken, so `request_winit_frame` found no window to ask
+    // and its frame request was skipped. The scene flag is set again, so ask for that frame now
+    // instead of leaving the new pixels waiting for an unrelated host event.
+    if state.take_scene_dirty() {
+        state.request_paint();
+    }
 }
 
 fn render_into(
@@ -568,7 +715,7 @@ fn render_into(
                     state.output_scale(),
                 )
             };
-            elements.extend(build_elements(state, backend.renderer()));
+            build_elements_into(state, backend.renderer(), &mut elements);
             elements
         }
     };
@@ -761,7 +908,13 @@ fn send_frame_callbacks(state: &State) {
     let throttle = Some(Duration::from_millis(16));
     let time = Duration::from_millis(u64::from(time));
     let output = &state.output;
-    for (_, top) in &state.toplevels {
+    for (id, top) in &state.toplevels {
+        // A hidden window (other workspace, minimised) gets no frame callback: the callback is what
+        // unblocks the client's next commit, so it would keep rasterising off screen at the refresh
+        // rate. The first frame after the window is shown resumes its pipeline.
+        if state.model.is_hidden(*id) {
+            continue;
+        }
         let surface = top.wl_surface();
         send_frames_surface_tree(surface, output, time, throttle, |_, _| Some(output.clone()));
         for (popup, _) in PopupManager::popups_for_surface(surface) {
@@ -771,10 +924,12 @@ fn send_frame_callbacks(state: &State) {
         }
     }
     // XWayland presents only after its previous frame callback: without these, an X11 client
-    // keeps the first (usually blank) buffer on screen.
+    // keeps the first (usually blank) buffer on screen. Hidden managed windows are skipped for the
+    // same reason as hidden Wayland toplevels above; unmanaged ones (docks, menus) are always drawn.
     let x11_surfaces = state
         .x11
         .iter()
+        .filter(|(id, _)| !state.model.is_hidden(*id))
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));
     for surface in x11_surfaces.filter_map(smithay::xwayland::X11Surface::wl_surface) {
@@ -782,15 +937,19 @@ fn send_frame_callbacks(state: &State) {
             Some(output.clone())
         });
     }
-    let layers: Vec<_> = layer_map_for_output(output).layers().cloned().collect();
-    for layer in layers {
-        send_frames_surface_tree(
-            layer.layer_surface().wl_surface(),
-            output,
-            time,
-            throttle,
-            |_, _| Some(output.clone()),
-        );
+    // Scoped so the per-output layer map lock is released before the cursor callback, never held
+    // across unrelated work (smithay deadlocks on a second guard for the same output).
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            send_frames_surface_tree(
+                layer.layer_surface().wl_surface(),
+                output,
+                time,
+                throttle,
+                |_, _| Some(output.clone()),
+            );
+        }
     }
     send_cursor_frame(state, time);
 }

@@ -101,8 +101,9 @@ impl X11App {
 
     pub(super) unsafe fn desktop_frame_atom(&mut self) -> Atom {
         if self.desktop_frame_atom == 0 {
-            let name = std::ffi::CString::new(crate::backdrop::DESKTOP_FRAME_PROPERTY)
-                .expect("property name has no NUL");
+            let Ok(name) = std::ffi::CString::new(crate::backdrop::DESKTOP_FRAME_PROPERTY) else {
+                return 0;
+            };
             self.desktop_frame_atom = unsafe { XInternAtom(self.display, name.as_ptr(), 0) };
         }
         self.desktop_frame_atom

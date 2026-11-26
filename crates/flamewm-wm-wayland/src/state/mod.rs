@@ -144,6 +144,13 @@ pub struct State {
     pub seat: Seat<State>,
     pub output: Output,
     pub output_size: Size<i32, Logical>,
+    /// Name of the primary [`Self::output`], cached at construction.
+    ///
+    /// `Output::name` clones a `String` out of the output's lock on every call, and the primary
+    /// name is compared on every client commit (surface homing), every work-area query (pointer
+    /// motion during a move grab) and every strut scan. An `Output`'s name never changes after
+    /// creation, so the clone is cached once instead of being paid on each of those paths.
+    primary_name: String,
     /// Last work area per output, used to place snapped/maximized/fullscreen windows.
     cached_work_areas: Vec<(String, Rect)>,
     /// Dock cut from the work area, from `dock.*` settings; `None` while the dock is hidden.
@@ -319,6 +326,7 @@ impl State {
             crate::input::saved_drag_feedback();
         let mut model = WindowModel::new(4);
         model.configure(titlebars, window_margin);
+        let primary_name = output.name();
 
         Ok(Self {
             session_lock,
@@ -343,6 +351,7 @@ impl State {
             seat,
             output,
             output_size: Size::from((1280, 800)),
+            primary_name,
             cached_work_areas: Vec::new(),
             dock_reserve: None,
             damage,
@@ -526,7 +535,7 @@ impl State {
         map.arrange();
         let zone: Rectangle<i32, Logical> = map.non_exclusive_zone();
         let size = (self.output_size.w, self.output_size.h);
-        let struts = self.struts_on(&self.output.name(), size);
+        let struts = self.struts_on(&self.primary_name, size);
         work_area_with_dock(
             Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h),
             &struts,
@@ -554,7 +563,7 @@ impl State {
         crate::output_layout::struts_on_output(
             &self.pointer_layout,
             &self.layout_outputs,
-            &self.output.name(),
+            &self.primary_name,
             &owned,
             name,
         )
@@ -575,7 +584,7 @@ impl State {
     /// Work area of output `name`: its layer zone and the unmanaged struts whose window sits on it,
     /// lifted to layout coordinates. The Dock stays on the primary output.
     pub fn work_area_on(&self, name: &str) -> Rect {
-        if name == self.output.name() {
+        if name == self.primary_name {
             return self.work_area();
         }
         let out = self.output_handle(name);
@@ -594,26 +603,32 @@ impl State {
         let Some(rect) = self.model.get(id).map(|w| w.rect) else {
             return self.work_area();
         };
-        let primary = self.output.name();
         let name = crate::output_layout::output_name_for_rect(
             &self.pointer_layout,
             &self.layout_outputs,
             rect,
-            &primary,
-        )
-        .to_owned();
-        self.work_area_on(&name)
+            &self.primary_name,
+        );
+        self.work_area_on(name)
     }
 
     /// Work area of the output under the pointer, where snapping and move-snap apply.
+    ///
+    /// Runs on every pointer motion of a move/resize grab, so it stays allocation-free: the
+    /// output's name is borrowed from the layout instead of being cloned into a `String`.
     pub fn pointer_work_area(&self) -> Rect {
-        self.work_area_on(&self.output_name_under_pointer())
+        match crate::output_layout::output_at(&self.pointer_layout, self.pointer.x, self.pointer.y)
+            .and_then(|index| self.layout_outputs.get(index))
+        {
+            Some(name) => self.work_area_on(name),
+            None => self.work_area(),
+        }
     }
 
     /// Refits placements on each output whose work area changed, once per change. Outputs whose
     /// work area is untouched keep their placements, so a strut on one output never moves another.
     pub(crate) fn reflow_if_work_area_changed(&mut self) {
-        let primary = self.output.name();
+        let primary = self.primary_name.clone();
         let mut names = self.layout_outputs.clone();
         if !names.contains(&primary) {
             names.push(primary);
@@ -625,7 +640,7 @@ impl State {
                 (name, work)
             })
             .collect();
-        self.model.set_primary_output(&self.output.name());
+        self.model.set_primary_output(&self.primary_name);
         for (name, work) in &current {
             self.model.record_work_area(name, *work);
         }
@@ -681,7 +696,7 @@ impl State {
             &self.pointer_layout,
             &self.layout_outputs,
             rect,
-            &self.output.name(),
+            &self.primary_name,
         ) == name
     }
 

@@ -105,6 +105,91 @@ struct Histories {
     upload: graph::History,
 }
 
+/// Formatted cells of one visible row, kept until the value each cell renders changes. A repaint
+/// for a click, a key or a scroll (or a sample where the row is unchanged) then reuses these
+/// strings instead of formatting a dozen values per row. The raw `Arc<str>` fields make the
+/// change test a refcount-free `str` compare while the cell text stays owned here.
+#[derive(Default)]
+struct RowText {
+    /// Process identity: a different PID/start-time pair rebuilds every cell.
+    pid: u32,
+    start: u64,
+    live: bool,
+    name: Option<Arc<str>>,
+    command: Option<Arc<str>>,
+    depth: Option<u32>,
+    threads: Option<u32>,
+    priority: Option<i64>,
+    nice: Option<i32>,
+    rss_kib: Option<u64>,
+    virt_kib: Option<u64>,
+    cpu: Option<f64>,
+    name_text: String,
+    pid_text: String,
+    virt_text: String,
+    cpu_text: String,
+    mem_text: String,
+    threads_text: String,
+    priority_text: String,
+    nice_text: String,
+}
+
+impl RowText {
+    /// Refreshes the cells whose process value moved. Untouched cells keep their old string.
+    fn update(&mut self, process: &model::Process) {
+        let reset = !self.live || self.pid != process.pid || self.start != process.start;
+        self.live = true;
+        self.pid = process.pid;
+        self.start = process.start;
+        if reset {
+            self.pid_text.clear();
+            let _ = write!(self.pid_text, "{}", process.pid);
+        }
+        if reset
+            || self.name.as_deref() != Some(&*process.name)
+            || self.command.as_deref() != Some(&*process.command)
+            || self.depth != Some(process.depth)
+        {
+            // `display_name` reads both `name` and `command`, so either one moving rebuilds it.
+            self.name = Some(Arc::clone(&process.name));
+            self.command = Some(Arc::clone(&process.command));
+            self.depth = Some(process.depth);
+            self.name_text.clear();
+            self.name_text
+                .push_str(INDENTS[process.depth.min(8) as usize]);
+            self.name_text.push_str(display_name(process));
+        }
+        if reset || self.threads != Some(process.threads) {
+            self.threads = Some(process.threads);
+            self.threads_text.clear();
+            let _ = write!(self.threads_text, "{}", process.threads);
+        }
+        if reset || self.priority != Some(process.priority) {
+            self.priority = Some(process.priority);
+            self.priority_text.clear();
+            let _ = write!(self.priority_text, "{}", process.priority);
+        }
+        if reset || self.nice != Some(process.nice) {
+            self.nice = Some(process.nice);
+            self.nice_text.clear();
+            let _ = write!(self.nice_text, "{}", process.nice);
+        }
+        if reset || self.virt_kib != Some(process.virt_kib) {
+            self.virt_kib = Some(process.virt_kib);
+            memory_text_into(&mut self.virt_text, process.virt_kib);
+        }
+        if reset || self.cpu != Some(process.cpu) {
+            self.cpu = Some(process.cpu);
+            self.cpu_text.clear();
+            let _ = write!(self.cpu_text, "{:.1}%", process.cpu);
+        }
+        if reset || self.rss_kib != Some(process.rss_kib) {
+            self.rss_kib = Some(process.rss_kib);
+            memory_text_into(&mut self.mem_text, process.rss_kib);
+        }
+    }
+}
+
 struct Application {
     snapshot: model::Snapshot,
     histories: Histories,
@@ -131,6 +216,8 @@ struct Application {
     selected: Option<(u32, u64)>,
     hovered: Option<usize>,
     rows: Vec<(u32, u64)>,
+    /// Formatted cells for the visible row slots, indexed by slot.
+    row_text: Vec<RowText>,
     /// Matching process indices in display order. Rebuilt only when the snapshot, the sort or the
     /// query changes, so a repaint for hover, a click or a scroll never re-sorts the whole table.
     hits: Vec<usize>,
@@ -167,6 +254,7 @@ impl Application {
             selected: None,
             hovered: None,
             rows: Vec::new(),
+            row_text: (0..ROWS).map(|_| RowText::default()).collect(),
             hits: Vec::new(),
             hits_dirty: true,
             graph_rasters: [
@@ -468,8 +556,9 @@ impl Application {
         self.ensure_hits();
         let max_first = self.hits.len().saturating_sub(self.viewport);
         self.first = self.first.min(max_first);
-        // One id and one value buffer for the whole table: a visible row costs no `String`
-        // allocation per cell, and `text_ref` skips unchanged cells inside the document.
+        // One id buffer and one value buffer for the search box and the column headers: a repaint
+        // costs no `String` per cell, and `text_ref` skips unchanged text inside the document. Row
+        // cells come from the per-slot `RowText` cache and are re-formatted only when they change.
         let mut id = String::with_capacity(32);
         let mut value = String::with_capacity(96);
         value.clear();
@@ -522,44 +611,30 @@ impl Application {
         for slot in 0..shown {
             let p = &self.snapshot.processes[self.hits[self.first + slot]];
             self.rows.push((p.pid, p.start));
-            let indent = INDENTS[p.depth.min(8) as usize];
+            let cells = &mut self.row_text[slot];
+            cells.update(p);
             cell_id(&mut id, slot, "name");
-            value.clear();
-            value.push_str(indent);
-            value.push_str(display_name(p));
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.name_text)?;
             cell_id(&mut id, slot, "dot");
             doc.background(&id, UiColor::from_rgb(state_color(p.state), 255))?;
             cell_id(&mut id, slot, "pid");
-            value.clear();
-            let _ = write!(value, "{}", p.pid);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.pid_text)?;
             cell_id(&mut id, slot, "user");
             doc.text_ref(&id, &p.user)?;
             cell_id(&mut id, slot, "state");
             doc.text_ref(&id, state_name(p.state))?;
             cell_id(&mut id, slot, "threads");
-            value.clear();
-            let _ = write!(value, "{}", p.threads);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.threads_text)?;
             cell_id(&mut id, slot, "pri");
-            value.clear();
-            let _ = write!(value, "{}", p.priority);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.priority_text)?;
             cell_id(&mut id, slot, "nice");
-            value.clear();
-            let _ = write!(value, "{}", p.nice);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.nice_text)?;
             cell_id(&mut id, slot, "virt");
-            memory_text_into(&mut value, p.virt_kib);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.virt_text)?;
             cell_id(&mut id, slot, "cpu");
-            value.clear();
-            let _ = write!(value, "{:.1}%", p.cpu);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.cpu_text)?;
             cell_id(&mut id, slot, "mem");
-            memory_text_into(&mut value, p.rss_kib);
-            doc.text_ref(&id, &value)?;
+            doc.text_ref(&id, &cells.mem_text)?;
             cell_id(&mut id, slot, "cmd");
             doc.text_ref(&id, &p.command)?;
             let memory_share = 100.0 * p.rss_kib as f64 / total as f64;
@@ -1032,7 +1107,9 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
 }
 
 pub fn run() -> Result<(), String> {
-    let theme = initial_settings();
+    // Settings are not needed for the first frame: paint the defaults at once and swap in the live
+    // snapshot (and its window backdrop) from the wake socket when the worker answers.
+    let theme = SettingsSnapshot::new(0);
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
     let (action_tx, action_rx) = mpsc::sync_channel::<ProcessRequest>(8);
@@ -1042,54 +1119,89 @@ pub fn run() -> Result<(), String> {
     let (mut reader, mut writer) = UnixStream::pair().map_err(|e| e.to_string())?;
     reader.set_nonblocking(true).map_err(|e| e.to_string())?;
     writer.set_nonblocking(true).map_err(|e| e.to_string())?;
+    // The control-bus settings round trip runs on a worker: the window paints its default theme
+    // first and the live snapshot is applied from the same wake socket as the samples.
+    let (settings_tx, settings_rx) = mpsc::sync_channel::<SettingsSnapshot>(1);
+    let mut settings_wake = writer.try_clone().map_err(|e| e.to_string())?;
+    // A refused thread keeps the default theme and backdrop; it must not abort the window.
+    let settings_worker = std::thread::Builder::new()
+        .name("flamewm-taskmgr-settings".into())
+        .spawn(move || {
+            let snapshot = initial_settings();
+            if settings_tx.try_send(snapshot).is_ok() {
+                let _ = settings_wake.write(&[1]);
+            }
+        });
+    if settings_worker.is_err() {
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            eprintln!(
+                "flamewm-task-manager: settings worker could not start; defaults stay in use"
+            );
+        }
+    }
     let (sender, receiver) = mpsc::sync_channel::<model::Snapshot>(1);
     let running = Arc::new(AtomicBool::new(true));
     let active = Arc::clone(&running);
     let gate = Arc::new(sample_gate::SampleGate::default());
     let worker_gate = Arc::clone(&gate);
     // One sampler exists only while this window is open; never a permanent desktop daemon.
-    let worker = std::thread::spawn(move || {
-        let mut sampler = model::Sampler::default();
-        while active.load(Ordering::Relaxed) {
-            // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
-            if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
-                break;
-            }
-            let snapshot = sampler.collect();
-            if sender.try_send(snapshot).is_ok() {
-                match writer.write(&[1]) {
-                    Ok(_) => (),
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
-                    Err(_) => break,
-                }
-            }
-            // Sleep on the action channel until the next sample is due: no 100 ms polling timer.
-            // A queued process operation wakes the worker at once; the sample cadence stays 1 s.
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            loop {
-                if !active.load(Ordering::Relaxed) {
+    let worker = std::thread::Builder::new()
+        .name("flamewm-task-manager-sampler".into())
+        .spawn(move || {
+            let mut sampler = model::Sampler::default();
+            while active.load(Ordering::Relaxed) {
+                // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
+                if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
                     break;
                 }
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                if remaining.is_zero() {
-                    break;
-                }
-                match action_rx.recv_timeout(remaining) {
-                    // Process operations may block, but only on this sampler worker.
-                    // The caller-selected PID/start-time pair is checked by the operation.
-                    Ok(command) => {
-                        let _ = result_tx.try_send(command.execute());
-                        let _ = writer.write(&[1]);
+                let snapshot = sampler.collect();
+                if sender.try_send(snapshot).is_ok() {
+                    match writer.write(&[1]) {
+                        Ok(_) => (),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+                        Err(_) => break,
                     }
-                    Err(mpsc::RecvTimeoutError::Timeout) => break,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        std::thread::sleep(remaining);
+                }
+                // Sleep on the action channel until the next sample is due: no 100 ms polling timer.
+                // A queued process operation wakes the worker at once; the sample cadence stays 1 s.
+                let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                loop {
+                    if !active.load(Ordering::Relaxed) {
                         break;
                     }
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match action_rx.recv_timeout(remaining) {
+                        // Process operations may block, but only on this sampler worker.
+                        // The caller-selected PID/start-time pair is checked by the operation.
+                        Ok(command) => {
+                            let _ = result_tx.try_send(command.execute());
+                            let _ = writer.write(&[1]);
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            std::thread::sleep(remaining);
+                            break;
+                        }
+                    }
                 }
             }
+        });
+    // A refused sampler thread leaves an empty table; the window still runs and the wake drain
+    // reports the missing samples instead of the process aborting on a spawn failure.
+    let worker = match worker {
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!("flamewm-task-manager: sampler worker could not start: {error}");
+            }
+            None
         }
-    });
+    };
     let queue = Rc::new(RefCell::new(receiver));
     let window = Rc::new(RefCell::new(app));
     let event_window = Rc::clone(&window);
@@ -1171,14 +1283,35 @@ pub fn run() -> Result<(), String> {
         move |doc| {
             let mut app = wake_window.borrow_mut();
             let mut changed = false;
+            if let Ok(snapshot) = settings_rx.try_recv() {
+                doc.request_window_backdrop(Some(window_backdrop(&snapshot)));
+                app.theme = snapshot;
+                app.theme_dirty = true;
+                changed = true;
+            }
             if let Some(theme) = incoming.borrow_mut().take() {
                 app.theme = theme;
                 app.theme_dirty = true;
                 changed = true;
             }
-            while let Ok(snapshot) = wake_queue.borrow().try_recv() {
-                app.accept(snapshot);
-                changed = true;
+            loop {
+                match wake_queue.borrow().try_recv() {
+                    Ok(snapshot) => {
+                        app.accept(snapshot);
+                        changed = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    // The sampler is gone (a panic or a failed start). Keep the last table and say
+                    // so once, instead of repainting nothing on every later wake.
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        const STOPPED: &str = "Process sampling stopped; showing the last sample";
+                        if app.message != STOPPED {
+                            app.message = STOPPED.to_owned();
+                            changed = true;
+                        }
+                        break;
+                    }
+                }
             }
             while let Ok(message) = result_rx.try_recv() {
                 app.message = message;
@@ -1192,7 +1325,15 @@ pub fn run() -> Result<(), String> {
     );
     running.store(false, Ordering::Relaxed);
     gate.wake();
-    let _ = worker.join();
+    if let Some(worker) = worker {
+        // A panic in the sampler must not take the process down with it; report it once.
+        if worker.join().is_err() {
+            static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!("flamewm-task-manager: sampler worker panicked");
+            }
+        }
+    }
     outcome
 }
 
@@ -1234,6 +1375,39 @@ mod tests {
         assert_eq!(folded_cmp("", "a"), Ordering::Less);
         // Non-ASCII pairs keep the former `to_lowercase()` comparison.
         assert_eq!(folded_cmp("Äpfel", "äpfel"), Ordering::Equal);
+    }
+    #[test]
+    fn row_text_cache_rebuilds_only_changed_cells() {
+        let mut process = model::Process::default();
+        process.pid = 42;
+        process.start = 7;
+        process.name = "worker".into();
+        process.command = "/usr/bin/worker".into();
+        process.threads = 3;
+        process.virt_kib = 2048;
+        process.cpu = 12.34;
+        let mut row = RowText::default();
+        row.update(&process);
+        assert_eq!(row.name_text, "worker");
+        assert_eq!(row.pid_text, "42");
+        assert_eq!(row.threads_text, "3");
+        assert_eq!(row.virt_text, "2.0 MB");
+        assert_eq!(row.cpu_text, "12.3%");
+        let cpu_text = row.cpu_text.clone();
+        // A new name rebuilds the name cell only; the CPU cell is reused as-is.
+        process.name = "worker2".into();
+        row.update(&process);
+        assert_eq!(row.name_text, "worker2");
+        assert_eq!(row.cpu_text, cpu_text);
+        process.cpu = 50.0;
+        row.update(&process);
+        assert_eq!(row.cpu_text, "50.0%");
+        // A different process identity (PID plus start time) rebuilds the row.
+        process.pid = 43;
+        process.name = "other".into();
+        row.update(&process);
+        assert_eq!(row.pid_text, "43");
+        assert_eq!(row.name_text, "other");
     }
     #[test]
     fn ordering_is_cached_until_the_snapshot_or_sort_invalidates_it() {

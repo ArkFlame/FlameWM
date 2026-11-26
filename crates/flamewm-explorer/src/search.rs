@@ -66,16 +66,41 @@ fn ci_starts_with(text: &str, prefix: &str) -> bool {
     }
 }
 
+/// ASCII-only substring test that skips starts whose first byte cannot match, instead of folding every
+/// same-width window. A deep walk visits up to `MAX_VISITS` names, so the per-name cost is the dominant
+/// non-filesystem share of a search; this compares one byte per candidate start and the needle only on a
+/// first-byte hit.
+fn ascii_contains_ci(text: &[u8], needle: &[u8]) -> bool {
+    let Some(&first) = needle.first() else {
+        return true;
+    };
+    if needle.len() > text.len() {
+        return false;
+    }
+    let last = text.len() - needle.len();
+    let mut start = 0;
+    while start <= last {
+        let Some(found) = text[start..=last]
+            .iter()
+            .position(|byte| byte.eq_ignore_ascii_case(&first))
+        else {
+            return false;
+        };
+        start += found;
+        if text[start..start + needle.len()].eq_ignore_ascii_case(needle) {
+            return true;
+        }
+        start += 1;
+    }
+    false
+}
+
 fn ci_contains(text: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
     if text.is_ascii() && needle.is_ascii() {
-        let (text, needle) = (text.as_bytes(), needle.as_bytes());
-        return text.len() >= needle.len()
-            && text
-                .windows(needle.len())
-                .any(|window| window.eq_ignore_ascii_case(needle));
+        return ascii_contains_ci(text.as_bytes(), needle.as_bytes());
     }
     // Non-ASCII names are rare; lowercasing both sides once keeps the same semantics as before.
     text.to_lowercase().contains(&needle.to_lowercase())
@@ -123,9 +148,12 @@ pub fn cap_notice() -> String {
 }
 
 /// Case-insensitive substring match on the file name. Empty or whitespace-only queries match nothing.
+/// One pass: the walker only needs to know whether a visited name matches at all, so this skips the
+/// separate exact and prefix compares `rank_match` needs for the result ordering.
 #[must_use]
 pub fn name_matches(name: &str, query: &str) -> bool {
-    rank_match(query, name).is_some()
+    let query = query.trim();
+    !query.is_empty() && ci_contains(name, query)
 }
 
 /// Shared directory queue: `active` counts directories being read, so idle threads wait for them to publish subdirectories.
@@ -209,7 +237,7 @@ fn walk(
                                 continue;
                             };
                             let directory = file_type.is_dir();
-                            let matched = rank_match(&query, &name).is_some();
+                            let matched = name_matches(&name, &query);
                             if !matched && !directory {
                                 continue;
                             }
@@ -311,6 +339,9 @@ pub struct SearchWorker {
     jobs: Sender<SearchJob>,
     events: Receiver<SearchEvent>,
     current: Option<Arc<AtomicBool>>,
+    /// Set by the walker when a wake is already queued, so a fast walk that publishes many batches in a
+    /// burst costs the UI one repaint instead of one per 64 hits. Cleared at the start of `poll`.
+    wake_pending: Arc<AtomicBool>,
     next_id: u64,
 }
 
@@ -319,16 +350,25 @@ impl SearchWorker {
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> std::io::Result<Self> {
         let (jobs_tx, jobs_rx) = mpsc::channel::<SearchJob>();
         let (events_tx, events_rx) = mpsc::channel::<SearchEvent>();
+        let wake_pending = Arc::new(AtomicBool::new(false));
+        let pending = Arc::clone(&wake_pending);
         thread::Builder::new()
             .name("explorer-search".into())
             .spawn(move || {
                 flamewm_integrations_linux::background::lower_current_thread();
+                // The event is sent before the pending flag is flipped: a batch always sits in the channel
+                // before its wake is dropped as already-queued, so `poll` cannot miss a batch it drained.
+                let wake_once = || {
+                    if !pending.swap(true, Ordering::Relaxed) {
+                        wake();
+                    }
+                };
                 while let Ok(job) = jobs_rx.recv() {
                     let id = job.id;
                     let batches = events_tx.clone();
                     let sink = |hits: Vec<SearchHit>| {
                         if batches.send(SearchEvent::Batch { id, hits }).is_ok() {
-                            wake();
+                            wake_once();
                         }
                     };
                     let (truncated, cancelled) = walk(
@@ -349,13 +389,14 @@ impl SearchWorker {
                     {
                         break;
                     }
-                    wake();
+                    wake_once();
                 }
             })?;
         Ok(Self {
             jobs: jobs_tx,
             events: events_rx,
             current: None,
+            wake_pending,
             next_id: 0,
         })
     }
@@ -393,6 +434,9 @@ impl SearchWorker {
 
     /// Drains events for the active job; events of stale jobs are dropped.
     pub fn poll(&mut self) -> Vec<SearchEvent> {
+        // Clear before draining: a batch sent after this store sees `false` and queues its own wake, while
+        // one already in the channel is drained below. That keeps a burst of batches to one UI wake.
+        self.wake_pending.store(false, Ordering::Relaxed);
         let active = self.next_id;
         self.events
             .try_iter()
@@ -551,6 +595,100 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(hits, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn name_matches_agrees_with_rank_match() {
+        let queries = ["report", "REPORT", "  epo  ", " ", "", "école", "É", "zzz"];
+        let names = [
+            "Report",
+            "report-final.txt",
+            "a-report-b",
+            "notes.md",
+            "ÉCOLE.TXT",
+            "müller",
+        ];
+        for query in queries {
+            for name in names {
+                assert_eq!(
+                    name_matches(name, query),
+                    rank_match(query, name).is_some(),
+                    "query {query:?} name {name:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_contains_ci_matches_the_folded_substring() {
+        let cases = [
+            ("report-final.txt", "REPORT"),
+            ("report-final.txt", "final"),
+            ("report-final.txt", "t-f"),
+            ("report-final.txt", "report-final.txt"),
+            ("report-final.txt", "zzz"),
+            ("abc", "abcd"),
+            ("abc", "c"),
+            ("ABC", "b"),
+            ("", "a"),
+            ("anything", ""),
+        ];
+        for (text, needle) in cases {
+            assert_eq!(
+                ascii_contains_ci(text.as_bytes(), needle.as_bytes()),
+                text.to_lowercase().contains(&needle.to_lowercase()),
+                "text {text:?} needle {needle:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_burst_of_batches_costs_one_wake_until_polled() {
+        let root = tree("wake");
+        // Three full batches plus a remainder: enough sink calls that uncoalesced wakes would be several.
+        for index in 0..200 {
+            fs::write(root.join(format!("report-{index:03}.txt")), b"x").unwrap();
+        }
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let mut worker = SearchWorker::spawn(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+        let id = worker.start(root.clone(), "report".into(), false).unwrap();
+        // The walk publishes many batches with no poll in between: the pending flag sticks after the
+        // first batch, so the remaining batches queue their events silently.
+        let first = Instant::now() + Duration::from_secs(10);
+        while wakes.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < first, "search worker never woke the UI");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(wakes.load(Ordering::Relaxed), 1, "batches must coalesce");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut hits = 0;
+        let mut done = false;
+        while !done {
+            for event in worker.poll() {
+                match event {
+                    SearchEvent::Batch {
+                        id: got,
+                        hits: batch,
+                    } => {
+                        assert_eq!(got, id);
+                        hits += batch.len();
+                    }
+                    SearchEvent::Done { id: got, .. } => {
+                        assert_eq!(got, id);
+                        done = true;
+                    }
+                }
+            }
+            assert!(Instant::now() < deadline, "search worker timed out");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(hits, 202, "every match still streams");
         let _ = fs::remove_dir_all(&root);
     }
 }

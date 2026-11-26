@@ -22,6 +22,7 @@ impl ExplorerApp {
 
     pub(crate) fn clear_search(&mut self) {
         self.search_rows=None;
+        self.search_running=false;
         if let Some(search)=self.search.as_mut() {search.cancel();}
     }
 
@@ -32,11 +33,14 @@ impl ExplorerApp {
         }
         if query.trim().is_empty() {self.clear_search();self.model.status="Search cleared".into();return;}
         let root=self.model.tab().path().to_path_buf();
+        // Re-committing the same query while its walk is still running would cancel it and start the same
+        // tree walk again; keep the live job and its streamed results instead.
+        if self.search_running && self.search_text==query && self.model.tab().path()==root.as_path() {return;}
         let hidden=self.model.hidden;
         let query_text=query.clone();
         let started=self.search.as_mut().map(|search|search.start(root,query,hidden));
         match started {
-            Some(Ok(id))=>{self.search_id=id;self.search_text=query_text;self.search_rows=Some(Vec::new());self.model.status="Searching…".into();},
+            Some(Ok(id))=>{self.search_id=id;self.search_text=query_text;self.search_running=true;self.search_rows=Some(Vec::new());self.model.status="Searching…".into();},
             Some(Err(error))=>self.model.status=format!("Search unavailable: {error}"),
             None=>self.model.status="Search worker unavailable".into(),
         }
@@ -53,6 +57,7 @@ impl ExplorerApp {
                     self.model.status=format!("Searching… {} found",rows.len());
                 },
                 SearchEvent::Done{truncated,cancelled,..}=>{
+                    self.search_running=false;
                     if cancelled {continue;}
                     let query=self.search_text.as_str();
                     if let Some(rows)=self.search_rows.as_mut() {rows.sort_by_cached_key(|entry|crate::search::result_order(query,&entry.name));}
@@ -128,7 +133,11 @@ impl ExplorerApp {
     pub(crate) fn request_listing(&mut self) {
         self.pending_navigation=None;
         self.pending_directory_dirty=false;
-        let generation=self.model.next_generation();
+        // A live refresh keeps the rows on screen: the worker sends one complete listing in display
+        // order and the UI merge-updates it. A fresh load (empty pane or new path) still streams
+        // batches so its first rows paint early.
+        let refresh=!self.model.tab().entries.is_empty();
+        let generation=if refresh {self.model.refresh_generation()} else {self.model.next_generation()};
         let path=self.model.tab().path().to_path_buf();
         if let Some(previous)=self.remote_cancel.take() {previous.cancel();}
         if let Some(url)=remote::url_of(&path) {
@@ -145,7 +154,7 @@ impl ExplorerApp {
             });
         }
         self.model.status="Loading directory…".into();
-        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.model.sort}).is_err() {
+        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.column_sort,stream:!refresh}).is_err() {
             self.model.status="File worker unavailable".into();
         }
     }
@@ -162,7 +171,7 @@ impl ExplorerApp {
             self.model.status="Remote listing needs the event loop".into();
             return;
         };
-        std::thread::spawn(move||forward_listing(generation,path,url,events,tx,wake));
+        remote_pool().submit(move||forward_listing(generation,path,url,events,tx,wake));
     }
 
     pub(crate) fn save_remote_recent(&mut self) {
@@ -185,7 +194,7 @@ impl ExplorerApp {
             }
         let transfer=self.remote.download(&url,&local,&RemoteCancel::new());
         self.model.status=format!("Downloading {}…",url.file_name());
-        std::thread::spawn(move||forward_download(local,transfer,tx,wake));
+        remote_pool().submit(move||forward_download(local,transfer,tx,wake));
     }
 
     pub(crate) fn navigate(&mut self,path:PathBuf) {
@@ -221,7 +230,7 @@ impl ExplorerApp {
         if let Some(cancel)=self.remote_cancel.take() {cancel.cancel();}
         self.pending_navigation=Some((generation,self.model.active,candidate));
         self.model.status="Loading directory…".into();
-        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.model.sort}).is_err() {
+        if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.column_sort,stream:true}).is_err() {
             self.pending_navigation=None;
             if self.pending_directory_dirty {self.request_listing();}
             self.model.tab_mut().loading=false;
@@ -273,7 +282,7 @@ impl ExplorerApp {
                     return;
                 };
                 let fs=self.remote.clone();
-                std::thread::spawn(move||{
+                remote_pool().submit(move||{
                     let result=fs.probe_host_key(&url).wait().map_err(|e|remote::describe(&e));
                     if tx.send(WorkerResult::HostKeyProbed{url,result}).is_ok() {let _=wake.write_all(&[1]);}
                 });
@@ -294,7 +303,7 @@ impl ExplorerApp {
         };
         self.model.status="Saving host key…".into();
         let fs=self.remote.clone();
-        std::thread::spawn(move||{
+        remote_pool().submit(move||{
             let result=fs.trust_host_key(&prompt).wait().map_err(|e|remote::describe(&e));
             if tx.send(WorkerResult::HostKeyTrusted{url,result}).is_ok() {let _=wake.write_all(&[1]);}
         });
@@ -335,7 +344,7 @@ impl ExplorerApp {
             return;
         };
         self.model.status="Opening…".into();
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             let result=mime::open_with_default(&path);
             if tx.send(WorkerResult::OpenResolved{path,result}).is_ok() {let _=wake.write_all(&[1]);}
         });

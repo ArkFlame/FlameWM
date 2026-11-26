@@ -19,8 +19,8 @@ use flamewm_control_core::{
     ControlError, ControlRequest, ControlResponse, Dispatcher, OBJECT_PATH,
 };
 use flamewm_control_wire::{
-    WireCall, WireReply, WireSignal, WireValue, decode_call, decode_reply, decode_signal,
-    encode_call, encode_reply, encode_signal,
+    WireCall, WireReply, WireValue, decode_call, decode_reply, decode_signal_owned, encode_call,
+    encode_reply, encode_signal,
 };
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
 use flamewm_platform::host::PlatformHost;
@@ -31,6 +31,7 @@ pub struct ControlServer {
     pump: BusPump,
     dispatcher: Dispatcher,
     capture_owner: RefCell<CaptureOwner>,
+    published: RefCell<PublishedRevisions>,
 }
 
 impl ControlServer {
@@ -41,6 +42,7 @@ impl ControlServer {
             pump,
             dispatcher: Dispatcher::new(),
             capture_owner: RefCell::new(CaptureOwner::default()),
+            published: RefCell::new(PublishedRevisions::default()),
         })
     }
 
@@ -56,6 +58,7 @@ impl ControlServer {
         let pump = &self.pump;
         let dispatcher = &self.dispatcher;
         let capture_owner = &self.capture_owner;
+        let published = &self.published;
         pump.on_ready(|message| {
             if let Some(name) = name_owner_lost(message) {
                 release_lost_capture_owner(dispatcher, host, capture_owner, &name);
@@ -74,7 +77,7 @@ impl ControlServer {
                         pump.send(reply)?;
                     }
                     for signal in signals {
-                        send_signal(pump, &signal)?;
+                        publish_signal(pump, published, &signal)?;
                     }
                     Ok(())
                 },
@@ -96,7 +99,7 @@ impl ControlServer {
     }
 
     pub fn emit_signal(&self, signal: &ControlSignal) -> FlameResult<()> {
-        send_signal(&self.pump, signal)
+        publish_signal(&self.pump, &self.published, signal)
     }
 }
 
@@ -158,7 +161,7 @@ fn handle_call<E: EnginePorts>(
     } else {
         let reply = encode_reply(&call, &response).map_err(to_flame_error)?;
         let mut output = message.method_return();
-        append_wire_values(&mut output, &reply.values)?;
+        append_wire_values(&mut output, reply.values)?;
         Some(output)
     };
     let mut signals = match (settings_keys, response) {
@@ -283,11 +286,74 @@ fn name_owner_lost(message: &Message) -> Option<String> {
     }
 }
 
+/// Snapshot revisions already written on this bus connection, per signal family.
+///
+/// A snapshot signal carries the snapshot's compare-and-swap revision, which moves exactly when the
+/// content changes. Duplicates still reach this layer more than once (a panel snapshot queued by
+/// the window flush and again by the panel flush, a system snapshot from two provider updates in one
+/// turn). Writing it again re-marshals the whole dictionary for every subscriber with no state
+/// change, so a repeated revision is dropped before encoding. State lives per connection: a fresh
+/// connection publishes its first snapshot, and clients fetch their initial state on connect.
+#[derive(Debug, Default)]
+struct PublishedRevisions {
+    panels: Option<u64>,
+    topology: Option<u64>,
+    system: Option<u64>,
+    weather: Option<u64>,
+}
+
+impl PublishedRevisions {
+    /// Records `key` in `slot`; `true` when that same revision was already published.
+    fn seen(slot: &mut Option<u64>, key: u64) -> bool {
+        if *slot == Some(key) {
+            return true;
+        }
+        *slot = Some(key);
+        false
+    }
+
+    /// `true` when this signal repeats a snapshot revision already published on this connection.
+    ///
+    /// Only snapshots whose revision is proven to cover the whole payload are coalesced. Window
+    /// snapshots carry a max `state_generation` and workspace snapshots derive `occupancy` from the
+    /// cached windows, so equal revisions can still mean new content; settings snapshots have
+    /// derived keys that are published without a revision bump. Those always send.
+    fn already_published(&mut self, signal: &ControlSignal) -> bool {
+        match signal {
+            ControlSignal::PanelsSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.panels, snapshot.revision)
+            }
+            ControlSignal::TopologyChanged { generation } => {
+                Self::seen(&mut self.topology, *generation)
+            }
+            ControlSignal::SystemSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.system, snapshot.revision)
+            }
+            ControlSignal::WeatherFeedChanged { snapshot } => {
+                Self::seen(&mut self.weather, snapshot.revision)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Encodes and writes one signal unless it repeats a snapshot revision already published.
+fn publish_signal(
+    pump: &BusPump,
+    published: &RefCell<PublishedRevisions>,
+    signal: &ControlSignal,
+) -> FlameResult<()> {
+    if published.borrow_mut().already_published(signal) {
+        return Ok(());
+    }
+    send_signal(pump, signal)
+}
+
 fn send_signal(pump: &BusPump, signal: &ControlSignal) -> FlameResult<()> {
     let signal = encode_signal(signal);
     let mut message = Message::new_signal(OBJECT_PATH, &signal.interface, &signal.member)
         .map_err(|error| FlameError::invalid(&error))?;
-    append_wire_values(&mut message, &signal.args)?;
+    append_wire_values(&mut message, signal.args)?;
     pump.send(message).map(|_| ())
 }
 
@@ -331,7 +397,7 @@ impl ControlClient {
         request: &ControlRequest,
         timeout: Duration,
     ) -> Result<flamewm_control_core::ControlResponse, ControlError> {
-        let call = encode_call(request)?;
+        let mut call = encode_call(request)?;
         let mut message = Message::new_method_call(
             flamewm_control_core::BUS_NAME,
             OBJECT_PATH,
@@ -339,7 +405,9 @@ impl ControlClient {
             &call.member,
         )
         .map_err(|error| FlameError::invalid(&error))?;
-        append_wire_values(&mut message, &call.args)?;
+        // Decoding the reply needs only the interface/member, so the request arguments move into
+        // the outgoing message instead of being cloned first.
+        append_wire_values(&mut message, std::mem::take(&mut call.args))?;
         let reply = self
             .pump
             .send_with_reply(message, timeout)
@@ -413,16 +481,17 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     let interface = message.interface()?.to_string();
     let member = message.member()?.to_string();
     let args = wire_args(message.get_items()).ok()?;
-    decode_signal(&WireSignal {
-        interface,
-        member,
-        args,
-    })
-    .ok()
+    // Hand the decoded arguments over instead of re-cloning the whole snapshot into a
+    // borrowed `WireSignal` first: every signal carries a full dictionary on the hot path.
+    decode_signal_owned(interface, member, args).ok()
 }
-fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResult<()> {
+/// Appends already-encoded wire values, moving them into `MessageItem`s.
+///
+/// `encode_*` already produced an owned copy of the snapshot; taking it by value avoids a second
+/// deep clone of every string on the way out (the previous signature cloned the whole payload).
+fn append_wire_values(message: &mut Message, values: Vec<WireValue>) -> FlameResult<()> {
     let items = values
-        .iter()
+        .into_iter()
         .map(to_item)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| FlameError::invalid(&error))?;
@@ -430,21 +499,18 @@ fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResul
     Ok(())
 }
 
-fn to_item(value: &WireValue) -> Result<MessageItem, String> {
+fn to_item(value: WireValue) -> Result<MessageItem, String> {
     match value {
-        WireValue::Bool(v) => Ok(MessageItem::Bool(*v)),
-        WireValue::U32(v) => Ok(MessageItem::UInt32(*v)),
-        WireValue::U64(v) => Ok(MessageItem::UInt64(*v)),
-        WireValue::I32(v) => Ok(MessageItem::Int32(*v)),
-        WireValue::I64(v) => Ok(MessageItem::Int64(*v)),
-        WireValue::String(v) => Ok(MessageItem::Str(v.clone())),
-        WireValue::StringArray(v) => array(
-            v.iter().map(|v| MessageItem::Str(v.clone())).collect(),
-            "as",
-        ),
-        WireValue::Bytes(v) => array(v.iter().map(|b| MessageItem::Byte(*b)).collect(), "ay"),
+        WireValue::Bool(v) => Ok(MessageItem::Bool(v)),
+        WireValue::U32(v) => Ok(MessageItem::UInt32(v)),
+        WireValue::U64(v) => Ok(MessageItem::UInt64(v)),
+        WireValue::I32(v) => Ok(MessageItem::Int32(v)),
+        WireValue::I64(v) => Ok(MessageItem::Int64(v)),
+        WireValue::String(v) => Ok(MessageItem::Str(v)),
+        WireValue::StringArray(v) => array(v.into_iter().map(MessageItem::Str).collect(), "as"),
+        WireValue::Bytes(v) => array(v.into_iter().map(MessageItem::Byte).collect(), "ay"),
         WireValue::Array(v) => {
-            let items = v.iter().map(to_item).collect::<Result<Vec<_>, _>>()?;
+            let items = v.into_iter().map(to_item).collect::<Result<Vec<_>, _>>()?;
             // The element signature follows the items (dict rows, or `u` for occupancy counts);
             // an empty array keeps the dict-row default.
             let element = items
@@ -453,7 +519,7 @@ fn to_item(value: &WireValue) -> Result<MessageItem, String> {
             array(items, &format!("a{element}"))
         }
         WireValue::Dict(v) => {
-            MessageItem::from_dict(v.iter().map(|(k, v)| to_item(v).map(|v| (k.clone(), v))))
+            MessageItem::from_dict(v.into_iter().map(|(k, v)| to_item(v).map(|v| (k, v))))
                 .map_err(|error| error.to_string())
         }
     }
@@ -594,7 +660,7 @@ fn error_code_for_name(name: &str) -> Option<ErrorCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_control_wire::{SwitcherEntry, system_dict};
+    use flamewm_control_wire::{SwitcherEntry, WireSignal, decode_signal, system_dict};
 
     #[test]
     fn non_string_element_in_string_array_is_an_error_not_a_panic() {
@@ -607,6 +673,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repeated_snapshot_revision_is_coalesced_before_encoding() {
+        let mut published = PublishedRevisions::default();
+        let panels = |revision| ControlSignal::PanelsSnapshotChanged {
+            snapshot: flamewm_api::panels::PanelsSnapshot {
+                revision,
+                panels: Vec::new(),
+                tasks: Vec::new(),
+                pinned_apps: Vec::new(),
+            },
+        };
+        assert!(!published.already_published(&panels(3)));
+        assert!(published.already_published(&panels(3)));
+        // A newer revision is a real state change and is published again.
+        assert!(!published.already_published(&panels(4)));
+        // Requests and request-style signals carry no content revision, so they always send.
+        let request = ControlSignal::LauncherToggleRequested;
+        assert!(!published.already_published(&request));
+        assert!(!published.already_published(&request));
+    }
+
     fn signal_message(signal: &ControlSignal) -> Message {
         wire_signal_message(&encode_signal(signal))
     }
@@ -614,7 +701,7 @@ mod tests {
     fn wire_signal_message(wire: &WireSignal) -> Message {
         let mut message =
             Message::new_signal(OBJECT_PATH, &wire.interface, &wire.member).expect("signal");
-        append_wire_values(&mut message, &wire.args).expect("args");
+        append_wire_values(&mut message, wire.args.clone()).expect("args");
         message
     }
 
@@ -739,7 +826,7 @@ mod tests {
             .expect("encode reply");
         let mut message =
             Message::new_signal(OBJECT_PATH, "org.flamewm.Test", "Bootstrap").expect("signal");
-        append_wire_values(&mut message, &reply.values).expect("append");
+        append_wire_values(&mut message, reply.values.clone()).expect("append");
         let values = wire_args(message.get_items()).expect("decode items");
         let decoded =
             flamewm_control_wire::decode_reply(&call, &WireReply { values }).expect("decode reply");

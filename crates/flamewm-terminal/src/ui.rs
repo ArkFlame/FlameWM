@@ -61,6 +61,7 @@ fn fit(runs: &[Run], slots: usize) -> Cow<'_, [Run]> {
 impl App {
     /// Writes the current frame to `doc`, touching only the nodes whose content changed.
     pub fn project(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        self.advance_scroll();
         self.project_surface(doc)?;
         self.project_font(doc)?;
         let frame = self.frame();

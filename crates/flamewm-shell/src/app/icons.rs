@@ -7,28 +7,28 @@ impl ShellLoop {
         if self.icon_loader.is_none() {
             let theme =
                 crate::entry::settings_projection::icon_theme_name(self.settings_cache.as_ref());
-            self.icon_loader = Some(IconLoader::spawn(self.loader_root.clone(), theme));
+            self.icon_loader = IconLoader::spawn(self.loader_root.clone(), theme);
         }
     }
 
     /// Canonical `IconService` wake FD for the reactor loop. Ensures the
     /// loader exists (single owner) and returns the service descriptor;
     /// the reactor only wakes on it, `drain_icons` drains on the tick.
-    pub(crate) fn icon_wake_fd(&mut self) -> std::os::unix::io::RawFd {
+    /// `None` when the loader worker could not be created.
+    pub(crate) fn icon_wake_fd(&mut self) -> Option<std::os::unix::io::RawFd> {
         self.ensure_loader();
-        self.icon_loader
-            .as_ref()
-            .map(IconLoader::wake_fd)
-            .expect("icon loader present after ensure")
+        self.icon_loader.as_ref().map(IconLoader::wake_fd)
     }
 
     /// FD wake path: drain the wake pipe only. Result payloads stay queued
-    /// for the tick (`drain_icons`), which owns document mutation.
-    pub(crate) fn drain_icons_pending(&mut self) {
+    /// for the tick (`drain_icons`), which owns document mutation. Returns
+    /// `false` once the worker's write end is gone (EOF), so the reactor can
+    /// unregister the fd instead of spinning on a permanently readable pipe.
+    pub(crate) fn drain_icons_pending(&mut self) -> bool {
         self.ensure_loader();
-        if let Some(loader) = self.icon_loader.as_mut() {
-            loader.wake_drain();
-        }
+        self.icon_loader
+            .as_ref()
+            .is_some_and(|loader| loader.wake_drain())
     }
 
     pub(crate) fn drain_icons(&mut self, runtime: &mut SurfaceRuntime) {
@@ -138,10 +138,26 @@ impl ShellLoop {
                     }
                 }
                 DependentSurface::Launcher => {
-                    if matches!(
-                        runtime.with_document(self.surfaces.launcher, apply),
-                        Ok(true)
-                    ) {
+                    let applied = runtime.with_document(self.surfaces.launcher, |document| {
+                        if async_projection::apply_icon_result(
+                            document,
+                            res.target,
+                            &res.name,
+                            res.width,
+                            res.height,
+                            res.generation,
+                            image.clone(),
+                        )? {
+                            Ok(true)
+                        } else {
+                            // Typing bumps the launcher epoch, so a reply for a row that is
+                            // still visible lands stale. The raster is cached; repaint the
+                            // bound row now instead of leaving its placeholder until the next
+                            // projection.
+                            async_projection::apply_cached_binding(document, res.target, res.width)
+                        }
+                    });
+                    if matches!(applied, Ok(true)) {
                         let _ = runtime.redraw(self.surfaces.launcher);
                     }
                 }

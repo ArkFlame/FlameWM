@@ -170,8 +170,9 @@ impl SurfaceController {
 
     pub(super) fn icon_geometry_atom(&mut self) -> Atom {
         if self.icon_geometry_atom == 0 {
-            let name = std::ffi::CString::new("_NET_WM_ICON_GEOMETRY")
-                .expect("static atom contains no NUL");
+            let Ok(name) = std::ffi::CString::new("_NET_WM_ICON_GEOMETRY") else {
+                return 0;
+            };
             self.icon_geometry_atom = unsafe { XInternAtom(self.display, name.as_ptr(), 0) };
         }
         self.icon_geometry_atom

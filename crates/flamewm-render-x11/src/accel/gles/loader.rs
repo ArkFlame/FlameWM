@@ -51,7 +51,9 @@ impl Egl {
     }
 
     pub(super) fn extension_proc(&self, name: &str) -> *mut c_void {
-        let name = CString::new(name).expect("extension name is static and NUL-free");
+        let Ok(name) = CString::new(name) else {
+            return std::ptr::null_mut();
+        };
         // SAFETY: eglGetProcAddress accepts any NUL-terminated name and returns NULL when unknown.
         unsafe { (self.get_proc_address)(name.as_ptr()) }
     }

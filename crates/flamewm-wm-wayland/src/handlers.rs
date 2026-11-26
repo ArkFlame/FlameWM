@@ -32,7 +32,7 @@ use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::Serial;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction, with_states,
+    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction, get_role, with_states,
     with_surface_tree_upward,
 };
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
@@ -57,7 +57,8 @@ use smithay::wayland::shell::wlr_layer::{
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{
-    PopupSurface, PositionerState, ShellClient, ToplevelSurface, XdgShellHandler, XdgShellState,
+    PopupSurface, PositionerState, ShellClient, ToplevelSurface, XDG_POPUP_ROLE, XdgShellHandler,
+    XdgShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use std::os::fd::OwnedFd;
@@ -127,23 +128,34 @@ impl CompositorHandler for State {
         let visible = commit_changes_pixels(surface);
         let before = buffer_geometry(surface);
         on_commit_buffer_handler::<Self>(surface);
+        // One read for both the resize reimport and the layer re-layout below.
+        let after = buffer_geometry(surface);
         // A repaint of a window the open switcher lists refreshes its preview (throttled there).
+        // The switcher is closed almost always, so its check comes before the surface-to-window
+        // lookup: that scan is O(toplevels + X11 windows) and commits are the hottest client path.
         if visible
+            && let Some(control) = self.control.as_ref()
+            && control.switcher_open()
             && let Some(id) = self.window_for_surface(surface)
-            && let Some(control) = self.control.clone()
             && control.note_switcher_commit(id)
         {
             self.request_redraw();
         }
-        if reimports_on_resize(before, buffer_geometry(surface)) {
+        let resized = reimports_on_resize(before, after);
+        if resized {
             self.import_resized_buffer(surface);
         }
-        self.popups.commit(surface);
+        // Popup bookkeeping only applies to a surface that has the popup role. Both lookups scan
+        // every known popup tree, and the common commit (toplevel, cursor, subsurface) is never a
+        // popup, so the role gate keeps that path free of the scans.
+        if get_role(surface) == Some(XDG_POPUP_ROLE) {
+            self.popups.commit(surface);
 
-        if let Some(PopupKind::Xdg(xdg)) = self.popups.find_popup(surface)
-            && !xdg.is_initial_configure_sent()
-        {
-            let _ = xdg.send_configure();
+            if let Some(PopupKind::Xdg(xdg)) = self.popups.find_popup(surface)
+                && !xdg.is_initial_configure_sent()
+            {
+                let _ = xdg.send_configure();
+            }
         }
 
         // Layer surfaces: re-arrange exclusive zones and send the first configure once.
@@ -154,8 +166,14 @@ impl CompositorHandler for State {
                 .cloned()
         };
         if let Some(layer) = layer {
-            layer_map_for_output(&out).arrange();
-            self.reflow_if_work_area_changed();
+            // `arrange` walks every layer surface's tree and popups, so a panel that commits
+            // animation frames would pay the whole layout on each commit. The layout depends only
+            // on the layer's protocol state (anchor, size, margins, exclusive zone) and on a buffer
+            // geometry change, never on damage alone, so a buffer-only commit skips it.
+            if resized || layer.layer_surface().has_pending_changes() {
+                layer_map_for_output(&out).arrange();
+                self.reflow_if_work_area_changed();
+            }
             if !State::layer_initial_configure_sent(surface) {
                 layer.layer_surface().send_configure();
             }
@@ -206,21 +224,28 @@ pub(crate) fn reimports_on_resize(
 /// or removed buffer, surface damage, or a frame callback the client waits on. Must run before
 /// `on_commit_buffer_handler`, which drains the buffer and damage from the committed state.
 fn commit_changes_pixels(surface: &WlSurface) -> bool {
-    let mut visible = false;
+    // A `Cell` lets the visit and the early-stop closures observe the same flag.
+    let visible = std::cell::Cell::new(false);
     with_surface_tree_upward(
         surface,
         (),
         |_, _, ()| TraversalAction::DoChildren(()),
-        |_, states, ()| {
+        |child, states, ()| {
             let mut guard = states.cached_state.get::<SurfaceAttributes>();
             let attrs = guard.current();
-            visible |= attrs.buffer.is_some()
+            let shows = attrs.buffer.is_some()
                 || !attrs.damage.is_empty()
                 || !attrs.frame_callbacks.is_empty();
+            // A parent with children can move pixels without a buffer, damage or callback: an
+            // applied `wl_subsurface.set_position` (and every synchronized child state) takes
+            // effect on the parent's commit, and that commit carries none of the three itself.
+            // Surfaces without children (panels, X11 windows) keep the damage-only gate.
+            visible.set(visible.get() || shows || child != surface);
         },
-        |_, _, ()| true,
+        // One visible surface is enough to answer; stopping prunes the rest of the subtree.
+        |_, _, ()| !visible.get(),
     );
-    visible
+    visible.get()
 }
 
 delegate_compositor!(State);
@@ -694,8 +719,9 @@ impl SelectionHandler for State {
         _user_data: &(),
     ) {
         // Kept text (a Wayland owner that exited, or one re-published by the compositor) is served here.
-        if let Some(bytes) = self.compat.clipboard.slot(ty).text(&mime_type) {
-            write_off_loop(bytes.to_vec(), fd);
+        // The slot hands out shared bytes, so this path copies no payload on the compositor loop.
+        if let Some(bytes) = self.compat.clipboard.slot(ty).bytes(&mime_type) {
+            write_off_loop(bytes, fd);
             return;
         }
         // An X11 client pastes from a Wayland owner: stream the data into the X11 side.

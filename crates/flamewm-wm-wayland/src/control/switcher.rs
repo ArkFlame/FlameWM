@@ -152,6 +152,12 @@ impl Service {
         self.switcher.borrow_mut().as_mut()?.pending.pop_front()
     }
 
+    /// True while the switcher is open. Lets the per-commit path skip the surface-to-window lookup
+    /// that only a preview refresh needs.
+    pub(crate) fn switcher_open(&self) -> bool {
+        self.switcher.borrow().is_some()
+    }
+
     /// True while the open switcher still has previews queued for capture.
     pub(crate) fn switcher_captures_pending(&self) -> bool {
         self.switcher

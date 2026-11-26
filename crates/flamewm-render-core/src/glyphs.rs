@@ -58,9 +58,66 @@ pub struct TextMask {
     pub coverage: Vec<u8>,
 }
 
+/// One rasterized glyph plus the tick of its last use, so the cache can evict the coldest entry.
+struct GlyphEntry {
+    mask: Arc<GlyphMask>,
+    used: u64,
+}
+
+/// One measured advance plus the tick of its last use.
+struct AdvanceEntry {
+    width: f32,
+    used: u64,
+}
+
 struct FontCache {
     font: Font,
-    cache: HashMap<(char, u32), Arc<GlyphMask>>,
+    glyphs: HashMap<(char, u32), GlyphEntry>,
+    /// Advance widths of characters measured but never painted. Layout measures every word of a
+    /// line (and every candidate line) through `advance`; without this table each measure re-scales
+    /// the same glyph in `fontdue` and re-rasterizes nothing. Bounded like `glyphs`.
+    advances: HashMap<(char, u32), AdvanceEntry>,
+    /// Monotonic use counter shared by both tables; wrapping only costs eviction order.
+    uses: u64,
+}
+
+impl FontCache {
+    fn tick(&mut self) -> u64 {
+        self.uses = self.uses.wrapping_add(1);
+        self.uses
+    }
+
+    /// Drops the least recently used glyph when the cap is reached, instead of wiping every
+    /// bitmap: a sustained stream of new sizes then costs one re-raster instead of a full
+    /// re-raster of the whole visible set on the next frame.
+    fn make_room_for_glyph(&mut self) {
+        if self.glyphs.len() < CACHE_LIMIT {
+            return;
+        }
+        if let Some(key) = self
+            .glyphs
+            .iter()
+            .min_by_key(|(_, entry)| entry.used)
+            .map(|(key, _)| *key)
+        {
+            self.glyphs.remove(&key);
+        }
+    }
+
+    /// Same policy for the advance table, whose entries are much smaller but just as cold.
+    fn make_room_for_advance(&mut self) {
+        if self.advances.len() < CACHE_LIMIT {
+            return;
+        }
+        if let Some(key) = self
+            .advances
+            .iter()
+            .min_by_key(|(_, entry)| entry.used)
+            .map(|(key, _)| *key)
+        {
+            self.advances.remove(&key);
+        }
+    }
 }
 
 static FONT: Mutex<Option<Option<FontCache>>> = Mutex::new(None);
@@ -69,23 +126,31 @@ static FONT: Mutex<Option<Option<FontCache>>> = Mutex::new(None);
 const CACHE_LIMIT: usize = 1024;
 
 fn find_font() -> Option<Font> {
-    fn walk(dir: &std::path::Path, wanted: &str, depth: u8) -> Option<std::path::PathBuf> {
+    /// Collects every candidate font file under `dir`, at most `depth` levels deep, in readdir
+    /// order. One walk serves all candidates instead of re-reading the same directory tree once
+    /// per candidate (five system-wide walks on a cold start).
+    fn collect(dir: &std::path::Path, depth: u8, found: &mut Vec<(usize, std::path::PathBuf)>) {
         if depth == 0 {
-            return None;
+            return;
         }
-        let entries = std::fs::read_dir(dir).ok()?;
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut subdirs = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 subdirs.push(path);
-            } else if path.file_name().is_some_and(|name| name == wanted) {
-                return Some(path);
+            } else if let Some(priority) = path
+                .file_name()
+                .and_then(|name| CANDIDATES.iter().position(|wanted| name == *wanted))
+            {
+                found.push((priority, path));
             }
         }
-        subdirs
-            .into_iter()
-            .find_map(|dir| walk(&dir, wanted, depth - 1))
+        for dir in subdirs {
+            collect(&dir, depth - 1, found);
+        }
     }
 
     let user = user_font_dir();
@@ -96,12 +161,18 @@ fn find_font() -> Option<Font> {
         .filter(|root| root.exists())
         .collect();
 
-    for wanted in CANDIDATES {
-        for root in &roots {
-            let Some(path) = walk(root, wanted, 4) else {
+    let mut found = Vec::new();
+    for root in &roots {
+        collect(root, 4, &mut found);
+    }
+
+    // Candidate order still wins over root order, exactly as the per-candidate walk did.
+    for priority in 0..CANDIDATES.len() {
+        for (found_priority, path) in &found {
+            if *found_priority != priority {
                 continue;
-            };
-            let Ok(bytes) = std::fs::read(&path) else {
+            }
+            let Ok(bytes) = std::fs::read(path) else {
                 continue;
             };
             if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
@@ -124,8 +195,10 @@ struct Run<'a> {
 impl Run<'_> {
     fn glyph(&mut self, c: char) -> Arc<GlyphMask> {
         let key = (c, self.px.to_bits());
-        if let Some(hit) = self.cache.cache.get(&key) {
-            return Arc::clone(hit);
+        let tick = self.cache.tick();
+        if let Some(entry) = self.cache.glyphs.get_mut(&key) {
+            entry.used = tick;
+            return Arc::clone(&entry.mask);
         }
         let (metrics, coverage) = self.cache.font.rasterize(c, self.px);
         let glyph = Arc::new(GlyphMask {
@@ -136,10 +209,14 @@ impl Run<'_> {
             height: metrics.height,
             coverage,
         });
-        if self.cache.cache.len() >= CACHE_LIMIT {
-            self.cache.cache.clear();
-        }
-        self.cache.cache.insert(key, Arc::clone(&glyph));
+        self.cache.make_room_for_glyph();
+        self.cache.glyphs.insert(
+            key,
+            GlyphEntry {
+                mask: Arc::clone(&glyph),
+                used: tick,
+            },
+        );
         glyph
     }
 
@@ -152,10 +229,26 @@ impl Run<'_> {
     }
 
     /// Unrounded advance of `c`, the same value [`Self::glyph`] stores, without rasterizing a
-    /// bitmap or touching the glyph cache. Measurement and caret paths only need advances, so
-    /// they must not pay for coverage they never paint.
-    fn advance(&self, c: char) -> f32 {
-        self.cache.font.metrics(c, self.px).advance_width
+    /// bitmap. Measurement and caret paths only need advances, so they must not pay for coverage
+    /// they never paint; a painted glyph already carries its advance, so its cache entry answers
+    /// here too and the two paths can never disagree.
+    fn advance(&mut self, c: char) -> f32 {
+        let key = (c, self.px.to_bits());
+        let tick = self.cache.tick();
+        if let Some(entry) = self.cache.glyphs.get_mut(&key) {
+            entry.used = tick;
+            return entry.mask.advance;
+        }
+        if let Some(entry) = self.cache.advances.get_mut(&key) {
+            entry.used = tick;
+            return entry.width;
+        }
+        let width = self.cache.font.metrics(c, self.px).advance_width;
+        self.cache.make_room_for_advance();
+        self.cache
+            .advances
+            .insert(key, AdvanceEntry { width, used: tick });
+        width
     }
 }
 
@@ -165,16 +258,63 @@ fn with_run<R>(px: f32, f: impl FnOnce(&mut Run<'_>) -> R) -> Option<R> {
     if guard.is_none() {
         *guard = Some(find_font().map(|font| FontCache {
             font,
-            cache: HashMap::new(),
+            glyphs: HashMap::new(),
+            advances: HashMap::new(),
+            uses: 0,
         }));
     }
     let cache = guard.as_mut()?.as_mut()?;
     Some(f(&mut Run { cache, px }))
 }
 
+/// Releases the rasterized glyph bitmaps and advance tables, keeping the parsed font.
+///
+/// Font bitmaps dominate the subsystem's resident memory once a session has painted many sizes,
+/// and an idle desktop never asks for them again. Call this from an idle handler; the next paint
+/// re-rasterizes only the glyphs it actually draws. Returns `true` when a font was loaded.
+pub fn trim_caches() -> bool {
+    let Ok(mut guard) = FONT.lock() else {
+        return false;
+    };
+    let Some(Some(cache)) = guard.as_mut() else {
+        return false;
+    };
+    cache.glyphs.clear();
+    cache.advances.clear();
+    cache.glyphs.shrink_to_fit();
+    cache.advances.shrink_to_fit();
+    true
+}
+
+/// Drops the caches and the parsed font file, returning all of the subsystem's memory.
+///
+/// The next text call finds and parses the font again (a file read plus a parse, paid once).
+/// Use under memory pressure, not on every idle tick. Returns `true` when a font was loaded.
+pub fn unload() -> bool {
+    let Ok(mut guard) = FONT.lock() else {
+        return false;
+    };
+    let had_font = matches!(guard.as_ref(), Some(Some(_)));
+    // `None` (not `Some(None)`) so the next call searches again instead of caching "no font".
+    *guard = None;
+    had_font
+}
+
+/// Cached glyph and advance entry counts, or `None` when no font is loaded.
+///
+/// Reported by perf harnesses so the cache bound is observable without absolute numbers.
+#[must_use]
+pub fn cache_stats() -> Option<(usize, usize)> {
+    let guard = FONT.lock().ok()?;
+    let cache = guard.as_ref()?.as_ref()?;
+    Some((cache.glyphs.len(), cache.advances.len()))
+}
+
 /// Shapes `text`: the fractional pen origin of every char plus the run end (`len = chars + 1`),
-/// and the glyph of every char. The pen is accumulated in f32; nothing is rounded per glyph.
-fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Arc<GlyphMask>>) {
+/// and the glyph of every inkable char. Whitespace advances the pen but has no bitmap, so it is
+/// left as `None` instead of rasterizing an empty mask into the glyph cache. The pen is
+/// accumulated in f32; nothing is rounded per glyph.
+fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Option<Arc<GlyphMask>>>) {
     let mut origins = Vec::with_capacity(text.len() + 1);
     let mut glyphs = Vec::with_capacity(text.len());
     let mut pen = 0.0f32;
@@ -184,9 +324,14 @@ fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Arc<GlyphMask>>) {
             pen += run.kern(left, character);
         }
         origins.push(pen);
-        let glyph = run.glyph(character);
-        pen += glyph.advance;
-        glyphs.push(glyph);
+        if character.is_whitespace() {
+            pen += run.advance(character);
+            glyphs.push(None);
+        } else {
+            let glyph = run.glyph(character);
+            pen += glyph.advance;
+            glyphs.push(Some(glyph));
+        }
         prev = Some(character);
     }
     origins.push(pen);
@@ -195,7 +340,7 @@ fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Arc<GlyphMask>>) {
 
 /// Pen origin of every char plus the run end (`len = chars + 1`), accumulated in f32 exactly as
 /// [`shape`] does, but from advances only: no glyph is rasterized or cached.
-fn shape_origins(text: &str, run: &Run<'_>) -> Vec<f32> {
+fn shape_origins(text: &str, run: &mut Run<'_>) -> Vec<f32> {
     let mut origins = Vec::with_capacity(text.len() + 1);
     let mut pen = 0.0f32;
     let mut prev: Option<char> = None;
@@ -212,7 +357,7 @@ fn shape_origins(text: &str, run: &Run<'_>) -> Vec<f32> {
 }
 
 /// Final pen of `text`, accumulated in the exact order [`shape`] uses, with no allocation.
-fn advance_pen(text: &str, run: &Run<'_>) -> f32 {
+fn advance_pen(text: &str, run: &mut Run<'_>) -> f32 {
     let mut pen = 0.0f32;
     let mut prev: Option<char> = None;
     for character in text.chars() {
@@ -293,14 +438,24 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
     }
     with_run(size, |run| {
         let (origins, shaped) = shape(text, run);
-        let mut glyphs = Vec::new();
-        for (origin, glyph) in origins.iter().zip(shaped) {
+        let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
+        let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
+        let mut inked = false;
+        for (origin, glyph) in origins.iter().zip(&shaped) {
+            let Some(glyph) = glyph else { continue };
             // Each origin rounds once on its own; the pen itself never accumulates rounding.
-            if glyph.width > 0 && glyph.height > 0 {
-                glyphs.push((origin.round() as i32, glyph));
+            if glyph.width == 0 || glyph.height == 0 {
+                continue;
             }
+            inked = true;
+            let left = origin.round() as i32 + glyph.left;
+            let top = -glyph.top;
+            min_x = min_x.min(left);
+            min_y = min_y.min(top);
+            max_x = max_x.max(left + glyph.width as i32);
+            max_y = max_y.max(top + glyph.height as i32);
         }
-        if glyphs.is_empty() {
+        if !inked {
             return TextMask {
                 x: pen_x.round() as i32,
                 y: baseline_y.round() as i32,
@@ -310,22 +465,16 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
             };
         }
 
-        let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
-        let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
-        for (offset, glyph) in &glyphs {
-            let left = offset + glyph.left;
-            let top = -glyph.top;
-            min_x = min_x.min(left);
-            min_y = min_y.min(top);
-            max_x = max_x.max(left + glyph.width as i32);
-            max_y = max_y.max(top + glyph.height as i32);
-        }
         let width = (max_x - min_x).max(0) as u32;
         let height = (max_y - min_y).max(0) as u32;
         let mut coverage = vec![0u8; width as usize * height as usize];
 
-        for (offset, glyph) in &glyphs {
-            let base_x = offset + glyph.left - min_x;
+        for (origin, glyph) in origins.iter().zip(&shaped) {
+            let Some(glyph) = glyph else { continue };
+            if glyph.width == 0 || glyph.height == 0 {
+                continue;
+            }
+            let base_x = origin.round() as i32 + glyph.left - min_x;
             let base_y = -glyph.top - min_y;
             for row in 0..glyph.height {
                 let y = base_y + row as i32;
@@ -558,5 +707,35 @@ mod tests {
         let row = mask.width as usize * (mask.height as usize / 2);
         let interior = &mask.coverage[row..row + mask.width as usize];
         assert!(interior.contains(&0), "the spaces stay clear");
+    }
+
+    #[test]
+    fn trimming_caches_keeps_text_identical() {
+        if !any_font() {
+            return;
+        }
+        let before = text_mask("Ag 13", 18.0, 0.0, 18.0).expect("mask");
+        // Another test in this binary may unload first; either way text must stay identical.
+        let _ = trim_caches();
+        let after = text_mask("Ag 13", 18.0, 0.0, 18.0).expect("mask");
+        assert_eq!(
+            before.coverage, after.coverage,
+            "re-rasterized mask is equal"
+        );
+        assert_eq!((before.x, before.y), (after.x, after.y));
+    }
+
+    #[test]
+    fn unload_reloads_the_font_lazily() {
+        if !any_font() {
+            return;
+        }
+        let before = text_mask("B", 16.0, 0.0, 16.0).expect("mask");
+        let _ = unload();
+        let after = text_mask("B", 16.0, 0.0, 16.0).expect("mask");
+        assert_eq!(
+            before.coverage, after.coverage,
+            "reloaded font draws the same"
+        );
     }
 }

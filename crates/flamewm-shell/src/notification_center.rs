@@ -85,6 +85,9 @@ pub enum Command {
 
 impl Command {
     /// Parses a template `data-action` value. Slot numbers in actions are one-based.
+    ///
+    /// Walks the segments with one iterator instead of collecting a `Vec` per press: this runs
+    /// on every button release, and an action never needs more than five borrowed segments.
     #[must_use]
     pub fn parse(action: &str) -> Option<Self> {
         match action {
@@ -92,19 +95,29 @@ impl Command {
             "notification.center.dnd" => return Some(Self::ToggleDnd),
             _ => {}
         }
-        let rest = action.strip_prefix("notification.center.")?;
-        let parts: Vec<&str> = rest.split('.').collect();
-        match parts.as_slice() {
-            ["group", group, "mute"] => Some(Self::ToggleGroupMute(slot(group, MAX_GROUP_SLOTS)?)),
-            ["item", group, item, "dismiss"] => Some(Self::DismissItem {
-                group: slot(group, MAX_GROUP_SLOTS)?,
-                item: slot(item, MAX_ITEM_SLOTS)?,
-            }),
-            ["item", group, item, "action", action] => Some(Self::InvokeItemAction {
-                group: slot(group, MAX_GROUP_SLOTS)?,
-                item: slot(item, MAX_ITEM_SLOTS)?,
-                action: slot(action, MAX_ITEM_ACTION_SLOTS)?,
-            }),
+        let mut parts = action.strip_prefix("notification.center.")?.split('.');
+        match parts.next()? {
+            "group" => {
+                let group = slot(parts.next()?, MAX_GROUP_SLOTS)?;
+                (parts.next()? == "mute" && parts.next().is_none())
+                    .then_some(Self::ToggleGroupMute(group))
+            }
+            "item" => {
+                let group = slot(parts.next()?, MAX_GROUP_SLOTS)?;
+                let item = slot(parts.next()?, MAX_ITEM_SLOTS)?;
+                match parts.next()? {
+                    "dismiss" if parts.next().is_none() => Some(Self::DismissItem { group, item }),
+                    "action" => {
+                        let action = slot(parts.next()?, MAX_ITEM_ACTION_SLOTS)?;
+                        parts.next().is_none().then_some(Self::InvokeItemAction {
+                            group,
+                            item,
+                            action,
+                        })
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -306,12 +319,6 @@ fn center_ids() -> &'static CenterIds {
     })
 }
 
-/// Every template write needed to show `view`, with no focused row.
-#[must_use]
-pub fn nodes(view: &CenterView) -> Vec<Node> {
-    nodes_with_focus(view, None)
-}
-
 /// Every template write needed to show `view`; `focus` indexes rows in Tab order (see
 /// [`item_at`]). Unused slots are hidden.
 #[must_use]
@@ -374,8 +381,12 @@ pub fn nodes_with_focus(view: &CenterView, focus: Option<usize>) -> Vec<Node> {
             }
         }
         let hidden = group.count.saturating_sub(group.items.len());
+        // The common group has three or fewer entries, so no overflow: only hide the row. The
+        // "+N more" label is built (one allocation) solely when there is overflow to report.
         out.push(visible(group_ids.more.as_str(), hidden > 0));
-        out.push(text(group_ids.more.as_str(), format!("+{hidden} more")));
+        if hidden > 0 {
+            out.push(text(group_ids.more.as_str(), format!("+{hidden} more")));
+        }
         base += group.items.len();
     }
     out
@@ -427,17 +438,9 @@ pub fn key_action(payload: &str, focus: Option<usize>, view: &CenterView) -> Opt
     }
 }
 
-/// First [`MAX_TEXT_CHARS`] characters, plus an ellipsis when the text continues. The cut is a
-/// byte index, so a long string is copied once instead of being collected char by char.
+/// First [`MAX_TEXT_CHARS`] characters, plus an ellipsis when the text continues.
 fn clip(value: &str) -> String {
-    match value.char_indices().nth(MAX_TEXT_CHARS) {
-        None => value.to_owned(),
-        Some((cut, _)) => {
-            let mut text = value[..cut].to_owned();
-            text.push('…');
-            text
-        }
-    }
+    flamewm_api::format::truncate_chars(value, MAX_TEXT_CHARS)
 }
 
 #[cfg(test)]
@@ -579,7 +582,7 @@ mod tests {
 
     #[test]
     fn nodes_hide_empty_center_and_report_overflow() {
-        let empty = nodes(&CenterView::default());
+        let empty = nodes_with_focus(&CenterView::default(), None);
         assert!(empty.contains(&visible("nc-empty", true)));
         assert!(empty.contains(&text("nc-dnd-state", "Off")));
 
@@ -587,7 +590,7 @@ mod tests {
         for index in 0..4 {
             record(&mut history, "chat", &format!("c{index}"));
         }
-        let projected = nodes(&view(&history));
+        let projected = nodes_with_focus(&view(&history), None);
         assert!(projected.contains(&visible("nc-empty", false)));
         assert!(projected.contains(&text("nc-group-1-count", "4")));
         assert!(projected.contains(&text("nc-group-1-mute", "Mute")));
@@ -628,7 +631,7 @@ mod tests {
             center.groups[0].items[0].actions.len(),
             MAX_ITEM_ACTION_SLOTS
         );
-        let projected = nodes(&center);
+        let projected = nodes_with_focus(&center, None);
         assert!(projected.contains(&text("nc-item-1-1-action-1", "Reply")));
         assert!(projected.contains(&text("nc-item-1-1-action-2", "Later")));
         assert!(projected.contains(&visible("nc-item-1-1-action-2", true)));
@@ -637,15 +640,15 @@ mod tests {
 
         hide_inactive_actions(&mut center, |_| false);
         assert!(center.groups[0].items[0].actions.is_empty());
-        assert!(nodes(&center).contains(&visible("nc-item-1-1-action-1", false)));
-        assert!(nodes(&center).contains(&visible("nc-item-1-1-actions", false)));
+        assert!(nodes_with_focus(&center, None).contains(&visible("nc-item-1-1-action-1", false)));
+        assert!(nodes_with_focus(&center, None).contains(&visible("nc-item-1-1-actions", false)));
     }
 
     #[test]
     fn every_projected_id_exists_in_template() {
         let mut history = NotificationHistory::new(10);
         record(&mut history, "chat", "hi");
-        let mut ids: Vec<&str> = nodes(&view(&history))
+        let mut ids: Vec<&str> = nodes_with_focus(&view(&history), None)
             .into_iter()
             .map(|node| match node {
                 Node::Text { id, .. } | Node::Visible { id, .. } | Node::Meter { id, .. } => id,

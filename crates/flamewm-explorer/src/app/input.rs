@@ -415,7 +415,7 @@ impl ExplorerApp {
                         Ok(items)=>{
                             self.clear_search();
                             *self.model.tab_mut()=candidate;
-                            self.model.apply_listing(generation,&path,Ok(items));
+                            self.model.apply_listing(generation,&path,Ok(items),self.column_sort);
                             if !view::is_sorted_by(&self.model.tab().entries,self.column_sort) {view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);}
                             self.request_listing();
                         },
@@ -428,9 +428,10 @@ impl ExplorerApp {
                     return;
                 }
                 let vanished=entries.as_ref().is_err_and(|error|error.kind()==std::io::ErrorKind::NotFound);
-                let applied=self.model.apply_listing(generation,&path,entries);
+                let applied=self.model.apply_listing(generation,&path,entries,self.column_sort);
                 if applied {
-                    // The worker sorted by name; re-sort on this thread only when another column is active.
+                    // The worker sorted in the display column order; re-sort here only when the user
+                    // changed the column while this listing was being read.
                     let tab=self.model.tab_mut();
                     if !view::is_sorted_by(&tab.entries,self.column_sort) {view::sort_entries(&mut tab.entries,self.column_sort);}
                 }
@@ -506,6 +507,8 @@ impl ExplorerApp {
             WorkerResult::Devices(devices)=>{
                 if self.unmounted!=devices {self.unmounted=devices;self.reload_places_async();}
             },
+            // Free space sampled on a worker: the projection only reads the cache.
+            WorkerResult::Space{path,value}=>self.space.borrow_mut().store(path,value,Instant::now()),
             WorkerResult::DeviceDone(outcome)=>{
                 let message=outcome.unwrap_or_else(|error|error);
                 self.model.status.clone_from(&message);

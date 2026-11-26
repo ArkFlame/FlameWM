@@ -202,13 +202,39 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
 }
 
 pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError> {
-    let call = WireCall::new(&signal.interface, &signal.member, signal.args.clone());
-    match (signal.interface.as_str(), signal.member.as_str()) {
+    decode_signal_call(&WireCall {
+        interface: signal.interface.clone(),
+        member: signal.member.clone(),
+        args: signal.args.clone(),
+        now_ms: 0,
+    })
+}
+
+/// Decode a wire signal whose interface, member and arguments the caller already owns.
+///
+/// The transport builds the wire payload from an incoming bus message and then hands it over, so
+/// moving the arguments into the decoder avoids deep-cloning a whole snapshot (every window,
+/// settings key and string) before it is decoded.
+pub fn decode_signal_owned(
+    interface: String,
+    member: String,
+    args: Vec<WireValue>,
+) -> Result<ControlSignal, ControlError> {
+    decode_signal_call(&WireCall {
+        interface,
+        member,
+        args,
+        now_ms: 0,
+    })
+}
+
+fn decode_signal_call(call: &WireCall) -> Result<ControlSignal, ControlError> {
+    match (call.interface.as_str(), call.member.as_str()) {
         (IFACE_WINDOWS, "WindowsChanged") => Ok(ControlSignal::WindowsChanged {
-            revision: signal_revision(&call)?,
+            revision: signal_revision(call)?,
         }),
         (IFACE_WINDOWS, "WindowsSnapshotChanged") => {
-            expect_arity(&call, 2)?;
+            expect_arity(call, 2)?;
             Ok(ControlSignal::WindowsSnapshotChanged {
                 revision: required_u64(&call.args[0], "revision")?,
                 windows: required_array(&call.args[1], "windows")?
@@ -218,65 +244,65 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
             })
         }
         (IFACE_WEATHER, "FeedChanged") => {
-            expect_arity(&call, 1)?;
+            expect_arity(call, 1)?;
             Ok(ControlSignal::WeatherFeedChanged {
                 snapshot: weather_feed_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })
         }
         (IFACE_SYSTEM, "SystemChanged") => Ok(ControlSignal::SystemChanged {
-            revision: signal_revision(&call)?,
+            revision: signal_revision(call)?,
         }),
         (IFACE_SYSTEM, "SystemSnapshotChanged") => {
-            expect_arity(&call, 1)?;
+            expect_arity(call, 1)?;
             Ok(ControlSignal::SystemSnapshotChanged {
                 snapshot: system_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })
         }
         (IFACE_SETTINGS, "SettingsChanged") => {
-            expect_arity(&call, 2)?;
+            expect_arity(call, 2)?;
             Ok(ControlSignal::SettingsChanged {
                 revision: required_u64(&call.args[0], "revision")?,
                 keys: required_string_array(&call.args[1], "keys")?.to_vec(),
             })
         }
         (IFACE_SETTINGS, "SettingsSnapshotChanged") => {
-            expect_arity(&call, 1)?;
+            expect_arity(call, 1)?;
             Ok(ControlSignal::SettingsSnapshotChanged {
                 snapshot: settings_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })
         }
         (IFACE_WORKSPACES, "WorkspacesChanged") => Ok(ControlSignal::WorkspacesChanged {
-            revision: signal_revision(&call)?,
+            revision: signal_revision(call)?,
         }),
         (IFACE_WORKSPACES, "WorkspacesSnapshotChanged") => {
-            expect_arity(&call, 1)?;
+            expect_arity(call, 1)?;
             Ok(ControlSignal::WorkspacesSnapshotChanged {
                 snapshot: workspace_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })
         }
         (IFACE_DISPLAYS, "TopologyChanged") => Ok(ControlSignal::TopologyChanged {
-            generation: signal_revision(&call)?,
+            generation: signal_revision(call)?,
         }),
         (IFACE_DISPLAYS, "DisplaysSnapshotChanged") => {
-            expect_arity(&call, 1)?;
+            expect_arity(call, 1)?;
             Ok(ControlSignal::DisplaysSnapshotChanged {
                 snapshot: display_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })
         }
         (IFACE_ROOT, "StartMenuToggleRequested") => {
-            expect_arity(&call, 0)?;
+            expect_arity(call, 0)?;
             Ok(ControlSignal::StartMenuToggleRequested)
         }
         (IFACE_ROOT, "LauncherToggleRequested") => {
-            expect_arity(&call, 0)?;
+            expect_arity(call, 0)?;
             Ok(ControlSignal::LauncherToggleRequested)
         }
         (IFACE_ROOT, "ClipboardHistoryRequested") => {
-            expect_arity(&call, 0)?;
+            expect_arity(call, 0)?;
             Ok(ControlSignal::ClipboardHistoryRequested)
         }
         (IFACE_ROOT, "WindowSwitcherChanged") => {
-            expect_arity(&call, 4)?;
+            expect_arity(call, 4)?;
             Ok(ControlSignal::WindowSwitcherChanged {
                 open: required_bool(&call.args[0], "open")?,
                 immediate: required_bool(&call.args[1], "immediate")?,
@@ -288,13 +314,13 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
             })
         }
         (IFACE_SHORTCUTS, "ShortcutsChanged") => Ok(ControlSignal::ShortcutsChanged {
-            revision: signal_revision(&call)?,
+            revision: signal_revision(call)?,
         }),
         (IFACE_PANELS, "PanelsChanged") => Ok(ControlSignal::PanelsChanged {
-            revision: signal_revision(&call)?,
+            revision: signal_revision(call)?,
         }),
         (IFACE_PANELS, "PanelsSnapshotChanged") => {
-            expect_arity(&call, 1)?;
+            expect_arity(call, 1)?;
             Ok(ControlSignal::PanelsSnapshotChanged {
                 snapshot: panels_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })

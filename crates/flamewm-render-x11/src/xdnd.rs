@@ -481,7 +481,9 @@ impl DropTarget {
                     .filter(|p| valid_object_path(p))
                 {
                     Some(path) => {
-                        let session = self.session.take().expect("session present");
+                        let Some(session) = self.session.take() else {
+                            return self.fail(source);
+                        };
                         let (x, y) = session.position;
                         (
                             vec![DropEvent::Extract {

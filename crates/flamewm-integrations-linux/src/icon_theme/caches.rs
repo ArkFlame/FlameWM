@@ -41,7 +41,7 @@ impl IconThemeCaches {
             *slot = exists;
             return;
         }
-        if self.exists_len >= EXISTS_CAP {
+        if self.exists_len >= EXISTS_CAP && !self.evict_generation_except(generation) {
             self.evict_one_exists();
         }
         self.exists
@@ -66,6 +66,25 @@ impl IconThemeCaches {
         if inner.is_empty() {
             self.exists.remove(&generation);
         }
+    }
+
+    /// Frees a whole generation that can no longer be queried (a snapshot bump
+    /// makes its answers unreachable), keeping the current generation's hit
+    /// rate instead of evicting live entries. Returns whether one was freed.
+    fn evict_generation_except(&mut self, current: u64) -> bool {
+        let Some(stale) = self
+            .exists
+            .keys()
+            .copied()
+            .find(|generation| *generation != current)
+        else {
+            return false;
+        };
+        if let Some(inner) = self.exists.remove(&stale) {
+            self.exists_len -= inner.len();
+            return true;
+        }
+        false
     }
 
     /// (hits, misses) across exists lookups.

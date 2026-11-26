@@ -72,11 +72,9 @@ pub fn project_calendar(
             let (mut cell_id, mut marker) = (String::new(), String::new());
             for (index, cell) in grid.cells.iter().enumerate() {
                 cell_id.clear();
-                write!(cell_id, "calendar-day-{}", index + 1)
-                    .expect("write to String is infallible");
+                let _ = write!(cell_id, "calendar-day-{}", index + 1);
                 marker.clear();
-                write!(marker, "calendar-day-{}-marker", index + 1)
-                    .expect("write to String is infallible");
+                let _ = write!(marker, "calendar-day-{}-marker", index + 1);
                 document.text(&marker, cell.day.to_string())?;
                 let current = cell.month_kind == flamewm_shell_core::CalendarMonth::Current;
                 document.foreground(&marker, if current { CURRENT_FG } else { ADJACENT_FG })?;

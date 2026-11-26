@@ -97,17 +97,6 @@ fn scaled_surfaces(state: &State) -> Vec<WlSurface> {
     surfaces
 }
 
-/// Every surface `output` presents: windows, popups, and the output's layer surfaces.
-fn mapped_surfaces(state: &State, output: &Output) -> Vec<WlSurface> {
-    let mut surfaces = window_surfaces(state);
-    surfaces.extend(
-        layer_map_for_output(output)
-            .layers()
-            .map(|layer| layer.layer_surface().wl_surface().clone()),
-    );
-    surfaces
-}
-
 /// Output scales and the output each mapped surface sits on, taken before a scale change.
 #[cfg_attr(not(feature = "drm"), allow(dead_code))] // live only where the drm backend sets scale
 pub struct ScaleSnapshot {
@@ -223,11 +212,37 @@ pub fn buffer_scale(scale: f64) -> i32 {
 /// Gathers the presentation feedback of every surface this frame presents on `output`.
 ///
 /// Call before the frame is submitted, so the callbacks belong to the frame being drawn.
+///
+/// One pass over the owners, no intermediate surface list: this runs on every painted frame and the
+/// old path built a `Vec<WlSurface>` (one clone per surface, plus one `Vec` per popup tree) only to
+/// iterate it once. Hidden windows (other workspace, minimised) are skipped along with their
+/// popups: their frame was never presented on this output, so reporting it would both tell the
+/// client a lie about presentation and keep its pipeline drawing off screen.
 pub fn collect_feedback(state: &State, output: &Output) -> OutputPresentationFeedback {
     let mut feedback = OutputPresentationFeedback::new(output);
-    for surface in &mapped_surfaces(state, output) {
+    for (id, top) in &state.toplevels {
+        if state.model.is_hidden(*id) {
+            continue;
+        }
+        let surface = top.wl_surface();
         take_presentation_feedback_surface_tree(
             surface,
+            &mut feedback,
+            |_, _| Some(output.clone()),
+            |_, _| wp_presentation_feedback::Kind::empty(),
+        );
+        for (popup, _) in PopupManager::popups_for_surface(surface) {
+            take_presentation_feedback_surface_tree(
+                popup.wl_surface(),
+                &mut feedback,
+                |_, _| Some(output.clone()),
+                |_, _| wp_presentation_feedback::Kind::empty(),
+            );
+        }
+    }
+    for layer in layer_map_for_output(output).layers() {
+        take_presentation_feedback_surface_tree(
+            layer.layer_surface().wl_surface(),
             &mut feedback,
             |_, _| Some(output.clone()),
             |_, _| wp_presentation_feedback::Kind::empty(),

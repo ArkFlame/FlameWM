@@ -25,7 +25,10 @@ impl DynamicLibrary {
 
     fn open_with_flags(names: &[&str], flags: c_int, close_on_drop: bool) -> Result<Self, String> {
         for name in names {
-            let c_name = CString::new(*name).expect("library name is static and NUL-free");
+            let Ok(c_name) = CString::new(*name) else {
+                // A name with an interior NUL cannot be loaded; try the next candidate.
+                continue;
+            };
             // `c_name` remains alive for the call; `flags` are valid dlopen flags.
             let handle = unsafe { dlopen(c_name.as_ptr(), flags) };
             if !handle.is_null() {

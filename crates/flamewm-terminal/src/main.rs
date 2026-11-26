@@ -98,19 +98,25 @@ fn run() -> Result<(), String> {
     flamewm_profiler::init_process("flamewm-terminal");
     // One-shot: startup's font and config temporaries stay free-but-resident in the malloc arena.
     // A single sleeping thread hands them back; no periodic wake is added.
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_secs(10));
-        flamewm_ui_x11::release_free_heap();
-    });
+    // Both threads are best-effort: a refused spawn keeps the terminal running, it only forgoes
+    // the one-time heap trim or the profiling window.
+    let _ = std::thread::Builder::new()
+        .name("flamewm-terminal-trim".into())
+        .spawn(|| {
+            std::thread::sleep(Duration::from_secs(10));
+            flamewm_ui_x11::release_free_heap();
+        });
     if flamewm_profiler::enabled() {
         // No reactor timer here: a plain thread drains the span window every interval, as the explorer does.
         let interval = Duration::from_secs(flamewm_profiler::profile_interval_secs());
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(interval);
-                let _ = flamewm_profiler::report_window();
-            }
-        });
+        let _ = std::thread::Builder::new()
+            .name("flamewm-terminal-profile".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(interval);
+                    let _ = flamewm_profiler::report_window();
+                }
+            });
     }
     let cwd = options
         .working_directory
@@ -179,6 +185,11 @@ fn run() -> Result<(), String> {
     let event_app = Rc::clone(&app);
     let wake_app = Rc::clone(&app);
     let fd = reader.as_raw_fd();
+    // Output keeps parsing while the window is fully obscured, but nothing it changes can be seen, so the frame is
+    // projected once when the window is uncovered instead of on every burst.
+    let visible = Rc::new(std::cell::Cell::new(true));
+    let event_visible = Rc::clone(&visible);
+    let wake_visible = Rc::clone(&visible);
     let pending_snapshot = Rc::new(RefCell::new(None::<SettingsSnapshot>));
     let wake_snapshot = Rc::clone(&pending_snapshot);
     let notifications = ControlSignalClient::connect_session().ok().map(|signals| {
@@ -252,7 +263,12 @@ fn run() -> Result<(), String> {
                     true
                 }
                 UiControllerEvent::Drag(_) => false,
-                UiControllerEvent::Visibility { .. } => false,
+                UiControllerEvent::Visibility { obscured } => {
+                    let shown = !*obscured;
+                    let was = event_visible.replace(shown);
+                    // Uncovering needs one frame for all the output that arrived while hidden.
+                    shown && !was
+                }
             };
             if changed {
                 app.project(document)
@@ -280,6 +296,9 @@ fn run() -> Result<(), String> {
             }
             let _wake = flamewm_profiler::start("terminal.wake");
             wake::drain_and_commit(&mut app, &events, settings_changed, |app| {
+                if !wake_visible.get() {
+                    return Ok(());
+                }
                 let _project = flamewm_profiler::start("terminal.project");
                 app.project(document)
             })
@@ -300,17 +319,28 @@ fn spawn_settings_fetch(
     tx: Sender<SettingsSnapshot>,
     mut wake: UnixStream,
 ) {
-    std::thread::spawn(move || {
-        let Some(snapshot) = initial_settings() else {
-            return;
-        };
-        if cached.as_ref() != Some(&snapshot) {
-            let _ = settings_cache::store(&cache_path, &snapshot);
+    // A refused thread keeps the cached/default palette: the terminal must still open.
+    let spawned = std::thread::Builder::new()
+        .name("flamewm-terminal-settings".into())
+        .spawn(move || {
+            let Some(snapshot) = initial_settings() else {
+                return;
+            };
+            if cached.as_ref() != Some(&snapshot) {
+                let _ = settings_cache::store(&cache_path, &snapshot);
+            }
+            if tx.send(snapshot).is_ok() {
+                let _ = wake.write(&[1]);
+            }
+        });
+    if spawned.is_err() {
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            eprintln!(
+                "flamewm-terminal: settings worker could not start; cached theme stays in use"
+            );
         }
-        if tx.send(snapshot).is_ok() {
-            let _ = wake.write(&[1]);
-        }
-    });
+    }
 }
 
 /// The window backdrop for a settings snapshot: `None` when there is no snapshot or the window is opaque.

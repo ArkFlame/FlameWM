@@ -43,11 +43,15 @@ impl ShellLoop {
     /// Launcher open: lists apps installed since the last read. Gated on XDG application dir
     /// mtimes (KDE kbuildsycoca precedent), so an unchanged set costs stat calls only. No watcher.
     fn refresh_launcher_applications(&mut self) {
-        match flamewm_applications::refresh_installed_applications_if_changed() {
+        // Catalog discovery runs on a startup worker. Until it lands, the Start snapshot from the
+        // session bus already lists the applications, so skip this open instead of parsing every
+        // `.desktop` file on the UI thread.
+        let Some(catalog) = flamewm_applications::ready_shared_application_catalog() else {
+            return;
+        };
+        match catalog.refresh_if_dirs_changed(flamewm_applications::cached_application_dirs()) {
             Ok(delta) if !delta.is_empty() => {
-                let applications = flamewm_applications::shared_application_catalog()
-                    .current()
-                    .all();
+                let applications = catalog.current().all();
                 self.start_model.replace_applications(applications);
             }
             Ok(_) => {}

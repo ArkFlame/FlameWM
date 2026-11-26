@@ -4,9 +4,9 @@ impl ExplorerApp {
     pub(crate) fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map_or_else(||home.join(".local/share"), PathBuf::from).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,pending_navigation:None,pending_directory_dirty:false,chooser_tx,chooser:None,convert_picker:None,thumbs:RefCell::new(Thumbnails::default()),thumb_queue:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,closing:false,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,pending_navigation:None,pending_directory_dirty:false,chooser_tx,chooser:None,convert_picker:None,thumbs:RefCell::new(Thumbnails::default()),thumb_queue:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
             ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,context_scroll:0,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,scroll_timer:None,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,dialog_focus:0,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,trash_base,places_gen:0,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
+            dialog:None,dialog_focus:0,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_running:false,search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,trash_base,places_gen:0,unmounted:Vec::new(),space:RefCell::new(view::SpaceCache::default()),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
     }
@@ -31,11 +31,13 @@ impl ExplorerApp {
         self.spawn_background(move||WorkerResult::Places{generation,list:build_places(&home,&unmounted,&trash_base)});
     }
 
-    /// Runs `job` on its own thread and wakes the UI with its result. Used for lsblk and udisks2, which can block.
+    /// Runs `job` on the shared background lanes and wakes the UI with its result. Used for lsblk,
+    /// udisks2 and sidebar rebuilds, which can block: the thread is reused, so a request no longer
+    /// pays for a spawn (and a resize burst no longer creates one thread per deferred flush).
     pub(crate) fn spawn_background(&self,job:impl FnOnce()->WorkerResult+Send+'static) {
         let Some((tx,wake))=self.events.as_ref() else {return};
         let (tx,Ok(mut wake))=(tx.clone(),wake.try_clone()) else {return};
-        std::thread::spawn(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
+        aux_pool().submit(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
     }
 
     /// Lists unmounted devices on a worker. Remounting remembered drives is the session's job, not the explorer's.
@@ -48,7 +50,6 @@ impl ExplorerApp {
     /// cancel per chunk, so waiting on the staging registry is the proof that the
     /// cancelled transfer left nothing behind.
     pub(crate) fn close(&mut self) {
-        self.closing=true;
         if self.busy {
             self.cancel.cancel();
             self.model.status="Cancelling…".into();

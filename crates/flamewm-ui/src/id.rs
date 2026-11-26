@@ -1,14 +1,19 @@
 use std::fmt;
+use std::sync::Arc;
 
+/// Stable identifiers are shared handles rather than owned strings: the tree, an event and a
+/// widget all name the same id, so cloning one on dispatch is a refcount bump instead of a heap
+/// copy.
 macro_rules! stable_id {
     ($name:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(String);
+        pub struct $name(Arc<str>);
 
         impl $name {
             #[must_use]
             pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
+                let value = value.into();
+                Self(Arc::<str>::from(value))
             }
             #[must_use]
             pub fn as_str(&self) -> &str {
@@ -22,13 +27,13 @@ macro_rules! stable_id {
 
         impl From<&str> for $name {
             fn from(value: &str) -> Self {
-                Self::new(value)
+                Self(Arc::<str>::from(value))
             }
         }
 
         impl From<String> for $name {
             fn from(value: String) -> Self {
-                Self(value)
+                Self(Arc::<str>::from(value))
             }
         }
 

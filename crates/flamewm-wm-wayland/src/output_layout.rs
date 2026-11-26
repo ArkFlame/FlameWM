@@ -17,6 +17,8 @@ pub(crate) const SCALE_MAX_PERCENT: u16 = 200;
 pub(crate) const SCALE_STEP_PERCENT: u16 = 5;
 
 /// One connector mode as the policy sees it. `refresh_mhz` is millihertz, like `Mode::refresh`.
+/// Only the DRM connector setup builds these; the nested backend never scans out a mode.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ModeCandidate {
     pub width: i32,
@@ -28,6 +30,8 @@ pub(crate) struct ModeCandidate {
 /// Picks the connector mode to scan out at: the preferred resolution (the EDID preferred mode, or
 /// the largest resolution when none is flagged), at its highest refresh rate. Ties keep the
 /// preferred-flagged mode, then the earlier entry. Returns `None` only for an empty list.
+// Only the DRM backend picks a scanout mode; the tests keep the policy pinned for it.
+#[cfg_attr(not(feature = "drm"), allow(dead_code))]
 pub(crate) fn select_mode(modes: &[ModeCandidate]) -> Option<usize> {
     let resolution = modes
         .iter()

@@ -19,7 +19,7 @@ flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
-rustix = { workspace = true, features = ["pty", "termios"] }
+rustix = { workspace = true, features = ["event", "pty", "termios"] }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }

@@ -2,7 +2,7 @@
 //! keyboard grab, PAM and power actions on worker threads, the idle screensaver,
 //! and live control snapshots. Input that wakes the screen is consumed in the same turn.
 use std::cell::RefCell;
-use std::io::{ErrorKind, Read, Write};
+use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
@@ -30,6 +30,7 @@ use crate::preview::PreviewInput;
 use crate::ribbons::{FRAME_INTERVAL, RibbonFrames};
 use crate::screensaver::{Phase, Screensaver};
 use crate::secret::PasswordBuffer;
+use crate::wake::Waker;
 
 mod change;
 mod control_watch;
@@ -59,8 +60,13 @@ use crate::state::{Effect, Key, LockState, Status};
 use crate::view::LockView;
 use crate::x11::{KeyBatch, PointerState, Session};
 
-/// Handles root `ConfigureNotify` promptly while still keeping activity sampling bounded.
-const TICK: Duration = Duration::from_millis(50);
+/// Idle tick interval. Keys, pointer events, control snapshots and worker results all
+/// wake the reactor themselves, so this timer only covers state the server does not
+/// announce: grab retries, screensaver phases, DPMS settling and the minute clock. The
+/// frame pacer adds its own wakes while the Ribbons animation runs.
+const TICK: Duration = Duration::from_secs(1);
+/// Minimum spacing of the grab and stacking safety nets, independent of the tick rate.
+const HOUSEKEEPING: Duration = Duration::from_secs(1);
 /// Poll interval of the preview: pointer and keyboard are read by polling.
 const PREVIEW_POLL: Duration = Duration::from_millis(50);
 /// Primary mouse button in X core numbering.
@@ -155,11 +161,13 @@ fn lock_on(
     let control_signals = Rc::new(RefCell::new(Vec::<ControlSignal>::new()));
     let (outcome_tx, outcome_rx) = mpsc::channel::<Outcome>();
     let (power_tx, power_rx) = mpsc::channel::<PowerEvent>();
-    power::fetch_capabilities_on_worker(power_tx.clone());
     let (mut wake_reader, wake_writer) =
         UnixStream::pair().map_err(|error| format!("frame pacer socket: {error}"))?;
     let frame_pacer = FramePacer::start(wake_writer)?;
+    let waker = frame_pacer.waker();
+    power::fetch_capabilities_on_worker(power_tx.clone(), waker.clone());
     let mut lock = LockLoop {
+        waker,
         surfaces,
         fallback,
         root,
@@ -183,6 +191,7 @@ fn lock_on(
         frame_pacer,
         fallback_frames: None,
         last_tick: Instant::now(),
+        last_housekeeping: Instant::now(),
         last_pointer: None,
         pending_root_geometry: None,
         pending_display_snapshot: None,
@@ -265,6 +274,8 @@ struct PaintKey {
 }
 
 struct LockLoop {
+    /// Wakes the reactor from worker threads; see [`Waker`].
+    waker: Waker,
     surfaces: Vec<LockSurface>,
     fallback: Option<LockSurface>,
     root: Rect,
@@ -291,6 +302,8 @@ struct LockLoop {
     frame_pacer: FramePacer,
     fallback_frames: Option<RibbonFrames>,
     last_tick: Instant,
+    /// Last grab/stacking safety-net pass; see [`HOUSEKEEPING`].
+    last_housekeeping: Instant,
     last_pointer: Option<PointerState>,
     pending_root_geometry: Option<(u32, u32)>,
     pending_auth_success: bool,
@@ -315,6 +328,7 @@ struct LockLoop {
 /// watches. The pacer thread sleeps on a condvar while the animation is off.
 struct FramePacer {
     running: Arc<(Mutex<bool>, Condvar)>,
+    waker: Waker,
 }
 
 impl FramePacer {
@@ -322,6 +336,8 @@ impl FramePacer {
         writer
             .set_nonblocking(true)
             .map_err(|error| format!("frame pacer socket: {error}"))?;
+        let waker = Waker::new(writer);
+        let thread_waker = waker.clone();
         let running = Arc::new((Mutex::new(false), Condvar::new()));
         let shared = Arc::clone(&running);
         thread::Builder::new()
@@ -335,16 +351,18 @@ impl FramePacer {
                     }
                     drop(on);
                     thread::sleep(FRAME_INTERVAL);
-                    // A full socket means a wake is already pending; a closed one means the loop is gone.
-                    if let Err(error) = (&writer).write(&[1])
-                        && error.kind() == ErrorKind::BrokenPipe
-                    {
+                    if !thread_waker.wake() {
                         return;
                     }
                 }
             })
             .map_err(|error| format!("frame pacer thread: {error}"))?;
-        Ok(Self { running })
+        Ok(Self { running, waker })
+    }
+
+    /// A clone of the loop's wake socket, for the loop and its worker threads.
+    fn waker(&self) -> Waker {
+        self.waker.clone()
     }
 
     fn set_running(&self, on: bool) {

@@ -7,6 +7,7 @@ use crate::settings::Command;
 use crate::view::Span;
 use flamewm_ui_x11::UiActionEvent;
 use flamewm_ui_x11::UiActionPhase;
+use std::time::Instant;
 
 const SCROLL_LINES_PER_NOTCH: usize = 3;
 
@@ -327,14 +328,19 @@ impl App {
             let bytes = arrow.repeat(SCROLL_LINES_PER_NOTCH).into_bytes();
             self.send_to(id, bytes);
             true
-        } else if let Some(pane) = self.pane_mut(id) {
-            let before = pane.view_offset;
-            pane.view_offset = if up {
-                (pane.view_offset + SCROLL_LINES_PER_NOTCH).min(max)
+        } else if let Some(from) = self.pane(id).map(|pane| pane.view_offset) {
+            let target = if up {
+                (from + SCROLL_LINES_PER_NOTCH).min(max)
             } else {
-                pane.view_offset.saturating_sub(SCROLL_LINES_PER_NOTCH)
+                from.saturating_sub(SCROLL_LINES_PER_NOTCH)
             };
-            pane.view_offset != before
+            let now = Instant::now();
+            let running = self.scroll.pane() == id && self.scroll.is_animating(now);
+            let changed = target != from || (running && self.scroll.target() != target);
+            if changed {
+                self.scroll.begin(id, from, target, now);
+            }
+            changed
         } else {
             false
         }

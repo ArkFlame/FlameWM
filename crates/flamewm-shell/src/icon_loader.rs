@@ -259,16 +259,24 @@ impl IconLoader {
         self.generation
     }
 
+    /// Whether a request for this exact key is queued or awaiting its reply. A visible row
+    /// re-projects often; while this key is in flight its placeholder is already on the node.
     #[must_use]
-    pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Self {
+    pub fn is_pending(&self, target: IconTarget, name: &str, width: u32, height: u32) -> bool {
+        self.pending.contains(target, name, width, height)
+    }
+
+    /// Returns `None` when the wake pipe or worker thread cannot be created
+    /// (fd or thread exhaustion). Callers keep running without icons instead
+    /// of losing the desktop session to a panic.
+    #[must_use]
+    pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Option<Self> {
         let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);
         let initial_theme = theme.clone();
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
-        let (wake_reader, mut wake_writer) = UnixStream::pair().expect("icon loader wake pair");
-        wake_reader
-            .set_nonblocking(true)
-            .expect("wake reader nonblocking");
-        std::thread::Builder::new()
+        let (wake_reader, mut wake_writer) = UnixStream::pair().ok()?;
+        wake_reader.set_nonblocking(true).ok()?;
+        let spawned = std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
                 flamewm_integrations_linux::background::lower_current_thread();
@@ -314,9 +322,15 @@ impl IconLoader {
                     }
                     let _ = wake_writer.write_all(&[1]);
                 }
-            })
-            .expect("spawn icon loader worker");
-        Self {
+            });
+        if spawned.is_err() {
+            static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!("flamewm-shell: icon worker could not start; the shell runs without themed icons");
+            }
+            return None;
+        }
+        Some(Self {
             req_tx,
             res_rx,
             wake_reader,
@@ -331,7 +345,7 @@ impl IconLoader {
             theme,
             theme_outbox: None,
             replies_outstanding: 0,
-        }
+        })
     }
 
     /// Live `iconTheme` change. Starts a new icon generation (old results
@@ -491,8 +505,18 @@ impl IconLoader {
                 }
                 // Empty: nothing queued now. Disconnected: the worker is gone, so no reply
                 // can still arrive; a stuck counter would otherwise keep this path awake.
+                // Release the keys it never answered so callers stop waiting for an icon
+                // that cannot come, and say so once instead of failing silently.
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.replies_outstanding = 0;
+                    self.pending.clear();
+                    self.retry.clear();
+                    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                    if WARNED.set(()).is_ok() {
+                        eprintln!(
+                            "flamewm-shell: icon worker stopped; icons keep their placeholders"
+                        );
+                    }
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -508,7 +532,9 @@ impl IconLoader {
         self.wake_reader.as_raw_fd()
     }
 
-    pub fn wake_drain(&self) {
+    /// Drains wake bytes. Returns `false` when the writer side is gone: EOF is the only signal a
+    /// dead worker gives, and the reactor must stop watching the fd instead of spinning on it.
+    pub fn wake_drain(&self) -> bool {
         use std::io::Read;
         // The reader is set nonblocking once in `spawn`; re-arming it per tick was one fcntl
         // syscall on every shell wake, including idle ticks with no icon traffic.
@@ -516,9 +542,9 @@ impl IconLoader {
         let mut buf = [0u8; 256];
         loop {
             match (&self.wake_reader).read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => return false,
                 Ok(_) => {}
-                Err(_) => break,
+                Err(_) => return true,
             }
         }
     }

@@ -239,12 +239,15 @@ impl LaunchFeedback {
         let side = ((BASE_ICON as u32 * scale + 50) / 100).clamp(8, 64);
         // Compare borrowed sequence fields before allocating a new request key.
         // Pointer updates must not clone app IDs/icons on every active poll.
-        let (started, replacement) = {
-            let sequence = self.sequences.visible().expect("checked above");
+        let visible = self.sequences.visible().map(|sequence| {
             (
                 sequence.started,
                 updated_launch_key(&sequence.id, &sequence.icon, side, self.requested.as_ref()),
             )
+        });
+        let Some((started, replacement)) = visible else {
+            self.hide(runtime)?;
+            return Ok(self.sequences.next_deadline());
         };
         if let Some(key) = replacement {
             self.requested = Some(key);
@@ -278,10 +281,7 @@ impl LaunchFeedback {
             })?;
             runtime.redraw(surface)?;
             if self.loader.is_none() {
-                self.loader = Some(IconLoader::spawn(
-                    self.loader_root.clone(),
-                    self.icon_theme.clone(),
-                ));
+                self.loader = IconLoader::spawn(self.loader_root.clone(), self.icon_theme.clone());
             }
             if let (Some(loader), Some((_, icon, _))) = (&mut self.loader, &self.requested) {
                 loader.request(IconTarget::TaskSlot(0), icon, side, side);

@@ -4,12 +4,20 @@ use super::super::*;
 /// Requests queue on the returned sender; the thread exits when the sender is dropped or `on_tick` returns false.
 pub(crate) fn spawn_frame_ticker(period:Duration,mut on_tick:impl FnMut()->bool+Send+'static)->Sender<()> {
     let (requests,pending)=mpsc::channel::<()>();
-    std::thread::spawn(move||{
-        while pending.recv().is_ok() {
-            std::thread::sleep(period);
-            if !on_tick() {break;}
-        }
-    });
+    // A glide ticker is an animation aid: when the OS refuses a thread the list must keep working,
+    // so the ticker degrades to no glide frames (later sends fail and are ignored) instead of panicking.
+    let spawned=std::thread::Builder::new()
+        .name("flamewm-explorer-glide".into())
+        .spawn(move||{
+            while pending.recv().is_ok() {
+                std::thread::sleep(period);
+                if !on_tick() {break;}
+            }
+        });
+    if spawned.is_err() {
+        static WARNED:std::sync::OnceLock<()>=std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {eprintln!("flamewm-explorer: glide ticker could not start; scrolling stays instant");}
+    }
     requests
 }
 

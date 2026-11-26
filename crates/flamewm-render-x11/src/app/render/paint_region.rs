@@ -96,8 +96,11 @@ impl X11App {
         let viewport = (self.width, self.height);
         let mut visits = 0u64;
         for index in 0..count {
+            let Some(command) = self.retained_command(index) else {
+                continue;
+            };
             // SAFETY: index is below the cached count; `paint` does not replace the cache.
-            let command = unsafe { &*self.retained_command(index) };
+            let command = unsafe { &*command };
             // Commands that write no pixels (clips, the scrollbar track) always replay so the clip
             // stack and ordering match the Full path.
             let always = super::damage_plan::no_pixel_command(command);

@@ -132,6 +132,36 @@ pub fn report_window() -> String {
         ));
     }
 
+    // Composition: each span's own wall time as a share of the measured window, so a one-second
+    // compose tick reads as a split (which subsystem owns how much of the second) instead of
+    // absolute milliseconds. Self wall, not inclusive: a turn that only starts a nested span must
+    // not claim its child's time twice. The unspanned remainder is printed as `wait`, which is the
+    // loop parked in `poll` and is the number an idle second is supposed to maximize.
+    let window_ns = proc_wall_ns.max(1);
+    let mut shares: Vec<(&'static str, u64)> = spans
+        .iter()
+        .filter(|row| row.self_wall > 0)
+        .map(|row| (row.label, row.self_wall))
+        .collect();
+    shares.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let total_self_ns: u64 = shares.iter().map(|(_, ns)| *ns).sum();
+    out.push_str("COMPOSITION:\n");
+    for (label, self_wall) in shares.iter().take(top) {
+        out.push_str(&format!(
+            " {label} share={:.1}% self_wall={}\n",
+            100.0 * (*self_wall as f64) / (window_ns as f64),
+            fmt_ms(*self_wall)
+        ));
+    }
+    // Clamp: a span that crosses the window boundary can make the rows outsum the window. The
+    // residual never goes negative, and a fully spanned window reports `wait:0%`.
+    let wait_ns = window_ns.saturating_sub(total_self_ns.min(window_ns));
+    out.push_str(&format!(
+        " wait share={:.1}% wall={}\n",
+        100.0 * (wait_ns as f64) / (window_ns as f64),
+        fmt_ms(wait_ns)
+    ));
+
     let frequent = by_highest_count(spans_into(&spans));
     out.push_str("HIGHEST_CALL_COUNT:\n");
     for row in frequent.iter().take(top) {

@@ -152,13 +152,16 @@ pub fn unique_destination(original: &Path) -> PathBuf {
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
-    for n in 1u32.. {
+    for n in 1..=u32::MAX {
         let candidate = parent.join(format!("{stem} (restored {n}){ext}"));
         if candidate.symlink_metadata().is_err() {
             return candidate;
         }
     }
-    unreachable!("u32 range exhausted")
+    // Every numbered name exists (practically impossible). Return a
+    // process-unique candidate instead of panicking; `restore` turns a
+    // remaining collision into an ordinary `io::Error`.
+    parent.join(format!("{stem} (restored {}){ext}", std::process::id()))
 }
 
 /// Restores one entry to its original location (never overwriting) and removes its info file.

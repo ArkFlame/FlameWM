@@ -336,20 +336,6 @@ fn sync_graph(
     Ok(())
 }
 
-pub(super) const MONTH_NAMES: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
 pub(super) const WEEKDAY_INITIALS: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
 /// Shown in place of data that is not available; keeps single-text-node targets valid.
 pub(super) const EMPTY_TEXT: &str = "\u{200b}";
@@ -417,7 +403,7 @@ pub(super) fn sync_calendar(
     document.visible(&format!("{id}-cal-month"), widget.flag("showMonth"))?;
     document.text(
         &format!("{id}-cal-month"),
-        MONTH_NAMES[month].to_uppercase(),
+        flamewm_api::format::MONTH_NAMES[month].to_uppercase(),
     )?;
     document.foreground(&format!("{id}-cal-month"), text)?;
     for (column, initial) in WEEKDAY_INITIALS.iter().enumerate() {

@@ -1,0 +1,9 @@
+# u116-audio-brightness
+
+Area: audio/brightness/network widgets in the quick-control popup host (event-driven, no polling; skip redraw when the open popup's domain did not change).
+
+- quick_controls/host: every control-signal `SystemSnapshotChanged` reprojected and redrew whichever popup was open, even when the change came from an unrelated domain (a battery/UPower sample or power-profile signal while the audio popup was open, a PulseAudio change while the battery menu was open). Added `system_reprojection_needed(kind, before, after)`: the cached snapshot is compared field-by-field for exactly the domains the open popup projects (audio -> `audio`; network -> `network` + `bluetooth`; battery -> `power` + `power_profiles` + `brightness` + `audio`; calendar/weather -> none), and a system signal now sets `system_reprojection_pending` only when that comparison says the visible content changed.
+- Composition shift: with the audio (volume) or network popup open, unrelated periodic battery/network/audio signals no longer cost a full `project_snapshot` (which clones the whole `SystemSnapshot` to build the synthetic `ShellSnapshot`) plus an X redraw. On a 1 s open-popup sample the reprojection/document-write share drops to the rate of the popup's own domain signals; idle open popups stay redraw-free between real changes.
+- The deep domain compares run only when a popup is open and at most once per signal; that is strictly less work than the project + redraw it replaces, and they never run while the popup host is idle.
+- Test: `system_reprojection_only_for_the_open_popup_domains` covers the cross-domain skip (battery-only and network-only deltas) and the battery menu's four-domain dependency.
+- Existing behaviour kept: the popup still reprojects on its own domain changes, network-secret and action-error paths still set `system_reprojection_pending`, and the parent panel status widgets are untouched.

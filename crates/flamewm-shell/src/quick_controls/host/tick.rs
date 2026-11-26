@@ -153,6 +153,34 @@ pub(crate) fn battery_menu_edge(
     }
 }
 
+/// True only when the open popup reads a domain that actually differs between the two
+/// snapshots. Callers compare before overwriting the cached snapshot: a battery sample or a
+/// network signal must not reproject an open audio popup, and the calendar/weather popups read
+/// nothing from the system snapshot, so they never reproject on a system signal. The deep
+/// compares of the audio/network vectors cost one pass per signal only while that popup is open,
+/// which is far cheaper than a full project plus X redraw of the popup document.
+pub(crate) fn system_reprojection_needed(
+    kind: QuickControlKind,
+    before: &flamewm_api::system::SystemSnapshot,
+    after: &flamewm_api::system::SystemSnapshot,
+) -> bool {
+    match kind {
+        QuickControlKind::Audio => before.audio != after.audio,
+        QuickControlKind::Network => {
+            before.network != after.network || before.bluetooth != after.bluetooth
+        }
+        // The battery menu embeds the power-profile, brightness and audio-input rows, so all
+        // four domains are projected there.
+        QuickControlKind::Battery => {
+            before.power != after.power
+                || before.power_profiles != after.power_profiles
+                || before.brightness != after.brightness
+                || before.audio != after.audio
+        }
+        QuickControlKind::Calendar | QuickControlKind::Weather => false,
+    }
+}
+
 pub(crate) fn apply_system_snapshot(
     snapshot: &mut QuickControlSnapshot,
     system: flamewm_api::system::SystemSnapshot,

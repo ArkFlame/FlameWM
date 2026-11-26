@@ -141,8 +141,25 @@ impl ExplorerApp {
             Verdict::NoOp=>return,
             Verdict::Refuse(message)=>{self.model.status=message.into();return;},
         };
-        // Existing names need one answer for the whole batch; the default keeps both.
-        let count=sources.iter().filter(|s|s.file_name().is_some_and(|n|fs::symlink_metadata(directory.join(n)).is_ok())).count();
+        // Existing names need one answer for the whole batch; the default keeps both. A paste into
+        // the folder on screen already knows its rows, so a multi-item selection costs no per-source
+        // stat on the UI thread; other destinations still stat, and the worker re-checks each target.
+        // The rows answer only once the listing is complete: a loading tab shows streamed batches,
+        // so a name missing from it may still exist on disk (an overwrite would go unprompted).
+        let count={
+            let current=self.model.tab();
+            if directory.as_path()==current.path() && !current.loading {
+                let existing:HashSet<&str>=current.entries.iter().map(|entry|entry.name.as_str()).collect();
+                sources.iter().filter(|s|s.file_name().is_some_and(|n|{
+                    let name=n.to_string_lossy();
+                    // Hidden rows are not listed, so only they still need a real stat.
+                    if name.starts_with('.') {fs::symlink_metadata(directory.join(n)).is_ok()}
+                    else {existing.contains(name.as_ref())}
+                })).count()
+            } else {
+                sources.iter().filter(|s|s.file_name().is_some_and(|n|fs::symlink_metadata(directory.join(n)).is_ok())).count()
+            }
+        };
         if count>0 {self.dialog=Some(Dialog::Conflicts{sources,directory,move_it,count});return;}
         if move_it {
             let title=if sources.len()==1 {"Move file?"} else {"Move items?"};
@@ -189,7 +206,7 @@ impl ExplorerApp {
     /// Publishes a file list to the system CLIPBOARD on a detached thread, so the UI never waits on it.
     pub(crate) fn publish_system_clipboard(&mut self,paths:Vec<PathBuf>,cut:bool) {
         self.system_spent=None;
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             let op=if cut {FileOp::Cut} else {FileOp::Copy};
             match Clipboard::connect() {
                 Ok(clipboard)=>{let _=clipboard.set_files(&paths,op);},
@@ -207,7 +224,7 @@ impl ExplorerApp {
             return;
         };
         self.model.status="Reading clipboard…".into();
-        std::thread::spawn(move||{
+        aux_pool().submit(move||{
             // Connect failures and a silent owner (500 ms timeout) both fall back to the in-app clipboard.
             let system=Clipboard::connect().ok().and_then(|clipboard|clipboard.get_files().ok().flatten())
                 .map(|(paths,op)|(paths,op==FileOp::Cut));

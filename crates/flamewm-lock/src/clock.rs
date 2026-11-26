@@ -35,30 +35,6 @@ pub fn format_clock(hour: u8, minute: u8, format: ClockFormat) -> String {
     }
 }
 
-const WEEKDAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-
 /// Formats a Gregorian date as e.g. "Monday, 12 October 2026".
 /// Returns `None` for an invalid month or day.
 #[must_use]
@@ -69,9 +45,9 @@ pub fn format_date(year: i32, month: u8, day: u8) -> Option<String> {
     let weekday = day_of_week(year, month, day);
     Some(format!(
         "{}, {} {} {}",
-        WEEKDAYS[weekday],
+        flamewm_api::format::weekday_name(weekday as u8),
         day,
-        MONTHS[usize::from(month - 1)],
+        flamewm_api::format::month_name(month),
         year
     ))
 }

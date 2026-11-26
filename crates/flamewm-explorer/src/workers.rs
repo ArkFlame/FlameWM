@@ -1,21 +1,89 @@
 //! Background worker loops for the explorer: thumbnails, directory scans and file jobs.
 //! Pure move out of main.rs; each loop talks to the UI through the shared wake socket.
 use super::*;
+use std::sync::{Mutex,OnceLock};
 
 /// Longest a decoded thumbnail waits before its result is announced while more jobs are queued. A
 /// fast burst (icons, small SVGs) used to wake the UI and run a full projection per decode; now at
 /// most one projection per interval runs, and the last job of a burst always wakes immediately.
 const THUMB_WAKE_INTERVAL:Duration=Duration::from_millis(40);
 
+/// A fixed set of reused threads that run queued one-shot jobs, so a user action costs a channel
+/// send instead of a thread spawn. Each worker holds the queue only while it waits for its next job.
+pub(crate) struct JobPool { jobs:Sender<Box<dyn FnOnce()+Send+'static>> }
+
+impl JobPool {
+    /// Starts `threads` workers named `name-<index>`. A thread that cannot start only shrinks the pool.
+    pub(crate) fn start(name:&str,threads:usize)->Self {
+        let (jobs,queue)=mpsc::channel::<Box<dyn FnOnce()+Send+'static>>();
+        let queue=Arc::new(Mutex::new(queue));
+        for index in 0..threads.max(1) {
+            let queue=Arc::clone(&queue);
+            let spawned=std::thread::Builder::new()
+                .name(format!("{name}-{index}"))
+                .spawn(move||{
+                    loop {
+                        let next={queue.lock().unwrap_or_else(|poisoned|poisoned.into_inner()).recv()};
+                        match next {Ok(job)=>job(),Err(_)=>return}
+                    }
+                });
+            if spawned.is_err() {
+                // Thread exhaustion shrinks the pool instead of losing the explorer: idle lanes are
+                // rare and a degraded pool still drains jobs. Report it once, not per failed lane.
+                static WARNED:OnceLock<()>=OnceLock::new();
+                if WARNED.set(()).is_ok() {eprintln!("flamewm-explorer: {name} worker could not start; the pool keeps the lanes it has");}
+                break;
+            }
+        }
+        Self{jobs}
+    }
+
+    /// Queues `job`. When every worker is gone the job runs on its own thread, so no work is dropped.
+    pub(crate) fn submit(&self,job:impl FnOnce()+Send+'static) {
+        let Err(mpsc::SendError(job))=self.jobs.send(Box::new(job)) else {return};
+        // Every pooled worker is gone (a panic or a failed start). A job still has to run, but a
+        // refused thread must not panic the UI thread on a desktop already out of resources.
+        if let Err(error)=std::thread::Builder::new().name("flamewm-explorer-job".into()).spawn(job) {
+            static WARNED:OnceLock<()>=OnceLock::new();
+            if WARNED.set(()).is_ok() {eprintln!("flamewm-explorer: background job dropped: {error}");}
+        }
+    }
+}
+
+/// Short background jobs (sidebar rebuilds, device actions, the coalesced resize flush) share two
+/// reused lanes: one slow udisks call or a stale network mount must not delay the resize flush behind it.
+pub(crate) fn aux_pool()->&'static JobPool {
+    static POOL:OnceLock<JobPool>=OnceLock::new();
+    POOL.get_or_init(||JobPool::start("flamewm-explorer-aux",2))
+}
+
+/// Remote listings and downloads stream until done, so they own two reused lanes: one can keep copying
+/// while another lists a folder, and a finished job leaves nothing to spawn next time.
+pub(crate) fn remote_pool()->&'static JobPool {
+    static POOL:OnceLock<JobPool>=OnceLock::new();
+    POOL.get_or_init(||JobPool::start("flamewm-explorer-remote",2))
+}
+
 /// Decodes queued image keys one at a time, oldest first; the UI reads results from the cache, never waits on this thread.
+/// A decode whose row scrolled away is abandoned at the next stage check and its result is never cached.
 pub(crate) fn thumb_worker(queue:Arc<thumbs::ThumbQueue>, result:Sender<WorkerResult>, mut wake:UnixStream) {
     let mut last_wake:Option<Instant>=None;
     loop {
         let key=queue.pop();
-        let pixels=thumbs::render_thumbnail(&key);
-        let sent=result.send(WorkerResult::Thumbnail{key,pixels}).is_ok();
+        let rendered=thumbs::render_thumbnail_while(&key,&mut ||queue.wants(&key));
+        queue.release(&key);
+        let pixels=match rendered {
+            thumbs::ThumbRender::Cancelled=>continue,
+            thumbs::ThumbRender::Ready(canvas)=>Some(canvas),
+            thumbs::ThumbRender::None=>None,
+        };
+        if result.send(WorkerResult::Thumbnail{key,pixels}).is_err() {
+            // The UI result channel is gone (window closed): no decode can reach anyone, so stop
+            // instead of burning the queue on a dead receiver.
+            return;
+        }
         let due=last_wake.is_none_or(|at|at.elapsed()>=THUMB_WAKE_INTERVAL);
-        if sent && (queue.is_empty() || due) {
+        if queue.is_empty() || due {
             let _=wake.write_all(&[1]);
             last_wake=Some(Instant::now());
         }
@@ -63,14 +131,20 @@ pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, m
         };
         // Obsolete queued navigation requests must never block the latest scan.
         while let Ok(newer)=rx.try_recv() { job=newer; }
-        let WorkerJob::Scan{generation,path,hidden,sort}=job else {continue};
+        let WorkerJob::Scan{generation,path,hidden,sort,stream}=job else {continue};
         let mut all=Vec::new();
         let mut first=true;
         let streamed=list_directory_streamed_cancellable(&path,hidden,|mut batch|{
-            sort_listing(&mut batch,sort);
-            all.extend(batch.iter().cloned());
-            send_wake(&mut wake,&result,WorkerResult::ScanBatch{generation,path:path.clone(),first,entries:batch});
-            first=false;
+            // The worker sorts in the exact display order, so the UI thread installs the listing
+            // without re-sorting it (and a live refresh sends one complete listing, no batches).
+            view::sort_entries(&mut batch,sort);
+            if stream {
+                all.extend(batch.iter().cloned());
+                send_wake(&mut wake,&result,WorkerResult::ScanBatch{generation,path:path.clone(),first,entries:batch});
+                first=false;
+            } else {
+                all.extend(batch);
+            }
             true
         },||{
             if let Ok(newer)=rx.try_recv() { next=Some(newer); true } else { false }
@@ -78,7 +152,7 @@ pub(crate) fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, m
         match streamed {
             Ok(false)=>{},
             Ok(true)=>{
-                sort_listing(&mut all,sort);
+                view::sort_entries(&mut all,sort);
                 send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Ok(all),path});
             },
             Err(error)=>send_wake(&mut wake,&result,WorkerResult::Scanned{generation,entries:Err(error),path}),

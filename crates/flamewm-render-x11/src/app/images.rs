@@ -358,10 +358,9 @@ impl X11App {
             let Some(eviction_key) = self.images.keys().next().copied() else {
                 break;
             };
-            let evicted = self
-                .images
-                .remove(&eviction_key)
-                .expect("cache key must exist");
+            let Some(evicted) = self.images.remove(&eviction_key) else {
+                break;
+            };
             cache_bytes = cache_bytes.saturating_sub(evicted.bytes);
             let display = self.display;
             unsafe { free_cached_image(display, &mut self.allocator, evicted) };

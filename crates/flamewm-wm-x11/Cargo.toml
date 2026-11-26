@@ -28,7 +28,8 @@ flamewm-shell-core = { path = "../flamewm-shell-core" }
 flamewm-skin = { path = "../flamewm-skin" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-x11-desktop = { path = "../flamewm-x11-desktop" }
-x11rb = { workspace = true, features = ["screensaver", "damage", "composite"] }
+# randr: output/scale/blue-light probes; shape: input-shape masks for frames and snap previews.
+x11rb = { workspace = true, features = ["screensaver", "damage", "composite", "randr", "shape"] }
 
 [lints]
 workspace = true

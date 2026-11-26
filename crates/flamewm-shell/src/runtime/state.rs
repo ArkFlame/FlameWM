@@ -103,12 +103,13 @@ impl ShellRuntime {
                 entries,
             } => {
                 let mut entries = entries.clone();
-                self.switcher_thumbs.resolve(&mut entries);
+                let previews = self.switcher_thumbs.resolve(&mut entries);
                 self.switcher = Some(crate::switcher::SwitcherFrame {
                     open: *open,
                     immediate: *immediate,
                     selected: usize::try_from(*selected).unwrap_or(0),
                     entries,
+                    previews,
                 });
             }
             _ => {}

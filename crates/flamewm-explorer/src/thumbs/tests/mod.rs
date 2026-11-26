@@ -347,6 +347,35 @@ fn cache_is_bounded_lru_and_caches_failures() {
 }
 
 #[test]
+fn cache_evicts_least_recently_used_at_the_pixel_byte_budget() {
+    let mut cache = Thumbnails::default();
+    // Four thumbnails fill the pixel budget exactly.
+    let chunk = CACHE_BYTES / 4;
+    for i in 0..4 {
+        cache.complete(key(&format!("b{i}"), 1), Some(vec![0; chunk]));
+    }
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    // A fifth image crosses the byte budget even though the entry count is far
+    // below `CACHE_CAPACITY`, so the least recently used thumbnail is evicted.
+    cache.complete(key("b4", 1), Some(vec![0; chunk]));
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    assert_eq!(cache.entries.len(), 4);
+    assert!(matches!(cache.lookup(&key("b0", 1)), Lookup::Missing));
+    for i in 1..=4 {
+        assert!(matches!(
+            cache.lookup(&key(&format!("b{i}"), 1)),
+            Lookup::Ready(..)
+        ));
+    }
+    // A cached failure costs no pixel bytes, so it never evicts a ready image.
+    let ready = cache.entries.len();
+    cache.complete(key("broken", 1), None);
+    assert_eq!(cache.entries.len(), ready + 1);
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    assert!(matches!(cache.lookup(&key("broken", 1)), Lookup::Failed));
+}
+
+#[test]
 fn changed_mtime_is_a_different_key() {
     assert_ne!(key("a", 1), key("a", 2));
 }

@@ -27,6 +27,7 @@ pub mod settings;
 pub mod signals;
 pub mod state;
 pub mod view;
+pub mod wake;
 #[cfg(feature = "wayland")]
 pub mod wayland;
 #[cfg(feature = "x11")]

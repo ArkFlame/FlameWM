@@ -78,6 +78,17 @@ struct WallpaperRequest {
     share: bool,
 }
 
+impl WallpaperRequest {
+    /// True when both requests would decode and compose exactly the same pixels. The generation is
+    /// deliberately excluded so a repeat of the current layout can reuse its decoded raster.
+    fn same_inputs(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.fit == other.fit
+            && self.share == other.share
+            && self.monitors == other.monitors
+    }
+}
+
 #[derive(Debug)]
 enum LoadResult {
     Image(Rgba8Raster),
@@ -133,6 +144,9 @@ pub struct WallpaperLoader {
     wake_read: UnixStream,
     next_generation: u64,
     state: WallpaperState,
+    /// Inputs that produced the image in `state`. A repeat of the same path/fit/monitors/share
+    /// reuses that decoded raster instead of decoding and uploading the same pixels again.
+    applied: Option<WallpaperRequest>,
 }
 
 impl WallpaperLoader {
@@ -172,10 +186,13 @@ impl WallpaperLoader {
             wake_read,
             next_generation: 0,
             state: WallpaperState::default(),
+            applied: None,
         })
     }
 
-    /// Requests either a separately fitted copy on each output or one shared root canvas.
+    /// Requests either a separately fitted copy on each output or one shared root canvas. A repeat
+    /// of the request already pending or already presented is answered with its existing
+    /// generation: the decoded raster is reused, no worker turn runs, and no repaint is staged.
     pub fn request_layout(
         &mut self,
         path: impl Into<PathBuf>,
@@ -183,9 +200,8 @@ impl WallpaperLoader {
         monitors: &[Rect],
         share: bool,
     ) -> Result<u64, LoaderClosed> {
-        self.next_generation = self.next_generation.saturating_add(1);
         let request = WallpaperRequest {
-            generation: self.next_generation,
+            generation: self.next_generation.saturating_add(1),
             path: path.into(),
             fit,
             monitors: monitors.to_vec(),
@@ -195,6 +211,19 @@ impl WallpaperLoader {
         if state.shutdown {
             return Err(LoaderClosed);
         }
+        if let Some(pending) = state.pending.as_ref()
+            && pending.same_inputs(&request)
+        {
+            return Ok(pending.generation);
+        }
+        if state.pending.is_none()
+            && let Some(applied) = self.applied.as_ref()
+            && applied.generation == self.state.generation
+            && applied.same_inputs(&request)
+        {
+            return Ok(applied.generation);
+        }
+        self.next_generation = request.generation;
         state.latest_generation = request.generation;
         state.pending = Some(request);
         state.completion = None;
@@ -215,6 +244,7 @@ impl WallpaperLoader {
         state.pending = None;
         state.completion = None;
         state.stale_generation = None;
+        self.applied = None;
         drop(state);
         self.state = WallpaperState {
             generation,
@@ -243,7 +273,8 @@ impl WallpaperLoader {
             };
         }
         let generation = completion.request.generation;
-        match completion.result {
+        let WallpaperCompletion { request, result } = completion;
+        match result {
             LoadResult::Image(image) => {
                 self.state = WallpaperState {
                     generation,
@@ -255,13 +286,14 @@ impl WallpaperLoader {
                     }),
                     diagnostic: None,
                 };
+                self.applied = Some(request);
                 PollOutcome::Applied { generation }
             }
             LoadResult::Failure(message) => {
                 self.state.generation = generation;
                 self.state.diagnostic = Some(WallpaperDiagnostic {
                     generation,
-                    path: completion.request.path,
+                    path: request.path,
                     message,
                 });
                 PollOutcome::Failed { generation }
@@ -671,6 +703,41 @@ mod tests {
             WallpaperPresentation::Solid([1, 2, 3])
         );
         assert_eq!(loader.poll(), PollOutcome::Idle);
+    }
+
+    #[test]
+    fn identical_layout_request_reuses_the_decoded_raster() {
+        // CONTRACT: re-requesting the layout already presented must not decode or repaint again.
+        // FAILURE MUTATION: bump the generation unconditionally; this test turns red.
+        let path = temp_path("ppm");
+        ppm(&path, [10, 20, 30]);
+        let mut loader = WallpaperLoader::new(1, 1, packaged_root()).expect("start loader");
+        let first = loader
+            .request_layout(&path, WallpaperFit::Fill, &[], true)
+            .expect("first request");
+        wait_applied(&mut loader, first);
+        let WallpaperPresentation::Image(presented) = loader.state().presentation.clone() else {
+            panic!("image expected");
+        };
+        let repeated = loader
+            .request_layout(&path, WallpaperFit::Fill, &[], true)
+            .expect("repeated request");
+        assert_eq!(repeated, first, "a repeat keeps the applied generation");
+        assert_eq!(loader.poll(), PollOutcome::Idle, "no worker turn is staged");
+        assert!(
+            matches!(
+                &loader.state().presentation,
+                WallpaperPresentation::Image(image) if Arc::ptr_eq(&image.pixels, &presented.pixels)
+            ),
+            "the decoded raster is reused, not decoded again"
+        );
+        let refit = loader
+            .request_layout(&path, WallpaperFit::Fit, &[], true)
+            .expect("refit request");
+        assert!(refit > first, "a different fit decodes again");
+        wait_applied(&mut loader, refit);
+        loader.shutdown();
+        let _ = fs::remove_file(path);
     }
 
     fn production_source() -> &'static str {

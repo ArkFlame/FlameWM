@@ -164,21 +164,28 @@ pub fn project_task_slots_async(
     icon_cache.sync(&snapshot.applications);
     // Task-slot nodes only: labels, icons, line visibility, backgrounds,
     // slot visibility. Pager/tray/geometry untouched.
-    let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
-        (String::new(), String::new(), String::new(), String::new());
+    let (mut slot_id, mut icon_id, mut label_id, mut line_id, mut progress_id) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
     for index in 0..TASK_SLOT_COUNT {
         let n = index + 1;
         slot_id.clear();
-        write!(slot_id, "task-slot-{n}").expect("write to String is infallible");
+        let _ = write!(slot_id, "task-slot-{n}");
         icon_id.clear();
-        write!(icon_id, "task-slot-{n}-icon").expect("write to String is infallible");
+        let _ = write!(icon_id, "task-slot-{n}-icon");
         label_id.clear();
-        write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
+        let _ = write!(label_id, "task-slot-{n}-label");
         line_id.clear();
-        write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
+        let _ = write!(line_id, "task-slot-{n}-line");
+        progress_id.clear();
+        let _ = write!(progress_id, "task-slot-{n}-progress");
         crate::projection::project_task_progress(
             document,
-            index,
+            &progress_id,
             states.get(index).map(|state| &state.id),
             view.task_progress,
         )?;
@@ -670,12 +677,19 @@ mod tests {
             progress: flamewm_api::panels::TaskProgress::new(50).unwrap(),
         };
         let mut doc = FakeDoc::default();
-        crate::projection::project_task_progress(&mut doc, 0, Some(&id), &[entry]).unwrap();
+        crate::projection::project_task_progress(
+            &mut doc,
+            "task-slot-1-progress",
+            Some(&id),
+            &[entry],
+        )
+        .unwrap();
         assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&true));
         let inner = crate::taskbar_scale::inner_node_height(1.0);
         assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(21.0, inner)));
 
-        crate::projection::project_task_progress(&mut doc, 0, None, &[]).unwrap();
+        crate::projection::project_task_progress(&mut doc, "task-slot-1-progress", None, &[])
+            .unwrap();
         assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&false));
         assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(0.0, inner)));
         assert_eq!(doc.visible.get("task-slot-2-progress"), None);
