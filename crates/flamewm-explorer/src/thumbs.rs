@@ -2,6 +2,8 @@
 //! worker; the UI only reads the bounded LRU cache, keyed by path plus the entry's mtime and size,
 //! so an edited file gets a fresh thumbnail. A row that leaves the view while its decode is running
 //! is abandoned at the next read/decode stage instead of finishing into a cache nobody reads.
+//! A window left covered for `HIDDEN_CACHE_GRACE` drops the whole cache and its queue, so an
+//! explorer hidden in the background holds no thumbnail pixels until it is shown again.
 //!
 //! A row slot shows either a thumbnail or the embedded type icon (`row-*.svg`), never nothing:
 //! every miss, failure, oversized source, corrupt file or fully transparent result is cached as a
@@ -11,7 +13,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
 use flamewm_image_core::{
@@ -32,6 +34,9 @@ pub const MAX_SOURCE_PIXELS: u64 = 25_000_000;
 pub const CACHE_CAPACITY: usize = 256;
 /// Pixel bytes kept across all cached thumbnails (LRU evicts past this, so large edges can never grow the cache).
 pub const CACHE_BYTES: usize = 256 * 1024;
+/// How long a covered or minimized window keeps its thumbnail cache before it is dropped. A quick
+/// uncover (an alt-tab back) still finds its rows ready; a window left hidden holds no pixels.
+pub const HIDDEN_CACHE_GRACE: Duration = Duration::from_secs(30);
 /// Alpha at or above this value counts as a visible pixel; anything less is an invisible thumbnail.
 pub const MIN_VISIBLE_ALPHA: u8 = 8;
 /// Front bytes probed before the rest of a source is read. Every container this pipeline accepts
@@ -579,6 +584,24 @@ impl ThumbQueue {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
+
+    /// Drops every queued job and abandons the decode in flight, whose worker stops at its next
+    /// `wants` check. Returns how many jobs were dropped, the in-flight one included.
+    pub fn clear(&self) -> usize {
+        let abandoned = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .is_some();
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let queued = jobs.len();
+        jobs.clear();
+        queued + usize::from(abandoned)
+    }
 }
 
 /// Bounded LRU of decoded thumbnails plus the set of keys whose decode is queued.
@@ -670,6 +693,90 @@ impl Thumbnails {
                 self.bytes -= removed.size();
             }
         }
+    }
+
+    /// Pixel bytes currently held across every cached thumbnail and failure.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Drops every cached decode and pending mark, returning the freed pixel bytes. The id counter
+    /// keeps rising, so a row that decodes again after the drop rebinds its image instead of
+    /// reusing a stale id.
+    pub fn clear(&mut self) -> usize {
+        let freed = self.bytes;
+        self.entries.clear();
+        self.pending.clear();
+        self.bytes = 0;
+        freed
+    }
+}
+
+/// What dropping a hidden window's thumbnail state freed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DroppedThumbs {
+    /// Pixel bytes released from the cache.
+    pub bytes: usize,
+    /// Queued or in-flight decodes abandoned.
+    pub jobs: usize,
+}
+
+/// True once a window has been hidden for the whole `HIDDEN_CACHE_GRACE`.
+#[must_use]
+pub fn hidden_cache_expired(hidden_for: Duration) -> bool {
+    hidden_for >= HIDDEN_CACHE_GRACE
+}
+
+/// Hidden-window policy for the thumbnail and app-icon cache. The UI forwards each `Visibility`
+/// change and each wake; once the window has stayed covered for `HIDDEN_CACHE_GRACE` the cache and
+/// its queued decodes are dropped, so a background explorer holds no thumbnail pixels. The UI arms
+/// one wake at `deadline()` instead of polling, and revealed rows decode again on demand.
+#[derive(Debug, Default)]
+pub struct HiddenCache {
+    hidden_since: Option<Instant>,
+}
+
+impl HiddenCache {
+    /// Records a visibility change at `now`. Becoming obscured starts the grace; an uncover cancels
+    /// it so a quick alt-tab back keeps every ready row.
+    pub fn set_hidden(&mut self, hidden: bool, now: Instant) {
+        if hidden {
+            self.hidden_since.get_or_insert(now);
+        } else {
+            self.hidden_since = None;
+        }
+    }
+
+    /// When the grace ends, so the caller arms a single wake instead of polling.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.hidden_since?.checked_add(HIDDEN_CACHE_GRACE)
+    }
+
+    /// True once the window has been hidden for the whole grace.
+    #[must_use]
+    pub fn is_due(&self, now: Instant) -> bool {
+        self.hidden_since
+            .is_some_and(|since| hidden_cache_expired(now.saturating_duration_since(since)))
+    }
+
+    /// Drops the cache and its queued decodes once the grace has elapsed. `None` means the window is
+    /// visible, still inside the grace, or its cache was already dropped.
+    pub fn check(
+        &mut self,
+        now: Instant,
+        cache: &mut Thumbnails,
+        queue: &ThumbQueue,
+    ) -> Option<DroppedThumbs> {
+        if !self.is_due(now) {
+            return None;
+        }
+        self.hidden_since = None;
+        Some(DroppedThumbs {
+            bytes: cache.clear(),
+            jobs: queue.clear(),
+        })
     }
 }
 

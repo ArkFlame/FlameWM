@@ -361,6 +361,16 @@ fn covers(outer: Rectangle<i32, Physical>, inner: Rectangle<i32, Physical>) -> b
         && outer.loc.y.saturating_add(outer.size.h) >= inner.loc.y.saturating_add(inner.size.h)
 }
 
+/// Whether a managed window's frame can contribute a pixel to `visible`.
+///
+/// A window dragged fully past an output edge, or placed outside this output's rect, is clipped
+/// away entirely. `scene_elements_into` skips its elements for exactly that reason; the frame
+/// callback is skipped with the same predicate, because a callback is what unblocks the client's
+/// next commit and would otherwise keep an invisible window rasterising at the refresh rate.
+fn frame_reaches_output(frame: Rect, scale: f64, visible: Rectangle<i32, Physical>) -> bool {
+    client_backdrop_rect(frame, scale).overlaps(visible)
+}
+
 /// Collects the opaque areas the just-built elements of one owner paint, so a lower window that
 /// is fully covered can skip building its own surface, decoration and backdrop elements.
 ///
@@ -428,6 +438,52 @@ mod occluder_tests {
     #[test]
     fn an_empty_rect_is_never_culled() {
         assert!(!covers(rect(0, 0, 100, 100), rect(10, 10, 0, 0)));
+    }
+}
+
+#[cfg(test)]
+mod frame_reaches_output_tests {
+    use super::{Rect, frame_reaches_output};
+    use smithay::utils::{Physical, Rectangle, Size};
+
+    fn visible() -> Rectangle<i32, Physical> {
+        Rectangle::from_size(Size::from((1280, 800)))
+    }
+
+    #[test]
+    fn a_frame_inside_the_output_reaches_it() {
+        assert!(frame_reaches_output(
+            Rect::new(100, 100, 400, 300),
+            1.0,
+            visible()
+        ));
+    }
+
+    #[test]
+    fn a_frame_dragged_past_the_right_edge_is_culled() {
+        assert!(!frame_reaches_output(
+            Rect::new(1280, 100, 400, 300),
+            1.0,
+            visible()
+        ));
+    }
+
+    #[test]
+    fn a_frame_straddling_the_edge_still_reaches_it() {
+        assert!(frame_reaches_output(
+            Rect::new(1200, 100, 400, 300),
+            1.0,
+            visible()
+        ));
+    }
+
+    #[test]
+    fn the_scale_is_applied_before_the_check() {
+        // 1024 logical * 1.25 = 1280 physical: the first column past the output, so it is culled
+        // even though the same frame would fit at scale 1.0.
+        let frame = Rect::new(1024, 100, 256, 300);
+        assert!(!frame_reaches_output(frame, 1.25, visible()));
+        assert!(frame_reaches_output(frame, 1.0, visible()));
     }
 }
 
@@ -525,7 +581,7 @@ fn scene_elements_into(
                 };
                 let frame = managed.frame();
                 let frame_rect = client_backdrop_rect(frame, scale);
-                if !frame_rect.overlaps(visible)
+                if !frame_reaches_output(frame, scale, visible)
                     || occluders.iter().any(|outer| covers(*outer, frame_rect))
                 {
                     continue;
@@ -907,11 +963,24 @@ fn send_frame_callbacks(state: &State) {
     let throttle = Some(Duration::from_millis(16));
     let time = Duration::from_millis(u64::from(time));
     let output = &state.output;
+    let scale = state.output_scale();
+    // Same visible area the frame builder culls against, so a window whose elements are skipped
+    // also gets no callback.
+    let visible = client_backdrop_rect(state.output_rect(), scale);
     for (id, top) in &state.toplevels {
         // A hidden window (other workspace, minimised) gets no frame callback: the callback is what
         // unblocks the client's next commit, so it would keep rasterising off screen at the refresh
         // rate. The first frame after the window is shown resumes its pipeline.
         if state.model.is_hidden(*id) {
+            continue;
+        }
+        // Off-output window: fully clipped, so its element list is skipped and any callback would
+        // only drive rasterisation nobody can see.
+        if state
+            .model
+            .get(*id)
+            .is_some_and(|managed| !frame_reaches_output(managed.frame(), scale, visible))
+        {
             continue;
         }
         let surface = top.wl_surface();
@@ -924,11 +993,18 @@ fn send_frame_callbacks(state: &State) {
     }
     // XWayland presents only after its previous frame callback: without these, an X11 client
     // keeps the first (usually blank) buffer on screen. Hidden managed windows are skipped for the
-    // same reason as hidden Wayland toplevels above; unmanaged ones (docks, menus) are always drawn.
+    // same reason as hidden Wayland toplevels above, and an off-output frame is skipped too;
+    // unmanaged ones (docks, menus) are always drawn.
     let x11_surfaces = state
         .x11
         .iter()
-        .filter(|(id, _)| !state.model.is_hidden(*id))
+        .filter(|(id, _)| {
+            !state.model.is_hidden(*id)
+                && !state
+                    .model
+                    .get(*id)
+                    .is_some_and(|managed| !frame_reaches_output(managed.frame(), scale, visible))
+        })
         .map(|(_, window)| window)
         .chain(state.unmanaged.iter().map(|entry| &entry.surface));
     for surface in x11_surfaces.filter_map(smithay::xwayland::X11Surface::wl_surface) {

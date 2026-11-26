@@ -393,3 +393,57 @@ fn cache_evicts_least_recently_used_at_the_pixel_byte_budget() {
 fn changed_mtime_is_a_different_key() {
     assert_ne!(key("a", 1), key("a", 2));
 }
+
+#[test]
+fn hidden_window_drops_its_thumbnail_cache_only_after_the_grace() {
+    let mut cache = Thumbnails::default();
+    let queue = ThumbQueue::default();
+    queue.push(key("queued", 1));
+    assert!(cache.begin(&key("queued", 1)));
+    cache.complete(key("ready", 1), Some(vec![7; 16]));
+    let mut hidden = HiddenCache::default();
+
+    let covered = Instant::now();
+    hidden.set_hidden(true, covered);
+    assert_eq!(hidden.deadline(), Some(covered + HIDDEN_CACHE_GRACE));
+    assert!(!hidden.is_due(covered));
+    // A quick uncover keeps every pixel and the queued decode.
+    assert!(
+        hidden
+            .check(covered + Duration::from_secs(1), &mut cache, &queue)
+            .is_none()
+    );
+    assert_eq!(cache.bytes(), 16);
+    assert!(!queue.is_empty());
+
+    // Past the grace the cache and its queue are dropped exactly once.
+    let dropped = hidden
+        .check(covered + HIDDEN_CACHE_GRACE, &mut cache, &queue)
+        .expect("the grace elapsed");
+    assert_eq!(dropped, DroppedThumbs { bytes: 16, jobs: 1 });
+    assert_eq!(cache.bytes(), 0);
+    assert!(matches!(cache.lookup(&key("ready", 1)), Lookup::Missing));
+    assert!(queue.is_empty());
+    // The dropped request left `pending`, so the row can queue a fresh decode.
+    assert!(cache.begin(&key("queued", 1)));
+    assert!(
+        hidden
+            .check(covered + HIDDEN_CACHE_GRACE, &mut cache, &queue)
+            .is_none(),
+        "the drop is charged once, not on every later check"
+    );
+
+    // Showing the window again cancels the grace entirely.
+    hidden.set_hidden(true, covered);
+    hidden.set_hidden(false, covered);
+    assert_eq!(hidden.deadline(), None);
+    assert!(
+        hidden
+            .check(covered + HIDDEN_CACHE_GRACE, &mut cache, &queue)
+            .is_none()
+    );
+    assert!(
+        !cache.begin(&key("queued", 1)),
+        "the pending request survived the cancelled grace"
+    );
+}

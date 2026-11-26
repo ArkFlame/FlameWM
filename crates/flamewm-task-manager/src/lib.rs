@@ -68,6 +68,12 @@ fn visible_rows(height: u32) -> usize {
     (height.saturating_sub(FIXED_HEIGHT) / ROW_HEIGHT).clamp(1, ROWS as u32) as usize
 }
 
+/// Visible row slots for the current first row and hit count. Only these slots are formatted;
+/// the always-empty tail of the table is never touched.
+fn visible_slots(first: usize, viewport: usize, hits: usize) -> std::ops::Range<usize> {
+    0..viewport.min(hits.saturating_sub(first)).min(ROWS)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sort {
     Cpu,
@@ -95,6 +101,15 @@ impl ProcessRequest {
             },
         }
     }
+}
+
+/// Everything the sampler worker waits on: process requests from the UI and window visibility
+/// changes. One channel keeps the worker asleep with no timer and lets a hide/uncover interrupt
+/// the sample wait immediately, so a hidden window costs no further `/proc` walk and a shown one
+/// samples at once.
+enum WorkerMsg {
+    Action(ProcessRequest),
+    VisibilityChanged,
 }
 
 #[derive(Default)]
@@ -231,10 +246,10 @@ struct Application {
     viewport: usize,
     window: (f32, f32),
     message: String,
-    actions: SyncSender<ProcessRequest>,
+    actions: SyncSender<WorkerMsg>,
 }
 impl Application {
-    fn new(theme: SettingsSnapshot, actions: SyncSender<ProcessRequest>) -> Self {
+    fn new(theme: SettingsSnapshot, actions: SyncSender<WorkerMsg>) -> Self {
         Self {
             snapshot: model::Snapshot::default(),
             histories: Histories::default(),
@@ -591,10 +606,8 @@ impl Application {
         // Row slots that can be visible with the current first row. Their visibility flags are
         // emitted only when this count moves: restating all 40 slots (25 of them always empty at
         // the default window size) cost 40 document calls on every sample, repaint and scroll.
-        let shown = self
-            .viewport
-            .min(self.hits.len().saturating_sub(self.first))
-            .min(ROWS);
+        let shown_slots = visible_slots(self.first, self.viewport, self.hits.len());
+        let shown = shown_slots.end;
         if shown != self.painted_rows {
             for slot in self.painted_rows..shown {
                 id.clear();
@@ -685,7 +698,7 @@ impl Application {
         Ok(())
     }
     fn enqueue(&mut self, request: ProcessRequest) {
-        self.message = if self.actions.try_send(request).is_ok() {
+        self.message = if self.actions.try_send(WorkerMsg::Action(request)).is_ok() {
             "Applying process action…".into()
         } else {
             "Process action queue is full or unavailable".into()
@@ -1112,8 +1125,11 @@ pub fn run() -> Result<(), String> {
     let theme = SettingsSnapshot::new(0);
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
-    let (action_tx, action_rx) = mpsc::sync_channel::<ProcessRequest>(8);
+    let (action_tx, action_rx) = mpsc::sync_channel::<WorkerMsg>(8);
     let (result_tx, result_rx) = mpsc::sync_channel::<String>(8);
+    // Cloned before the UI takes the sender: the visibility handler nudges the sampler at once,
+    // so a hide stops the current wait and an uncover samples immediately instead of up to 1 s later.
+    let visibility_tx = action_tx.clone();
     let mut app = Application::new(theme, action_tx);
     app.paint(&mut document)?;
     let (mut reader, mut writer) = UnixStream::pair().map_err(|e| e.to_string())?;
@@ -1145,13 +1161,17 @@ pub fn run() -> Result<(), String> {
     let active = Arc::clone(&running);
     let gate = Arc::new(sample_gate::SampleGate::default());
     let worker_gate = Arc::clone(&gate);
+    // Mirrors the gate: the worker needs the state without blocking to decide whether a visibility
+    // nudge means "stop now" (hidden) or "sample now" (shown).
+    let hidden = Arc::new(AtomicBool::new(false));
+    let worker_hidden = Arc::clone(&hidden);
     // One sampler exists only while this window is open; never a permanent desktop daemon.
     let worker = std::thread::Builder::new()
         .name("flamewm-task-manager-sampler".into())
         .spawn(move || {
             let mut sampler = model::Sampler::default();
-            while active.load(Ordering::Relaxed) {
-                // Obscured: sleep with no timer until uncovered. Visible: the loop below is unchanged.
+            'sampler: while active.load(Ordering::Relaxed) {
+                // Obscured: sleep with no timer until uncovered. Visible: sample at once.
                 if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
                     break;
                 }
@@ -1163,7 +1183,7 @@ pub fn run() -> Result<(), String> {
                         Err(_) => break,
                     }
                 }
-                // Sleep on the action channel until the next sample is due: no 100 ms polling timer.
+                // Sleep on the worker channel until the next sample is due: no 100 ms polling timer.
                 // A queued process operation wakes the worker at once; the sample cadence stays 1 s.
                 let deadline = std::time::Instant::now() + Duration::from_secs(1);
                 loop {
@@ -1177,9 +1197,22 @@ pub fn run() -> Result<(), String> {
                     match action_rx.recv_timeout(remaining) {
                         // Process operations may block, but only on this sampler worker.
                         // The caller-selected PID/start-time pair is checked by the operation.
-                        Ok(command) => {
+                        Ok(WorkerMsg::Action(command)) => {
                             let _ = result_tx.try_send(command.execute());
                             let _ = writer.write(&[1]);
+                        }
+                        // A hide interrupts the wait at once and parks with no timer; an uncover
+                        // releases the same wait, so the next sample is taken now, not up to 1 s
+                        // later. The gate has no clock and the graph gains no fake samples.
+                        Ok(WorkerMsg::VisibilityChanged) => {
+                            if worker_hidden.load(Ordering::Relaxed) {
+                                if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
+                                    break 'sampler;
+                                }
+                                // Uncovered after a real pause: sample now. A stale show message
+                                // that arrives while already visible just leaves the wait running.
+                                break;
+                            }
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1275,7 +1308,10 @@ pub fn run() -> Result<(), String> {
                 }
                 UiControllerEvent::Drag(_) => Ok(()),
                 UiControllerEvent::Visibility { obscured } => {
+                    hidden.store(*obscured, Ordering::Relaxed);
                     visibility_gate.set_visible(!*obscured);
+                    // Interrupt the sampler's 1 s wait: a hide parks it now, an uncover samples now.
+                    let _ = visibility_tx.try_send(WorkerMsg::VisibilityChanged);
                     Ok(())
                 }
             }
@@ -1500,6 +1536,17 @@ mod tests {
         assert_eq!(visible_rows(HEIGHT), 15);
         assert_eq!(visible_rows(0), 1);
         assert_eq!(visible_rows(4096), ROWS);
+    }
+    #[test]
+    fn only_visible_slots_are_formatted() {
+        // Default window shows 15 of 500 rows; scroll to the end leaves only the tail.
+        assert_eq!(visible_slots(0, 15, 500), 0..15);
+        assert_eq!(visible_slots(490, 15, 500), 0..10);
+        // A table shorter than the window and an empty table format nothing extra.
+        assert_eq!(visible_slots(0, 15, 3), 0..3);
+        assert_eq!(visible_slots(0, 15, 0), 0..0);
+        // Never more slots than the fixed row buffers hold.
+        assert_eq!(visible_slots(0, ROWS + 5, 1000), 0..ROWS);
     }
     #[test]
     fn search_folds_ascii_case_and_matches_pid_digits_in_place() {
