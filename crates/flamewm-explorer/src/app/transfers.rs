@@ -141,22 +141,23 @@ impl ExplorerApp {
             Verdict::NoOp=>return,
             Verdict::Refuse(message)=>{self.model.status=message.into();return;},
         };
-        // Existing names need one answer for the whole batch; the default keeps both. When the
-        // destination is the directory already on screen, its rows say which names exist, so a
-        // multi-item paste costs no per-source stat on the UI thread (which can block on a dark
-        // network mount). The worker still re-checks every destination before writing.
-        let current=self.model.tab();
-        let same_directory=current.path()==directory.as_path();
-        let listed:HashSet<&str>=if same_directory {
-            current.entries.iter().map(|entry|entry.name.as_str()).collect()
-        } else {HashSet::new()};
-        let count=sources.iter().filter(|s|s.file_name().is_some_and(|n|{
-            if same_directory {
-                n.to_str().is_none_or(|name|listed.contains(name))
+        // Existing names need one answer for the whole batch; the default keeps both. A paste into
+        // the folder on screen already knows its rows, so a multi-item selection costs no per-source
+        // stat on the UI thread; other destinations still stat, and the worker re-checks each target.
+        let count={
+            let current=self.model.tab();
+            if directory.as_path()==current.path() {
+                let existing:HashSet<&str>=current.entries.iter().map(|entry|entry.name.as_str()).collect();
+                sources.iter().filter(|s|s.file_name().is_some_and(|n|{
+                    let name=n.to_string_lossy();
+                    // Hidden rows are not listed, so only they still need a real stat.
+                    if name.starts_with('.') {fs::symlink_metadata(directory.join(n)).is_ok()}
+                    else {existing.contains(name.as_ref())}
+                })).count()
             } else {
-                fs::symlink_metadata(directory.join(n)).is_ok()
+                sources.iter().filter(|s|s.file_name().is_some_and(|n|fs::symlink_metadata(directory.join(n)).is_ok())).count()
             }
-        })).count();
+        };
         if count>0 {self.dialog=Some(Dialog::Conflicts{sources,directory,move_it,count});return;}
         if move_it {
             let title=if sources.len()==1 {"Move file?"} else {"Move items?"};

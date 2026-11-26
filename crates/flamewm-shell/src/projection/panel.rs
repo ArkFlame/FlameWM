@@ -1177,9 +1177,7 @@ fn project_glyph_nodes(
     charging: bool,
 ) -> Result<(), String> {
     use crate::taskbar::status::battery::BATTERY_GLYPHS;
-    for (candidate, (plain_id, charging_id)) in
-        BATTERY_GLYPHS.iter().zip(BATTERY_MENU_GLYPH_IDS)
-    {
+    for (candidate, (plain_id, charging_id)) in BATTERY_GLYPHS.iter().zip(BATTERY_MENU_GLYPH_IDS) {
         let shown = *candidate == glyph;
         document.visible(plain_id, shown && !charging)?;
         document.visible(charging_id, shown && charging)?;
