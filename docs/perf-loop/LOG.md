@@ -124,6 +124,3 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - explorer startup 10 / idle 0 / 21 MB; terminal 14 / 0 / 30 MB; shell 13 / 0 / 22 MB; task-manager 32 / 4 / 31 MB.
 - Only idle cost is the task manager's 1 s /proc sampler (about 2% of one core, 100% of its own samples). Everything else parks.
 - Next: shrink the sampler cost (skip unchanged per-pid reads, reuse buffers) without losing rows.
-
-## u156 (backdrop drag throttle)
-- A moving translucent window reuses its cached backdrop (position-only change, same size, radii, scale, material, scene) for up to 50 ms instead of recapturing every frame. Dock sites never reuse. Expected shift: captures during a drag about 60/s down to about 20/s (each capture = scene render + readback + CPU blur). Not measured live; tests cover the reuse decision.
