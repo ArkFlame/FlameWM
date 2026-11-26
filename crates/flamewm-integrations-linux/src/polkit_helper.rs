@@ -97,12 +97,20 @@ fn helper_path_in(candidates: &[&str], exists: impl Fn(&Path) -> bool) -> Option
 /// registers the returned pipe with the reactor.
 ///
 /// # Errors
-/// Returns `InvalidInput` for an empty user or cookie, or the spawn/write error.
+/// Returns `InvalidInput` for an empty user or cookie, or one holding a control character
+/// (a newline would inject an extra line into the helper's stdin protocol), or the spawn/write
+/// error.
 pub fn spawn_helper(mut command: Command, user: &str, cookie: &str) -> io::Result<ChildPipe> {
     if user.is_empty() || cookie.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "helper needs a user and a cookie",
+        ));
+    }
+    if user.chars().chain(cookie.chars()).any(char::is_control) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "helper user and cookie must not contain control characters",
         ));
     }
     let mut pipe = ChildPipe::spawn(command.arg(user))?;
@@ -304,6 +312,21 @@ mod tests {
             "empty name is not an account"
         );
         assert_eq!(name_in_passwd(passwd, 4242), None);
+    }
+
+    #[test]
+    fn spawn_rejects_control_characters_before_spawning() {
+        for (user, cookie) in [
+            ("alice", "cookie\nhunter2"),
+            ("alice", "cookie\r"),
+            ("alice", "cookie\0"),
+            ("al\nice", "cookie-1"),
+        ] {
+            let error = spawn_helper(Command::new("/nonexistent/helper"), user, cookie)
+                .err()
+                .expect("control character rejected");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
     }
 
     #[test]
