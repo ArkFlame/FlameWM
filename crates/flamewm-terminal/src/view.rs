@@ -251,6 +251,7 @@ pub struct RunCache {
     decoded: Line,
     /// Rows rebuilt by the last `update`.
     pub rebuilt: usize,
+    pub dbg: (bool, usize, usize, usize, usize),
 }
 
 impl RunCache {
@@ -324,9 +325,12 @@ impl RunCache {
             // A captured scroll moved every visible row up by `shift`: the runs of a row are those of the row below
             // it, so rotate the handles and rebuild only the rows the scroll exposed at the bottom. Reuse needs the
             // absolute window to have advanced by exactly that many lines; a capped scrollback drops lines and keeps
-            // the index, which renumbers the selection, so that case rebuilds.
+            // the index, which renumbers the selection, so that case rebuilds. A scrolled-back window also rebuilds:
+            // its top row moves from the live grid into packed scrollback, whose trimmed trailing cells no longer
+            // match a row shaped from the live line.
             if shift > 0
                 && shift < rows
+                && options.view_offset == 0
                 && self
                     .top
                     .is_some_and(|old| old.checked_add(shift) == Some(top))
@@ -381,6 +385,13 @@ impl RunCache {
             self.key = Some((palette.clone(), options.view_offset, options.cursor_shape));
         }
         self.rebuilt = stale.iter().filter(|slot| **slot).count();
+        self.dbg = (
+            all_dirty,
+            shift,
+            self.changed.len(),
+            reused,
+            self.changed.first().copied().unwrap_or(usize::MAX),
+        );
         // One decoded-line buffer for the whole update: a scrollback view no longer allocates a `Line` per rebuilt
         // row on top of the runs it produces.
         let mut decoded = std::mem::take(&mut self.decoded);
@@ -916,16 +927,32 @@ mod tests {
                 cursor_shape: shape,
             };
             let palette = &themes[theme].palette;
+            let before = (
+                cache.key.clone(),
+                cache.top,
+                cache.drops,
+                screen.scrollback_len(),
+                screen.scrollback_drops(),
+                screen.alt_active(),
+            );
             let cached: Vec<Vec<Run>> = cache
                 .update(&mut screen, palette, &options)
                 .iter()
                 .map(|row| row.to_vec())
                 .collect();
-            assert_eq!(
-                cached,
-                grid_runs(&screen, palette, &options),
-                "cache diverged from a full rebuild"
-            );
+            let direct = grid_runs(&screen, palette, &options);
+            if cached != direct {
+                eprintln!(
+                    "DIVERGE options={options:?} before={before:?} after_top={:?} rebuilt={} sb={} drops={} rows={} dbg={:?}",
+                    cache.top,
+                    cache.rebuilt,
+                    screen.scrollback_len(),
+                    screen.scrollback_drops(),
+                    screen.rows(),
+                    cache.dbg
+                );
+            }
+            assert_eq!(cached, direct, "cache diverged from a full rebuild");
             assert!(cache.rebuilt <= screen.rows());
         }
     }

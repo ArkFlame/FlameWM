@@ -952,6 +952,8 @@ impl Perform for Screen {
                 2 => self.erase_lines(0, self.rows),
                 3 => {
                     self.scrollback.clear();
+                    // Erasing the saved lines renumbers every absolute line, exactly like a capped drop.
+                    self.scrollback_drops = self.scrollback_drops.saturating_add(1);
                     self.mark_all();
                     self.erase_lines(0, self.rows);
                 }

@@ -29,6 +29,7 @@ fn push_file_uri(uri: &mut String, path: &Path) {
 
 /// `file://` URI for an absolute path. Every byte outside the unreserved set is
 /// percent-encoded, so spaces, `#`, `%`, newlines and UTF-8 bytes all survive.
+#[cfg(test)]
 pub fn file_uri(path: &Path) -> String {
     let mut uri = String::with_capacity(7 + path.as_os_str().as_bytes().len());
     push_file_uri(&mut uri, path);
@@ -174,10 +175,7 @@ pub fn text_payloads(text: &str) -> Vec<(&'static str, Vec<u8>)> {
         return vec![("UTF8_STRING", text.as_bytes().to_vec())];
     }
     let bytes = text.as_bytes().to_vec();
-    let mut out = Vec::with_capacity(2);
-    out.push(("UTF8_STRING", bytes.clone()));
-    out.push(("STRING", bytes));
-    out
+    vec![("UTF8_STRING", bytes.clone()), ("STRING", bytes)]
 }
 
 #[cfg(test)]
@@ -233,8 +231,8 @@ mod tests {
             parse_uri_list(input),
             vec![path("/a"), path("/b c"), path("/d")]
         );
-        assert!(parse_uri_list(b"").is_empty());
-        assert!(parse_uri_list(b"# only\r\n").is_empty());
+        assert_eq!(parse_uri_list(b""), [] as [std::path::PathBuf; 0]);
+        assert_eq!(parse_uri_list(b"# only\r\n"), [] as [std::path::PathBuf; 0]);
     }
 
     #[test]
@@ -292,7 +290,7 @@ mod tests {
             text_plain(&[path("/a b"), path("/ü")]),
             "/a b\n/ü\n".as_bytes()
         );
-        assert!(text_plain(&[]).is_empty());
+        assert_eq!(text_plain(&[]), [] as [u8; 0]);
     }
 
     #[test]

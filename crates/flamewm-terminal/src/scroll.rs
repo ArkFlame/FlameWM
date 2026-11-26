@@ -77,15 +77,15 @@ impl ScrollGlide {
     /// Steps the applied integer offset. Returns the new offset when it changed, so the caller writes the pane only
     /// when a frame visibly moved. A finished glide snaps exactly to the target and clears its start.
     pub fn advance(&mut self, now: Instant) -> Option<usize> {
-        if self.start.is_none() {
+        let Some(start) = self.start else {
             return None;
-        }
+        };
         let value = self.value(now);
         let lo = self.from.min(self.to) as i64;
         let hi = self.from.max(self.to) as i64;
         // Rounding cannot overshoot the target: the eased value stays inside the endpoints.
         let next = (value.round() as i64).clamp(lo, hi) as usize;
-        if now.saturating_duration_since(self.start.unwrap()) >= DURATION {
+        if now.saturating_duration_since(start) >= DURATION {
             self.start = None;
         }
         if next != self.applied {

@@ -29,36 +29,6 @@ pub fn serve_png(display: Option<&str>, png: &[u8]) -> Result<(), String> {
     owner::serve(display, "CLIPBOARD", payloads)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nIHDR";
-
-    #[test]
-    fn non_png_payload_is_rejected_before_connecting() {
-        // A bogus display proves no connection was attempted: the error is the payload check.
-        assert_eq!(
-            serve_png(Some(":no-such-display-999"), b"GIF89a").unwrap_err(),
-            "clipboard payload is not PNG"
-        );
-        assert_eq!(
-            serve_png(Some(":no-such-display-999"), b"").unwrap_err(),
-            "clipboard payload is not PNG"
-        );
-    }
-
-    #[test]
-    fn unreachable_display_fails_instead_of_claiming_clipboard() {
-        assert!(serve_png(Some(":no-such-display-999"), PNG).is_err());
-    }
-
-    #[test]
-    fn connect_to_missing_display_is_an_error() {
-        assert!(Clipboard::connect_display(Some(":no-such-display-999")).is_err());
-    }
-}
-
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -349,4 +319,34 @@ fn intern(conn: &RustConnection, names: &[&str]) -> Result<Vec<Atom>, String> {
         .into_iter()
         .map(|cookie| Ok(cookie.reply().map_err(err)?.atom))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nIHDR";
+
+    #[test]
+    fn non_png_payload_is_rejected_before_connecting() {
+        // A bogus display proves no connection was attempted: the error is the payload check.
+        assert_eq!(
+            serve_png(Some(":no-such-display-999"), b"GIF89a").unwrap_err(),
+            "clipboard payload is not PNG"
+        );
+        assert_eq!(
+            serve_png(Some(":no-such-display-999"), b"").unwrap_err(),
+            "clipboard payload is not PNG"
+        );
+    }
+
+    #[test]
+    fn unreachable_display_fails_instead_of_claiming_clipboard() {
+        assert!(serve_png(Some(":no-such-display-999"), PNG).is_err());
+    }
+
+    #[test]
+    fn connect_to_missing_display_is_an_error() {
+        assert!(Clipboard::connect_display(Some(":no-such-display-999")).is_err());
+    }
 }

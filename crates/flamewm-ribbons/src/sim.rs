@@ -373,7 +373,7 @@ impl Ribbons {
         for s in &mut self.streams {
             s.step(t_start, dims);
         }
-        if self.steps % SAMPLE_EVERY_STEPS == 0 {
+        if self.steps.is_multiple_of(SAMPLE_EVERY_STEPS) {
             let t = self.time();
             for s in &mut self.streams {
                 let sample = sample(s.pos, s.psi, s.chi, t);

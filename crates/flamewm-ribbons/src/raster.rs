@@ -161,8 +161,12 @@ impl Rasterizer {
             for ((dst, a), b) in row.iter_mut().zip(src_a).zip(src_b) {
                 *dst = std::array::from_fn(|c| (1.0 - ty) * f32::from(a[c]) + ty * f32::from(b[c]));
             }
-            for (ox, (px_out, &(xa, xb, tx))) in
-                row_out.chunks_exact_mut(4).zip(&self.x_taps).enumerate()
+            for (ox, (px_out, &(xa, xb, tx))) in row_out
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(&self.x_taps)
+                .enumerate()
             {
                 if masked && !state.covers(ox as u32, oy as u32) {
                     px_out.copy_from_slice(&[0, 0, 0, 255]);

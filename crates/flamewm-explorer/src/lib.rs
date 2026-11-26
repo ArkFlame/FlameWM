@@ -296,9 +296,9 @@ impl Tab {
         let paths=self.visible_window(rows).into_iter().enumerate()
             .filter(|(i,_)| (lo..=hi).contains(i))
             .map(|(_,entry)|entry.path.clone()).collect::<Vec<_>>();
-        self.selected_paths=paths.iter().cloned().collect();
         self.selected=paths.first().cloned();
         self.anchor=self.selected.clone();
+        self.selected_paths=paths.into_iter().collect();
     }
     /// Entries that pass the search filter, in list order.
     pub fn visible(&self) -> impl Iterator<Item=&Entry> + '_ {
