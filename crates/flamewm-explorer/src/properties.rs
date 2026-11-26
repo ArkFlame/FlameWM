@@ -15,6 +15,8 @@ pub struct Properties {
     pub gid: u32,
     /// Permission bits only (`0o7777` mask).
     pub mode: u32,
+    /// True when the path is a directory (from the same `stat`, no second call needed).
+    pub is_dir: bool,
     pub modified: Option<SystemTime>,
     pub accessed: Option<SystemTime>,
     /// Symlink target, not followed. `None` for non-links.
@@ -35,6 +37,7 @@ pub fn read(path: &Path) -> io::Result<Properties> {
         uid: meta.uid(),
         gid: meta.gid(),
         mode: meta.mode() & 0o7777,
+        is_dir: meta.is_dir(),
         modified: meta.modified().ok(),
         accessed: meta.accessed().ok(),
         link_target,

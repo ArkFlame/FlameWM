@@ -1,12 +1,35 @@
 use super::super::*;
+use std::collections::{HashMap, HashSet};
 
 impl ExplorerApp {
+    /// Filesystem facts for the transfer guard. Sources that are rows of the current listing already
+    /// carry their type, so a normal drag/drop selection costs no per-source `symlink_metadata` on the
+    /// UI thread (which blocks on a slow mount); only paths from outside the listing are stat'ed.
+    pub(crate) fn source_facts(&self, paths:&[PathBuf]) -> Vec<ops::Source> {
+        let entries=&self.model.tab().entries;
+        let wanted:HashSet<&Path>=paths.iter().map(PathBuf::as_path).collect();
+        let mut known:HashMap<&Path,bool>=HashMap::with_capacity(paths.len());
+        if !wanted.is_empty() {
+            for entry in entries {
+                let path=entry.path.as_path();
+                if wanted.contains(path) {known.insert(path,entry.directory);}
+            }
+        }
+        paths.iter().map(|path|{
+            if let Some(&directory)=known.get(path.as_path()) {
+                ops::Source{path:path.clone(),exists:true,is_dir:directory}
+            } else {
+                let meta=fs::symlink_metadata(path).ok();
+                ops::Source{path:path.clone(),exists:meta.is_some(),is_dir:meta.as_ref().is_some_and(std::fs::Metadata::is_dir)}
+            }
+        }).collect()
+    }
     /// Folder drops (row drags and external drops) confirm first, with the same validator and dialog as paste.
     pub(crate) fn confirm_drop(&mut self,sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool) {
         if self.refuse_if_busy() {return;}
         let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
         let kind=if force_copy {ops::Kind::Copy} else {ops::Kind::Move};
-        let sources=match ops::validate(kind,&source_facts(&sources),Some(&directory),writable) {
+        let sources=match ops::validate(kind,&self.source_facts(&sources),Some(&directory),writable) {
             Verdict::Run(sources)=>sources,
             Verdict::NoOp=>{self.model.status=(if force_copy {"Drop cancelled (nothing to copy)"} else {"Drop cancelled (nothing to move)"}).into();return;},
             Verdict::Refuse(message)=>{self.model.status=message.into();return;},
@@ -94,7 +117,7 @@ impl ExplorerApp {
         if sources.iter().any(|s|remote::is_remote(s)) {self.model.status="Duplicate is not available in remote folders yet".into();return;}
         let directory=self.model.tab().path().to_path_buf();
         let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
-        match ops::validate(ops::Kind::Copy,&source_facts(&sources),Some(&directory),writable) {
+        match ops::validate(ops::Kind::Copy,&self.source_facts(&sources),Some(&directory),writable) {
             Verdict::Run(sources)=>self.send_transfer(sources,directory,false,Conflict::Duplicate),
             Verdict::NoOp=>{},
             Verdict::Refuse(message)=>self.model.status=message.into(),
@@ -113,7 +136,7 @@ impl ExplorerApp {
         let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
         let kind=if move_it {ops::Kind::Move} else {ops::Kind::Copy};
         // Redundant transfers (move into its own folder, missing sources) are dropped without a popup.
-        let sources=match ops::validate(kind,&source_facts(&sources),Some(&directory),writable) {
+        let sources=match ops::validate(kind,&self.source_facts(&sources),Some(&directory),writable) {
             Verdict::Run(sources)=>sources,
             Verdict::NoOp=>return,
             Verdict::Refuse(message)=>{self.model.status=message.into();return;},
@@ -211,7 +234,7 @@ impl ExplorerApp {
         let paths=self.selected_files();
         self.context=None;
         if paths.iter().any(|p|remote::is_remote(p)) {self.confirm_remote_delete(paths);return;}
-        match ops::validate(ops::Kind::Delete,&source_facts(&paths),None,true) {
+        match ops::validate(ops::Kind::Delete,&self.source_facts(&paths),None,true) {
             Verdict::Run(paths)=>{let location=parent_dir(&paths);self.confirm_items("Delete permanently?",&paths,&location,Pending::Delete(paths.clone()));},
             Verdict::NoOp=>{},
             Verdict::Refuse(message)=>self.model.status=message.into(),
@@ -231,7 +254,7 @@ impl ExplorerApp {
 
     pub(crate) fn request_trash(&mut self,paths:Vec<PathBuf>) {
         self.context=None;
-        match ops::validate(ops::Kind::Trash,&source_facts(&paths),None,true) {
+        match ops::validate(ops::Kind::Trash,&self.source_facts(&paths),None,true) {
             Verdict::Run(paths)=>{let location=parent_dir(&paths);self.confirm_items("Move to trash?",&paths,&location,Pending::Trash(paths.clone()));},
             Verdict::NoOp=>{},
             Verdict::Refuse(message)=>self.model.status=message.into(),

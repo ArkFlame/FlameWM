@@ -197,7 +197,7 @@ impl ExplorerApp {
                 self.model.new_tab();self.scan();
                 if let Some(path)=target {self.navigate(path);}
             },
-            "bookmark"=>{let path=self.target_directory();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
+            "bookmark"=>{let path=self.target_directory();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places_async();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
             "properties"=>if let Some(path)=self.context_place_path().or(selected) {self.open_properties(path)},
             "opencontaining"=>if let Some(path)=selected {self.open_containing(path)},
             "restore"=>if let Some(path)=selected
@@ -227,18 +227,37 @@ impl ExplorerApp {
     }
 
     pub(crate) fn open_properties(&mut self,path:PathBuf) {
-        let props=match properties::read(&path) {
+        // Metadata and the symlink target are syscalls that can block on a stale network mount.
+        // When the event channel exists the read runs on a worker and the dialog opens on arrival;
+        // before that (startup, tests) it reads synchronously.
+        if let Some((tx,wake))=self.events.as_ref()
+            && let Ok(mut wake)=wake.try_clone() {
+            let tx=tx.clone();
+            std::thread::spawn(move||{
+                let result=properties::read(&path).map_err(|e|e.to_string());
+                if tx.send(WorkerResult::Properties(result)).is_ok() {let _=wake.write_all(&[1]);}
+            });
+            return;
+        }
+        let result=properties::read(&path).map_err(|e|e.to_string());
+        self.show_properties(result);
+    }
+
+    /// Opens the Properties dialog once its metadata is known; the directory flag comes from the
+    /// same `stat` the worker already made, so no second `symlink_metadata` runs on the UI thread.
+    pub(crate) fn show_properties(&mut self,result:Result<properties::Properties,String>) {
+        let props=match result {
             Ok(props)=>props,
             Err(error)=>{self.model.status=format!("Properties: {error}");return;},
         };
         let cancel=Arc::new(AtomicBool::new(false));
-        let is_dir=fs::symlink_metadata(&path).is_ok_and(|m|m.is_dir());
+        let is_dir=props.is_dir;
         let size=(!is_dir).then_some(props.size);
         if is_dir {
             // Recursive size runs on its own thread so the UI and file worker stay responsive.
             let events=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?)));
             if let Some((tx,mut wake))=events {
-                let (flag,target)=(Arc::clone(&cancel),path.clone());
+                let (flag,target)=(Arc::clone(&cancel),props.path.clone());
                 std::thread::spawn(move||{
                     let bytes=properties::recursive_size(&target,&flag);
                     if tx.send(WorkerResult::SizeReady{path:target,bytes}).is_ok() {let _=wake.write_all(&[1]);}

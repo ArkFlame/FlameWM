@@ -23,7 +23,7 @@ impl ExplorerApp {
         let Some(index)=items.iter().position(|b|b.path==path) else {self.model.status="Bookmark not found".into();return;};
         if !edit(&mut items,index) {return;}
         match bookmarks::save_bookmarks(&file,&items) {
-            Ok(())=>{self.reload_places();self.model.status="Places updated".into();},
+            Ok(())=>{self.reload_places_async();self.model.status="Places updated".into();},
             Err(error)=>self.model.status=format!("Places not saved: {error}"),
         }
     }

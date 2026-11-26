@@ -195,6 +195,10 @@ enum WorkerResult {
     DefaultSaved(Result<(), String>),
     BatchCompleted {report:BatchReport,action:&'static str,cut_sources:Option<Vec<PathBuf>>},
     Completed(Result<String,String>),
+    /// Rebuilt sidebar places from the background loader; `generation` drops a stale result.
+    Places {generation:u64,list:Vec<Place>},
+    /// Metadata read for the Properties dialog on a worker (stat/read_link off the UI thread).
+    Properties(Result<properties::Properties,String>),
     /// Unmounted filesystems from lsblk.
     Devices(Vec<bookmarks::BlockDevice>),
     /// A block device or mount-table change arrived from the kernel; the sidebar reloads.
@@ -306,6 +310,8 @@ struct ExplorerApp {
     dialog:Option<Dialog>, dialog_focus:usize, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>, device_watch:Option<DeviceWatch>,
     context_place:Option<usize>, trash_base:PathBuf,
+    /// Latest sidebar rebuild requested; a worker result with an older id is ignored.
+    places_gen:u64,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
     unmounted:Vec<bookmarks::BlockDevice>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
@@ -581,13 +587,6 @@ fn row_icon_choice(entry:&Entry, thumbnail:Option<&(u64,Arc<Vec<u8>>)>)->RowIcon
 #[path = "tests/icon_slot_tests.rs"]
 mod icon_slot_tests;
 
-/// Filesystem facts for the guard; a source that cannot be stat'ed is reported missing.
-fn source_facts(paths:&[PathBuf])->Vec<ops::Source> {
-    paths.iter().map(|path|{
-        let meta=fs::symlink_metadata(path).ok();
-        ops::Source{path:path.clone(),exists:meta.is_some(),is_dir:meta.as_ref().is_some_and(std::fs::Metadata::is_dir)}
-    }).collect()
-}
 /// Parent directory of the first path, used as the location line of a confirmation.
 fn parent_dir(paths:&[PathBuf])->PathBuf {
     paths.first().and_then(|p|p.parent()).unwrap_or(Path::new("/")).to_path_buf()

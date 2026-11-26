@@ -37,13 +37,15 @@ pub fn validate(
     dest: Option<&Path>,
     dest_writable: bool,
 ) -> Verdict {
-    let mut seen: Vec<&Path> = Vec::new();
+    // Both passes dedup with a hash set: a select-all of 100k rows made the old linear
+    // `seen.contains` / `runnable.contains` scans quadratic (billions of path comparisons) on the
+    // UI thread before a trash/delete/copy. A `HashSet` keeps the same first-seen order and result.
+    let mut seen: std::collections::HashSet<&Path> = std::collections::HashSet::with_capacity(sources.len());
     let mut kept: Vec<PathBuf> = Vec::new();
     for source in sources {
-        if !source.exists || seen.contains(&source.path.as_path()) {
+        if !source.exists || !seen.insert(source.path.as_path()) {
             continue;
         }
-        seen.push(&source.path);
         kept.push(source.path.clone());
     }
     if kept.is_empty() {
@@ -55,18 +57,21 @@ pub fn validate(
     if matches!(kind, Kind::Move | Kind::Copy) && !dest_writable {
         return Verdict::Refuse("Destination is read-only");
     }
+    let kept_set: std::collections::HashSet<&Path> = kept.iter().map(PathBuf::as_path).collect();
+    let mut run_seen: std::collections::HashSet<&Path> = std::collections::HashSet::new();
     let mut runnable = Vec::new();
-    for source in sources.iter().filter(|s| kept.contains(&s.path)) {
-        if !runnable.contains(&source.path) {
-            // Moving an item into the folder it already lives in changes nothing.
-            if kind == Kind::Move && source.path.parent() == Some(dest) {
-                continue;
-            }
-            if source.is_dir && (dest == source.path || dest.starts_with(&source.path)) {
-                return Verdict::Refuse("Cannot place a folder inside itself");
-            }
-            runnable.push(source.path.clone());
+    for source in sources.iter().filter(|s| kept_set.contains(s.path.as_path())) {
+        if !run_seen.insert(source.path.as_path()) {
+            continue;
         }
+        // Moving an item into the folder it already lives in changes nothing.
+        if kind == Kind::Move && source.path.parent() == Some(dest) {
+            continue;
+        }
+        if source.is_dir && (dest == source.path || dest.starts_with(&source.path)) {
+            return Verdict::Refuse("Cannot place a folder inside itself");
+        }
+        runnable.push(source.path.clone());
     }
     if runnable.is_empty() {
         Verdict::NoOp

@@ -198,7 +198,7 @@ impl ExplorerApp {
             "explorer.back"=>self.history_navigation(flamewm_explorer::Tab::back),
             "explorer.forward"=>self.history_navigation(flamewm_explorer::Tab::forward),
             "explorer.up"=>self.history_navigation(flamewm_explorer::Tab::up),
-            "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
+            "explorer.reload"=>{self.reload_places_async();self.refresh_devices();self.scan();},
             "explorer.hidden"=>self.toggle_hidden(),
             "explorer.search"=>{if !matches!(self.edit,Some(EditMode::Search)){let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);}},
             "explorer.search.clear"=>{self.edit=None;self.clear_search();self.search_text.clear();self.model.status="Search cleared".into();},
@@ -478,19 +478,23 @@ impl ExplorerApp {
             WorkerResult::ResizeFlush=>self.flush_resize(),
             WorkerResult::Thumbnail{key,pixels}=>self.thumbs.borrow_mut().complete(key,pixels),
             WorkerResult::SearchTick=>self.take_search_results(),
+            WorkerResult::Properties(result)=>self.show_properties(result),
             WorkerResult::SizeReady{path,bytes}=>{
                 if let Some(Dialog::Properties{props,size,..})=self.dialog.as_mut()
                     && props.path==path {*size=Some(bytes.unwrap_or(0));}
             },
-            WorkerResult::DevicesChanged=>{self.reload_places();self.refresh_devices();},
+            WorkerResult::Places{generation,list}=>{
+                if generation==self.places_gen {self.places=list;}
+            },
+            WorkerResult::DevicesChanged=>{self.reload_places_async();self.refresh_devices();},
             WorkerResult::Devices(devices)=>{
-                if self.unmounted!=devices {self.unmounted=devices;self.reload_places();}
+                if self.unmounted!=devices {self.unmounted=devices;self.reload_places_async();}
             },
             WorkerResult::DeviceDone(outcome)=>{
                 let message=outcome.unwrap_or_else(|error|error);
                 self.model.status.clone_from(&message);
                 self.activity=Some(message);
-                self.reload_places();
+                self.reload_places_async();
                 self.refresh_devices();
             },
             // The worker owns the counters; the UI stores the latest snapshot and
