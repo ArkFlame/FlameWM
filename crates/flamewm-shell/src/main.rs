@@ -514,7 +514,7 @@ impl NotificationHost {
             return self.set_icon(runtime, None);
         };
         if self.icons.is_none() {
-            self.icons = Some(IconLoader::spawn(self.icon_root.clone(), String::new()));
+            self.icons = IconLoader::spawn(self.icon_root.clone(), String::new());
         }
         let Some(loader) = self.icons.as_mut() else {
             return self.set_icon(runtime, None);
@@ -1062,9 +1062,9 @@ fn execute() -> Result<(), String> {
             .map_err(|error| format!("register result wake source: {error}"))?;
     }
     // Canonical IconService wake FD: registered before the run loop so
-    // worker completions wake the reactor; the tick drains them.
-    {
-        let icon_fd = state.borrow_mut().icon_wake_fd();
+    // worker completions wake the reactor; the tick drains them. A failed
+    // loader keeps running without icons instead of aborting the session.
+    if let Some(icon_fd) = state.borrow_mut().icon_wake_fd() {
         let icon_state = Rc::clone(&state);
         reactor
             .register_raw_fd_with_action(icon_fd, calloop::Interest::READ, move |_, _| {

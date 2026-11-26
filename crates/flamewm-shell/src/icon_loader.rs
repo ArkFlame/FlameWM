@@ -266,15 +266,16 @@ impl IconLoader {
         self.pending.contains(target, name, width, height)
     }
 
+    /// Returns `None` when the wake pipe or worker thread cannot be created
+    /// (fd or thread exhaustion). Callers keep running without icons instead
+    /// of losing the desktop session to a panic.
     #[must_use]
-    pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Self {
+    pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Option<Self> {
         let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);
         let initial_theme = theme.clone();
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
-        let (wake_reader, mut wake_writer) = UnixStream::pair().expect("icon loader wake pair");
-        wake_reader
-            .set_nonblocking(true)
-            .expect("wake reader nonblocking");
+        let (wake_reader, mut wake_writer) = UnixStream::pair().ok()?;
+        wake_reader.set_nonblocking(true).ok()?;
         std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
@@ -322,8 +323,8 @@ impl IconLoader {
                     let _ = wake_writer.write_all(&[1]);
                 }
             })
-            .expect("spawn icon loader worker");
-        Self {
+            .ok()?;
+        Some(Self {
             req_tx,
             res_rx,
             wake_reader,
@@ -338,7 +339,7 @@ impl IconLoader {
             theme,
             theme_outbox: None,
             replies_outstanding: 0,
-        }
+        })
     }
 
     /// Live `iconTheme` change. Starts a new icon generation (old results

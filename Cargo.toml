@@ -106,6 +106,15 @@ opt-level = "s"
 [profile.release.package.flamewm-settings]
 opt-level = "s"
 
+# Task manager and audio helper are resident the same way as the apps above: their own code is
+# /proc sampling, pulse wrapping and widget composition, while every pixel they draw or every
+# audio read they serve goes through flamewm-ui-x11/-ui-core/-integrations-linux at opt-level 3.
+[profile.release.package.flamewm-task-manager]
+opt-level = "s"
+
+[profile.release.package.flamewm-audio-helper]
+opt-level = "s"
+
 [profile.release.build-override]
 opt-level = 2
 
