@@ -721,6 +721,97 @@ impl Perform for Screen {
         self.last_char = Some(c);
     }
 
+    fn print_ascii(&mut self, bytes: &[u8]) {
+        // DEC graphics remaps printable ASCII to box glyphs, and insert mode shifts the rest of the line per
+        // character: both keep the per-character path.
+        if self.insert || (self.use_g1 && self.g1_graphics) || (!self.use_g1 && self.g0_graphics) {
+            for &byte in bytes {
+                self.print(char::from(byte));
+            }
+            return;
+        }
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            // Same wrap rule as `put_char`, once per run instead of once per cell.
+            if self.wrap_next && self.autowrap {
+                self.col = 0;
+                self.linefeed();
+                self.wrap_next = false;
+            }
+            let (row, col, cols, pen) = (self.row, self.col, self.cols, self.pen);
+            let Some(free) = cols.checked_sub(col).filter(|free| *free > 0) else {
+                // A cursor past the last column (it cannot normally happen) keeps the exact per-char behaviour.
+                self.print(char::from(rest[0]));
+                rest = &rest[1..];
+                continue;
+            };
+            let take = rest.len().min(free);
+            let template = Cell {
+                ch: ' ',
+                fg: pen.fg,
+                bg: pen.bg,
+                attrs: pen.attrs,
+            };
+            let (changed, left_spacer, right_wide) = {
+                let grid = if self.alt_active {
+                    &self.alt
+                } else {
+                    &self.primary
+                };
+                let line = &grid[row];
+                let mut changed = false;
+                for offset in 0..take {
+                    let cell = &line[col + offset];
+                    if *cell
+                        != Cell {
+                            ch: char::from(rest[offset]),
+                            ..template
+                        }
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+                if changed {
+                    // Overwriting the spacer (or the lead) of a wide glyph at either edge of the run leaves its
+                    // partner behind, so blank it the way `put_char` does.
+                    (
+                        true,
+                        col > 0 && line[col].attrs & attr::SPACER != 0,
+                        col + take < cols && line[col + take - 1].attrs & attr::WIDE != 0,
+                    )
+                } else {
+                    (false, false, false)
+                }
+            };
+            if changed {
+                // One dirty mark for the whole run, then a straight stretch of cells.
+                let line = self.row_mut(row);
+                if left_spacer {
+                    line[col - 1] = Cell::blank(line[col - 1].bg);
+                }
+                for offset in 0..take {
+                    line[col + offset] = Cell {
+                        ch: char::from(rest[offset]),
+                        ..template
+                    };
+                }
+                if right_wide {
+                    line[col + take] = Cell::blank(line[col + take].bg);
+                }
+            }
+            self.col = col + take;
+            if self.col >= cols {
+                self.col = cols - 1;
+                self.wrap_next = self.autowrap;
+            } else {
+                self.wrap_next = false;
+            }
+            self.last_char = Some(char::from(rest[take - 1]));
+            rest = &rest[take..];
+        }
+    }
+
     fn execute(&mut self, byte: u8) {
         match byte {
             0x07 => self.bell = true,

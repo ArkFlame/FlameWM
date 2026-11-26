@@ -176,6 +176,10 @@ pub fn blend(from: u32, to: u32, num: u32, den: u32) -> u32 {
 /// cell's resolved colours, so shades blend the two. The rectangles live in the returned value, not on the heap.
 #[must_use]
 pub fn glyph_rects(ch: char, fg: u32, bg: u32) -> Option<Rects> {
+    // Ordinary text never reaches the table: one range test instead of the whole match per cell.
+    if !('\u{2500}'..='\u{259f}').contains(&ch) {
+        return None;
+    }
     if let Some(weights) = box_weights(ch) {
         return Some(box_arms(weights, fg));
     }

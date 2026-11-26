@@ -6,8 +6,21 @@ use std::sync::Arc;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 use crate::app::App;
-use crate::pool::{Pool, run_id, run_id_into};
+use crate::pool::{Pool, run_id};
 use crate::view::{Row, Run};
+
+/// Geometry, colours and weight last written to one pooled node. A run whose text changed but whose box and style
+/// did not (a counter ticking, a log line scrolling) then writes only its text instead of every setter.
+#[derive(Clone, Copy, Default)]
+struct SlotState {
+    /// False until the node has been written, so the first write sets every property.
+    visible: bool,
+    pos: (f32, f32),
+    size: (f32, f32),
+    fg: u32,
+    bg: Option<u32>,
+    bold: bool,
+}
 
 #[derive(Default)]
 pub struct UiCache {
@@ -16,6 +29,12 @@ pub struct UiCache {
     font: Option<(u16, String)>,
     surface: Option<(u32, u8)>,
     surface_stroke: Option<UiColor>,
+    /// Per pooled slot: the last attributes written (indexed `row * pool.runs + slot`).
+    slots: Vec<SlotState>,
+    /// Per pooled slot: its node id, formatted once when the pool changes instead of per write.
+    ids: Vec<String>,
+    /// The row handed to rows past the frame's end, kept so a frame allocates no empty row.
+    empty: Row,
 }
 
 /// Fits a row into the pool: when a row has more runs than slots, the tail merges into the last slot. Those cells
@@ -86,6 +105,8 @@ impl App {
         }
         self.ui.font = Some(font);
         self.ui.rows.clear();
+        // The new font changes every box and the node's font size, so forget the written attributes too.
+        self.ui.slots.fill(SlotState::default());
         Ok(())
     }
 }

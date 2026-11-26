@@ -5,6 +5,13 @@
 /// Receives decoded input. The screen implements this; tests use a recording implementation.
 pub trait Perform {
     fn print(&mut self, c: char);
+    /// A whole run of printable ASCII bytes from the ground state, one cell per byte, in order. The default prints
+    /// each byte; a performer that owns a grid overrides it to write a stretch of cells in one pass.
+    fn print_ascii(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.print(char::from(byte));
+        }
+    }
     fn execute(&mut self, byte: u8);
     /// `prefix` is the private marker (`?`, `>`, `<`, `=`), `params` the `;` groups, `action` the final byte.
     fn csi(&mut self, prefix: Option<u8>, params: &[Vec<u16>], intermediates: &[u8], action: u8);
@@ -72,14 +79,15 @@ impl Parser {
         let mut rest = bytes;
         while !rest.is_empty() {
             // Fast path: printable ASCII in the ground state is one character per byte and changes no state, which is
-            // the bulk of ordinary output. Handle the whole run here instead of running the state machine per byte.
+            // the bulk of ordinary output. Hand the whole run over in one call instead of running the state machine
+            // per byte and dispatching per character.
             if self.state == State::Ground && self.utf8_need == 0 {
                 let mut end = 0;
                 while end < rest.len() && (0x20..=0x7e).contains(&rest[end]) {
-                    performer.print(char::from(rest[end]));
                     end += 1;
                 }
                 if end > 0 {
+                    performer.print_ascii(&rest[..end]);
                     rest = &rest[end..];
                     continue;
                 }
