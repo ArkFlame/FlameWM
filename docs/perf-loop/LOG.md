@@ -130,3 +130,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Measured: 90 steps took 6.9 s (~76 ms/frame, software GL) and made 73 backdrop captures. The 50 ms reuse window rarely applies when frames are slower than 50 ms, so u156's saving is NOT confirmed in this harness; on a 60 Hz GPU it should reuse about 2 of 3 frames (unmeasured). Follow-up: make the throttle frame-count based (reuse up to 2 consecutive frames) so it also helps when frames are slow.
 - Default drag mode is outline-only (showContentWhileDragging off), which does not recapture at all.
 - Regression caught by running the app: u152 panicked the task manager at startup (RefCell double borrow), fixed in 67819329. Lesson: run the app, not only tests and clippy, after UI-closure changes.
+
+## u156 follow-up: frame-count throttle
+- A moving window now also reuses its backdrop for up to 2 consecutive frames when frames are slower than 50 ms (MAX_STALE_FRAMES).
+- Measured with the scripted drag (90 steps, nested software GL, one run each): captures 73 -> 60, drag elapsed 6.9 s -> 5.4 s. Smaller than the ~30 captures expected: the reuse also requires the scene stamp beneath to match, and it changes as the window slides over different elements. Single runs, so noise is unquantified.
+- Next: let the scene check ignore the moving window's own motion over unchanged elements.

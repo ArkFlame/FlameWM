@@ -71,6 +71,8 @@ pub(super) struct DockBacking {
     pub(super) key: BackdropKey,
     pub(super) buffer: MemoryRenderBuffer,
     pub(super) captured_at: Instant,
+    /// Consecutive frames this capture was reused while its window moved.
+    pub(super) reused: std::cell::Cell<u8>,
 }
 
 /// Dock material from the committed settings, packed as `opacity << 8 | blur`. The default is
@@ -97,6 +99,10 @@ pub(super) fn needs_capture(wanted: &BackdropKey, cached: Option<&BackdropKey>) 
     cached != Some(wanted)
 }
 
+/// A moving window reuses its capture for up to 50 ms, or for `MAX_STALE_FRAMES` consecutive frames
+/// when frames are slower than that (software GL, loaded GPU), so the saving holds at any frame rate.
+const MAX_STALE_FRAMES: u8 = 2;
+
 fn reuse_while_moving(cached: &DockBacking, wanted: &BackdropKey, now: Instant) -> bool {
     let key = &cached.key;
     key.site == wanted.site
@@ -108,7 +114,9 @@ fn reuse_while_moving(cached: &DockBacking, wanted: &BackdropKey, now: Instant) 
         && key.window_radii == wanted.window_radii
         && key.scale_milli == wanted.scale_milli
         && key.material == wanted.material
-        && now.saturating_duration_since(cached.captured_at) < std::time::Duration::from_millis(50)
+        && (now.saturating_duration_since(cached.captured_at)
+            < std::time::Duration::from_millis(50)
+            || cached.reused.get() < MAX_STALE_FRAMES)
 }
 
 /// Coverage (0..=255) of pixel `(x, y)` inside a `w` x `h` rounded rectangle of corner `radius`,
@@ -326,6 +334,7 @@ fn capture_dock(
         key,
         buffer,
         captured_at: Instant::now(),
+        reused: std::cell::Cell::new(0),
     })
 }
 
@@ -500,6 +509,7 @@ pub(crate) fn refresh_dock_backdrops(
                 && reuse_while_moving(backing, &wanted, Instant::now())
                 && scene_matches(&elements, region, scale, &backing.key.scene)
             {
+                backing.reused.set(backing.reused.get().saturating_add(1));
                 live.push(site.site);
                 continue;
             }
@@ -618,6 +628,7 @@ mod tests {
                 None,
             ),
             captured_at: now,
+            reused: std::cell::Cell::new(0),
         };
         let mut wanted = cached.clone();
         wanted.rect.0 += 1;
@@ -626,11 +637,12 @@ mod tests {
             &wanted,
             now + std::time::Duration::from_millis(49)
         ));
-        assert!(!reuse_while_moving(
-            &backing,
-            &wanted,
-            now + std::time::Duration::from_millis(50)
-        ));
+        // Slower than 50 ms: still reused for the first MAX_STALE_FRAMES frames, then recaptured.
+        let slow = now + std::time::Duration::from_millis(80);
+        assert!(reuse_while_moving(&backing, &wanted, slow));
+        backing.reused.set(MAX_STALE_FRAMES);
+        assert!(!reuse_while_moving(&backing, &wanted, slow));
+        backing.reused.set(0);
         wanted.rect.2 += 1;
         assert!(!reuse_while_moving(
             &backing,
