@@ -248,7 +248,11 @@ mod tests {
             let mut sink = |progress: Progress| seen.borrow_mut().push(progress);
             // Entries: 500 gives an entry step of 5, so one finished entry is below the step.
             let mut reporter = Reporter::new(1_000_000, 500, &cancel, &mut sink);
-            assert_eq!(seen.borrow().len(), 1, "the constructor emits one starting snapshot");
+            assert_eq!(
+                seen.borrow().len(),
+                1,
+                "the constructor emits one starting snapshot"
+            );
             assert_eq!(
                 seen.borrow()[0],
                 Progress {
