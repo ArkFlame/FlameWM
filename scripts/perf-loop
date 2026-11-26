@@ -4,6 +4,7 @@
 #   scripts/perf-loop wait [SECONDS]    block (no sleep, no polling child) until the open-unit count changes or timeout
 #   scripts/perf-loop sync "message"    fmt, commit tracked changes + docs/perf-loop, push with retry
 #   scripts/perf-loop check             one workspace cargo check; prints only error lines, exit code is cargo's
+#   scripts/perf-loop clippy            CI-parity clippy (all features, -D warnings); prints only lint lines
 #   scripts/perf-loop built             stamp the build clock (docs/perf-loop/LASTBUILD)
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
@@ -47,6 +48,11 @@ case "${1:-status}" in
     log=$(mktemp -p "${TMPDIR:-/tmp}" perf-check.XXXXXX); trap 'rm -f "$log"' EXIT
     rc=0; cargo check --workspace --all-targets --message-format=short >"$log" 2>&1 || rc=$?
     { rg 'error(\[|:)' "$log" || true; } | cut -c1-230 | head -40; echo "exit=$rc"; exit "$rc" ;;
+  clippy)
+    # CI parity: same flags as .github CI (workspace, all targets, all features, -D warnings).
+    log=$(mktemp -p "${TMPDIR:-/tmp}" perf-clippy.XXXXXX); trap 'rm -f "$log"' EXIT
+    rc=0; cargo clippy --workspace --all-targets --all-features --keep-going --message-format=short -- -D warnings >"$log" 2>&1 || rc=$?
+    { rg ': (error|warning)' "$log" || true; } | sort -u | cut -c1-230 | head -40; echo "exit=$rc"; exit "$rc" ;;
   built) date +%s > docs/perf-loop/LASTBUILD ;;
-  *) echo "usage: $0 status|wait [s]|sync msg|check|built" >&2; exit 2 ;;
+  *) echo "usage: $0 status|wait [s]|sync msg|check|clippy|built" >&2; exit 2 ;;
 esac
