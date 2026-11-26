@@ -26,7 +26,7 @@ case "${1:-status}" in
     # Format BEFORE committing: CI runs `cargo fmt --check` on the commits, and a fmt run after the
     # commit only reformats the working tree, so the pushed commit would stay unformatted.
     cargo fmt --all 2>/dev/null || true
-    git add -u crates Cargo.toml Cargo.lock 2>/dev/null || true
+    git add crates Cargo.toml Cargo.lock 2>/dev/null || true   # not -u: workers add new modules
     git add docs/perf-loop scripts 2>/dev/null || true
     git diff --cached --quiet || git commit -q -m "$msg" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
     # Workers edit while the pre-push hook checks formatting, so format and push back to back.
@@ -34,7 +34,7 @@ case "${1:-status}" in
       cargo fmt --all
       # Fold any formatting the workers' late edits needed into the unpushed commit.
       if ! git diff --quiet -- crates; then
-        git add -u crates
+        git add crates
         if (( $(git rev-list --count '@{u}..HEAD') > 0 )); then git commit -q --amend --no-edit
         else git commit -q -m "style: cargo fmt" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"; fi
       fi
