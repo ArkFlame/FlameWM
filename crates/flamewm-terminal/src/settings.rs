@@ -64,8 +64,14 @@ pub fn opacity_options() -> Vec<u8> {
     (1..=20).rev().map(|step| step * 5).collect()
 }
 
-/// Monospace font families from fontconfig. The generic `monospace` alias always comes first.
+/// Monospace font families from fontconfig. The generic `monospace` alias always comes first. Discovered once per
+/// process: opening the picker again must not fork `fc-list` on the UI thread.
 pub fn mono_fonts() -> Vec<String> {
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FAMILIES.get_or_init(discover_mono_fonts).clone()
+}
+
+fn discover_mono_fonts() -> Vec<String> {
     let mut families: Vec<String> = match std::process::Command::new("fc-list")
         .args([":spacing=mono", "family"])
         .output()

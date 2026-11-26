@@ -28,6 +28,13 @@ const BASE_OFFSET: i32 = 13;
 /// The four pending-launch dots from `ui/shell/launch-feedback.html`, in 16px CSS units:
 /// 4x4 circles (`border-radius: 2px`) at these `(left, top)` offsets.
 const DOT_OFFSETS: [(f32, f32); 4] = [(6.0, 0.0), (12.0, 6.0), (6.0, 12.0), (0.0, 6.0)];
+/// Template ids of the four pending dots, in [`DOT_OFFSETS`] order: no `format!` per frame.
+const DOT_IDS: [&str; 4] = [
+    "launch-dot-0",
+    "launch-dot-1",
+    "launch-dot-2",
+    "launch-dot-3",
+];
 const DOT_SIZE: f32 = 4.0;
 /// `XShape` is 1-bit. An icon pixel with alpha at or above this cutoff is part of the
 /// silhouette; anything below it (antialiased fringe, near-transparent padding) is not drawn.
@@ -245,8 +252,8 @@ impl LaunchFeedback {
             let surface = self.surface(runtime)?;
             runtime.set_surface_shape_mask(surface, Some(dot_shape_spans(side)))?;
             runtime.with_document(surface, |doc| {
-                for index in 0..4 {
-                    doc.visible(&format!("launch-dot-{index}"), true)?;
+                for id in DOT_IDS {
+                    doc.visible(id, true)?;
                 }
                 doc.visible("launch-icon", false)
             })?;
@@ -313,8 +320,8 @@ impl LaunchFeedback {
             runtime.with_document(surface, |doc| {
                 doc.image_rgba8("launch-icon", image)?;
                 doc.visible("launch-icon", true)?;
-                for index in 0..4 {
-                    doc.visible(&format!("launch-dot-{index}"), false)?;
+                for id in DOT_IDS {
+                    doc.visible(id, false)?;
                 }
                 Ok(())
             })?;
@@ -336,7 +343,7 @@ impl LaunchFeedback {
             };
             if self.indicator_frame != Some(frame) {
                 runtime.with_document(surface, |doc| {
-                    for index in 0..4 {
+                    for (index, id) in DOT_IDS.iter().enumerate() {
                         let color = if index == frame {
                             flamewm_ui_x11::UiColor {
                                 r: 101,
@@ -352,7 +359,7 @@ impl LaunchFeedback {
                                 a: 160,
                             }
                         };
-                        doc.background(&format!("launch-dot-{index}"), color)?;
+                        doc.background(*id, color)?;
                     }
                     Ok(())
                 })?;

@@ -104,20 +104,23 @@ pub(crate) fn tick_host(
         let mut guard = state.borrow_mut();
         if guard.system_reprojection_pending {
             guard.system_reprojection_pending = false;
-            let open = guard.surfaces.open;
-            open.and_then(|kind| {
-                guard
-                    .surfaces
-                    .handle(kind)
-                    .map(|surface| (surface, guard.snapshot.clone(), kind))
-            })
+            guard
+                .surfaces
+                .open
+                .and_then(|kind| guard.surfaces.handle(kind).map(|surface| (surface, kind)))
         } else {
             None
         }
     };
-    if let Some((surface, snapshot, kind)) = pending {
+    if let Some((surface, kind)) = pending {
         let probe_start = std::time::Instant::now();
-        project_snapshot(runtime, surface, &snapshot, kind).map_err(UiBackendError::Document)?;
+        // Project from the live snapshot: a reprojection needs no copy of the whole
+        // quick-control state, and the borrow ends before the redraw.
+        {
+            let guard = state.borrow();
+            project_snapshot(runtime, surface, &guard.snapshot, kind)
+                .map_err(UiBackendError::Document)?;
+        }
         let projected = probe_start.elapsed();
         runtime.redraw(surface)?;
         if host_debug_enabled() {

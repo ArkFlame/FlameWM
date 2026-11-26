@@ -326,14 +326,18 @@ impl OsdController {
         self.workspace_card = false;
         let scale = runtime.apply_output_scale(surface, scale)?;
         let card = placement(work, scale);
+        // One document pass for styles and values: the backdrop is a runtime property, so it
+        // needs no second document borrow per show.
+        runtime.with_document(surface, |document| {
+            if let Some(settings) = settings {
+                settings_projection::project(document, settings, SurfaceKind::Osd)?;
+            }
+            paint(document, level)
+        })?;
         if let Some(settings) = settings {
-            runtime.with_document(surface, |document| {
-                settings_projection::project(document, settings, SurfaceKind::Osd)
-            })?;
             let (opacity, blur) = settings_projection::start_backdrop_percents(settings);
             runtime.set_popup_backdrop(surface, Some((opacity, blur)))?;
         }
-        runtime.with_document(surface, |document| paint(document, level))?;
         runtime.move_resize(
             surface,
             card.x,
@@ -372,13 +376,13 @@ impl OsdController {
         let surface = self.ensure_surface(runtime)?;
         let scale = runtime.apply_output_scale(surface, scale)?;
         let card = placement(work, scale);
-        if let Some(settings) = settings {
-            runtime.with_document(surface, |document| {
-                settings_projection::project(document, settings, SurfaceKind::Osd)
-            })?;
-        }
+        runtime.with_document(surface, |document| {
+            if let Some(settings) = settings {
+                settings_projection::project(document, settings, SurfaceKind::Osd)?;
+            }
+            paint_workspace(document, &label)
+        })?;
         runtime.set_popup_backdrop(surface, None)?;
-        runtime.with_document(surface, |document| paint_workspace(document, &label))?;
         runtime.move_resize(
             surface,
             card.x,

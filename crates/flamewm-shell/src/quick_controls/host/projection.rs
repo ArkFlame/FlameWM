@@ -54,17 +54,17 @@ pub(crate) fn project_snapshot(
                     )
                 }),
                 QuickControlKind::Network => {
-                    let query = snapshot.network_query.clone();
+                    let query = &snapshot.network_query;
                     crate::projection::project_network_full(
                         document,
                         &shell,
-                        &query,
+                        query,
                         snapshot.network_scroll_offset,
                     )?;
                     crate::projection::project_network_details(
                         document,
                         &shell,
-                        &query,
+                        query,
                         snapshot.network_scroll_offset,
                         snapshot.network_details_path.as_deref(),
                     )?;

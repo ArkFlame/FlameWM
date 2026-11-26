@@ -238,11 +238,18 @@ fn url_with_credentials(lower: &str) -> bool {
     })
 }
 
-fn escape(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('\n', "\\n")
-        .replace('\t', "\\t")
-        .replace('\r', "\\r")
+/// Appends `text` with backslash, newline, tab and carriage return escaped. One pass, so seeding a large shell
+/// history or recording a command does not allocate a fresh string per replaced character class.
+fn escape_into(out: &mut String, text: &str) {
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
 }
 
 fn unescape(text: &str) -> String {
@@ -290,7 +297,10 @@ fn compact_lines(text: &str) -> String {
     ordered.sort_unstable_by_key(|entry| entry.0);
     let mut out = String::new();
     for (_, uses, command) in ordered {
-        out.push_str(&format!("{uses}\t{}\n", escape(&command)));
+        use std::fmt::Write as _;
+        let _ = write!(out, "{uses}\t");
+        escape_into(&mut out, &command);
+        out.push('\n');
     }
     out
 }
@@ -335,7 +345,9 @@ fn shell_history_lines(path: &Path) -> String {
             None => line,
         };
         if admissible(command) {
-            out.push_str(&format!("1\t{}\n", escape(command)));
+            out.push_str("1\t");
+            escape_into(&mut out, command);
+            out.push('\n');
         }
     }
     out
@@ -481,10 +493,10 @@ impl History {
     /// Applies the store lines past `offset`. A complete line only: a partly written last line waits for the next sync.
     pub fn sync(&mut self) -> io::Result<()> {
         self.checked = Some(Instant::now());
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.path.as_deref() else {
             return Ok(());
         };
-        let mut file = match File::open(&path) {
+        let mut file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),
@@ -525,8 +537,9 @@ impl History {
             return Ok(true);
         }
         file.seek(SeekFrom::Start(0))?;
-        let mut head = vec![0; self.head.len()];
-        Ok(file.read_exact(&mut head).is_ok() && head == self.head)
+        let mut head = [0_u8; HEAD_BYTES];
+        let head = &mut head[..self.head.len()];
+        Ok(file.read_exact(&mut *head).is_ok() && &*head == self.head.as_slice())
     }
 
     fn apply(&mut self, line: &str) {
@@ -552,7 +565,11 @@ impl History {
         if !admissible(command) {
             return Ok(());
         }
-        append(&path, &format!("1\t{}\n", escape(command)))?;
+        let mut line = String::with_capacity(command.len() + 4);
+        line.push_str("1\t");
+        escape_into(&mut line, command);
+        line.push('\n');
+        append(&path, &line)?;
         self.sync()?;
         if fs::metadata(&path).is_ok_and(|meta| meta.len() > self.compact_at) {
             compact(&path)?;
@@ -607,10 +624,10 @@ impl LineInput {
 
     /// Text inserted by the terminal itself (an accepted suggestion) or by a paste.
     pub fn insert_str(&mut self, text: &str) {
-        for c in text.chars() {
-            self.chars.insert(self.cursor, c);
-            self.cursor += 1;
-        }
+        // Splice the whole insertion at once: inserting char by char is quadratic on a large paste.
+        let inserted = text.chars().count();
+        self.chars.splice(self.cursor..self.cursor, text.chars());
+        self.cursor += inserted;
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -694,6 +711,12 @@ impl LineInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn escape(text: &str) -> String {
+        let mut out = String::new();
+        escape_into(&mut out, text);
+        out
+    }
 
     fn tmp_dir(name: &str) -> PathBuf {
         let dir = PathBuf::from("/tmp").join(format!(

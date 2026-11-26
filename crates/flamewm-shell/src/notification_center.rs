@@ -150,45 +150,47 @@ pub struct CenterView {
 
 #[must_use]
 pub fn view(history: &NotificationHistory) -> CenterView {
-    let groups = history
-        .groups()
-        .into_iter()
-        .take(MAX_GROUP_SLOTS)
-        .map(|group| {
-            let items = group
-                .entries
-                .iter()
-                .take(MAX_ITEM_SLOTS)
-                .filter_map(|seq| {
-                    history
-                        .entries()
-                        .find(|entry| entry.seq == *seq)
-                        .map(|entry| CenterItem {
-                            seq: entry.seq,
-                            notification_id: entry.view.id,
-                            summary: clip(&entry.view.summary),
-                            body: clip(&entry.view.body),
-                            actions: entry
-                                .view
-                                .actions
-                                .iter()
-                                .take(MAX_ITEM_ACTION_SLOTS)
-                                .cloned()
-                                .collect(),
-                            progress: entry.view.progress,
-                            urgency: entry.view.urgency,
-                            default_action: entry.view.default_action,
-                        })
-                })
-                .collect();
-            CenterGroup {
-                app_name: group.app_name,
-                muted: group.muted,
-                count: group.entries.len(),
-                items,
+    // One pass over the newest-first entries: entries are already grouped by app in the order
+    // their newest member appears, so no seq lookup per row and no second `groups()` walk.
+    let mut groups: Vec<CenterGroup> = Vec::new();
+    for entry in history.entries() {
+        let app_name = entry.view.app_name.as_str();
+        let slot = match groups.iter().position(|group| group.app_name == app_name) {
+            Some(slot) => slot,
+            None if groups.len() < MAX_GROUP_SLOTS => {
+                groups.push(CenterGroup {
+                    app_name: app_name.to_owned(),
+                    muted: history.is_app_muted(app_name),
+                    count: 0,
+                    items: Vec::new(),
+                });
+                groups.len() - 1
             }
-        })
-        .collect();
+            // Beyond the visible slots: still counted by nothing shown, so skip the work.
+            None => continue,
+        };
+        let group = &mut groups[slot];
+        group.count += 1;
+        if group.items.len() >= MAX_ITEM_SLOTS {
+            continue;
+        }
+        let view = &entry.view;
+        group.items.push(CenterItem {
+            seq: entry.seq,
+            notification_id: view.id,
+            summary: clip(&view.summary),
+            body: clip(&view.body),
+            actions: view
+                .actions
+                .iter()
+                .take(MAX_ITEM_ACTION_SLOTS)
+                .cloned()
+                .collect(),
+            progress: view.progress,
+            urgency: view.urgency,
+            default_action: view.default_action,
+        });
+    }
     CenterView {
         dnd: history.dnd(),
         groups,

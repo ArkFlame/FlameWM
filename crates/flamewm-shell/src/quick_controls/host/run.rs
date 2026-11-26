@@ -157,15 +157,19 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
             })
             .map_err(|error| HostError::Control(format!("register mutation fd: {error}")))?;
     }
-    reactor
-        .register_timer(
-            Duration::from_secs(flamewm_profiler::profile_interval_secs()),
-            true,
-            || {
-                let _ = flamewm_profiler::report_window();
-            },
-        )
-        .map_err(|error| HostError::Control(format!("register profile timer: {error}")))?;
+    // The profiler's periodic window flush is the only timer this loop owns; it must not
+    // wake an idle popup host when profiling is off.
+    if flamewm_profiler::enabled() {
+        reactor
+            .register_timer(
+                Duration::from_secs(flamewm_profiler::profile_interval_secs()),
+                true,
+                || {
+                    let _ = flamewm_profiler::report_window();
+                },
+            )
+            .map_err(|error| HostError::Control(format!("register profile timer: {error}")))?;
+    }
     // Keep the nonblocking stdin description alive until the loop returns.
     let _stdin_file = stdin_holder;
 

@@ -101,6 +101,10 @@ impl Drop for ExitNotice {
 /// Spacing between UI wakes from one tab. Output inside the window is queued and wakes once when it ends.
 pub const FRAME: Duration = Duration::from_millis(16);
 
+/// Bytes one `Output` event may carry. Data the kernel already holds is merged into one event, so a flood costs one
+/// allocation, one channel message and one banner check per batch instead of one per few-KiB read.
+const BATCH_BYTES: usize = 32 * 1024;
+
 /// Owns the wake socket and turns "output queued" signals into at most one wake per `FRAME`. A signal after idle
 /// wakes at once, so a keystroke echo is not delayed; a signal inside the window sleeps to its end, then one wake
 /// covers everything queued meanwhile, so trailing output is never stranded.
@@ -141,17 +145,27 @@ fn read_loop(
         wake: notice_wake,
     };
     let mut buffer = vec![0_u8; 16 * 1024];
+    let mut batch = Vec::new();
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => return,
             Ok(count) => {
-                if events
-                    .send(SessionEvent::Output {
-                        id,
-                        bytes: buffer[..count].to_vec(),
-                    })
-                    .is_err()
-                {
+                batch.extend_from_slice(&buffer[..count]);
+                // Drain what the kernel already buffered into this same event: a flood would otherwise send one
+                // event per few-KiB read, and each event costs an allocation, a channel message and a UI callback.
+                while batch.len() < BATCH_BYTES {
+                    let ready = rustix::io::ioctl_fionread(&reader).unwrap_or(0) as usize;
+                    if ready == 0 {
+                        break;
+                    }
+                    let want = ready.min(BATCH_BYTES - batch.len()).min(buffer.len());
+                    match reader.read(&mut buffer[..want]) {
+                        Ok(0) | Err(_) => break,
+                        Ok(extra) => batch.extend_from_slice(&buffer[..extra]),
+                    }
+                }
+                let bytes = std::mem::replace(&mut batch, Vec::new());
+                if events.send(SessionEvent::Output { id, bytes }).is_err() {
                     return;
                 }
                 if pacer.send(()).is_err() {
@@ -219,8 +233,8 @@ mod tests {
             "{wakes} wakes in {elapsed:?} exceeds the frame cadence"
         );
         assert!(
-            wakes * 4 <= chunks,
-            "{wakes} wakes for {chunks} reads: no coalescing"
+            wakes * 2 <= chunks,
+            "{wakes} wakes for {chunks} events: no coalescing"
         );
     }
 }
