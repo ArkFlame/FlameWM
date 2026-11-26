@@ -192,7 +192,8 @@ fn read_loop(
             tv_nsec: wait.subsec_nanos() as _,
         });
         let ready = {
-            let mut fds = [PollFd::new(reader.as_fd(), PollFlags::IN)];
+            let fd = reader.as_fd();
+            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
             poll(&mut fds, timespec.as_ref())
         };
         match ready {
