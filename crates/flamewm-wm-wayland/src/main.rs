@@ -760,6 +760,57 @@ fn run() -> Result<i32, Box<dyn Error>> {
         )?;
     }
 
+    // Nested measurement: `FLAMEWM_WAYLAND_SCRIPT_DRAG=x0,y0,x1,y1,steps,start_ms,total_ms` presses
+    // the titlebar at (x0,y0) after `start_ms`, moves to (x1,y1) in `steps` equal motion events
+    // spread over `total_ms`, releases, and prints the backdrop captures made during the drag. It is
+    // inert when unset and is read only here, so the tty backend never runs it.
+    if let Some(spec) = std::env::var("FLAMEWM_WAYLAND_SCRIPT_DRAG")
+        .ok()
+        .and_then(|value| {
+            let n: Vec<f64> = value
+                .split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect();
+            (n.len() == 7).then_some(n)
+        })
+    {
+        let (x0, y0, x1, y1) = (spec[0], spec[1], spec[2], spec[3]);
+        let steps = spec[4].max(1.0) as u32;
+        let (start, total) = (spec[5] as u64, spec[6] as u64);
+        let mut step = 0_u32;
+        let mut captures_at_start = 0_u64;
+        let mut began_at = std::time::Instant::now();
+        let mut begun = false;
+        handle.insert_source(
+            Timer::from_duration(Duration::from_millis(start)),
+            move |_, (), state| {
+                if !begun {
+                    begun = state.script_drag_begin(x0, y0);
+                    if !begun {
+                        eprintln!("SCRIPT_DRAG no titlebar at ({x0},{y0})");
+                        return TimeoutAction::Drop;
+                    }
+                    captures_at_start = render::backdrop_captures();
+                    began_at = std::time::Instant::now();
+                }
+                step += 1;
+                let t = f64::from(step) / f64::from(steps);
+                state.on_motion((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t).into(), step);
+                state.request_redraw();
+                if step >= steps {
+                    state.grab = None;
+                    eprintln!(
+                        "SCRIPT_DRAG steps={steps} planned_ms={total} elapsed_ms={} backdrop_captures={}",
+                        began_at.elapsed().as_millis(),
+                        render::backdrop_captures() - captures_at_start
+                    );
+                    return TimeoutAction::Drop;
+                }
+                TimeoutAction::ToDuration(Duration::from_millis((total / u64::from(steps)).max(1)))
+            },
+        )?;
+    }
+
     // A completed flip is not a desktop. The first frame is painted inside backend init, before
     // XWayland exists, and contains only the clear colour and the cursor; XWayland readiness is what
     // actually puts windows on screen. If autostart clients are configured but XWayland never

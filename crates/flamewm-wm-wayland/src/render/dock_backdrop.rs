@@ -252,6 +252,13 @@ fn scene_matches(
     )
 }
 
+static CAPTURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Backdrop captures so far; read by the nested scripted-drag measurement.
+pub(crate) fn backdrop_captures() -> u64 {
+    CAPTURES.load(Ordering::Relaxed)
+}
+
 /// Renders the overlapping scene into a Dock-sized target, reduces and blurs it, and builds the
 /// buffer beneath the Dock: opaque inside the Dock's rounded outline and transparent in its corners.
 fn capture_dock(
@@ -262,6 +269,7 @@ fn capture_dock(
     region: Rectangle<i32, Physical>,
     scale: f64,
 ) -> Result<DockBacking, Box<dyn Error>> {
+    CAPTURES.fetch_add(1, Ordering::Relaxed);
     let dims = (region.size.w.max(1) as usize, region.size.h.max(1) as usize);
     let target_size = Size::<i32, Physical>::from((dims.0 as i32, dims.1 as i32));
     let mut texture: GlesTexture = match take_scratch(&mut decorations.dock_scratch, dims) {

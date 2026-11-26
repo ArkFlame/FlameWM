@@ -30,6 +30,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
 mod dock_backdrop;
+pub(crate) use dock_backdrop::backdrop_captures;
 mod switcher_thumbs;
 mod titlebar;
 pub use switcher_thumbs::serve_switcher_thumbs;

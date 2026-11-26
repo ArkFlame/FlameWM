@@ -104,6 +104,21 @@ pub(super) fn unmanaged_focus(
 }
 
 impl State {
+    /// Nested measurement only (`FLAMEWM_WAYLAND_SCRIPT_DRAG`): starts a titlebar move at `(x, y)`
+    /// as a left press there would. Returns whether a titlebar was under the point.
+    pub(crate) fn script_drag_begin(&mut self, x: f64, y: f64) -> bool {
+        self.on_motion((x, y).into(), 0);
+        let Some(Hit::Titlebar(id)) = self.pointer_target((x, y).into()).managed_hit else {
+            return false;
+        };
+        let Some(managed) = self.model.get(id).cloned() else {
+            return false;
+        };
+        self.set_focus(Some(id));
+        self.grab = Some(Grab::move_window(id, (x, y), &managed, true));
+        true
+    }
+
     pub(crate) fn on_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         // Backends report the host or device position in `raw_pointer`; the cursor (`pointer`) may
         // stay put while a lock is active, so the relative delta is taken from the raw position.

@@ -124,3 +124,9 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - explorer startup 10 / idle 0 / 21 MB; terminal 14 / 0 / 30 MB; shell 13 / 0 / 22 MB; task-manager 32 / 4 / 31 MB.
 - Only idle cost is the task manager's 1 s /proc sampler (about 2% of one core, 100% of its own samples). Everything else parks.
 - Next: shrink the sampler cost (skip unchanged per-pid reads, reuse buffers) without losing rows.
+
+## u157 (nested scripted drag) and u156 measurement
+- Scripted titlebar drag works in the nested harness; live-content drag shows the window following the pointer with the blurred backdrop strip following it (no visible lag artefact in the frame).
+- Measured: 90 steps took 6.9 s (~76 ms/frame, software GL) and made 73 backdrop captures. The 50 ms reuse window rarely applies when frames are slower than 50 ms, so u156's saving is NOT confirmed in this harness; on a 60 Hz GPU it should reuse about 2 of 3 frames (unmeasured). Follow-up: make the throttle frame-count based (reuse up to 2 consecutive frames) so it also helps when frames are slow.
+- Default drag mode is outline-only (showContentWhileDragging off), which does not recapture at all.
+- Regression caught by running the app: u152 panicked the task manager at startup (RefCell double borrow), fixed in 67819329. Lesson: run the app, not only tests and clippy, after UI-closure changes.
