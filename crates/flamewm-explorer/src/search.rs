@@ -37,20 +37,64 @@ pub struct SearchOutcome {
     pub cancelled: bool,
 }
 
+/// Lowercased character stream, so case folding never allocates a `String` for short-lived comparisons.
+fn lower_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.chars().flat_map(char::to_lowercase)
+}
+
+fn ci_eq(left: &str, right: &str) -> bool {
+    if left.is_ascii() && right.is_ascii() {
+        return left.eq_ignore_ascii_case(right);
+    }
+    lower_chars(left).eq(lower_chars(right))
+}
+
+fn ci_starts_with(text: &str, prefix: &str) -> bool {
+    if text.is_ascii() && prefix.is_ascii() {
+        return text.len() >= prefix.len()
+            && text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes());
+    }
+    let mut prefix = lower_chars(prefix);
+    let mut text = lower_chars(text);
+    loop {
+        match prefix.next() {
+            None => return true,
+            Some(expected) => match text.next() {
+                Some(actual) if actual == expected => {}
+                _ => return false,
+            },
+        }
+    }
+}
+
+fn ci_contains(text: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if text.is_ascii() && needle.is_ascii() {
+        let (text, needle) = (text.as_bytes(), needle.as_bytes());
+        return text.len() >= needle.len()
+            && text
+                .windows(needle.len())
+                .any(|window| window.eq_ignore_ascii_case(needle));
+    }
+    // Non-ASCII names are rare; lowercasing both sides once keeps the same semantics as before.
+    text.to_lowercase().contains(&needle.to_lowercase())
+}
+
 /// Match tier of `name` for `query`, case-insensitive: 0 exact, 1 prefix, 2 substring. `None` when no match.
-/// Empty or whitespace-only queries match nothing.
+/// Empty or whitespace-only queries match nothing. Allocation-free for ASCII names and queries.
 #[must_use]
 pub fn rank_match(query: &str, name: &str) -> Option<u8> {
-    let query = query.trim().to_lowercase();
+    let query = query.trim();
     if query.is_empty() {
         return None;
     }
-    let name = name.to_lowercase();
-    if name == query {
+    if ci_eq(name, query) {
         Some(0)
-    } else if name.starts_with(&query) {
+    } else if ci_starts_with(name, query) {
         Some(1)
-    } else if name.contains(&query) {
+    } else if ci_contains(name, query) {
         Some(2)
     } else {
         None
@@ -155,16 +199,26 @@ fn walk(
                                 truncated.store(true, Ordering::Relaxed);
                                 break;
                             }
-                            let name = item.file_name().to_string_lossy().into_owned();
+                            let os_name = item.file_name();
+                            let name = os_name.to_string_lossy();
                             if !show_hidden && name.starts_with('.') {
                                 continue;
                             }
-                            let path = item.path();
-                            let Ok(meta) = fs::symlink_metadata(&path) else {
+                            // `file_type` answers from the readdir record (d_type) on normal filesystems,
+                            // so non-matching files no longer cost an lstat and a `PathBuf` each.
+                            let Ok(file_type) = item.file_type() else {
                                 continue;
                             };
-                            let directory = meta.is_dir();
-                            if name_matches(&name, &query) {
+                            let directory = file_type.is_dir();
+                            let matched = rank_match(&query, &name).is_some();
+                            if !matched && !directory {
+                                continue;
+                            }
+                            let path = dir.join(&os_name);
+                            if matched {
+                                let Ok(meta) = fs::symlink_metadata(&path) else {
+                                    continue;
+                                };
                                 if hits.fetch_add(1, Ordering::Relaxed) >= MAX_HITS {
                                     truncated.store(true, Ordering::Relaxed);
                                     break;
@@ -172,7 +226,7 @@ fn walk(
                                 batch.push(SearchHit {
                                     parent: dir.clone(),
                                     path: path.clone(),
-                                    name,
+                                    name: name.into_owned(),
                                     directory,
                                     size: meta.len(),
                                     modified: meta.modified().ok(),

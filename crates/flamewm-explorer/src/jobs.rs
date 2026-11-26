@@ -247,6 +247,15 @@ fn remove_entry(path: &Path) -> io::Result<()> {
 /// Copies into a fresh staging entry. Symlinks are recreated, never followed.
 /// Permissions are preserved; hardlinks become independent copies.
 fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, sink: &mut impl TransferSink) -> io::Result<()> {
+    // One transfer buffer per top-level copy: a fresh 256 KiB zeroed `Vec` per file was the largest
+    // allocation cost when copying trees of many small files. It is filled on first use, so a
+    // directory-only copy allocates nothing.
+    let mut buffer = Vec::new();
+    copy_tree_with(from, to, cancel, sink, &mut buffer)
+}
+
+fn copy_tree_with(from: &Path, to: &Path, cancel: &CancellationToken,
+    sink: &mut impl TransferSink, buffer: &mut Vec<u8>) -> io::Result<()> {
     if cancel.is_cancelled() { return Err(cancelled()); }
     let meta = fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
@@ -256,19 +265,20 @@ fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, sink: &mut impl
         fs::create_dir(to)?;
         for child in fs::read_dir(from)? {
             let child = child?;
-            copy_tree(&child.path(), &to.join(child.file_name()), cancel, sink)?;
+            let name = child.file_name();
+            copy_tree_with(&from.join(&name), &to.join(&name), cancel, sink, buffer)?;
         }
         return fs::set_permissions(to, meta.permissions());
     }
     if !meta.is_file() {
         return Err(io::Error::new(io::ErrorKind::Unsupported, "not a regular file"));
     }
+    if buffer.is_empty() { buffer.resize(CHUNK, 0); }
     let mut input = File::open(from)?;
     let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)?;
-    let mut buffer = vec![0_u8; CHUNK];
     loop {
         if cancel.is_cancelled() { return Err(cancelled()); }
-        let len = input.read(&mut buffer)?;
+        let len = input.read(&mut buffer[..])?;
         if len == 0 { break; }
         output.write_all(&buffer[..len])?;
         sink.bytes(len as u64);

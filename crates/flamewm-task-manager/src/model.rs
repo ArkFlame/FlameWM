@@ -122,15 +122,17 @@ struct Cpu {
 fn cpu_ticks(line: &str) -> Option<Cpu> {
     let mut fields = line.split_whitespace();
     let _name = fields.next()?;
-    let values: Vec<u64> = fields
-        .take(8)
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .ok()?;
-    if values.len() < 4 {
+    // The first eight counters are user..guest; a small stack array avoids a Vec per CPU line.
+    let mut values = [0_u64; 8];
+    let mut count = 0;
+    for field in fields.take(8) {
+        values[count] = field.parse().ok()?;
+        count += 1;
+    }
+    if count < 4 {
         return None;
     }
-    let total = values.iter().sum();
+    let total = values[..count].iter().sum();
     let idle = values[3] + values.get(4).copied().unwrap_or(0);
     Some(Cpu {
         total,
@@ -231,7 +233,9 @@ pub fn parse_uid(status: &str) -> u32 {
 fn command(scratch: &mut Vec<u8>, pid: u32, name: &str) -> String {
     if let Some(bytes) = read_proc(scratch, &format!("/proc/{pid}/cmdline")) {
         let args = String::from_utf8_lossy(bytes);
-        let text = sanitize(&args.replace('\0', " "), 180).trim().to_owned();
+        // `sanitize` already maps every control byte, including the NUL argument separators,
+        // to a space, so no intermediate replacement string is needed.
+        let text = sanitize(&args, 180).trim().to_owned();
         if !text.is_empty() {
             return text;
         }
@@ -240,28 +244,32 @@ fn command(scratch: &mut Vec<u8>, pid: u32, name: &str) -> String {
 }
 fn memory() -> (u64, u64, u64, u64) {
     let text = fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    let mut fields = HashMap::new();
+    // One pass over the four counters we need: no per-sample HashMap of every field.
+    let (mut total, mut available, mut swap_total, mut swap_free) = (0_u64, 0, 0, 0);
     for line in text.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        if let Some(kib) = value
+        let Some(kib) = value
             .split_whitespace()
             .next()
             .and_then(|v| v.parse::<u64>().ok())
-        {
-            fields.insert(key, kib);
+        else {
+            continue;
+        };
+        match key {
+            "MemTotal" => total = kib,
+            "MemAvailable" => available = kib,
+            "SwapTotal" => swap_total = kib,
+            "SwapFree" => swap_free = kib,
+            _ => {}
         }
     }
-    let get = |key| fields.get(key).copied().unwrap_or(0_u64);
-    let total = get("MemTotal");
-    let available = get("MemAvailable");
-    let swap_total = get("SwapTotal");
     (
         total,
         total.saturating_sub(available),
         swap_total,
-        swap_total.saturating_sub(get("SwapFree")),
+        swap_total.saturating_sub(swap_free),
     )
 }
 /// Received and transmitted byte totals of every interface but loopback in `/proc/net/dev`.

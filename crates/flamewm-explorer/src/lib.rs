@@ -101,9 +101,13 @@ pub fn list_directory_streamed_cancellable(dir: &Path, show_hidden: bool, mut em
     for (index, item) in fs::read_dir(dir)?.enumerate() {
         if index % 64 == 0 && cancelled() { return Ok(false); }
         let item = item?;
-        let name = item.file_name().to_string_lossy().into_owned();
+        // Reuse the `OsString` name for both the hidden check and the path; `item.path()` would
+        // re-read and re-allocate the same name. The owned `String` is only built for kept rows.
+        let os_name = item.file_name();
+        let name = os_name.to_string_lossy();
         if !show_hidden && name.starts_with('.') { continue; }
-        let path = item.path();
+        let name = name.into_owned();
+        let path = dir.join(&os_name);
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -129,9 +133,21 @@ pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result
     Ok(entries)
 }
 
-/// Case-insensitive filter match; `query` is already lowercase.
+/// Case-insensitive substring test against an already-lowercased haystack. ASCII needles compare
+/// bytes in place, so projections allocate nothing; non-ASCII needles fall back to one lowercase.
+fn contains_lower(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() { return true; }
+    if needle.is_ascii() {
+        return haystack.len() >= needle.len()
+            && haystack.as_bytes().windows(needle.len())
+                .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()));
+    }
+    haystack.contains(&needle.to_lowercase())
+}
+
+/// Filter match against `entry.lower_name`, case-insensitive in `query` without allocating per call.
 fn entry_matches(entry: &Entry, query: &str) -> bool {
-    query.is_empty() || entry.lower_name.contains(query)
+    contains_lower(&entry.lower_name, query)
 }
 
 #[derive(Clone, Debug)]
@@ -204,9 +220,9 @@ impl Tab {
             if additive {self.toggle_selection(target);} else {self.select_one(target);}
             return;
         };
-        let query=self.search.to_lowercase();
+        let query=&self.search;
         let range=self.entries.iter().filter(|e| {
-            entry_matches(e, &query)
+            entry_matches(e, query)
         }).skip(start.min(target_index)).take(start.abs_diff(target_index)+1)
             .map(|e|e.path.clone());
         if !additive {self.selected_paths.clear();}
@@ -236,8 +252,7 @@ impl Tab {
     }
     /// Entries that pass the search filter, in list order.
     pub fn visible(&self) -> impl Iterator<Item=&Entry> + '_ {
-        let query=self.search.to_lowercase();
-        self.entries.iter().filter(move |entry| entry_matches(entry, &query))
+        self.entries.iter().filter(move |entry| entry_matches(entry, &self.search))
     }
     /// Filtered rows starting at the scroll offset, at most `rows` of them.
     pub fn visible_window(&self, rows: usize) -> Vec<&Entry> {
@@ -264,11 +279,11 @@ impl Tab {
         self.visible().position(|entry| entry.path==path)
     }
     pub fn filtered_count(&self) -> usize {
-        let query=self.search.to_lowercase();
+        // The cache key is the raw query; the match itself folds case, so no lowercase copy is made.
         if let Some((revision,cached_query,count))=self.filter_cache.borrow().as_ref()
-            && *revision==self.revision && *cached_query==query {return *count;}
-        let count=self.entries.iter().filter(|entry| entry_matches(entry, &query)).count();
-        *self.filter_cache.borrow_mut()=Some((self.revision,query,count));
+            && *revision==self.revision && *cached_query==self.search {return *count;}
+        let count=self.entries.iter().filter(|entry| entry_matches(entry, &self.search)).count();
+        *self.filter_cache.borrow_mut()=Some((self.revision,self.search.clone(),count));
         count
     }
 }

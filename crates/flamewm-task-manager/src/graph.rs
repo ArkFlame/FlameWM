@@ -8,25 +8,56 @@ pub const SAMPLES: usize = 60;
 const GRID: [u8; 4] = [255, 255, 255, 22];
 const AREA_ALPHA: u8 = 52;
 
-#[derive(Default)]
+/// Fixed-size ring: `SAMPLES` values with an O(1) push and no shifting or reallocation.
 pub struct History {
-    values: Vec<f32>,
+    values: [f32; SAMPLES],
+    /// Number of valid entries, at most `SAMPLES`.
+    len: usize,
+    /// Physical slot that the next push overwrites.
+    head: usize,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            values: [0.0; SAMPLES],
+            len: 0,
+            head: 0,
+        }
+    }
 }
 
 impl History {
     pub fn push(&mut self, value: f32) {
-        if self.values.len() == SAMPLES {
-            self.values.remove(0);
-        }
-        self.values.push(if value.is_finite() {
+        self.values[self.head] = if value.is_finite() {
             value.max(0.0)
         } else {
             0.0
-        });
+        };
+        self.head = (self.head + 1) % SAMPLES;
+        if self.len < SAMPLES {
+            self.len += 1;
+        }
+    }
+
+    /// Logical order, oldest sample first.
+    fn in_order(&self) -> impl Iterator<Item = f32> + '_ {
+        let start = (self.head + SAMPLES - self.len) % SAMPLES;
+        (0..self.len).map(move |index| self.values[(start + index) % SAMPLES])
+    }
+
+    /// Copies the history in logical order into `out`; returns the number of written entries.
+    fn copy_in_order(&self, out: &mut [f32; SAMPLES]) -> usize {
+        let mut count = 0;
+        for (slot, value) in out.iter_mut().zip(self.in_order()) {
+            *slot = value;
+            count += 1;
+        }
+        count
     }
 
     pub fn peak(&self) -> f32 {
-        self.values.iter().copied().fold(0.0, f32::max)
+        self.in_order().fold(0.0, f32::max)
     }
 }
 
@@ -51,11 +82,13 @@ pub fn render(series: &[Series<'_>], full_scale: f32) -> Vec<u8> {
     }
     let scale = if full_scale > 0.0 { full_scale } else { 1.0 };
     let step = (width - 1) as f32 / (SAMPLES - 1) as f32;
+    let mut values = [0.0_f32; SAMPLES];
     for line in series {
-        let values = &line.history.values;
-        if values.is_empty() {
+        let count = line.history.copy_in_order(&mut values);
+        if count == 0 {
             continue;
         }
+        let values = &values[..count];
         let [r, g, b] = [
             (line.rgb >> 16) as u8,
             (line.rgb >> 8) as u8,
@@ -118,8 +151,8 @@ mod tests {
         }
         history.push(f32::NAN);
         history.push(-4.0);
-        assert_eq!(history.values.len(), SAMPLES);
-        assert_eq!(history.values[SAMPLES - 1], 0.0);
+        assert_eq!(history.len, SAMPLES);
+        assert_eq!(history.in_order().last(), Some(0.0));
         assert_eq!(history.peak(), 99.0);
     }
 

@@ -32,6 +32,18 @@ const CORE_COLUMNS: usize = CORES / CORES_PER_COLUMN;
 const WIDTH: u32 = 1180;
 const HEIGHT: u32 = 805;
 const ROW_HEIGHT: u32 = 30;
+/// Pre-indented tree labels: index is the clamped depth, so rows never allocate padding.
+const INDENTS: [&str; 9] = [
+    "",
+    "  ",
+    "    ",
+    "      ",
+    "        ",
+    "          ",
+    "            ",
+    "              ",
+    "                ",
+];
 const LIST_TOP: u32 = 50 + 196 + 46 + 1 + 4;
 const FIXED_HEIGHT: u32 = LIST_TOP + 30;
 const MENU_WIDTH: f32 = 215.0;
@@ -98,6 +110,8 @@ struct Application {
     graphs_dirty: bool,
     theme: SettingsSnapshot,
     theme_dirty: bool,
+    /// Metrics text and core meters change only with a new sample or a resize.
+    metrics_dirty: bool,
     sort: Sort,
     descending: bool,
     search_active: bool,
@@ -121,6 +135,7 @@ impl Application {
             graphs_dirty: true,
             theme,
             theme_dirty: true,
+            metrics_dirty: true,
             sort: Sort::Cpu,
             descending: true,
             search_active: false,
@@ -149,6 +164,7 @@ impl Application {
         self.histories.upload.push(snapshot.net_tx as f32);
         self.snapshot = snapshot;
         self.graphs_dirty = true;
+        self.metrics_dirty = true;
     }
     fn sorted(&self) -> Vec<usize> {
         let query = self.query.to_lowercase();
@@ -205,7 +221,9 @@ impl Application {
         if std::mem::take(&mut self.theme_dirty) {
             self.paint_theme(doc, accent)?;
         }
-        self.paint_metrics(doc)?;
+        if std::mem::take(&mut self.metrics_dirty) {
+            self.paint_metrics(doc)?;
+        }
         if std::mem::take(&mut self.graphs_dirty) {
             self.paint_graphs(doc)?;
         }
@@ -419,7 +437,7 @@ impl Application {
             let p = &self.snapshot.processes[hits[self.first + slot]];
             self.rows.push((p.pid, p.start));
             let id = |name: &str| format!("r-{slot}-{name}");
-            let indent = "  ".repeat(p.depth.min(8) as usize);
+            let indent = INDENTS[p.depth.min(8) as usize];
             doc.text(&id("name"), format!("{indent}{}", display_name(p)))?;
             doc.background(&id("dot"), UiColor::from_rgb(state_color(p.state), 255))?;
             doc.text(&id("pid"), p.pid.to_string())?;
@@ -950,6 +968,7 @@ pub fn run() -> Result<(), String> {
                 UiControllerEvent::Resized { width, height } => {
                     app.viewport = visible_rows(*height);
                     app.window = (*width as f32, *height as f32);
+                    app.metrics_dirty = true;
                     app.paint(doc)
                 }
                 UiControllerEvent::Drag(_) => Ok(()),
