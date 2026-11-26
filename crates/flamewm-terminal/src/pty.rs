@@ -437,7 +437,10 @@ mod tests {
         let marker = std::env::temp_dir().join(format!("flamewm-pty-hup-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let mut polite = Command::new("/bin/sh")
-            .args(["-c", "trap 'echo saved > \"$0\"; exit 0' HUP; while :; do sleep 0.05; done"])
+            .args([
+                "-c",
+                "trap 'echo saved > \"$0\"; exit 0' HUP; while :; do sleep 0.05; done",
+            ])
             .arg(&marker)
             .spawn()
             .expect("spawn polite shell");
@@ -445,7 +448,9 @@ mod tests {
         let status = hangup_then_reap(&mut polite).expect("reap the polite shell");
         assert!(status.success(), "the polite shell exits from its HUP trap");
         assert_eq!(
-            std::fs::read_to_string(&marker).expect("state written on hangup").trim(),
+            std::fs::read_to_string(&marker)
+                .expect("state written on hangup")
+                .trim(),
             "saved"
         );
         let _ = std::fs::remove_file(&marker);
@@ -456,6 +461,10 @@ mod tests {
             .expect("spawn stubborn shell");
         std::thread::sleep(Duration::from_millis(50));
         let status = hangup_then_reap(&mut stubborn).expect("reap the stubborn shell");
-        assert_eq!(status.signal(), Some(9), "a hung-up child is killed after the grace");
+        assert_eq!(
+            status.signal(),
+            Some(9),
+            "a hung-up child is killed after the grace"
+        );
     }
 }

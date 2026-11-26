@@ -80,6 +80,9 @@ pub struct Screen {
     /// Lines captured into scrollback since the last `take_scroll_shift`: every visible row moved up by this many,
     /// so a renderer reuses its previous rows instead of rebuilding them.
     scroll_shift: usize,
+    /// Lines dropped from the front of a capped scrollback. Every absolute line index renumbers down by this much
+    /// without `total_lines` changing, so a renderer must not trust an unchanged window index after it moves.
+    scrollback_drops: u64,
     /// Last graphic character printed, the source for REP (`CSI b`).
     last_char: Option<char>,
 }
@@ -131,6 +134,7 @@ impl Screen {
             dirty_rows: vec![false; rows],
             dirty_all: true,
             scroll_shift: 0,
+            scrollback_drops: 0,
             last_char: None,
         }
     }
@@ -242,6 +246,13 @@ impl Screen {
         }
     }
 
+    /// How many lines a capped scrollback has dropped from its front. Absolute line indices move down by the
+    /// increase, even though `total_lines` stays the same.
+    #[must_use]
+    pub fn scrollback_drops(&self) -> u64 {
+        self.scrollback_drops
+    }
+
     #[must_use]
     pub fn line_abs(&self, index: usize) -> Option<Cow<'_, Line>> {
         let history = self.scrollback_len();
@@ -334,6 +345,7 @@ impl Screen {
                             .push_back(History::pack(&line[..history_len(&line)]));
                         if self.scrollback.len() > self.scrollback_limit {
                             self.scrollback.pop_front();
+                            self.scrollback_drops = self.scrollback_drops.saturating_add(1);
                         }
                     }
                     self.primary
@@ -434,6 +446,7 @@ impl Screen {
                 self.scrollback.push_back(history);
                 if self.scrollback.len() > self.scrollback_limit {
                     self.scrollback.pop_front();
+                    self.scrollback_drops = self.scrollback_drops.saturating_add(1);
                 }
             }
         }

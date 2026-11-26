@@ -239,6 +239,9 @@ pub struct RunCache {
     /// Absolute index of the first visible line last update, so a reported scroll shift can be trusted only when the
     /// window advanced by exactly that many lines (a scrollback drop keeps the index while the content moves).
     top: Option<usize>,
+    /// Scrollback drops seen at the last update. A drop renumbers every absolute line, so a reused row would show
+    /// the wrong line until a rebuild.
+    drops: u64,
     /// Per-frame row scratch, kept so an update allocates no state bitmap.
     stale: Vec<bool>,
     /// Live rows the screen reported changed, in one buffer reused across frames.
@@ -267,6 +270,13 @@ impl RunCache {
         let key_matches = self.key.as_ref().is_some_and(|(kept, offset, shape)| {
             kept == palette && *offset == options.view_offset && *shape == options.cursor_shape
         });
+        // A view offset change alone keeps every line's content: the rows are baked by absolute line index, so only
+        // the rows the window slid past must be rebuilt. A capped scrollback that dropped lines renumbers those
+        // indices, so that case still rebuilds.
+        let offset_only = self.key.as_ref().is_some_and(|(kept, offset, shape)| {
+            kept == palette && *shape == options.cursor_shape && *offset != options.view_offset
+        });
+        let drops = screen.scrollback_drops();
         // Reuse the scratch rows across frames: an update marks rows, it does not allocate the bitmap.
         let mut stale = std::mem::take(&mut self.stale);
         stale.clear();
@@ -277,8 +287,39 @@ impl RunCache {
         // Lines a scroll let this update reuse from the previous frame, 0 when it rebuilt every row.
         let mut reused = 0;
         if !key_matches || self.rows.len() != rows {
-            stale.fill(true);
-            partial = false;
+            if offset_only
+                && !all_dirty
+                && self.rows.len() == rows
+                && self.drops == drops
+                && let Some(old) = self.top
+            {
+                // The window slid by `top - old` lines; the runs of a row move with it and the rows the slide
+                // exposed are the only ones rebuilt.
+                if top >= old {
+                    let moved = top - old;
+                    if moved < rows {
+                        self.rows.rotate_left(moved);
+                        stale[rows - moved..].fill(true);
+                        reused = moved;
+                    } else {
+                        stale.fill(true);
+                        partial = false;
+                    }
+                } else {
+                    let moved = old - top;
+                    if moved < rows {
+                        self.rows.rotate_right(moved);
+                        stale[..moved].fill(true);
+                        reused = moved;
+                    } else {
+                        stale.fill(true);
+                        partial = false;
+                    }
+                }
+            } else {
+                stale.fill(true);
+                partial = false;
+            }
         } else if all_dirty {
             // A captured scroll moved every visible row up by `shift`: the runs of a row are those of the row below
             // it, so rotate the handles and rebuild only the rows the scroll exposed at the bottom. Reuse needs the
@@ -363,6 +404,7 @@ impl RunCache {
         self.cursor = cursor;
         self.selection = options.selection;
         self.top = Some(top);
+        self.drops = drops;
         &self.rows
     }
 }
@@ -735,6 +777,67 @@ mod tests {
         assert_eq!(
             scroll_rebuilds, 2,
             "a scroll rebuilds the exposed row and the reused row the cursor painted"
+        );
+    }
+
+    #[test]
+    fn a_view_offset_change_reuses_the_rows_between_the_windows() {
+        let p = palette();
+        let mut screen = Screen::new(5, 3, 100);
+        feed(&mut screen, b"0\r\n1\r\n2\r\n3\r\n4\r\n5");
+        assert!(
+            screen.scrollback_len() >= 2,
+            "the scrollback must hold the two lines the window slides over"
+        );
+        let mut cache = RunCache::default();
+        let mut options = opts(false);
+        options.view_offset = 1;
+        let before: Vec<Row> = cache.update(&mut screen, &p, &options).to_vec();
+        options.view_offset = 0;
+        let after = cache.update(&mut screen, &p, &options).to_vec();
+        assert_eq!(
+            cache.rebuilt, 1,
+            "only the row the window exposed at the bottom is new"
+        );
+        assert!(
+            Arc::ptr_eq(&before[1], &after[0]),
+            "row 1 moved up to row 0"
+        );
+        assert!(
+            Arc::ptr_eq(&before[2], &after[1]),
+            "row 2 moved up to row 1"
+        );
+        options.view_offset = 1;
+        let back = cache.update(&mut screen, &p, &options).to_vec();
+        assert_eq!(
+            cache.rebuilt, 1,
+            "only the row the window exposed at the top is new"
+        );
+        assert!(
+            Arc::ptr_eq(&after[0], &back[1]),
+            "row 0 moved down to row 1"
+        );
+    }
+
+    #[test]
+    fn a_scrollback_drop_forces_a_full_rebuild() {
+        let p = palette();
+        let mut screen = Screen::new(5, 3, 2);
+        feed(&mut screen, b"0\r\n1\r\n2\r\n3\r\n4\r\n5");
+        assert_eq!(screen.scrollback_len(), 2, "the capped scrollback is full");
+        let mut cache = RunCache::default();
+        let options = opts(false);
+        cache.update(&mut screen, &p, &options);
+        let drops = screen.scrollback_drops();
+        feed(&mut screen, b"\r\n");
+        assert!(
+            screen.scrollback_drops() > drops,
+            "the capped scrollback dropped a line"
+        );
+        cache.update(&mut screen, &p, &options);
+        assert_eq!(
+            cache.rebuilt, 3,
+            "a drop renumbers every line, so every row is rebuilt"
         );
     }
 

@@ -9,6 +9,7 @@ pub mod parser;
 pub mod pool;
 pub mod pty;
 pub mod screen;
+pub mod scroll;
 pub mod search;
 pub mod session;
 pub mod settings;

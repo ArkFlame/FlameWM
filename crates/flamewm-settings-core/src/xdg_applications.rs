@@ -359,9 +359,8 @@ impl ApplicationSettings {
     #[must_use]
     pub fn watch(&self) -> XdgWatch {
         let names = self.mimeapps_names().count();
-        let mut paths = Vec::with_capacity(
-            (self.config_dirs.len() + self.data_dirs.len()) * (1 + names),
-        );
+        let mut paths =
+            Vec::with_capacity((self.config_dirs.len() + self.data_dirs.len()) * (1 + names));
         for root in &self.config_dirs {
             paths.push(root.join("autostart"));
             for name in self.mimeapps_names() {

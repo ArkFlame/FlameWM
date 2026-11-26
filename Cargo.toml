@@ -19,9 +19,9 @@ rustix = { version = "=1.1.4", default-features = false, features = ["fs", "proc
 serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
 # Only the core protocol lives here. Extension modules are opted into by the crates that call
 # them (`randr`/`shape` in flamewm-wm-x11, `randr` in flamewm-x11-desktop/screenshot, `shape` in
-# flamewm-x11-canary, `xfixes`/`shm` in screenshot/clipboard, ...). Nothing uses `xkb`: the
-# keyboard layout path is xkbcommon through smithay, not the X11 extension. Keeping the workspace
-# set at core+none means no crate pays for a protocol module it never names.
+# flamewm-x11-canary, `xfixes`/`shm` in screenshot/clipboard, ...). No crate names the `xkb`
+# extension: keyboard layout is xkbcommon's, not x11rb's. The workspace entry therefore carries no
+# extension at all.
 x11rb = { version = "=0.14.0", default-features = false }
 # Shared so the API types, the WM, and the Wayland/Screenshot clients cannot drift apart.
 serde = { version = "=1.0.229", default-features = false, features = ["std"] }

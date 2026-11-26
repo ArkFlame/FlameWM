@@ -563,8 +563,7 @@ fn run()->Result<(),String>{
     // This runs on every exit path, including a failed event loop: a broken window
     // must not leave half-published staging entries behind.
     Rc::clone(&app).borrow_mut().close();
-    outcome?;
-    Ok(())
+    outcome
 }
 
 
