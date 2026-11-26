@@ -118,9 +118,9 @@ const LIGHT_TASKBAR_MIN_ALPHA: u8 = 204;
 /// Tint. Reduce transparency yields the opaque Dock solid.
 #[must_use]
 pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
-    let appearance = crate::glass::appearance_from_settings(snapshot);
     // highContrast (WCAG 1.4.11): the taskbar and its capsules take the opaque palette surface, the
-    // same as menus and Start, whatever the Dock material, tint or glass alpha says.
+    // same as menus and Start, whatever the Dock material, tint or glass alpha says. Checked before
+    // the appearance build it would discard.
     if crate::glass::high_contrast_from_settings(snapshot) {
         return SurfaceFill {
             rgb: crate::glass::palette_from_settings(snapshot).surface.0,
@@ -128,36 +128,41 @@ pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
             width: 1,
         };
     }
+    // Blur Only and Custom Tint read only their own keys; resolving them directly avoids the full
+    // appearance build (tint hex, light mode, backdrop and the regular-glass ink solve).
+    if let Some(material) = crate::glass::non_inherit_dock_material_from_settings(snapshot) {
+        return SurfaceFill {
+            rgb: material.tint_rgb,
+            alpha: ((u32::from(material.alpha_permille) * 255 + 500) / 1000) as u8,
+            width: 1,
+        };
+    }
+    let appearance = crate::glass::appearance_from_settings(snapshot);
     // Inherit is the shared surface: same surfaceColor, glass alpha and reduce-transparency solid
     // as popups and widgets, so the taskbar cannot drift from them.
-    if appearance.taskbar_mode == crate::glass::TaskbarMode::Inherit {
-        let mut fill = surface_fill_with(snapshot, appearance);
-        // Light ink is dark: a translucent light bar over a dark wallpaper reads as dark glass
-        // with dark text (Pass 12). Only the taskbar takes the floor; popups keep the glass alpha.
-        if appearance.light && !appearance.reduce_transparency {
-            fill.alpha = fill.alpha.max(LIGHT_TASKBAR_MIN_ALPHA);
-        }
-        return fill;
+    let mut fill = surface_fill_with(snapshot, appearance);
+    // Light ink is dark: a translucent light bar over a dark wallpaper reads as dark glass
+    // with dark text (Pass 12). Only the taskbar takes the floor; popups keep the glass alpha.
+    if appearance.light && !appearance.reduce_transparency {
+        fill.alpha = fill.alpha.max(LIGHT_TASKBAR_MIN_ALPHA);
     }
-    let material = crate::glass::resolve(
-        crate::glass::MaterialRole::Dock,
-        appearance,
-        100,
-        crate::glass::RendererCaps {
-            backdrop_blur: true,
-        },
-    );
-    SurfaceFill {
-        rgb: material.tint_rgb,
-        alpha: ((u32::from(material.alpha_permille) * 255 + 500) / 1000) as u8,
-        width: 1,
-    }
+    fill
 }
 
 /// Taskbar/Dock `(opacity, blur)` percents for the pseudo-transparency backdrop. Shared by the X11
 /// shell and the Wayland compositor so both backends read one Dock material.
 #[must_use]
 pub fn dock_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
+    // Flat materials are opaque with no backdrop, whatever the Dock mode.
+    if crate::glass::reduce_transparency_from_settings(snapshot) {
+        return (100, 0);
+    }
+    if let Some(material) = crate::glass::non_inherit_dock_material_from_settings(snapshot) {
+        return (
+            u8::try_from(material.alpha_permille / 10).unwrap_or(100),
+            crate::glass::blur_percent_from_px(material.blur_px),
+        );
+    }
     let dock = crate::glass::resolve(
         crate::glass::MaterialRole::Dock,
         crate::glass::appearance_from_settings(snapshot),
@@ -176,15 +181,7 @@ pub fn dock_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
 /// reduce transparency is on.
 #[must_use]
 pub fn surface_blur_percent(snapshot: &SettingsSnapshot) -> u8 {
-    let material = crate::glass::resolve(
-        crate::glass::MaterialRole::GlassRegular,
-        crate::glass::appearance_from_settings(snapshot),
-        100,
-        crate::glass::RendererCaps {
-            backdrop_blur: true,
-        },
-    );
-    crate::glass::blur_percent_from_px(material.blur_px)
+    crate::glass::regular_blur_percent_from_settings(snapshot)
 }
 
 /// Thickness bounds shared by `surfaceOutlineWidth` and `windowOutlineWidth`: 1..=4 px.

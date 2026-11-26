@@ -9,6 +9,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flamewm_api::settings::SettingsSnapshot;
@@ -16,8 +17,8 @@ use flamewm_api::switcher::SwitcherThumb;
 use flamewm_api::Rect;
 use flamewm_control_wire::SwitcherEntry;
 use flamewm_ui_x11::{
-    decode_document, RuntimeImage, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
-    SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
+    decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
+    UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 use crate::settings_projection::{self, SurfaceKind};
@@ -42,6 +43,29 @@ pub struct SwitcherFrame {
     pub immediate: bool,
     pub selected: usize,
     pub entries: Vec<SwitcherEntry>,
+    /// Resolved previews aligned with `entries`; shared pixels, never copied into the frame.
+    pub previews: Vec<Option<SwitcherPreview>>,
+}
+
+impl SwitcherFrame {
+    /// Cheap content identity: labels, selection and preview identity, never pixel bytes. A
+    /// repeated snapshot therefore repaints nothing.
+    fn same_content(&self, other: &Self) -> bool {
+        self.open == other.open
+            && self.immediate == other.immediate
+            && self.selected == other.selected
+            && self.entries == other.entries
+            && self.previews.len() == other.previews.len()
+            && self
+                .previews
+                .iter()
+                .zip(&other.previews)
+                .all(|(left, right)| match (left, right) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => left.same_content(right),
+                    _ => false,
+                })
+    }
 }
 
 /// Rows shown for `count` windows with `selected` in view: the window scrolls only once the
@@ -85,35 +109,107 @@ pub fn row_label(entry: &SwitcherEntry) -> &str {
     }
 }
 
+/// One resolved preview: shared pixel buffer plus its size. The shell hands these to the UI
+/// document by shared handle, so a repaint never copies preview bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitcherPreview {
+    pub width: u32,
+    pub height: u32,
+    /// Content identity; `0` marks untracked legacy pixels that bypass the generation cache.
+    pub generation: u64,
+    pub pixels: Arc<Vec<u8>>,
+}
+
+impl SwitcherPreview {
+    /// Cheap identity: generation and size, plus the buffer only for untracked legacy pixels.
+    fn same_content(&self, other: &Self) -> bool {
+        self.width == other.width
+            && self.height == other.height
+            && self.generation == other.generation
+            && (self.generation != 0
+                || Arc::ptr_eq(&self.pixels, &other.pixels)
+                || self.pixels == other.pixels)
+    }
+
+    /// Document source key. A non-zero generation is the WM's content identity, so it names the
+    /// pixels without re-hashing them and lets identical previews share one upload.
+    fn source(&self) -> String {
+        if self.generation != 0 {
+            return format!(
+                "switcher-thumb-{}x{}-g{}",
+                self.width, self.height, self.generation
+            );
+        }
+        let mut hasher = DefaultHasher::new();
+        self.pixels.hash(&mut hasher);
+        format!(
+            "switcher-thumb-{}x{}-{:x}",
+            self.width,
+            self.height,
+            hasher.finish()
+        )
+    }
+}
+
+/// Takes one thumb's pixels as a preview, leaving the entry as a metadata-only reference.
+fn take_preview(thumb: &mut SwitcherThumb) -> Option<SwitcherPreview> {
+    let pixels = Arc::new(std::mem::take(&mut thumb.rgba));
+    let expected = u64::from(thumb.width) * u64::from(thumb.height) * 4;
+    (thumb.width > 0 && thumb.height > 0 && pixels.len() as u64 == expected).then(|| {
+        SwitcherPreview {
+            width: thumb.width,
+            height: thumb.height,
+            generation: thumb.generation,
+            pixels,
+        }
+    })
+}
+
 /// Preview pixels the shell holds, keyed by the WM's generation. Rebuilt from every snapshot, so
 /// only generations the latest snapshot names survive; a closed snapshot names none.
 #[derive(Debug, Clone, Default)]
-pub struct SwitcherThumbCache(HashMap<u64, SwitcherThumb>);
+pub struct SwitcherThumbCache(HashMap<u64, SwitcherPreview>);
 
 impl SwitcherThumbCache {
-    /// Stores fresh pixels and fills references from the cache. A reference whose pixels are
-    /// missing drops to no preview (the row keeps its title).
-    pub fn resolve(&mut self, entries: &mut [SwitcherEntry]) {
-        let mut next = HashMap::new();
+    /// Stores fresh pixels and resolves references from the cache. Returns one preview per entry,
+    /// aligned with `entries`. Pixels live in a shared handle, so a reference reuses the buffer
+    /// without copying it. A reference whose pixels are missing drops to no preview (the row keeps
+    /// its title).
+    pub fn resolve(&mut self, entries: &mut [SwitcherEntry]) -> Vec<Option<SwitcherPreview>> {
+        let mut next = HashMap::with_capacity(entries.len());
+        let mut previews = Vec::with_capacity(entries.len());
         for entry in entries.iter_mut() {
             let Some(thumb) = entry.thumb.as_mut() else {
+                previews.push(None);
                 continue;
             };
             if thumb.generation == 0 {
+                // LEGACY: untracked pixels render directly and are not cached.
+                previews.push(take_preview(thumb));
                 continue;
             }
             if thumb.is_reference() {
-                let Some(held) = self.0.get(&thumb.generation) else {
+                let held = self
+                    .0
+                    .get(&thumb.generation)
+                    .filter(|held| held.width == thumb.width && held.height == thumb.height);
+                if let Some(held) = held {
+                    previews.push(Some(held.clone()));
+                } else {
                     entry.thumb = None;
-                    continue;
-                };
-                thumb.rgba = held.rgba.clone();
+                    previews.push(None);
+                }
+                continue;
             }
-            if let Some(thumb) = entry.thumb.as_ref() {
-                next.insert(thumb.generation, thumb.clone());
-            }
+            let Some(preview) = take_preview(thumb) else {
+                previews.push(None);
+                continue;
+            };
+            next.insert(preview.generation, preview.clone());
+            previews.push(Some(preview));
         }
         self.0 = next;
+        previews
     }
 
     /// Number of previews held; for tests and diagnostics.
@@ -193,8 +289,15 @@ impl SwitcherController {
             return was_visible;
         }
         let immediate = frame.immediate;
+        // A repeated snapshot (same selection, same preview generations) changes nothing on screen.
+        if self
+            .frame
+            .as_ref()
+            .is_none_or(|held| !held.same_content(&frame))
+        {
+            self.dirty = true;
+        }
         self.frame = Some(frame);
-        self.dirty = true;
         if immediate {
             self.show_at = None;
             self.visible = true;
@@ -302,10 +405,11 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
         let label_id = format!("switcher-row-{row}-label");
         let icon_id = format!("switcher-row-{row}-icon");
         let thumb_id = format!("switcher-row-{row}-thumb");
+        let index = window.start + slot;
         match frame
             .entries
-            .get(window.start + slot)
-            .filter(|_| window.start + slot < window.end)
+            .get(index)
+            .filter(|_| index < window.end)
         {
             Some(entry) => {
                 document.text_ref(&label_id, row_label(entry))?;
@@ -317,22 +421,17 @@ fn paint(document: &mut impl UiDocumentAccess, frame: &SwitcherFrame) -> Result<
                 let state_id = format!("switcher-row-{row}-state");
                 document.text_ref(&state_id, state_label(entry))?;
                 document.visible(&state_id, hidden)?;
-                if let Some(thumb) = entry.thumb.as_ref().filter(|t| t.is_well_formed()) {
-                    let (w, h) = thumb_fit(thumb.width, thumb.height);
-                    let mut hasher = DefaultHasher::new();
-                    thumb.rgba.hash(&mut hasher);
-                    let image = RuntimeImage {
-                        source: format!(
-                            "switcher-thumb-{row}-{}x{}-{:x}",
-                            thumb.width,
-                            thumb.height,
-                            hasher.finish()
-                        ),
-                        width: thumb.width,
-                        height: thumb.height,
-                        pixels: thumb.rgba.clone(),
-                    };
-                    document.image_rgba8(&thumb_id, image)?;
+                if let Some(preview) = frame.previews.get(index).and_then(Option::as_ref) {
+                    let (w, h) = thumb_fit(preview.width, preview.height);
+                    // Shared pixels: the document keeps the same buffer, so an unchanged preview
+                    // is not copied or re-uploaded on the next repaint.
+                    document.image_rgba8_shared(
+                        &thumb_id,
+                        preview.source(),
+                        preview.width,
+                        preview.height,
+                        Arc::clone(&preview.pixels),
+                    )?;
                     document.size(&thumb_id, w, h)?;
                     document.visible(&icon_id, false)?;
                     document.visible(&thumb_id, true)?;
@@ -398,6 +497,7 @@ mod tests {
                 switcher_row("Minimised", true, false),
                 switcher_row("Elsewhere", false, true),
             ],
+            previews: vec![None, None, None],
         };
         let mut inner = crate::test_recorder::NullDocument;
         let mut doc = crate::test_recorder::Recording::new(&mut inner);

@@ -557,51 +557,138 @@ pub fn resolve(
 #[must_use]
 pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
     let defaults = Appearance::default();
-    let percent = |key: &str| match snapshot.values.get(key) {
-        Some(SettingValue::Percent(value)) => Some(*value),
-        _ => None,
-    };
-    let flag = |key: &str, default: bool| match snapshot.values.get(key) {
-        Some(SettingValue::Boolean(value)) => *value,
-        _ => default,
-    };
-    let mode = match snapshot.values.get("taskbarMaterialMode") {
-        Some(SettingValue::Text(value)) if value == "inherit" => TaskbarMode::Inherit,
-        Some(SettingValue::Text(value)) if value == "custom-tint" => TaskbarMode::CustomTint,
-        Some(SettingValue::Text(value)) if value == "blur-only" => TaskbarMode::BlurOnly,
-        _ => defaults.taskbar_mode,
-    };
-    // The glass key is the live one; read the legacy percent only while it is absent, so a desktop
-    // that already carries `glassBlurPx` skips one settings lookup per appearance build.
-    let glass_blur_px = match percent_u8_key(snapshot, "glassBlurPx") {
-        Some(px) => px.min(54),
-        None => percent("surfaceBlurPercent")
-            .map(|value| (u16::from(value.min(100)) * 40 / 100) as u8)
-            .unwrap_or(defaults.glass_blur_px)
-            .min(54),
-    };
     let glass_opacity_percent = glass_opacity_from_settings(snapshot);
-    let custom_tint = match snapshot.values.get("taskbarCustomTint") {
-        Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
-        _ => None,
-    };
     let tint_rgb = tint_rgb_from_settings(snapshot);
     Appearance {
         // highContrast (WCAG 1.4.11, KDE High Contrast, Windows contrast themes) also makes every
         // material opaque with no blur, the same flat look as reduceTransparency.
-        reduce_transparency: flag("reduceTransparency", defaults.reduce_transparency)
-            || high_contrast_from_settings(snapshot),
+        reduce_transparency: reduce_transparency_from_settings(snapshot),
         glass_opacity_percent,
         tint_rgb,
-        glass_blur_px,
-        taskbar_mode: mode,
-        taskbar_opacity_percent: percent("taskbarOpacityPercent")
-            .unwrap_or(defaults.taskbar_opacity_percent)
-            .min(75),
-        taskbar_custom_tint: custom_tint.unwrap_or(defaults.taskbar_custom_tint),
+        glass_blur_px: glass_blur_px_from_settings(snapshot),
+        taskbar_mode: taskbar_mode_from_settings(snapshot),
+        taskbar_opacity_percent: taskbar_opacity_from_settings(snapshot),
+        taskbar_custom_tint: taskbar_custom_tint_from_settings(snapshot)
+            .unwrap_or(defaults.taskbar_custom_tint),
         light: appearance_is_light(snapshot),
         backdrop_rgb: wallpaper_mean_rgb(snapshot),
     }
+}
+
+/// `taskbarMaterialMode`; an unset or unknown value is the Inherit default.
+fn taskbar_mode_from_settings(snapshot: &SettingsSnapshot) -> TaskbarMode {
+    match snapshot.values.get("taskbarMaterialMode") {
+        Some(SettingValue::Text(value)) if value == "inherit" => TaskbarMode::Inherit,
+        Some(SettingValue::Text(value)) if value == "custom-tint" => TaskbarMode::CustomTint,
+        Some(SettingValue::Text(value)) if value == "blur-only" => TaskbarMode::BlurOnly,
+        _ => Appearance::default().taskbar_mode,
+    }
+}
+
+/// `taskbarOpacityPercent`, clamped to the 75 percent ceiling.
+fn taskbar_opacity_from_settings(snapshot: &SettingsSnapshot) -> u8 {
+    match snapshot.values.get("taskbarOpacityPercent") {
+        Some(SettingValue::Percent(value)) => (*value).min(75),
+        _ => Appearance::default().taskbar_opacity_percent,
+    }
+}
+
+fn taskbar_custom_tint_from_settings(snapshot: &SettingsSnapshot) -> Option<u32> {
+    match snapshot.values.get("taskbarCustomTint") {
+        Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
+        _ => None,
+    }
+}
+
+/// `glassBlurPx` in logical px, clamped to 54. The glass key is the live one; the legacy
+/// `surfaceBlurPercent` seeds it only while the glass key is absent, so a desktop that already
+/// carries `glassBlurPx` skips one settings lookup.
+pub(crate) fn glass_blur_px_from_settings(snapshot: &SettingsSnapshot) -> u8 {
+    match percent_u8_key(snapshot, "glassBlurPx") {
+        Some(px) => px.min(54),
+        None => match snapshot.values.get("surfaceBlurPercent") {
+            Some(SettingValue::Percent(value)) => {
+                (u16::from((*value).min(100)) * 40 / 100) as u8
+            }
+            _ => Appearance::default().glass_blur_px,
+        }
+        .min(54),
+    }
+}
+
+/// `reduceTransparency` or high contrast, the exact flat-material rule `appearance_from_settings`
+/// applies. Public to the crate so a surface that only needs the flat flag skips a full appearance.
+pub(crate) fn reduce_transparency_from_settings(snapshot: &SettingsSnapshot) -> bool {
+    matches!(
+        snapshot.values.get("reduceTransparency"),
+        Some(SettingValue::Boolean(true))
+    ) || high_contrast_from_settings(snapshot)
+}
+
+/// Backdrop blur percent of a regular glass surface, derived without building [`Appearance`] or
+/// running the ink solve. `resolve(MaterialRole::GlassRegular, ...)` takes its blur straight from
+/// `glassBlurPx`; the scrim can raise the alpha but never the blur, so the two always agree.
+pub(crate) fn regular_blur_percent_from_settings(snapshot: &SettingsSnapshot) -> u8 {
+    if reduce_transparency_from_settings(snapshot) {
+        0
+    } else {
+        blur_percent_from_px(scale_px(
+            u16::from(glass_blur_px_from_settings(snapshot)),
+            100,
+        ))
+    }
+}
+
+/// Resolved material of a Dock that does not inherit the shared glass, read straight from the
+/// setting keys. `None` for Inherit, whose alpha the ink scrim can lift and which therefore needs
+/// the full regular-glass solve. One owner: this mirrors the Dock branch of [`resolve`].
+pub(crate) fn non_inherit_dock_material_from_settings(
+    snapshot: &SettingsSnapshot,
+) -> Option<ResolvedMaterial> {
+    let mode = taskbar_mode_from_settings(snapshot);
+    if mode == TaskbarMode::Inherit {
+        return None;
+    }
+    let reduce_transparency = reduce_transparency_from_settings(snapshot);
+    let (tint_rgb, alpha_permille, blur_px) = match (mode, reduce_transparency) {
+        (TaskbarMode::CustomTint, true) => (
+            taskbar_custom_tint_from_settings(snapshot)
+                .unwrap_or(Appearance::default().taskbar_custom_tint),
+            1000,
+            0,
+        ),
+        (_, true) => (
+            if appearance_is_light(snapshot) {
+                LIGHT_PANEL.0
+            } else {
+                STANDARD_RGB
+            },
+            1000,
+            0,
+        ),
+        (TaskbarMode::CustomTint, false) => (
+            taskbar_custom_tint_from_settings(snapshot)
+                .unwrap_or(Appearance::default().taskbar_custom_tint),
+            u16::from(taskbar_opacity_from_settings(snapshot)) * 10,
+            scale_px(
+                taskbar_blur_px(glass_blur_px_from_settings(snapshot)),
+                100,
+            ),
+        ),
+        (_, false) => (
+            NEUTRAL_RGB,
+            u16::from(taskbar_opacity_from_settings(snapshot)) * 10,
+            scale_px(
+                taskbar_blur_px(glass_blur_px_from_settings(snapshot)),
+                100,
+            ),
+        ),
+    };
+    Some(ResolvedMaterial {
+        tint_rgb,
+        alpha_permille,
+        blur_px,
+    })
 }
 
 /// The Surfaces slider writes surfaceOpacity only, so while the glass group is not custom the
@@ -1399,3 +1486,107 @@ mod high_contrast_flat_tests {
         assert_eq!(window_backdrop_material(&snapshot, 67, 40), (67, 40));
     }
 }
+
+#[cfg(test)]
+mod fast_path_tests {
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+    use super::{
+        MaterialRole, RendererCaps, ResolvedMaterial, appearance_from_settings,
+        blur_percent_from_px, non_inherit_dock_material_from_settings,
+        regular_blur_percent_from_settings, resolve,
+    };
+
+    const CAPS: RendererCaps = RendererCaps {
+        backdrop_blur: true,
+    };
+
+    fn snapshot(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in pairs {
+            snapshot.values.insert((*key).into(), value.clone());
+        }
+        snapshot
+    }
+
+    /// The blur fast path must equal the full regular-glass resolution for every input shape.
+    #[test]
+    fn regular_blur_fast_path_matches_resolution() {
+        let cases: [Vec<(&str, SettingValue)>; 5] = [
+            Vec::new(),
+            vec![("glassBlurPx", SettingValue::Percent(40))],
+            vec![("surfaceBlurPercent", SettingValue::Percent(70))],
+            vec![("reduceTransparency", SettingValue::Boolean(true))],
+            vec![("highContrast", SettingValue::Boolean(true))],
+        ];
+        for pairs in cases {
+            let snapshot = snapshot(&pairs);
+            let resolved = resolve(
+                MaterialRole::GlassRegular,
+                appearance_from_settings(&snapshot),
+                100,
+                CAPS,
+            );
+            assert_eq!(
+                regular_blur_percent_from_settings(&snapshot),
+                blur_percent_from_px(resolved.blur_px),
+                "{pairs:?}"
+            );
+        }
+    }
+
+    /// The non-inherit Dock fast path must reproduce `resolve(MaterialRole::Dock, ...)` exactly.
+    #[test]
+    fn non_inherit_dock_fast_path_matches_resolution() {
+        let cases: [Vec<(&str, SettingValue)>; 5] = [
+            vec![(
+                "taskbarMaterialMode",
+                SettingValue::Text("blur-only".into()),
+            )],
+            vec![
+                ("taskbarMaterialMode", SettingValue::Text("blur-only".into())),
+                ("taskbarOpacityPercent", SettingValue::Percent(40)),
+                ("glassBlurPx", SettingValue::Percent(33)),
+            ],
+            vec![
+                (
+                    "taskbarMaterialMode",
+                    SettingValue::Text("custom-tint".into()),
+                ),
+                (
+                    "taskbarCustomTint",
+                    SettingValue::Text("#112233".into()),
+                ),
+            ],
+            vec![
+                ("taskbarMaterialMode", SettingValue::Text("blur-only".into())),
+                ("reduceTransparency", SettingValue::Boolean(true)),
+            ],
+            vec![
+                (
+                    "taskbarMaterialMode",
+                    SettingValue::Text("custom-tint".into()),
+                ),
+                ("highContrast", SettingValue::Boolean(true)),
+            ],
+        ];
+        for pairs in cases {
+            let snapshot = snapshot(&pairs);
+            let expected = resolve(
+                MaterialRole::Dock,
+                appearance_from_settings(&snapshot),
+                100,
+                CAPS,
+            );
+            let actual: ResolvedMaterial =
+                non_inherit_dock_material_from_settings(&snapshot).expect("non-inherit mode");
+            assert_eq!(actual, expected, "{pairs:?}");
+        }
+    }
+
+    #[test]
+    fn inherit_mode_needs_the_full_solve() {
+        assert!(non_inherit_dock_material_from_settings(&SettingsSnapshot::new(1)).is_none());
+    }
+}
+

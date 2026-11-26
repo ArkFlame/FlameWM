@@ -12,6 +12,7 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use flamewm_api::clipboard::ClipboardHistoryEntry;
@@ -37,6 +38,9 @@ pub const MAX_TEXT_BYTES: usize = 1 << 20;
 pub const READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// Clipboard history length. Klipper's default (`klipper/historymodel.cpp`, `MaxClipItems`).
 pub const HISTORY_LEN: usize = 20;
+/// Total bytes across history entries. Entries are shared with the current selection, so this cap
+/// bounds retained clipboard RAM without copying anything when an entry is kept or re-selected.
+pub const MAX_HISTORY_BYTES: usize = 8 << 20;
 /// Preview length in characters for one history entry.
 pub const PREVIEW_CHARS: usize = 120;
 /// KDE/KeePassXC convention (`x-kde-passwordManagerHint`): a source offering it holds a secret.
@@ -67,33 +71,46 @@ pub fn preview(text: &str) -> String {
 pub struct TextHistory {
     next_id: u64,
     items: VecDeque<HistoryItem>,
+    bytes: usize,
 }
 
 /// One kept entry. The preview is computed once at push, so listing never rescans the text.
+/// The bytes are shared with the selection slot, so keeping an entry copies no payload.
 struct HistoryItem {
     id: u64,
-    text: String,
+    bytes: Arc<[u8]>,
     preview: String,
 }
 
 impl TextHistory {
-    /// Adds `text` at the front, moving an equal entry there with a fresh id. Returns false for
-    /// empty text, non-UTF-8 text (caller's job), or text above `MAX_TEXT_BYTES`.
-    pub fn push(&mut self, text: String) -> bool {
-        if text.is_empty() || text.len() > MAX_TEXT_BYTES {
+    /// Adds `bytes` at the front, moving an equal entry there with a fresh id. Returns false for
+    /// empty text, non-UTF-8 bytes, or text above `MAX_TEXT_BYTES`. The caller passes the slot's
+    /// shared bytes, so history never duplicates the text.
+    pub fn push(&mut self, bytes: Arc<[u8]>) -> bool {
+        if bytes.is_empty() || bytes.len() > MAX_TEXT_BYTES {
             return false;
         }
-        if let Some(pos) = self.items.iter().position(|item| item.text == text) {
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            return false;
+        };
+        if let Some(pos) = self.items.iter().position(|item| item.bytes == bytes) {
+            self.bytes -= self.items[pos].bytes.len();
             self.items.remove(pos);
         }
         self.next_id += 1;
-        let preview = preview(&text);
+        let preview = preview(text);
+        self.bytes += bytes.len();
         self.items.push_front(HistoryItem {
             id: self.next_id,
-            text,
+            bytes,
             preview,
         });
-        self.items.truncate(HISTORY_LEN);
+        while self.items.len() > HISTORY_LEN || self.bytes > MAX_HISTORY_BYTES {
+            let Some(old) = self.items.pop_back() else {
+                break;
+            };
+            self.bytes -= old.bytes.len();
+        }
         true
     }
 
@@ -104,20 +121,22 @@ impl TextHistory {
             .map(|item| ClipboardHistoryEntry {
                 id: item.id,
                 preview: item.preview.clone(),
-                len: item.text.len(),
+                len: item.bytes.len(),
             })
             .collect()
     }
 
-    pub fn get(&self, id: u64) -> Option<&str> {
+    /// Shared bytes of entry `id`; re-selecting it copies a refcount, not the text.
+    pub fn get(&self, id: u64) -> Option<Arc<[u8]>> {
         self.items
             .iter()
             .find(|item| item.id == id)
-            .map(|item| item.text.as_str())
+            .map(|item| Arc::clone(&item.bytes))
     }
 
     pub fn clear(&mut self) {
         self.items.clear();
+        self.bytes = 0;
     }
 }
 
@@ -128,12 +147,25 @@ pub fn pick_text_mime(offered: &[String]) -> Option<&'static str> {
         .find(|mime| offered.iter().any(|o| o == mime))
 }
 
+/// Bytes kept for one selection target, with the UTF-8 verdict cached at completion so serving a
+/// paste never rescans a large payload on the compositor loop.
+struct Kept {
+    mime: &'static str,
+    bytes: Arc<[u8]>,
+    utf8: bool,
+}
+
+fn kept_bytes(mime: &'static str, bytes: Arc<[u8]>) -> Kept {
+    let utf8 = std::str::from_utf8(&bytes).is_ok();
+    Kept { mime, bytes, utf8 }
+}
+
 /// Text kept for one selection target. Generations invalidate reads that were started for an
 /// earlier selection, so a late read cannot replace a newer one.
 #[derive(Default)]
 pub struct TextSlot {
     generation: u64,
-    text: Option<(&'static str, Vec<u8>)>,
+    kept: Option<Kept>,
 }
 
 impl TextSlot {
@@ -151,7 +183,7 @@ impl TextSlot {
     /// Explicit clear, or the start of a replacement. Invalidates any read in flight.
     pub fn clear(&mut self) {
         self.generation += 1;
-        self.text = None;
+        self.kept = None;
     }
 
     /// Keeps the bytes of a finished read. Returns false, and keeps nothing, when the read is stale,
@@ -165,35 +197,57 @@ impl TextSlot {
         if generation != self.generation {
             return false;
         }
-        self.text = bytes
+        self.kept = bytes
             .filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_TEXT_BYTES)
-            .map(|bytes| (mime, bytes));
-        self.text.is_some()
+            .map(|bytes| kept_bytes(mime, Arc::from(bytes)));
+        self.kept.is_some()
+    }
+
+    /// Keeps shared bytes already known to be UTF-8 text (a history entry). No copy, no rescan.
+    pub fn complete_utf8(
+        &mut self,
+        generation: u64,
+        mime: &'static str,
+        bytes: Arc<[u8]>,
+    ) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.kept = (!bytes.is_empty() && bytes.len() <= MAX_TEXT_BYTES).then_some(Kept {
+            mime,
+            bytes,
+            utf8: true,
+        });
+        self.kept.is_some()
     }
 
     /// The kept bytes, when `mime` is the stored mime or, for UTF-8 text, any other text target.
     pub fn text(&self, mime: &str) -> Option<&[u8]> {
-        self.text
-            .as_ref()
-            .filter(|(kept, bytes)| {
-                *kept == mime
-                    || (TEXT_MIMES.contains(kept)
-                        && TEXT_MIMES.contains(&mime)
-                        && std::str::from_utf8(bytes).is_ok())
-            })
-            .map(|(_, bytes)| bytes.as_slice())
+        self.matching(mime).map(|kept| kept.bytes.as_ref())
+    }
+
+    /// Shared handle to the kept bytes for a paste, so serving does not copy the payload on the loop.
+    pub fn bytes(&self, mime: &str) -> Option<Arc<[u8]>> {
+        self.matching(mime).map(|kept| Arc::clone(&kept.bytes))
+    }
+
+    fn matching(&self, mime: &str) -> Option<&Kept> {
+        self.kept.as_ref().filter(|kept| {
+            kept.mime == mime
+                || (kept.utf8
+                    && TEXT_MIMES.contains(&kept.mime)
+                    && TEXT_MIMES.contains(&mime))
+        })
     }
 
     /// Mime types a re-published selection offers. UTF-8 text advertises every text target, so a
     /// client that asks for `text/plain`, `UTF8_STRING` or `text/plain;charset=utf-8` finds it.
     pub fn offers(&self) -> Vec<String> {
-        match &self.text {
-            Some((mime, bytes))
-                if TEXT_MIMES.contains(mime) && std::str::from_utf8(bytes).is_ok() =>
-            {
+        match self.kept.as_ref() {
+            Some(kept) if kept.utf8 && TEXT_MIMES.contains(&kept.mime) => {
                 TEXT_MIMES.iter().map(|m| (*m).to_owned()).collect()
             }
-            Some((mime, _)) => vec![(*mime).to_owned()],
+            Some(kept) => vec![kept.mime.to_owned()],
             None => Vec::new(),
         }
     }
@@ -340,15 +394,10 @@ impl State {
             return;
         }
         if ty == SelectionTarget::Clipboard
-            && let Some(text) = self
-                .compat
-                .clipboard
-                .slot(ty)
-                .text(mime)
-                .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                .map(str::to_owned)
+            && let Some(bytes) = self.compat.clipboard.slot(ty).bytes(mime)
         {
-            self.compat.clipboard.history.push(text);
+            // Shared with the slot: keeping history costs a refcount, not another copy of the text.
+            self.compat.clipboard.history.push(bytes);
         }
         let seat = self.seat.clone();
         let offers = self.compat.clipboard.slot(ty).offers();
@@ -370,12 +419,12 @@ impl State {
     /// Makes history entry `id` the CLIPBOARD selection, served like a kept owner's text. False when
     /// the id is unknown.
     pub(crate) fn select_clipboard_history(&mut self, id: u64) -> bool {
-        let Some(text) = self.compat.clipboard.history.get(id).map(str::to_owned) else {
+        let Some(bytes) = self.compat.clipboard.history.get(id) else {
             return false;
         };
         let slot = self.compat.clipboard.slot_mut(SelectionTarget::Clipboard);
         let generation = slot.begin();
-        slot.complete(generation, TEXT_MIMES[0], Some(text.into_bytes()));
+        slot.complete_utf8(generation, TEXT_MIMES[0], bytes);
         let seat = self.seat.clone();
         set_data_device_selection(&self.display, &seat, vec![TEXT_MIMES[0].to_owned()], ());
         true
@@ -388,7 +437,8 @@ impl State {
 }
 
 /// Writes kept text into a paste's fd. Off the loop so a slow reader cannot stall the compositor.
-pub fn write_off_loop(bytes: Vec<u8>, fd: OwnedFd) {
+/// Takes the slot's shared bytes, so the compositor thread never copies the payload.
+pub fn write_off_loop(bytes: Arc<[u8]>, fd: OwnedFd) {
     std::thread::spawn(move || {
         let _ = File::from(fd).write_all(&bytes);
     });
@@ -490,6 +540,10 @@ mod tests {
         assert_eq!(slot.text("text/plain"), Some(&b"new"[..]));
     }
 
+    fn arc(text: &str) -> Arc<[u8]> {
+        Arc::from(text.as_bytes())
+    }
+
     fn text_entry(history: &TextHistory) -> Vec<String> {
         history
             .summaries()
@@ -501,11 +555,11 @@ mod tests {
     #[test]
     fn history_is_newest_first_and_dedupe_moves_to_front() {
         let mut history = TextHistory::default();
-        assert!(history.push("one".into()));
-        assert!(history.push("two".into()));
-        assert!(history.push("three".into()));
+        assert!(history.push(arc("one")));
+        assert!(history.push(arc("two")));
+        assert!(history.push(arc("three")));
         assert_eq!(text_entry(&history), ["three", "two", "one"]);
-        assert!(history.push("one".into()));
+        assert!(history.push(arc("one")));
         assert_eq!(text_entry(&history), ["one", "three", "two"]);
         let ids: Vec<u64> = history.summaries().iter().map(|entry| entry.id).collect();
         assert_eq!(ids.len(), 3);
@@ -519,7 +573,7 @@ mod tests {
     fn history_keeps_twenty_entries_and_evicts_oldest() {
         let mut history = TextHistory::default();
         for tag in 0..=HISTORY_LEN {
-            assert!(history.push(format!("item {tag}")));
+            assert!(history.push(arc(&format!("item {tag}"))));
         }
         assert_eq!(history.summaries().len(), HISTORY_LEN);
         assert_eq!(

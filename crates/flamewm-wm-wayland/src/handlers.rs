@@ -694,8 +694,9 @@ impl SelectionHandler for State {
         _user_data: &(),
     ) {
         // Kept text (a Wayland owner that exited, or one re-published by the compositor) is served here.
-        if let Some(bytes) = self.compat.clipboard.slot(ty).text(&mime_type) {
-            write_off_loop(bytes.to_vec(), fd);
+        // The slot hands out shared bytes, so this path copies no payload on the compositor loop.
+        if let Some(bytes) = self.compat.clipboard.slot(ty).bytes(&mime_type) {
+            write_off_loop(bytes, fd);
             return;
         }
         // An X11 client pastes from a Wayland owner: stream the data into the X11 side.
