@@ -115,3 +115,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 ## u151, u153 (audits, no code change)
 - u151 terminal: dirty-line reuse and batched PTY reads already in place (view.rs, app/grid.rs, session.rs).
 - u153 explorer: transfers.rs stats only unknown paths plus one destination stat per user drop; left synchronous on purpose. Composition shift: none.
+
+## Idle composition sample (scripts/perf-clients, nested, SETTLE=6, 2 s window, 100 ticks = 1 s)
+- explorer startup 10 / idle 0 / 21 MB; terminal 14 / 0 / 30 MB; shell 13 / 0 / 22 MB; task-manager 32 / 4 / 31 MB.
+- Only idle cost is the task manager's 1 s /proc sampler (about 2% of one core, 100% of its own samples). Everything else parks.
+- Next: shrink the sampler cost (skip unchanged per-pid reads, reuse buffers) without losing rows.
