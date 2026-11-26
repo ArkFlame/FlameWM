@@ -290,9 +290,6 @@ struct ExplorerApp {
     convert_picker:Option<PathBuf>,
     context:Option<(f32,f32)>, edit:Option<EditMode>, field:flamewm_explorer::TextField, rename_target:Option<PathBuf>, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<progress::Snapshot>,
-    /// Set when the user closed the window: the running job is cancelled, and the
-    /// process exits once its staging output is gone.
-    closing:bool,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>,
     /// Ark drag-out extractions in flight; polled from the event loop.
@@ -448,7 +445,7 @@ fn run()->Result<(),String>{
             }).is_ok(){UiWakeDrain::Keep}else{UiWakeDrain::Retire}
         }) as Box<dyn FnMut()->UiWakeDrain>)
     });
-    run_with_controller_events_role_and_two_readable_fds(
+    let outcome = run_with_controller_events_role_and_two_readable_fds(
         doc,
         UiWindowConfig{width:window_w,height:window_h,x:80,y:window_y,title:"FlameWM Explorer".into(),identity:Some(flamewm_ui_x11::X11WindowIdentity{
             // Matches flamewm-explorer.desktop (StartupWMClass) so the taskbar resolves the app icon.
@@ -560,10 +557,13 @@ fn run()->Result<(),String>{
             if app.glide.is_animating(Instant::now()) {return app.project_rows(document,false);}
             Ok(())
         },
-    )?;
+    );
     // Closing the window cancels a running transfer and waits for its staging
     // output to be gone before the process exits, so no partial file survives.
+    // This runs on every exit path, including a failed event loop: a broken window
+    // must not leave half-published staging entries behind.
     Rc::clone(&app).borrow_mut().close();
+    outcome?;
     Ok(())
 }
 

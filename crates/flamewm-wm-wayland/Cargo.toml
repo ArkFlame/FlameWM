@@ -52,6 +52,11 @@ tracing = "0.1"
 xcursor = "0.3"
 rustix = { workspace = true, features = ["process"] }
 dbus = { workspace = true, optional = true }
+# Feature-minimal by audit: backend_winit (nested backend in main.rs), backend_egl +
+# renderer_glow (GlowRenderer in drm/mod.rs and clip.rs), wayland_frontend (reexported
+# wayland-server dispatch in lock_global.rs), desktop (PopupManager and layer_map_for_output in
+# scene.rs/state), xwayland (src/xwayland.rs), use_system_lib (ImportEgl::bind_wl_display, see
+# below).
 smithay = { version = "0.7", default-features = false, features = [
     "backend_winit",
     "backend_egl",

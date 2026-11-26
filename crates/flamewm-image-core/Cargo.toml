@@ -10,6 +10,10 @@ repository.workspace = true
 flamewm-api = { path = "../flamewm-api" }
 gif = { version = "=0.14.2", default-features = false, features = ["std"] }
 image-webp = "=0.2.4"
+# default-features = false keeps resvg on shapes/paths: the text/system-font stack (fontdb,
+# ttf-parser) is not linked. `raster-images` stays: <image> elements inside SVG assets resolve
+# through it (the themed icon set ships many), and dropping it would silently draw holes instead of
+# failing, so it is feature parity, not weight to trim.
 resvg = { version = "=0.48.1", default-features = false, features = ["raster-images"] }
 zune-jpeg = { version = "=0.5.15", default-features = false, features = ["std"] }
 

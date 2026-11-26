@@ -351,6 +351,33 @@ impl ApplicationSettings {
             .ok_or_else(|| invalid("missing absolute user config directory"))
     }
 
+    /// The exact paths [`Self::stamp`] stats, built once per facade instance.
+    ///
+    /// Building this list joins every config root, data root and `mimeapps.list` name, so a
+    /// page that stamps on every repaint should cache the result and call
+    /// [`Self::stamp_with`] instead of re-deriving it with [`Self::stamp`].
+    #[must_use]
+    pub fn watch(&self) -> XdgWatch {
+        let names = self.mimeapps_names().count();
+        let mut paths = Vec::with_capacity(
+            (self.config_dirs.len() + self.data_dirs.len()) * (1 + names),
+        );
+        for root in &self.config_dirs {
+            paths.push(root.join("autostart"));
+            for name in self.mimeapps_names() {
+                paths.push(root.join(name));
+            }
+        }
+        for root in &self.data_dirs {
+            let applications = root.join("applications");
+            paths.push(applications.clone());
+            for name in self.mimeapps_names() {
+                paths.push(applications.join(name));
+            }
+        }
+        XdgWatch(paths)
+    }
+
     /// Cheap change detector for every XDG path this facade reads.
     ///
     /// Each stamp is one `stat` per watched directory or `mimeapps.list`, never a file
@@ -360,26 +387,20 @@ impl ApplicationSettings {
     /// write of this facade always moves the stamp it touches.
     #[must_use]
     pub fn stamp(&self) -> XdgStamp {
-        let names: Vec<String> = self.mimeapps_names().collect();
-        let mut entries = Vec::with_capacity(
-            self.config_dirs.len() * (1 + names.len()) + self.data_dirs.len() * (1 + names.len()),
-        );
-        for root in &self.config_dirs {
-            entries.push(StampEntry::of(root.join("autostart")));
-            for name in &names {
-                entries.push(StampEntry::of(root.join(name)));
-            }
-        }
-        for root in &self.data_dirs {
-            let applications = root.join("applications");
-            entries.push(StampEntry::of(applications.clone()));
-            for name in &names {
-                entries.push(StampEntry::of(applications.join(name)));
-            }
-        }
-        XdgStamp(entries)
+        self.stamp_with(&self.watch())
+    }
+
+    /// [`Self::stamp`] over an already built [`XdgWatch`], with no path joins per call.
+    #[must_use]
+    pub fn stamp_with(&self, watch: &XdgWatch) -> XdgStamp {
+        XdgStamp(watch.0.iter().map(|path| StampEntry::of(path)).collect())
     }
 }
+
+/// Prebuilt watched-path list from [`ApplicationSettings::watch`]. Reuse it across stamps so a
+/// repaint only costs the `stat` calls and never rebuilds or clones a path per watched entry.
+#[derive(Debug, Clone, Default)]
+pub struct XdgWatch(Vec<PathBuf>);
 
 /// Identity of one watched XDG path; absent paths compare as `modified: None, len: 0`.
 /// Entries keep the path order of [`ApplicationSettings::stamp`], so no path is stored.
@@ -390,8 +411,8 @@ struct StampEntry {
 }
 
 impl StampEntry {
-    fn of(path: PathBuf) -> Self {
-        let metadata = fs::metadata(&path).ok();
+    fn of(path: &Path) -> Self {
+        let metadata = fs::metadata(path).ok();
         Self {
             modified: metadata.as_ref().and_then(|meta| meta.modified().ok()),
             len: metadata.as_ref().map_or(0, std::fs::Metadata::len),
@@ -806,5 +827,34 @@ mod tests {
             present,
             "a removed autostart entry must move the stamp"
         );
+    }
+
+    #[test]
+    fn reused_watch_stamps_like_a_fresh_walk() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-xdg-watch-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let settings = ApplicationSettings {
+            config_dirs: vec![root.join("config")],
+            data_dirs: vec![root.join("share")],
+            desktops: vec!["flamewm".to_owned()],
+        };
+        let watch = settings.watch();
+        assert_eq!(settings.stamp_with(&watch), settings.stamp());
+        fs::create_dir_all(root.join("config/autostart")).unwrap();
+        fs::create_dir_all(root.join("share/applications")).unwrap();
+        assert_eq!(
+            settings.stamp_with(&watch),
+            settings.stamp(),
+            "a cached watch list must observe the same paths as a fresh one"
+        );
+        assert_ne!(
+            settings.stamp_with(&watch),
+            XdgStamp::default(),
+            "the watch list must cover the created directories"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 }

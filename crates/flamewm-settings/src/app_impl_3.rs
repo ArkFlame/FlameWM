@@ -1,9 +1,5 @@
 //! Split from `lib.rs` (`app_impl_3`); see crate docs.
 
-use std::rc::Rc;
-
-use flamewm_settings_core::xdg_applications::ApplicationSettings;
-
 use super::*;
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -28,11 +24,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Projects the Startup page rows from the live XDG autostart entries.
     pub(crate) fn sync_startup(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         // One facade read covers rows and the picker candidates, memoized until its XDG stamp
-        // moves: this page resyncs on every input event, so a repaint must not re-read files.
-        let view = match ApplicationSettings::from_environment() {
-            Ok(settings) => self.xdg_cache.borrow_mut().startup(&settings),
-            Err(_) => Rc::new(crate::xdg_cache::StartupView::default()),
-        };
+        // moves: this page resyncs on every input event, so a repaint must not re-read files,
+        // re-parse the environment or re-join the watched XDG paths.
+        let view = self.xdg_cache.borrow_mut().startup();
         let entries = &view.rows;
         document.visible("startup-empty", entries.is_empty())?;
         for slot in 0..crate::startup_page::SLOTS {
@@ -58,13 +52,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Projects the current default handler name for each Default Applications row.
     pub(crate) fn sync_defaults(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let labels = match ApplicationSettings::from_environment() {
-            Ok(settings) => self.xdg_cache.borrow_mut().defaults(&settings),
-            Err(_) => Rc::new(vec![
-                "Unavailable".to_owned();
-                crate::default_apps_page::GROUPS.len()
-            ]),
-        };
+        let labels = self.xdg_cache.borrow_mut().defaults();
         for (slot, value) in labels.iter().enumerate() {
             document.text(&format!("defaults-value-{slot}"), value.clone())?;
         }

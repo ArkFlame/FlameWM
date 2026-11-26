@@ -8,6 +8,15 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
+use std::time::{Duration, Instant};
+
+/// Grace period for a hung-up child to flush its own state before the hard kill. An interactive
+/// shell writes `$HISTFILE` from its SIGHUP handler; the wait is the same one Terminator uses
+/// (`.vendor/terminator-master/terminatorlib/terminal.py`, `_wait_for_shell_exit`).
+const HANGUP_GRACE: Duration = Duration::from_millis(250);
+/// Poll interval while the hung-up child exits, so a tab close never waits the full grace on a
+/// shell that exits promptly.
+const HANGUP_POLL: Duration = Duration::from_millis(5);
 
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
@@ -148,9 +157,16 @@ impl PtyProcess {
         })
     }
 
+    /// Ends the child: SIGHUP first so a shell can flush its state, SIGKILL only when it stays.
+    ///
+    /// Closing the master alone also hangs the session up, but the kernel delivers that SIGHUP
+    /// as a burst and bash 5.2+ aborts a history flush that a second terminating signal
+    /// interrupts, which loses `$HISTFILE` on every window close. Sending the hangup explicitly
+    /// and waiting for the child to exit before the master closes keeps one signal the shell can
+    /// finish on (Terminator's `_wait_for_shell_exit` documents the same mechanism). The child is
+    /// always reaped, so no zombie survives inside a still-running terminal.
     pub fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = hangup_then_reap(&mut self.child);
     }
 
     #[must_use]
@@ -161,10 +177,43 @@ impl PtyProcess {
 
 impl Drop for PtyProcess {
     fn drop(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
-            self.kill();
+        // Always go through the hangup path: it reaps a child that already exited as well, so no
+        // zombie is left behind when a tab closes while the terminal keeps running.
+        let _ = hangup_then_reap(&mut self.child);
+    }
+}
+
+/// Hangs `child` up, waits up to `HANGUP_GRACE` for it to exit, then kills and reaps it. Sends no
+/// signal to a child that already exited; the final `wait` reaps it either way.
+fn hangup_then_reap(child: &mut Child) -> io::Result<std::process::ExitStatus> {
+    if let Ok(None) = child.try_wait() {
+        let _ = rustix::process::kill_process(
+            rustix::process::Pid::from_child(&*child),
+            rustix::process::Signal::HUP,
+        );
+        let deadline = Instant::now() + HANGUP_GRACE;
+        let mut exited = false;
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    exited = true;
+                    break;
+                }
+                Ok(None) => std::thread::sleep(HANGUP_POLL),
+                // An unreapable child is best left to the final `wait`.
+                Err(_) => {
+                    exited = true;
+                    break;
+                }
+            }
+        }
+        // A child that ignored the hangup (a foreground program with its own handler, or a
+        // stopped job) must still be gone before the master closes.
+        if !exited {
+            let _ = child.kill();
         }
     }
+    child.wait()
 }
 
 fn winsize(size: PtySize) -> Winsize {
@@ -379,5 +428,34 @@ mod tests {
         let launch = Launch::shell(None);
         assert!(!launch.program.is_empty());
         assert_eq!(launch.args, vec!["-i"]);
+    }
+
+    #[test]
+    fn closing_hangs_up_a_shell_that_saves_state_and_still_reclaims_one_that_does_not() {
+        use std::os::unix::process::ExitStatusExt;
+        // A polite shell saves its file in the SIGHUP trap and exits cleanly.
+        let marker = std::env::temp_dir().join(format!("flamewm-pty-hup-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let mut polite = Command::new("/bin/sh")
+            .args(["-c", "trap 'echo saved > \"$0\"; exit 0' HUP; while :; do sleep 0.05; done"])
+            .arg(&marker)
+            .spawn()
+            .expect("spawn polite shell");
+        std::thread::sleep(Duration::from_millis(50));
+        let status = hangup_then_reap(&mut polite).expect("reap the polite shell");
+        assert!(status.success(), "the polite shell exits from its HUP trap");
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("state written on hangup").trim(),
+            "saved"
+        );
+        let _ = std::fs::remove_file(&marker);
+        // A child that ignores the hangup is still gone before the master closes.
+        let mut stubborn = Command::new("/bin/sh")
+            .args(["-c", "trap '' HUP; while :; do sleep 0.05; done"])
+            .spawn()
+            .expect("spawn stubborn shell");
+        std::thread::sleep(Duration::from_millis(50));
+        let status = hangup_then_reap(&mut stubborn).expect("reap the stubborn shell");
+        assert_eq!(status.signal(), Some(9), "a hung-up child is killed after the grace");
     }
 }

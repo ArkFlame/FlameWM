@@ -526,11 +526,6 @@ impl State {
         }
     }
 
-    /// Cached name of the primary output; see the `primary_name` field docs.
-    pub fn primary_output_name(&self) -> &str {
-        &self.primary_name
-    }
-
     /// Usable area: the output minus layer-shell exclusive zones (panels).
     /// Layer-shell zones and X11 docks (`_NET_WM_STRUT*`) both shrink the usable area.
     pub fn work_area(&self) -> Rect {
@@ -618,8 +613,16 @@ impl State {
     }
 
     /// Work area of the output under the pointer, where snapping and move-snap apply.
+    ///
+    /// Runs on every pointer motion of a move/resize grab, so it stays allocation-free: the
+    /// output's name is borrowed from the layout instead of being cloned into a `String`.
     pub fn pointer_work_area(&self) -> Rect {
-        self.work_area_on(&self.output_name_under_pointer())
+        match crate::output_layout::output_at(&self.pointer_layout, self.pointer.x, self.pointer.y)
+            .and_then(|index| self.layout_outputs.get(index))
+        {
+            Some(name) => self.work_area_on(name),
+            None => self.work_area(),
+        }
     }
 
     /// Refits placements on each output whose work area changed, once per change. Outputs whose

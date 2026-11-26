@@ -10,7 +10,8 @@ repository.workspace = true
 flamewm-api = { path = "../flamewm-api" }
 flamewm-applications = { path = "../flamewm-applications" }
 rustix = { workspace = true, features = ["process"] }
-x11rb.workspace = true
+# RandR is the output/refresh path in src/lib.rs and src/shared.rs.
+x11rb = { workspace = true, features = ["randr"] }
 
 [lints]
 workspace = true

@@ -12,7 +12,8 @@ name = "flamewm-x11-canary"
 path = "src/main.rs"
 
 [dependencies]
-x11rb = { workspace = true, features = ["xtest"] }
+# xtest: synthetic input; shape: the input-shape assertions in scenarios/window_interaction.rs.
+x11rb = { workspace = true, features = ["xtest", "shape"] }
 
 [lints]
 workspace = true
