@@ -207,25 +207,27 @@ fn parse_uint(field: &[u8]) -> Option<u64> {
         if !byte.is_ascii_digit() {
             return None;
         }
-        value = value
-            .checked_mul(10)?
-            .checked_add(u64::from(byte - b'0'))?;
+        value = value.checked_mul(10)?.checked_add(u64::from(byte - b'0'))?;
     }
     Some(value)
 }
 
 /// Same, accepting a leading `-` for the signed `priority` and `nice` fields.
 fn parse_int(field: &[u8]) -> Option<i64> {
-    match field.split_first() {
-        Some((b'-', rest)) => i64::try_from(parse_uint(rest)?).ok().map(|value| -value),
-        _ => i64::try_from(parse_uint(field)?).ok(),
+    if field.first() == Some(&b'-') {
+        return i64::try_from(parse_uint(field.get(1..)?)?)
+            .ok()
+            .map(|value| -value);
     }
+    i64::try_from(parse_uint(field)?).ok()
 }
 
 /// `/proc/[pid]/stat`: the comm field may contain spaces and closing parentheses.
 /// Only the final closing parenthesis can delimit it. Parsing the raw bytes skips the UTF-8
 /// validation of the whole line, the `char` decoding of whitespace splitting and the `parse::<>`
 /// machinery, and keeps a process whose `comm` is not valid UTF-8 instead of dropping it.
+/// The sampler reads bytes directly; this `&str` entry point backs the parser tests.
+#[cfg(test)]
 pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
     parse_stat_bytes(pid, text.as_bytes(), page_bytes, None)
 }
@@ -384,7 +386,7 @@ pub fn parse_uid(status: &str) -> u32 {
         .and_then(|v| v.split_whitespace().next()?.parse().ok())
         .unwrap_or(u32::MAX)
 }
-/// Sanitized `cmdline` text into the sampler's reused `text` buffer: control bytes (the NUL
+/// Sanitized `cmdline` text into the sampler's reused `command_text`: control bytes (the NUL
 /// argument separators included) become spaces, and at most 180 chars are kept. Empty when the
 /// read fails, so the caller falls back to the bracketed name.
 fn command_into(scratch: &mut Vec<u8>, path: &mut String, text: &mut String, pid: u32) {
@@ -535,7 +537,10 @@ impl Sampler {
             && let Ok(entries) = fs::read_dir("/proc")
         {
             for entry in entries.flatten() {
-                let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok())
+                let Some(pid) = entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|n| n.parse::<u32>().ok())
                 else {
                     continue;
                 };
@@ -650,14 +655,20 @@ impl Sampler {
             // exec can replace argv without changing PID/starttime; the refresh bounds that lag.
             // The sanitized text goes into one reused buffer, and the shared `Arc<str>` is only
             // rebuilt when the command actually changed.
-            command_into(&mut self.scratch, &mut self.path, &mut self.command_text, pid);
+            command_into(
+                &mut self.scratch,
+                &mut self.path,
+                &mut self.command_text,
+                pid,
+            );
             let trimmed = self.command_text.trim();
+            let current: &str = &cached.command;
             if trimmed.is_empty() {
                 let fallback = format!("[{}]", task.name);
-                if cached.command.as_ref() != fallback.as_str() {
+                if current != fallback {
                     cached.command = Arc::from(fallback);
                 }
-            } else if cached.command.as_ref() != trimmed {
+            } else if current != trimmed {
                 cached.command = Arc::from(trimmed);
             }
             cached.refreshed = tick;
@@ -817,7 +828,8 @@ mod tests {
     fn unchanged_comm_reuses_the_cached_name_arc() {
         let stat = "4242 (fire fox) S 1 4242 4242 0 -1 4194560 1 0 0 0 150 30 0 0 20 0 7 0 555 6291456 1030 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
         let cached: Arc<str> = "fire fox".into();
-        let reused = parse_stat_with_name(4242, stat.as_bytes(), 4096, Some(&cached)).expect("parse");
+        let reused =
+            parse_stat_with_name(4242, stat.as_bytes(), 4096, Some(&cached)).expect("parse");
         assert!(Arc::ptr_eq(&reused.name, &cached));
         // A different cached name is ignored and the parsed comm still wins.
         let stale: Arc<str> = "old name".into();

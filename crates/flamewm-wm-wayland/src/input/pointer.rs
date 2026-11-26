@@ -21,6 +21,16 @@ pub(super) struct PointerTarget {
     pub(super) scene_hit: bool,
 }
 
+/// The pointer constraint in force for one motion event.
+///
+/// Lock and confine are recorded on the focused surface and mutually exclusive, so a single read
+/// of that surface's constraint decides both; the motion path used to query it once per question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MotionConstraint {
+    Locked,
+    Confined,
+}
+
 /// Which part of the scene owns the pixels under the pointer.
 ///
 /// A managed window splits three ways: its client area belongs to the client surface, its
@@ -99,11 +109,22 @@ impl State {
         // stay put while a lock is active, so the relative delta is taken from the raw position.
         let delta = relative_delta(self.raw_pointer, location);
         self.raw_pointer = location;
-        if let Some(surface) = self.locked_focus() {
-            self.send_relative_motion(&surface, delta, time);
+        // One constraint lookup answers both lock and confine: both are recorded on the focused
+        // surface and never apply together, so a second query would only repeat the same data.
+        let constrained = self.motion_constraint();
+        if let Some((surface, MotionConstraint::Locked)) = constrained.as_ref() {
+            self.send_relative_motion(surface, delta, time);
             return;
         }
-        let location = self.confined_location(self.pointer, location);
+        let confined = constrained
+            .as_ref()
+            .filter(|(_, motion)| matches!(motion, MotionConstraint::Confined))
+            .map(|(surface, _)| surface);
+        let previous = self.pointer;
+        let (location, resolved) = match confined {
+            Some(surface) => self.confined_motion(surface, previous, location),
+            None => (location, None),
+        };
         let primary = [self.output_rect()];
         let rects = crate::output_layout::pointer_layout(&self.pointer_layout, &primary);
         let (x, y) = crate::output_layout::clamp_point_to_layout(location.x, location.y, rects);
@@ -125,41 +146,52 @@ impl State {
                     let dx = (location.x - pointer.0).round() as i32;
                     let dy = (location.y - pointer.1).round() as i32;
                     let activated = move_activated(dx, dy);
+                    let titlebars = self.model.titlebars();
                     let floating = clamp_move_candidate(
                         move_candidate(
                             start, start_mode, restore, pointer, location, anchor_num, anchor_den,
                             anchor_y, activated,
                         ),
                         self.output_rect(),
-                        self.model.titlebars(),
+                        titlebars,
                     );
-                    let titlebars = self.model.titlebars();
-                    let target = snap_target_at(self, location, activated);
-                    // `snapPreviewEnabled` off hides the zone ring only; release still snaps.
-                    let zone =
-                        (self.snap_preview_enabled && target != SnapTarget::None).then(|| {
+                    let floating_frame = frame_for_client(floating, titlebars);
+                    // `snapPreviewEnabled` off hides the zone ring only; release still snaps. The
+                    // zone is the only consumer of the target here, so the output, work-area and
+                    // threshold lookups are skipped while the ring is off.
+                    let zone = if self.snap_preview_enabled {
+                        let target = snap_target_at(self, location, activated);
+                        (target != SnapTarget::None).then(|| {
                             self.model
                                 .snap_client_geometry(id, target, self.pointer_work_area())
-                                .map_or_else(
-                                    || frame_for_client(floating, titlebars),
-                                    |client| frame_for_client(client, titlebars),
-                                )
-                        });
+                                .map_or(floating_frame, |client| frame_for_client(client, titlebars))
+                        })
+                    } else {
+                        None
+                    };
                     let feedback = move_feedback(
                         self.show_content_while_dragging,
                         zone,
                         floating,
-                        frame_for_client(floating, titlebars),
+                        floating_frame,
                     );
                     // Content mode moves the real window; outline mode leaves it until release.
-                    let rect_changed = feedback.live.is_some_and(|rect| {
-                        let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
+                    if let Some(rect) = feedback.live {
+                        let previous_rect = self.model.get(id).map(|window| window.rect);
                         self.model.set_rect(id, rect);
-                        !unchanged
-                    });
-                    if rect_changed {
-                        self.refresh_window_outputs();
-                        self.pending_configure = Some(id);
+                        let rect_changed = previous_rect != Some(rect);
+                        if rect_changed {
+                            // Only a cross-output step can change this window's home output (and
+                            // with it `wl_surface.enter` and the fractional scale). Rebuilding
+                            // every toplevel's home on each in-output step allocates a string and
+                            // clones a surface per window per pointer event.
+                            if previous_rect
+                                .is_some_and(|before| home_output_changed(self, before, rect))
+                            {
+                                self.refresh_window_outputs();
+                            }
+                            self.pending_configure = Some(id);
+                        }
                     }
                     let ring_changed = match feedback.ring {
                         Some(ring) => self.snap_preview.show(ring),
@@ -188,7 +220,14 @@ impl State {
                 }
             }
         }
-        let target = self.pointer_target(location);
+        let target = match self.grab {
+            // A move or resize grab carries its window with the pointer, so that window is the
+            // scene owner under it: resolving it directly keeps the drag path off the full
+            // front-to-back walk and its per-event allocation.
+            Some(Grab::Move { id, .. }) => self.dragged_target(id, location, false),
+            Some(Grab::Resize { id, .. }) => self.dragged_target(id, location, true),
+            None => resolved.unwrap_or_else(|| self.pointer_target(location)),
+        };
         let decor_cursor = match target.managed_hit {
             Some(Hit::Resize(id)) => self.model.get(id).and_then(|window| {
                 resize_cursor(resize_edge_at(
@@ -253,13 +292,25 @@ impl State {
         )
     }
 
-    fn locked_focus(&self) -> Option<WlSurface> {
+    /// The constraint in force for this motion event, read once from the focused surface's data.
+    fn motion_constraint(&self) -> Option<(WlSurface, MotionConstraint)> {
         let pointer = self.seat.get_pointer()?;
         let surface = pointer.current_focus()?;
-        let locked = with_pointer_constraint(&surface, &pointer, |c| {
-            c.is_some_and(|c| c.is_active() && matches!(*c, PointerConstraint::Locked(_)))
-        });
-        locked.then_some(surface)
+        let motion = with_pointer_constraint(&surface, &pointer, |constraint| {
+            let constraint = constraint.filter(|constraint| constraint.is_active())?;
+            Some(match *constraint {
+                PointerConstraint::Locked(_) => MotionConstraint::Locked,
+                PointerConstraint::Confined(_) => MotionConstraint::Confined,
+            })
+        })?;
+        Some((surface, motion))
+    }
+
+    fn locked_focus(&self) -> Option<WlSurface> {
+        self.motion_constraint()
+            .and_then(|(surface, motion)| {
+                (motion == MotionConstraint::Locked).then_some(surface)
+            })
     }
 
     fn send_relative_motion(&mut self, surface: &WlSurface, delta: Point<f64, Logical>, time: u32) {

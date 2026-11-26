@@ -344,6 +344,87 @@ fn scene_elements(
     out
 }
 
+/// Whether `outer` fully contains `inner`, so every pixel of `inner` has an opaque `outer` pixel
+/// in front of it.
+fn covers(outer: Rectangle<i32, Physical>, inner: Rectangle<i32, Physical>) -> bool {
+    inner.size.w > 0
+        && inner.size.h > 0
+        && outer.loc.x <= inner.loc.x
+        && outer.loc.y <= inner.loc.y
+        && outer.loc.x.saturating_add(outer.size.w) >= inner.loc.x.saturating_add(inner.size.w)
+        && outer.loc.y.saturating_add(outer.size.h) >= inner.loc.y.saturating_add(inner.size.h)
+}
+
+/// Collects the opaque areas the just-built elements of one owner paint, so a lower window that
+/// is fully covered can skip building its own surface, decoration and backdrop elements.
+///
+/// Memory elements (titlebar and outline strips) are never treated as occluders: they carry
+/// rounded, antialiased and translucent chrome, so a buffer that claims its whole rect would
+/// wrongly hide a window behind a glass bar. Solid bodies and client surfaces report their true
+/// opaque regions, which is exactly what the renderer may rely on.
+fn collect_occluders(elements: &[Elem], scale: f64, occluders: &mut Vec<Rectangle<i32, Physical>>) {
+    /// Bounded so a frame with many windows cannot grow the list without limit; a scene past the
+    /// cap simply keeps building the lowest windows, which is only a missed optimisation.
+    const MAX_OCCLUDERS: usize = 64;
+    for element in elements {
+        if occluders.len() >= MAX_OCCLUDERS {
+            return;
+        }
+        let regions = match element {
+            Elem::Solid(solid) => solid.opaque_regions(scale.into()),
+            Elem::Surface(surface) => surface.opaque_regions(scale.into()),
+            Elem::Rounded(rounded) => rounded.opaque_regions(scale.into()),
+            Elem::Memory(_) => continue,
+        };
+        // `Element::opaque_regions` is element-local, as the renderer expects: shift each region
+        // by this element's placed geometry so the stored rects are in output space.
+        let origin = element.geometry(scale.into()).loc;
+        for mut region in regions {
+            if region.size.w > 0 && region.size.h > 0 {
+                region.loc += origin;
+                occluders.push(region);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod occluder_tests {
+    use super::covers;
+    use smithay::utils::{Physical, Rectangle};
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn a_larger_rect_covers_a_smaller_one() {
+        assert!(covers(rect(0, 0, 100, 80), rect(10, 10, 40, 40)));
+    }
+
+    #[test]
+    fn an_equal_rect_covers_itself() {
+        assert!(covers(rect(5, 7, 30, 20), rect(5, 7, 30, 20)));
+    }
+
+    #[test]
+    fn a_partial_overlap_is_not_coverage() {
+        // One pixel of the inner rect sticks out on the right and bottom.
+        assert!(!covers(rect(0, 0, 101, 60), rect(10, 10, 92, 40)));
+        assert!(!covers(rect(0, 0, 100, 80), rect(10, 10, 40, 80)));
+    }
+
+    #[test]
+    fn a_disjoint_rect_is_not_covered() {
+        assert!(!covers(rect(0, 0, 50, 50), rect(60, 60, 10, 10)));
+    }
+
+    #[test]
+    fn an_empty_rect_is_never_culled() {
+        assert!(!covers(rect(0, 0, 100, 100), rect(10, 10, 0, 0)));
+    }
+}
+
 /// [`scene_elements`] appending into `out`, so a frame builder reuses its element buffer.
 fn scene_elements_into(
     state: &State,
@@ -357,6 +438,13 @@ fn scene_elements_into(
 
     let scale = state.output_scale();
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
+    // Physical area this output shows. A managed window whose whole frame misses it (another
+    // output of the layout, or dragged past the edge) cannot contribute a pixel, so its element
+    // list is skipped rather than built and clipped away by the renderer.
+    let visible = client_backdrop_rect(state.output_rect(), scale);
+    // Opaque areas already drawn in front of the current item. The traversal is front to back, so
+    // a window whose frame fits inside one of these is fully hidden and needs no element work.
+    let mut occluders: Vec<Rectangle<i32, Physical>> = Vec::new();
     for item in items {
         match item {
             SceneItem::Layer { surface, .. } => {
@@ -427,12 +515,20 @@ fn scene_elements_into(
                 let Some(surface) = state.window_wl_surface(id) else {
                     continue;
                 };
+                let frame = managed.frame();
+                let frame_rect = client_backdrop_rect(frame, scale);
+                if !frame_rect.overlaps(visible)
+                    || occluders.iter().any(|outer| covers(*outer, frame_rect))
+                {
+                    continue;
+                }
+                let first = out.len();
                 // Front-to-back list: the outline comes first in this window's group, so the ring
                 // sits above the client and the titlebar and above every window behind it.
                 out.extend(decorations.outline_elements(
                     renderer,
                     id,
-                    managed.frame(),
+                    frame,
                     outline_radius(&managed),
                     scale,
                 ));
@@ -465,7 +561,6 @@ fn scene_elements_into(
                     // through the gap (KWin and xfwm4 paint a decorated window's body the same way).
                     // Pushed after the surface, so it sits below the client and the titlebar.
                     out.push(Elem::Solid(client_backdrop(managed.rect, scale)));
-                    let frame = managed.frame();
                     let focused = state.focused == Some(id);
                     let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
                     let hovered = match hovered_button {
@@ -501,6 +596,9 @@ fn scene_elements_into(
                         out.push(element);
                     }
                 }
+                // Everything this window paints is now in `out`; its opaque areas hide whatever
+                // lower windows are fully behind it.
+                collect_occluders(&out[first..], scale, &mut occluders);
             }
         }
     }

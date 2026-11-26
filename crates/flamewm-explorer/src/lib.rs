@@ -174,18 +174,51 @@ pub struct Tab {
     pub scroll: usize,
     pub search: String,
     pub loading: bool,
+    /// True while a load started from an empty listing paints streamed batches. A live refresh keeps
+    /// the rows on screen and applies one diff when the complete listing lands.
+    streaming: bool,
     /// Bumped by every entries mutation; with the query it keys `filter_cache`.
     revision: u64,
     filter_cache: RefCell<Option<(u64, String, usize)>>,
 }
 impl Tab {
-    #[must_use] pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, revision:0, filter_cache:RefCell::new(None) } }
+    #[must_use] pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, streaming:true, revision:0, filter_cache:RefCell::new(None) } }
     /// Replaces the listing; the filtered-count cache is invalidated.
     pub fn set_entries(&mut self, items: Vec<Entry>) { self.entries=items; self.revision+=1; }
     pub fn extend_entries(&mut self, items: Vec<Entry>) { self.entries.extend(items); self.revision+=1; }
     pub fn clear_entries(&mut self) { self.entries.clear(); self.revision+=1; }
     /// Frees the listing of a hidden tab (capacity included). Path, selection and scroll are kept.
     pub fn release_entries(&mut self) { self.entries=Vec::new(); self.revision+=1; }
+    /// Applies a complete listing onto the rows a tab already shows. Rows whose entry did not change
+    /// keep their value, so the revision and every projection cache keyed on it (row labels,
+    /// thumbnail pass) stay valid when a watcher event reports the listing on screen. Selection is
+    /// reconciled against the new rows. Returns true when any row changed or was added or removed.
+    pub fn apply_refresh(&mut self, items: Vec<Entry>) -> bool {
+        let changed=if self.entries.len()==items.len() {
+            let mut changed=false;
+            for (row,entry) in self.entries.iter_mut().zip(items) {
+                if *row!=entry { *row=entry; changed=true; }
+            }
+            if changed { self.revision+=1; }
+            changed
+        } else {
+            self.set_entries(items);
+            true
+        };
+        // A small selection (the usual one or two rows) is resolved by scanning the listing, which
+        // avoids building a path set of every entry; a large one (Select All) uses the set.
+        if self.selected_paths.len() > 32 {
+            let present=self.entries.iter().map(|entry|entry.path.as_path()).collect::<HashSet<_>>();
+            self.selected_paths.retain(|path|present.contains(path.as_path()));
+        } else if !self.selected_paths.is_empty() {
+            self.selected_paths.retain(|path|self.entries.iter().any(|entry|entry.path.as_path()==path.as_path()));
+        }
+        if !self.selected.as_ref().is_some_and(|path|self.selected_paths.contains(path)) {
+            self.selected=self.selected_paths.iter().min().cloned();
+        }
+        if !self.anchor.as_ref().is_some_and(|path|self.selected_paths.contains(path)) {self.anchor=self.selected.clone();}
+        changed
+    }
     pub fn path(&self) -> &Path { &self.history[self.cursor] }
     /// Listing generation. Projection caches that key on the entry set (thumbnail pass) compare it.
     #[must_use] pub fn revision(&self) -> u64 { self.revision }
@@ -204,7 +237,7 @@ impl Tab {
         if let Some(p)=self.path().parent().map(Path::to_path_buf) && p != self.path() { self.visit(p); return true; } false }
     pub fn can_back(&self) -> bool { self.cursor > 0 }
     pub fn can_forward(&self) -> bool { self.cursor + 1 < self.history.len() }
-    fn reset(&mut self) { self.clear_entries(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; }
+    fn reset(&mut self) { self.clear_entries(); self.selected_paths.clear(); self.selected=None; self.anchor=None; self.scroll=0; self.search.clear(); self.loading=true; self.streaming=true; }
     /// Filter once per request, retaining at most the currently rendered page.
     /// Avoid allocating a Vec of every match on each UI projection.
     pub fn select_one(&mut self, path: PathBuf) {
