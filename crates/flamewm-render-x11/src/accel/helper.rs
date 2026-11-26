@@ -597,6 +597,13 @@ mod tests {
     fn messages_round_trip_through_the_length_prefix() {
         let mut wire = Vec::new();
         write_message(&mut wire, b"hello").unwrap();
-        assert_eq!(read_message(&mut wire.as_slice()).unwrap(), b"hello");
+        let mut body = Vec::new();
+        read_message(&mut wire.as_slice(), &mut body).unwrap();
+        assert_eq!(body, b"hello");
+        // The retained buffer is reused, not regrown, for a message of the same size.
+        let capacity = body.capacity();
+        read_message(&mut wire.as_slice(), &mut body).unwrap();
+        assert_eq!(body, b"hello");
+        assert_eq!(body.capacity(), capacity);
     }
 }

@@ -66,7 +66,7 @@ pub fn is_sorted_by(entries: &[Entry], sort: ColumnSort) -> bool {
 fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
     b.directory.cmp(&a.directory).then_with(|| {
         let order = match sort.column {
-            Column::Name => a.lower_name.cmp(&b.lower_name),
+            Column::Name => a.cmp_lower_name(b),
             Column::Size => a.size.cmp(&b.size),
             Column::Modified => a.modified.cmp(&b.modified),
             // Comparing the label values instead of the formatted labels: "Type" used to format two
@@ -82,7 +82,7 @@ fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
     })
 }
 
-/// Comparable form of [`type_label`] that borrows the extension instead of formatting a String.
+/// Comparable form of the Type label that borrows the extension instead of formatting a String.
 #[derive(PartialEq, Eq)]
 enum TypeOrder<'a> {
     /// No extension: labelled "File".
@@ -119,7 +119,8 @@ impl PartialOrd for TypeOrder<'_> {
     }
 }
 
-/// The value `type_label` compares: kind for links and folders, the ASCII-lowercased extension otherwise.
+/// The value the removed Type label compared: kind for links and folders, the ASCII-lowercased
+/// extension otherwise.
 fn type_order(entry: &Entry) -> TypeOrder<'_> {
     if entry.symlink {
         return TypeOrder::Link;
@@ -151,6 +152,22 @@ pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usiz
     (0..len)
         .map(|step| (from + step) % len)
         .find(|&i| starts_with_lowercase(names[i], &prefix))
+}
+
+/// Same wrap-and-match over the listing itself. Typeahead on the projection path has no filter
+/// active, so it reads `Entry::name` in place instead of collecting every name into a `Vec<&str>`
+/// (an 800 KB allocation per typed character in a 100k-row folder).
+#[must_use]
+pub fn typeahead_match_entries(entries: &[Entry], prefix: &str, from: usize) -> Option<usize> {
+    let prefix = prefix.to_lowercase();
+    let len = entries.len();
+    if prefix.is_empty() || len == 0 {
+        return None;
+    }
+    let from = from.min(len);
+    (0..len)
+        .map(|step| (from + step) % len)
+        .find(|&i| starts_with_lowercase(&entries[i].name, &prefix))
 }
 
 /// `name.to_lowercase().starts_with(prefix)` without allocating a lowercase copy of every name.

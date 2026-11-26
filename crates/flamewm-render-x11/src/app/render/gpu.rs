@@ -110,6 +110,8 @@ impl X11App {
             log_gpu_fallback("reason=source-failed");
             return None;
         };
+        // Taken before the backdrop borrow starts; a failed frame drops it and the next one reallocates.
+        let mut rgba = std::mem::take(&mut self.gpu_frame_rgba);
         let backdrop = match self.gpu_backdrop() {
             Ok(backdrop) => backdrop,
             Err(reason) => {
@@ -130,7 +132,6 @@ impl X11App {
         // The scene starts transparent, exactly as `clear_scene` leaves it. The RGBA scratch is
         // retained between frames so a steady-state paint does not fault fresh pages each time.
         let len = width as usize * height as usize * 4;
-        let mut rgba = std::mem::take(&mut self.gpu_frame_rgba);
         rgba.clear();
         rgba.resize(len, 0);
         if crate::accel::try_gpu_batch(&mut rgba, width, height, &ops) {

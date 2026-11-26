@@ -51,13 +51,15 @@ pub struct Entry {
     pub symlink: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
-    /// `name` lowercased once at construction, so search filters never reallocate it per keystroke.
-    lower_name: String,
 }
 impl Entry {
     #[must_use] pub fn new(path: PathBuf, name: String, directory: bool, symlink: bool, size: u64, modified: Option<SystemTime>) -> Self {
-        let lower_name = name.to_lowercase();
-        Self { path, name, directory, symlink, size, modified, lower_name }
+        Self { path, name, directory, symlink, size, modified }
+    }
+    /// Case-insensitive name order with `name.to_lowercase()` semantics, without keeping a
+    /// lowercase copy per entry: ASCII names fold bytewise, only the rare non-ASCII pair allocates.
+    #[must_use] pub(crate) fn cmp_lower_name(&self, other: &Self) -> std::cmp::Ordering {
+        lower_cmp(&self.name, &other.name)
     }
     #[must_use] pub fn size_label(&self) -> String {
         if self.directory { return "—".into(); }
@@ -80,11 +82,21 @@ pub fn sort_listing(entries: &mut [Entry], sort: SortBy) {
 
 fn listing_order(a: &Entry, b: &Entry, sort: SortBy) -> std::cmp::Ordering {
     b.directory.cmp(&a.directory).then_with(|| match sort {
-        // `lower_name` is computed once per entry; lowercasing inside the comparator allocated per compare.
-        SortBy::Name => a.lower_name.cmp(&b.lower_name),
+        // Allocation-free fold: no per-entry lowercase copy is kept or compared.
+        SortBy::Name => a.cmp_lower_name(b),
         SortBy::Size => a.size.cmp(&b.size),
         SortBy::Modified => b.modified.cmp(&a.modified),
     }).then_with(|| a.name.cmp(&b.name))
+}
+
+/// Orders two names as their `to_lowercase()` forms would. ASCII-only names (the common case, and
+/// every entry of a 100k-row folder) compare folded bytes with no allocation at all.
+fn lower_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        return a.bytes().map(|byte|byte.to_ascii_lowercase())
+            .cmp(b.bytes().map(|byte|byte.to_ascii_lowercase()));
+    }
+    a.to_lowercase().cmp(&b.to_lowercase())
 }
 
 /// Streams a directory in readdir order as batches of at most `FIRST_BATCH`, then `LATER_BATCH` rows.
@@ -133,21 +145,21 @@ pub fn list_directory(dir: &Path, show_hidden: bool, sort: SortBy) -> io::Result
     Ok(entries)
 }
 
-/// Case-insensitive substring test against an already-lowercased haystack. ASCII needles compare
-/// bytes in place, so projections allocate nothing; non-ASCII needles fall back to one lowercase.
+/// Case-insensitive substring test against a name. Both-ASCII input compares bytes in place, so a
+/// keystroke's filter pass allocates nothing; a non-ASCII name or needle folds both sides once.
 fn contains_lower(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() { return true; }
-    if needle.is_ascii() {
+    if needle.is_ascii() && haystack.is_ascii() {
         return haystack.len() >= needle.len()
             && haystack.as_bytes().windows(needle.len())
                 .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()));
     }
-    haystack.contains(&needle.to_lowercase())
+    haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
-/// Filter match against `entry.lower_name`, case-insensitive in `query` without allocating per call.
+/// Filter match against `entry.name`, case-insensitive in `query` without allocating per call.
 fn entry_matches(entry: &Entry, query: &str) -> bool {
-    contains_lower(&entry.lower_name, query)
+    contains_lower(&entry.name, query)
 }
 
 #[derive(Clone, Debug)]
@@ -258,7 +270,13 @@ impl Tab {
     }
     /// Filtered rows starting at the scroll offset, at most `rows` of them.
     pub fn visible_window(&self, rows: usize) -> Vec<&Entry> {
-        self.visible().skip(self.window_start(rows)).take(rows).collect()
+        let start=self.window_start(rows);
+        // No active query (the normal case): slice the listing instead of filtering from row 0.
+        if self.search.is_empty() {
+            let take=rows.min(self.entries.len().saturating_sub(start));
+            return self.entries[start..start+take].iter().collect();
+        }
+        self.visible().skip(start).take(rows).collect()
     }
     /// Scroll offset clamped to the filtered list, so a shorter list never shows blank space.
     pub fn window_start(&self, rows: usize) -> usize {
@@ -275,12 +293,18 @@ impl Tab {
         self.scroll=if index<start {index} else if index>=start+rows {index+1-rows} else {start};
     }
     pub fn visible_nth(&self, index:usize) -> Option<&Entry> {
+        // Without a query every row is visible, so the nth filtered row is the nth entry.
+        if self.search.is_empty() {return self.entries.get(index);}
         self.visible().nth(index)
     }
     pub fn visible_index_of(&self, path:&Path) -> Option<usize> {
+        if self.search.is_empty() {return self.entries.iter().position(|entry|entry.path==path);}
         self.visible().position(|entry| entry.path==path)
     }
     pub fn filtered_count(&self) -> usize {
+        // No query: every entry is a row, which keeps the count O(1) while a 100k-row listing is
+        // still streaming in (each batch bumps the revision) and on every full projection.
+        if self.search.is_empty() {return self.entries.len();}
         // The cache key is the raw query; the match itself folds case, so no lowercase copy is made.
         if let Some((revision,cached_query,count))=self.filter_cache.borrow().as_ref()
             && *revision==self.revision && *cached_query==self.search {return *count;}
@@ -338,9 +362,14 @@ impl Explorer {
                 // The status strip shows the count itself (view::items_text), so the message stays free for results.
                 self.status.clear();
                 let tab=self.tab_mut();
-                if !tab.selected_paths.is_empty() {
+                // A live refresh re-applies the whole listing on every watcher event. A small
+                // selection (the usual one or two rows) is resolved by scanning the listing, which
+                // avoids building a path set of every entry; a large one (Select All) uses the set.
+                if tab.selected_paths.len() > 32 {
                     let present=items.iter().map(|e|e.path.as_path()).collect::<HashSet<_>>();
                     tab.selected_paths.retain(|path|present.contains(path.as_path()));
+                } else if !tab.selected_paths.is_empty() {
+                    tab.selected_paths.retain(|path|items.iter().any(|entry|entry.path.as_path()==path.as_path()));
                 }
                 if !tab.selected.as_ref().is_some_and(|p|tab.selected_paths.contains(p)) {
                     tab.selected=tab.selected_paths.iter().min().cloned();

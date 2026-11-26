@@ -211,8 +211,7 @@ impl ShellLoop {
         let key_press = action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press;
         // Only keyboard menu navigation or activation reads these rows. Pointer, wheel and hover
         // events (the bulk of the stream) must not allocate one action string per menu row.
-        let menu_rows = if key_press
-            || typed.is_some_and(|text| matches!(text, "\n" | "\r" | " "))
+        let menu_rows = if key_press || typed.is_some_and(|text| matches!(text, "\n" | "\r" | " "))
         {
             menu_row_actions(self.context_menu.as_ref(), self.shell.snapshot())
         } else {

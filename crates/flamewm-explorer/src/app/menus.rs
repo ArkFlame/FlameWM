@@ -108,7 +108,12 @@ impl ExplorerApp {
         let program=flamewm_applications::terminal::terminal_program();
         let mut argv=flamewm_applications::terminal::terminal_command(&program,&[],Some(&directory));
         if argv.len()>1 && matches!(argv.last().map(String::as_str),Some("-e"|"--")) {argv.pop();}
-        self.model.status=match Command::new(&argv[0]).args(&argv[1..]).current_dir(&directory).spawn() {
+        // An empty command list means no emulator resolved; report it instead of indexing argv[0].
+        let Some(executable)=argv.first() else {
+            self.model.status="Terminal unavailable".into();
+            return;
+        };
+        self.model.status=match Command::new(executable.as_str()).args(&argv[1..]).current_dir(&directory).spawn() {
             Ok(_)=>"Opened terminal".into(),
             Err(e)=>format!("Terminal failed: {e}"),
         };

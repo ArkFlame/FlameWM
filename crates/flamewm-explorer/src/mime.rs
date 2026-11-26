@@ -62,7 +62,8 @@ impl OpenWithChooser {
     pub fn show_every_app(&mut self) {
         self.show_all = !self.show_all;
         self.page = 0;
-        if self.selected.is_some_and(|index| !self.show_all && !self.apps[index].associated) {
+        // `selected` indexes the unfiltered list; guard it so a stale choice cannot panic.
+        if self.selected.is_some_and(|index| self.apps.get(index).is_some_and(|app| !self.show_all && !app.associated)) {
             self.selected = self.apps.iter().position(|choice| choice.associated);
         }
     }

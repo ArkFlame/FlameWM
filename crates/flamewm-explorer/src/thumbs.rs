@@ -382,8 +382,12 @@ impl Thumbnails {
     }
 
     /// Marks `key` as queued. Returns `true` only for the first request, so each file decodes once.
+    /// A re-projection of a row whose decode is still waiting keeps the pending set untouched, so
+    /// no key (path allocation) is cloned per frame while decodes lag behind the scroll.
     pub fn begin(&mut self, key: &ThumbKey) -> bool {
-        self.pending.insert(key.clone())
+        if self.pending.contains(key) { return false; }
+        self.pending.insert(key.clone());
+        true
     }
 
     /// Starts a full projection pass. Jobs still waiting in `queue` came from earlier passes; the pass

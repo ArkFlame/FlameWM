@@ -345,7 +345,13 @@ impl ShellLoop {
             }
             let _ = runtime.redraw(surface);
             self.dock_entries.clone_from(&layout.entries);
-            self.dock_last = Some((frame.clone(), placed, names, layout.entries.clone(), squared));
+            self.dock_last = Some((
+                frame.clone(),
+                placed,
+                names,
+                layout.entries.clone(),
+                squared,
+            ));
         }
         self.place_dock(
             runtime,

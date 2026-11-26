@@ -245,11 +245,11 @@ fn row_labels<'a>(cache:&'a mut Vec<Option<(LabelKey,RowLabels)>>,slot:usize,ent
                 thumb:(!remote::is_remote(&entry.path)).then(||ThumbKey::of(entry)).flatten(),
             }));
     }
-    &cache[slot].as_ref().map_or(&EMPTY_LABELS,|(_,labels)|labels)
+    cache[slot].as_ref().map_or(&EMPTY_LABELS,|(_,labels)|labels)
 }
 /// Fallback for a slot the fill above did not produce (it always does): keeps the projection free of a
 /// panic path if that invariant ever breaks.
-const EMPTY_LABELS:RowLabels=RowLabels{
+static EMPTY_LABELS:RowLabels=RowLabels{
     size:String::new(), modified:String::new(), kind:String::new(), icon:"file", thumb:None,
 };
 
@@ -620,6 +620,11 @@ impl ExplorerApp {
         match self.search_rows.as_ref() {
             Some(results)=>{
                 for (slot, entry) in results.iter().skip(first).take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }
+            },
+            // No active query (the common case): copy the window straight out of the sorted listing
+            // instead of filtering from row 0 to the scroll origin on every full projection.
+            None if tab.search.is_empty()=>{
+                for (slot, entry) in tab.entries.get(first..).unwrap_or_default().iter().take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }
             },
             None=>{
                 for (slot, entry) in tab.visible().skip(first).take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }

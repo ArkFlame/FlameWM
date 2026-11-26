@@ -26,7 +26,7 @@ pub struct MountedDevice {
 /// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
 #[must_use]
 pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
-    let mut out = Vec::new();
+    let mut out = Vec::<MountedDevice>::new();
     for line in text.lines() {
         // One pass over the fields instead of collecting a `Vec<&str>` per line: mountinfo can
         // hold hundreds of lines and this runs on every places refresh.
@@ -101,7 +101,7 @@ pub const GVFS_FSTYPE: &str = "fuse.gvfsd-fuse";
 /// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
 #[must_use]
 pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
-    let mut out = Vec::new();
+    let mut out = Vec::<NetworkMount>::new();
     for line in text.lines() {
         // Same single-pass field scan as `parse_mountinfo`: no per-line field vector.
         let mut mount = None;

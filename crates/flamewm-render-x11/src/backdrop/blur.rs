@@ -38,9 +38,8 @@ pub(super) fn opaque_argb_words(rgba: &[u8]) -> Vec<u32> {
     // Pre-sized: this runs once per blurred backdrop per frame over a whole window-sized image.
     let mut words = Vec::with_capacity(rgba.len() / 4);
     for p in rgba.chunks_exact(4) {
-        words.push(
-            0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]),
-        );
+        words
+            .push(0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]));
     }
     words
 }

@@ -80,15 +80,6 @@ impl ExplorerApp {
         }
     }
 
-    pub(crate) fn visible_entries(&self)->Vec<&Entry> {
-        let rows=self.visible_rows();
-        if let Some(results)=self.search_rows.as_ref() {
-            let start=self.model.tab().scroll.min(results.len().saturating_sub(rows));
-            return results.iter().skip(start).take(rows).collect();
-        }
-        self.model.tab().visible_window(rows)
-    }
-
     /// Rows that fit between the column header and the status strip. Paint, hit-testing and keys all use this.
     pub(crate) fn visible_rows(&self)->usize {
         let bottom=self.window.1-STATUS_STRIP_HEIGHT;
@@ -108,10 +99,15 @@ impl ExplorerApp {
         self.typed.push_str(text);
         self.typed_at=Some(now);
         let tab=self.model.tab();
-        // One pass over the visible rows: per-index `visible_nth` rescans the list for every name.
-        let names=tab.visible().map(|e|e.name.as_str()).collect::<Vec<_>>();
         let from=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
-        if let Some(index)=view::typeahead_match(&names,&self.typed,from) {
+        // No active filter: match names in place instead of collecting every name into a Vec.
+        let matched=if tab.search.is_empty() {
+            view::typeahead_match_entries(&tab.entries,&self.typed,from)
+        } else {
+            let names=tab.visible().map(|e|e.name.as_str()).collect::<Vec<_>>();
+            view::typeahead_match(&names,&self.typed,from)
+        };
+        if let Some(index)=matched {
             let Some(path)=tab.visible_nth(index).map(|entry|entry.path.clone()) else {return;};
             let rows=self.visible_rows();
             let tab=self.model.tab_mut();
@@ -245,7 +241,10 @@ impl ExplorerApp {
     }
 
     pub(crate) fn chosen(&self,slot:usize) -> Option<&Entry> {
-        self.visible_entries().get(slot).copied()
+        // Window slot → display index directly: collecting the whole window into a Vec for a drop
+        // target allocated once per pointer move, and the mapping is the same one `entry_at` uses.
+        let index=isize::try_from(self.origin(self.visible_rows()).checked_add(slot)?).ok()?;
+        self.entry_at(index)
     }
 
     pub(crate) fn selected(&self) -> Option<PathBuf> {self.model.tab().selected.clone()}
