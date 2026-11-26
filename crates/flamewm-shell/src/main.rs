@@ -1322,6 +1322,7 @@ fn load_panels_bootstrap() -> Result<(ShellSnapshot, ControlSignalClient), Strin
             load_shell_snapshot(&client)
         },
     )
+    .map(|(signal_client, snapshot)| (snapshot, signal_client))
 }
 
 /// The live snapshot installed after the first frame. A failed fetch is nonfatal: the defaults

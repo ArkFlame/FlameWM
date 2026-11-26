@@ -138,11 +138,11 @@ fn pass_cancels_an_in_flight_decode_only_when_its_row_left_the_view() {
     queue.push(key.clone());
     assert_eq!(queue.pop(), key);
     // A later pass still shows the row: the decode keeps running.
-    assert_eq!(queue.retain(|candidate| candidate.path == key.path), 0);
+    assert_eq!(queue.retain(|candidate| candidate.path == key.path).len(), 0);
     assert!(queue.wants(&key));
     // The row scrolled away: the worker sees the cancel at its next stage check, and the pass
     // reports the abandoned key so its pending mark is freed for a later re-request.
-    assert_eq!(queue.retain(|_| false), 1);
+    assert_eq!(queue.retain(|_| false).len(), 1);
     assert!(!queue.wants(&key), "a scrolled-away decode is abandoned");
     queue.release(&key);
 }

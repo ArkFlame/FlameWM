@@ -31,3 +31,5 @@
 ## Violation: an OpenCode worker (opencode serve pid 1131738) spawned /tmp/ctx-exec-th0hPN/code.js despite BRIEF rules. Killed by pid (12 s old, 0.3% cpu). Brief already forbids ctx_execute; check again each cycle.
 
 ## u99 verdict: no cheap headless backend (smithay has no backend_headless; pixman still needs a display). Steady ACTIVE composition requires the real DRM session; nested/winit cannot provide it. Use code-read hotspot ranking for active paths until a real-session run is possible.
+
+## Build 10: cargo check --workspace --all-targets green after 3 fixes: (1) explorer main.rs settings_wake cloned after writer moved into io thread, (2) shell main.rs load_panels_bootstrap tuple order from subscribe_then_load, (3) explorer thumbs queue test compared retain() Vec to an int. Batches 14-16, u94-u99 landed.

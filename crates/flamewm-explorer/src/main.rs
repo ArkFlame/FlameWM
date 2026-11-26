@@ -394,12 +394,12 @@ fn run()->Result<(),String>{
     let app_events=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let (search_tx,search_wake)=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let search=SearchWorker::spawn(move||{if search_tx.send(WorkerResult::SearchTick).is_ok() {let _=(&search_wake).write_all(&[1]);}}).map_err(|e|e.to_string())?;
+    let settings_wake=writer.try_clone().map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
     // The session-bus settings round trip (up to its full timeout when the control service is
     // slow) runs on a worker and is applied from the wake socket, so it never adds to
     // first-paint time; the first frame uses the default theme and no backdrop.
     let (settings_tx,settings_rx)=mpsc::sync_channel::<SettingsSnapshot>(1);
-    let settings_wake=writer.try_clone().map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-settings".into())
         .spawn(move||{
             let Some(snapshot)=initial_settings() else {return;};

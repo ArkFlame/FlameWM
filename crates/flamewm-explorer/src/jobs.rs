@@ -934,7 +934,7 @@ mod tests {
         assert!(chunk.is_power_of_two());
         // A real scratch path resolves through sysfs or falls back, but never leaves the bounds.
         let scratch = Scratch::new("chunk");
-        let chunk = copy_chunk(&scratch.path(), &scratch.path());
+        let chunk = copy_chunk(scratch.path(), scratch.path());
         assert!((CHUNK_UNKNOWN..=CHUNK_ROTATIONAL).contains(&chunk));
         assert!(chunk.is_power_of_two());
     }
