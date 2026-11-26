@@ -712,10 +712,14 @@ mod tests {
             ],
         );
         assert!(needs_capture(&swapped, Some(&two)));
-        // A static scene reuses the cache, however many frames ask.
-        for _ in 0..3 {
-            assert!(!needs_capture(&base, Some(&base)));
+        // A static scene reuses the cache across a full second at 60 frames per second.
+        let mut recaptures = 0;
+        for _ in 0..60 {
+            if needs_capture(&base, Some(&base)) {
+                recaptures += 1;
+            }
         }
+        assert_eq!(recaptures, 0, "a static scene never recaptures");
     }
 
     #[test]
