@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# One-second CPU COMPOSITION of a running process: share of the sample per thread name, never total CPU.
+# Usage: scripts/perf-compose PID [SECONDS=1]     (pure bash + awk; no python, no sleep binary)
+set -Eeuo pipefail
+pid=${1:?usage: perf-compose PID [seconds]}
+secs=${2:-1}
+[[ -d /proc/$pid/task ]] || { echo "no such process: $pid" >&2; exit 2; }
+snap() { # prints "comm ticks" per thread (utime+stime)
+  local t comm
+  for t in /proc/$pid/task/*; do
+    [[ -r $t/stat ]] || continue
+    # comm may contain spaces/parens: strip through the last ')' then read utime/stime (fields 14,15 overall).
+    awk '{ s=$0; sub(/^.*\) /,"",s); n=split(s,f," "); c=$0; sub(/^[0-9]+ \(/,"",c); sub(/\) .*$/,"",c); print c, f[12]+f[13] }' "$t/stat"
+  done
+}
+a=$(snap)
+read -rt "$secs" <> <(:) || true
+b=$(snap)
+{ echo "$a" | sed 's/^/A /'; echo "$b" | sed 's/^/B /'; } | awk '
+  { tag=$1; ticks=$NF; $1=""; $NF=""; name=$0; gsub(/^ +| +$/,"",name)
+    if (tag=="A") a[name]+=ticks; else b[name]+=ticks }
+  END { for (n in b) { d=b[n]-a[n]; if (d<0) d=0; tot+=d; dd[n]=d }
+        if (tot==0) { print "idle: 0 ticks in sample"; exit }
+        for (n in dd) if (dd[n]>0) printf "%5.1f%%  %s\n", 100*dd[n]/tot, n }' | sort -rn | head -12

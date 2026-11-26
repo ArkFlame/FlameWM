@@ -13,3 +13,5 @@
 ## Build 6: cargo check --workspace --all-targets green after 1 fix (terminal session.rs PollFd::new takes &fd). u68-u78 landed or in flight.
 
 ## Release build + nested smoke after build 6: release build 0 errors (3 dead-code warnings), `scripts/flamewm-nested-smoke` PASS (10 s, no early exit). First real run of u01-u78 changes on the compositor; no composition profile taken yet.
+
+## First composition (scripts/perf-compose, 1 s, nested idle): 100% of sampled ticks on the single main thread `flamewm-wayland`; no per-subsystem split from thread names. Next: add flamewm-profiler counters or perf record for a within-thread split (unit u79).
