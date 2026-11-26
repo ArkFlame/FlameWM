@@ -473,7 +473,7 @@ fn dnd_records_but_does_not_toast_until_critical() {
         MessageDisposition::Reply(_)
     ));
     assert!(inbox.notifications.is_empty());
-    assert!(inbox.updates.is_empty());
+    assert_eq!(inbox.updates.len(), 0);
     assert_eq!(inbox.history.len(), 1);
 
     inbox.notify("chat", "alarm", 2);
