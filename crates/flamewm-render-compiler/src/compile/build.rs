@@ -67,30 +67,44 @@ impl<'a> Compiler<'a> {
             inline.as_ref(),
             PseudoState::Base,
         )?;
-        let hover = self.compute_style(
-            source_index,
-            inherited,
-            &matched,
-            inline.as_ref(),
-            PseudoState::Hover,
-        )?;
-        let active = self.compute_style(
-            source_index,
-            inherited,
-            &matched,
-            inline.as_ref(),
-            PseudoState::Active,
-        )?;
-        let focus = self.compute_style(
-            source_index,
-            inherited,
-            &matched,
-            inline.as_ref(),
-            PseudoState::Focus,
-        )?;
-        let hover_style = (hover != base).then_some(hover);
-        let active_style = (active != base).then_some(active);
-        let focus_style = (focus != base).then_some(focus);
+        // A state with no matching rule rebuilds `base` verbatim, so most elements skip three
+        // full style passes. Interaction states are rare per element; base rules are not.
+        let hover_style = if has_state(&matched, PseudoState::Hover) {
+            let hover = self.compute_style(
+                source_index,
+                inherited,
+                &matched,
+                inline.as_ref(),
+                PseudoState::Hover,
+            )?;
+            (hover != base).then_some(hover)
+        } else {
+            None
+        };
+        let active_style = if has_state(&matched, PseudoState::Active) {
+            let active = self.compute_style(
+                source_index,
+                inherited,
+                &matched,
+                inline.as_ref(),
+                PseudoState::Active,
+            )?;
+            (active != base).then_some(active)
+        } else {
+            None
+        };
+        let focus_style = if has_state(&matched, PseudoState::Focus) {
+            let focus = self.compute_style(
+                source_index,
+                inherited,
+                &matched,
+                inline.as_ref(),
+                PseudoState::Focus,
+            )?;
+            (focus != base).then_some(focus)
+        } else {
+            None
+        };
         let id = source.attrs.get("id").cloned().unwrap_or_default();
         let action = source.attrs.get("data-action").cloned().unwrap_or_default();
         let (kind, image) = if source.tag == "img" {
@@ -205,10 +219,12 @@ impl<'a> Compiler<'a> {
         Ok(index)
     }
 
-    /// Rules whose selector matches the element, in source order. Pseudo state is filtered later.
+    /// Rules whose selector matches the element, sorted once in cascade order so every pseudo-state
+    /// pass can filter this slice instead of re-sorting. Pseudo state is filtered later.
     fn matching_rules(&self, source_index: usize) -> Vec<&'a Rule> {
         let (html, rules) = (self.html, self.rules);
-        self.rule_index
+        let mut matched: Vec<&'a Rule> = self
+            .rule_index
             .candidates(html, source_index)
             .into_iter()
             .map(|position| &rules[position])
@@ -216,7 +232,9 @@ impl<'a> Compiler<'a> {
                 rule.selector.state != PseudoState::Root
                     && rule.selector.matches(html, source_index)
             })
-            .collect()
+            .collect();
+        matched.sort_by_key(|rule| (rule.selector.specificity, rule.order));
+        matched
     }
 
     pub(super) fn compute_style(
@@ -229,13 +247,12 @@ impl<'a> Compiler<'a> {
     ) -> Result<Style, String> {
         let source = &self.html.nodes[source_index];
         let mut style = default_style_for_tag(&source.tag, inherited);
-        let mut selected: Vec<&Rule> = matched
+        // `matched` arrives in cascade order, so a state pass only filters it (no per-state Vec).
+        for rule in matched
             .iter()
             .copied()
             .filter(|rule| rule.selector.state == PseudoState::Base || rule.selector.state == state)
-            .collect();
-        selected.sort_by_key(|rule| (rule.selector.specificity, rule.order));
-        for rule in selected {
+        {
             for declaration in &rule.declarations {
                 self.apply_declaration(&mut style, declaration)?;
             }
@@ -251,4 +268,9 @@ impl<'a> Compiler<'a> {
         }
         Ok(style)
     }
+}
+
+/// Whether any matched rule targets `state`. A state with no rule would only reproduce `base`.
+fn has_state(matched: &[&Rule], state: PseudoState) -> bool {
+    matched.iter().any(|rule| rule.selector.state == state)
 }

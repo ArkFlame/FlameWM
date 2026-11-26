@@ -343,7 +343,8 @@ fn solve_linear(
     }
     used = used.saturating_add((visible_count - 1).max(0).saturating_mul(options.gap));
     let extra = available.saturating_sub(used);
-    if extra > 0 && flex_weight > 0 {
+    let grew = extra > 0 && flex_weight > 0;
+    if grew {
         for (index, item) in items.iter().enumerate() {
             if !item.spec.visible {
                 continue;
@@ -359,12 +360,17 @@ fn solve_linear(
         }
     }
 
-    let content_extent = sizes
-        .iter()
-        .zip(items)
-        .filter(|(_, item)| item.spec.visible)
-        .fold(0_i32, |sum, (size, _)| sum.saturating_add(*size))
-        .saturating_add((visible_count - 1).max(0).saturating_mul(options.gap));
+    // `used` already is the visible extent plus gaps; only a flex distribution changes it.
+    let content_extent = if grew {
+        sizes
+            .iter()
+            .zip(items)
+            .filter(|(_, item)| item.spec.visible)
+            .fold(0_i32, |sum, (size, _)| sum.saturating_add(*size))
+            .saturating_add((visible_count - 1).max(0).saturating_mul(options.gap))
+    } else {
+        used
+    };
     let main_alignment = pick(horizontal, options.horizontal, options.vertical);
     let mut cursor =
         origin.saturating_add(aligned_offset(available, content_extent, main_alignment));

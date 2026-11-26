@@ -389,12 +389,21 @@ pub fn main() -> Result<(), String> {
                 let mut state = state_cell.borrow_mut();
                 // Pointer hover arrives at input rate and every handler ignores it except the
                 // convert-wheel sector, which dedupes itself. A full refresh per motion event is
-                // pure cost, so hover skips it; any other event still refreshes first.
+                // pure cost, so hover skips it. Resize and visibility do not read the model and
+                // the flush pass refreshes later in the same turn, so they skip the pre-refresh
+                // instead of projecting twice.
                 let hover = matches!(
                     event,
                     UiControllerEvent::Action(action) if action.phase == UiActionPhase::Hover
                 );
-                if !hover && let Err(error) = refresh_all(document, &mut state) {
+                let handled_by_flush = matches!(
+                    event,
+                    UiControllerEvent::Resized { .. } | UiControllerEvent::Visibility { .. }
+                );
+                if !hover
+                    && !handled_by_flush
+                    && let Err(error) = refresh_all(document, &mut state)
+                {
                     eprintln!("desktop: refresh failed (continuing): {error}");
                 }
                 let result = match event {

@@ -1,4 +1,5 @@
 use super::*;
+use std::borrow::Cow;
 
 pub(crate) fn rescan_desktop(state: &mut DesktopState) -> Result<(), String> {
     state
@@ -479,18 +480,18 @@ pub(crate) fn desktop_item_label<'a>(
     &item.display_name
 }
 
-pub(crate) fn launcher_icon(
-    state: &DesktopState,
+pub(crate) fn launcher_icon<'a>(
+    state: &'a DesktopState,
     kind: DesktopItemKind,
     path: &Path,
-) -> Option<String> {
+) -> Option<Cow<'a, str>> {
     state
         .launchers
         .get(path)
         .filter(|meta| meta.valid && !meta.icon.trim().is_empty())
-        .map(|meta| meta.icon.clone())
+        .map(|meta| Cow::Borrowed(meta.icon.as_str()))
         .or_else(|| {
-            (kind == DesktopItemKind::File).then(|| projection::file_icon_name(path).to_owned())
+            (kind == DesktopItemKind::File).then(|| Cow::Borrowed(projection::file_icon_name(path)))
         })
 }
 

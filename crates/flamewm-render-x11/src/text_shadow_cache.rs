@@ -12,8 +12,10 @@
 //! would exceed it, least-recently-used entries are dropped until it fits. An image larger than
 //! the whole budget is returned to the caller but not retained.
 
+use std::borrow::Borrow;
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::os::raw::c_ulong;
 use std::rc::Rc;
 
@@ -27,7 +29,7 @@ pub const TEXT_SHADOW_CACHE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Identity of one shadow image. `size` and `radius` are stored as bit patterns, so keys compare
 /// exactly as the pixels were computed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShadowKey {
     family: String,
     text: String,
@@ -54,6 +56,130 @@ impl ShadowKey {
             radius_bits: radius.to_bits(),
             color,
         }
+    }
+}
+
+/// Read-only view of a shadow key. Owned and borrowed keys both implement it, and the map hashes
+/// and compares through it, so a lookup never builds the two owned `String`s a `ShadowKey` holds.
+pub trait ShadowKeyView {
+    fn family(&self) -> &str;
+    fn text(&self) -> &str;
+    fn size_bits(&self) -> u32;
+    fn weight(&self) -> u16;
+    fn radius_bits(&self) -> u32;
+    fn color(&self) -> [u8; 4];
+}
+
+fn hash_view<H: Hasher>(view: &dyn ShadowKeyView, state: &mut H) {
+    view.family().hash(state);
+    view.text().hash(state);
+    view.size_bits().hash(state);
+    view.weight().hash(state);
+    view.radius_bits().hash(state);
+    view.color().hash(state);
+}
+
+impl<'a> Hash for dyn ShadowKeyView + 'a {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_view(self, state);
+    }
+}
+
+impl<'a> PartialEq for dyn ShadowKeyView + 'a {
+    fn eq(&self, other: &Self) -> bool {
+        self.family() == other.family()
+            && self.text() == other.text()
+            && self.size_bits() == other.size_bits()
+            && self.weight() == other.weight()
+            && self.radius_bits() == other.radius_bits()
+            && self.color() == other.color()
+    }
+}
+
+impl<'a> Eq for dyn ShadowKeyView + 'a {}
+
+impl ShadowKeyView for ShadowKey {
+    fn family(&self) -> &str {
+        &self.family
+    }
+    fn text(&self) -> &str {
+        &self.text
+    }
+    fn size_bits(&self) -> u32 {
+        self.size_bits
+    }
+    fn weight(&self) -> u16 {
+        self.weight
+    }
+    fn radius_bits(&self) -> u32 {
+        self.radius_bits
+    }
+    fn color(&self) -> [u8; 4] {
+        self.color
+    }
+}
+
+impl Hash for ShadowKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_view(self, state);
+    }
+}
+
+impl<'a> Borrow<dyn ShadowKeyView + 'a> for ShadowKey {
+    fn borrow(&self) -> &(dyn ShadowKeyView + 'a) {
+        self
+    }
+}
+
+/// Borrowed lookup key. Build one per paint and pass it to [`TextShadowCache::get`]; no copy.
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowRef<'a> {
+    family: &'a str,
+    text: &'a str,
+    size_bits: u32,
+    weight: u16,
+    radius_bits: u32,
+    color: [u8; 4],
+}
+
+impl<'a> ShadowRef<'a> {
+    pub fn new(
+        family: &'a str,
+        text: &'a str,
+        size: f32,
+        weight: u16,
+        radius: f32,
+        color: [u8; 4],
+    ) -> Self {
+        Self {
+            family,
+            text,
+            size_bits: size.to_bits(),
+            weight,
+            radius_bits: radius.to_bits(),
+            color,
+        }
+    }
+}
+
+impl ShadowKeyView for ShadowRef<'_> {
+    fn family(&self) -> &str {
+        self.family
+    }
+    fn text(&self) -> &str {
+        self.text
+    }
+    fn size_bits(&self) -> u32 {
+        self.size_bits
+    }
+    fn weight(&self) -> u16 {
+        self.weight
+    }
+    fn radius_bits(&self) -> u32 {
+        self.radius_bits
+    }
+    fn color(&self) -> [u8; 4] {
+        self.color
     }
 }
 
@@ -116,7 +242,7 @@ impl TextShadowCache {
     }
 
     /// Looks up `key` and marks it most recently used.
-    pub fn get(&mut self, key: &ShadowKey) -> Option<Rc<ShadowImage>> {
+    pub fn get(&mut self, key: &dyn ShadowKeyView) -> Option<Rc<ShadowImage>> {
         self.tick += 1;
         let tick = self.tick;
         let entry = self.entries.get_mut(key)?;
@@ -124,7 +250,7 @@ impl TextShadowCache {
         Some(Rc::clone(&entry.image))
     }
 
-    pub fn contains(&self, key: &ShadowKey) -> bool {
+    pub fn contains(&self, key: &dyn ShadowKeyView) -> bool {
         self.entries.contains_key(key)
     }
 

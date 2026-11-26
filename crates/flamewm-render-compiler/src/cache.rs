@@ -26,9 +26,8 @@ pub fn default_dir() -> Option<PathBuf> {
 /// Returns the cached document for `key`, or `None` on any miss or invalid entry.
 pub fn load(dir: &Path, key: u64) -> Option<CompiledDocument> {
     let bytes = fs::read(entry_path(dir, key)).ok()?;
-    let document = decode(&bytes).ok()?;
-    document.validate().ok()?;
-    Some(document)
+    // `decode` already validates the decoded document; a second pass would repeat that work.
+    decode(&bytes).ok()
 }
 
 /// Best-effort store: a failed write only costs a recompile on the next load.

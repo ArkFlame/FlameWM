@@ -13,12 +13,24 @@ pub(super) fn project_slots(
     };
     let cells = &cache.cells;
     let generation = projection::theme_generation();
+    // One reusable node-id buffer for unchanged tiles; only the `format!`-free path needs an id.
+    let mut item_id = String::with_capacity(24);
+    // Consecutive tiles usually share an output; resolve the grid once per output run.
+    let mut last_output: Option<OutputId> = None;
+    let mut last_grid: Option<GridConfig> = None;
     #[allow(clippy::needless_range_loop)]
     for index in 0..SLOT_COUNT {
         let item = items.get(index).copied();
         if let Some(item) = item {
             let (output, cell) = &cells[index];
-            let output_grid = grid_for_output(state, output);
+            let output_grid = if last_output.as_ref() == Some(output) {
+                last_grid.unwrap_or_else(|| grid_for_output(state, output))
+            } else {
+                let grid = grid_for_output(state, output);
+                last_output = Some(output.clone());
+                last_grid = Some(grid);
+                grid
+            };
             let point = output_grid.cell_to_pixel(*cell);
             let kind = item.kind;
             let icon = launcher_icon(state, kind, &item.path);
@@ -29,14 +41,17 @@ pub(super) fn project_slots(
             }) {
                 // Unchanged tile: projection would only re-assert visibility. Drag
                 // hides sources without touching model state, so restore it here.
-                document.visible(&format!("desktop-item-{index}"), true)?;
+                item_id.clear();
+                item_id.push_str("desktop-item-");
+                let _ = std::fmt::Write::write_fmt(&mut item_id, format_args!("{index}"));
+                document.visible(&item_id, true)?;
                 continue;
             }
             let inputs = SlotInputs {
                 kind,
                 label: label.to_owned(),
                 point,
-                icon,
+                icon: icon.map(|icon| icon.into_owned()),
                 scale,
                 generation,
             };
@@ -132,25 +147,27 @@ pub(super) fn apply_ready_icons(
     if ready.is_empty() {
         return Ok(());
     }
+    // Item kinds indexed once; the previous loop re-walked the model for every slot of every
+    // completed icon, and cloned each slot's key just to compare it.
+    let kinds: Vec<DesktopItemKind> = state
+        .model
+        .items()
+        .take(SLOT_COUNT)
+        .map(|item| item.kind)
+        .collect();
     for (key, raster) in ready {
         let Some(raster) = raster else { continue };
         for index in 0..SLOT_COUNT {
-            let Some(expected) = state.icon_slots.get(index).cloned().flatten() else {
+            let expected = state.icon_slots.get(index).and_then(|slot| slot.as_ref());
+            if !slot_expects_key(expected, &key) {
                 continue;
-            };
-            let Some(kind) = state.model.items().nth(index).map(|item| item.kind) else {
-                continue;
-            };
-            if slot_expects_key(Some(&expected), &key) {
-                state.icons.apply_if_current(
-                    document,
-                    index,
-                    kind,
-                    &expected,
-                    &key,
-                    raster.clone(),
-                )?;
             }
+            let Some(&kind) = kinds.get(index) else {
+                continue;
+            };
+            state
+                .icons
+                .apply_if_current(document, index, kind, &key, &key, raster.clone())?;
         }
     }
     // A live prediction shares the same async icon cache as real desktop tiles.

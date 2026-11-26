@@ -17,11 +17,15 @@ impl<'a> Compiler<'a> {
         }
         let resolved = if takes_length_var(&declaration.name) && declaration.value.contains("var(")
         {
-            resolve_length_vars(declaration.value.trim(), self.length_map)?
+            std::borrow::Cow::Owned(resolve_length_vars(
+                declaration.value.trim(),
+                self.length_map,
+            )?)
         } else {
-            declaration.value.trim().to_string()
+            // Borrow the parsed declaration instead of allocating a copy for every application.
+            std::borrow::Cow::Borrowed(declaration.value.trim())
         };
-        let value = resolved.as_str();
+        let value: &str = &resolved;
         match declaration.name.as_str() {
             "display" => {
                 style.display = match value {

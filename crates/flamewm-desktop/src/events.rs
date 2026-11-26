@@ -421,11 +421,13 @@ pub(crate) fn handle_item(
             if state.drag_ghost.is_none() {
                 let (output, cell) = projected_cells(state)[index].clone();
                 let origin = grid_for_output(state, &output).cell_to_pixel(cell);
+                let icon_override =
+                    launcher_icon(state, item.kind, &item.path).map(|icon| icon.into_owned());
                 state.drag_ghost = Some(DragGhost {
                     output,
                     source_ids: drag.originals.iter().map(|item| item.id.clone()).collect(),
                     kind: item.kind,
-                    icon_override: launcher_icon(state, item.kind, &item.path),
+                    icon_override,
                     label: desktop_item_label(state, item).to_owned(),
                     offset_x: drag.start_x - origin.x as f32,
                     offset_y: drag.start_y - origin.y as f32,

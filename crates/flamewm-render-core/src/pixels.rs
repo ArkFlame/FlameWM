@@ -360,7 +360,12 @@ pub fn composite_cpu(
 /// matches its rectangle. Both fill backends fail only on a frame-length mismatch, so these checks
 /// are exactly the ones that could otherwise return `Err` mid-batch. Anything else keeps the
 /// copy-based path, which restores the frame on error.
-fn paints_in_place(frame_len: usize, width: u32, height: u32, ops: &[PixelOp<'_>]) -> bool {
+pub(crate) fn paints_in_place(
+    frame_len: usize,
+    width: u32,
+    height: u32,
+    ops: &[PixelOp<'_>],
+) -> bool {
     let Some(expected) = (width as usize)
         .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
@@ -482,57 +487,73 @@ pub trait PixelBackend {
         ops: &[PixelOp<'_>],
     ) -> Result<(), String> {
         if paints_in_place(pixels.len(), width, height, ops) {
-            // Only fills and blends with valid sizes, and none of them can fail here, so the
-            // batch runs directly on `pixels` and needs no full-frame copy for atomicity.
-            for op in ops {
-                match *op {
-                    PixelOp::FillRoundedRect { outer, hole, color } => {
-                        self.fill_rounded_rect(pixels, width, height, outer, hole, color)?;
-                    }
-                    blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
-                        composite_cpu(pixels, width, height, blend)?;
-                    }
-                    _ => unreachable!("paints_in_place admits only fills and blends"),
-                }
-            }
-            return Ok(());
+            return apply_ops_in_place(self, pixels, width, height, ops);
         }
         let mut scratch = pixels.to_vec();
-        for op in ops {
-            match *op {
-                PixelOp::FillRoundedRect { outer, hole, color } => {
-                    self.fill_rounded_rect(&mut scratch, width, height, outer, hole, color)?;
-                }
-                PixelOp::Blur { radius } => self.blur_rgba(&mut scratch, width, height, radius)?,
-                PixelOp::FillRoundedRectClipped {
-                    outer,
-                    hole,
-                    color,
-                    clip,
-                } => fill_clipped_cpu(self, &mut scratch, width, height, outer, hole, color, clip)?,
-                PixelOp::BackdropBlur {
-                    clip,
-                    node,
-                    corner,
-                    radius,
-                } => backdrop_blur_cpu(
-                    self,
-                    &mut scratch,
-                    width,
-                    height,
-                    clip,
-                    node,
-                    corner,
-                    radius,
-                )?,
-                blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
-                    composite_cpu(&mut scratch, width, height, blend)?;
-                }
-            }
-        }
+        apply_ops_to_scratch(self, &mut scratch, width, height, ops)?;
         pixels.copy_from_slice(&scratch);
         Ok(())
     }
+}
+
+/// Runs a batch that [`paints_in_place`] proved cannot fail directly on `pixels`, with no
+/// full-frame copy. Only fills and blends with valid sizes reach here.
+pub(crate) fn apply_ops_in_place<B: PixelBackend + ?Sized>(
+    backend: &mut B,
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    ops: &[PixelOp<'_>],
+) -> Result<(), String> {
+    // Only fills and blends with valid sizes, and none of them can fail here, so the
+    // batch runs directly on `pixels` and needs no full-frame copy for atomicity.
+    for op in ops {
+        match *op {
+            PixelOp::FillRoundedRect { outer, hole, color } => {
+                backend.fill_rounded_rect(pixels, width, height, outer, hole, color)?;
+            }
+            blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
+                composite_cpu(pixels, width, height, blend)?;
+            }
+            _ => unreachable!("paints_in_place admits only fills and blends"),
+        }
+    }
+    Ok(())
+}
+
+/// Runs `ops` on `scratch`, which must already hold the frame at `width` x `height`. A caller
+/// that keeps a frame-shaped scratch buffer reuses it every frame instead of allocating one.
+pub(crate) fn apply_ops_to_scratch<B: PixelBackend + ?Sized>(
+    backend: &mut B,
+    scratch: &mut [u8],
+    width: u32,
+    height: u32,
+    ops: &[PixelOp<'_>],
+) -> Result<(), String> {
+    for op in ops {
+        match *op {
+            PixelOp::FillRoundedRect { outer, hole, color } => {
+                backend.fill_rounded_rect(scratch, width, height, outer, hole, color)?;
+            }
+            PixelOp::Blur { radius } => backend.blur_rgba(scratch, width, height, radius)?,
+            PixelOp::FillRoundedRectClipped {
+                outer,
+                hole,
+                color,
+                clip,
+            } => fill_clipped_cpu(backend, scratch, width, height, outer, hole, color, clip)?,
+            PixelOp::BackdropBlur {
+                clip,
+                node,
+                corner,
+                radius,
+            } => backdrop_blur_cpu(backend, scratch, width, height, clip, node, corner, radius)?,
+            blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
+                composite_cpu(scratch, width, height, blend)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

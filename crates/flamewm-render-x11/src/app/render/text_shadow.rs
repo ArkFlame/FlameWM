@@ -1,5 +1,5 @@
 use super::*;
-use crate::text_shadow_cache::{ShadowImage, ShadowKey};
+use crate::text_shadow_cache::{ShadowImage, ShadowKey, ShadowRef};
 
 /// Per-thread shadow work buffers. The display thread is the only shadow painter,
 /// so every text shadow reuses the blur scratch and staging buffers instead of
@@ -120,14 +120,8 @@ impl X11App {
         text: &str,
         family: &str,
     ) -> Result<Option<std::rc::Rc<ShadowImage>>, String> {
-        let key = ShadowKey::new(
-            family,
-            text,
-            size,
-            weight,
-            radius,
-            [color.r, color.g, color.b, color.a],
-        );
+        let key_color = [color.r, color.g, color.b, color.a];
+        let key = ShadowRef::new(family, text, size, weight, radius, key_color);
         if let Some(image) = self.shadow_images.get(&key) {
             return Ok(Some(image));
         }
@@ -149,7 +143,8 @@ impl X11App {
         } = scratch;
         let image = shadow_image_from_coverage(blur, rgba, mask, w, h, color, radius)?;
         let mut displaced = Vec::new();
-        let image = self.shadow_images.insert(key, image, &mut displaced);
+        let owned = ShadowKey::new(family, text, size, weight, radius, key_color);
+        let image = self.shadow_images.insert(owned, image, &mut displaced);
         self.free_shadow_images(displaced);
         Ok(Some(image))
     }
@@ -181,7 +176,7 @@ impl X11App {
             {
                 let size = *size * scale;
                 let radius = (*blur_radius * scale).clamp(0.0, 8.0);
-                let key = ShadowKey::new(
+                let key = ShadowRef::new(
                     family,
                     text,
                     size,

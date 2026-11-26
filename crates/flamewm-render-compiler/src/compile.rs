@@ -153,7 +153,8 @@ fn cache_key(
             input.extend_from_slice(src.as_bytes());
             input.push(0);
             input.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-            input.extend_from_slice(&bytes);
+            // Digest each image rather than accumulating every pixel buffer in the key input.
+            input.extend_from_slice(&fnv1a64(&bytes).to_le_bytes());
         }
     }
     Some(fnv1a64(&input))
@@ -199,7 +200,8 @@ pub(crate) fn compile_parsed(
         fingerprint_input.extend_from_slice(asset.source.as_bytes());
         fingerprint_input.extend_from_slice(&asset.width.to_le_bytes());
         fingerprint_input.extend_from_slice(&asset.height.to_le_bytes());
-        fingerprint_input.extend_from_slice(&asset.pixels);
+        // Fold each pixel buffer in as a digest instead of copying megabytes into this Vec.
+        fingerprint_input.extend_from_slice(&fnv1a64(&asset.pixels).to_le_bytes());
     }
     let document = CompiledDocument {
         source_fingerprint: fnv1a64(&fingerprint_input),

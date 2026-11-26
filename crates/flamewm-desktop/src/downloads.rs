@@ -155,6 +155,12 @@ impl Organizer {
         if !self.enabled {
             return;
         }
+        // Idle turns are free: without new notes, stat only once the settle poll is due. This
+        // keeps pointer motion and key events from re-stat'ing every pending file.
+        let pending_notes = !self.queue.borrow().is_empty();
+        if !pending_notes && self.armed.is_some_and(|due| now < due) {
+            return;
+        }
         let notes: Vec<_> = self.queue.borrow_mut().drain(..).collect();
         for (name, finished, gone) in notes {
             if gone {

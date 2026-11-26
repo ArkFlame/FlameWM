@@ -4,12 +4,21 @@
 //! way to turn a `PaintCommand` list into pixels. This backend runs the same normalized ops on
 //! a plain RGBA8 frame, which is exactly what a Wayland shared-memory buffer holds.
 
-use crate::pixels::{PixelBackend, PixelOp, RoundedRect};
+use crate::pixels::{
+    PixelBackend, PixelOp, RoundedRect, apply_ops_in_place, apply_ops_to_scratch, paints_in_place,
+};
+
+/// Largest frame scratch retained between paints; a bigger frame is released instead, so a
+/// one-off huge surface cannot pin its bytes for the life of the process.
+const FRAME_SCRATCH_RETAIN_BYTES: usize = 16 * 1024 * 1024;
 
 /// Whole-frame RGBA8 software painting with a retained blur scratch buffer.
 #[derive(Default)]
 pub struct SoftPixels {
     scratch: flamewm_image_core::blur::BlurScratch,
+    /// Retained frame copy for the ops that cannot run in place (blur, backdrop, clipped fill).
+    /// Reused across frames so a changing document never reallocates a full frame per paint.
+    frame: Vec<u8>,
 }
 
 impl SoftPixels {
@@ -64,6 +73,30 @@ impl PixelBackend for SoftPixels {
         color: [u8; 4],
     ) -> Result<(), String> {
         fill_rounded_rect_cpu(pixels, width, height, outer, hole, color)
+    }
+
+    fn paint_batch(
+        &mut self,
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        ops: &[PixelOp<'_>],
+    ) -> Result<(), String> {
+        if paints_in_place(pixels.len(), width, height, ops) {
+            return apply_ops_in_place(self, pixels, width, height, ops);
+        }
+        let mut frame = std::mem::take(&mut self.frame);
+        frame.clear();
+        frame.extend_from_slice(pixels);
+        let result = apply_ops_to_scratch(self, &mut frame, width, height, ops);
+        if result.is_ok() {
+            pixels.copy_from_slice(&frame);
+        }
+        if frame.capacity() <= FRAME_SCRATCH_RETAIN_BYTES {
+            frame.clear();
+            self.frame = frame;
+        }
+        result
     }
 }
 

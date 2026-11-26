@@ -108,19 +108,26 @@ impl WidgetState {
         SampleKey {
             cpu_percent: samples.cpu_percent,
             cpu_count: samples.cpu_count,
-            memory: samples.memory.map(|memory| {
-                (
-                    memory.percent(),
-                    format_gib(memory.used_kib()),
-                    format_gib(memory.total_kib),
-                )
-            }),
+            memory: memory_key(samples.memory),
             uptime_seconds: samples.uptime_seconds,
             cpu_history: samples.cpu_history.clone(),
             memory_history: samples.memory_history.clone(),
             net_rx_history: scale_rates(&samples.net_rx_history),
             net_tx_history: scale_rates(&samples.net_tx_history),
         }
+    }
+
+    /// True when the stored sample key already describes the live samples, compared without
+    /// cloning a single history or formatting a single value.
+    pub(super) fn key_is_current(key: &SampleKey, samples: &Samples) -> bool {
+        key.cpu_percent == samples.cpu_percent
+            && key.cpu_count == samples.cpu_count
+            && memory_is_current(key.memory, samples.memory)
+            && key.uptime_seconds == samples.uptime_seconds
+            && key.cpu_history == samples.cpu_history
+            && key.memory_history == samples.memory_history
+            && rates_match(&key.net_rx_history, &samples.net_rx_history)
+            && rates_match(&key.net_tx_history, &samples.net_tx_history)
     }
 
     pub(crate) fn persist(&self) {
@@ -149,4 +156,37 @@ impl WidgetState {
             self.media_dirty |= self.has_media_widget();
         }
     }
+}
+
+/// Numeric memory inputs of one sample; the drawn text is a pure function of these.
+pub(super) fn memory_key(memory: Option<MemoryUsage>) -> Option<(Option<u8>, u64, u64)> {
+    memory.map(|memory| (memory.percent(), memory.used_kib(), memory.total_kib))
+}
+
+/// True when the drawn memory text (percent, used and total) is unchanged. Raw readings are
+/// compared first; formatting runs only when they differ, so a skipped sync allocates nothing.
+fn memory_is_current(stored: Option<(Option<u8>, u64, u64)>, memory: Option<MemoryUsage>) -> bool {
+    match (stored, memory) {
+        (None, None) => true,
+        (Some((percent, used, total)), Some(memory)) => {
+            let live = (memory.percent(), memory.used_kib(), memory.total_kib);
+            live == (percent, used, total)
+                || (live.0 == percent
+                    && format_gib(live.1) == format_gib(used)
+                    && format_gib(live.2) == format_gib(total))
+        }
+        _ => false,
+    }
+}
+
+/// Compares drawn graph points against the raw history without rebuilding the scaled copy.
+fn rates_match(stored: &VecDeque<u8>, source: &VecDeque<u64>) -> bool {
+    if stored.len() != source.len() {
+        return false;
+    }
+    let peak = source.iter().copied().max().unwrap_or(0).max(1);
+    stored
+        .iter()
+        .zip(source)
+        .all(|(drawn, rate)| *drawn == (rate * 100 / peak) as u8)
 }

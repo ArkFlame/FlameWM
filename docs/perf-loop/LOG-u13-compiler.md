@@ -1,0 +1,8 @@
+# u13-compiler changes
+- build: an element's `hover`/`active`/`focus` style is now computed only when some matched rule targets that state; a state with no rule rebuilt `base` verbatim, so typical elements drop three full style passes (default style build, inherit copy, every base declaration, inline declarations) and three `Style` comparisons.
+- build: matched rules are sorted by cascade order once per element in `matching_rules` instead of once per pseudo-state pass in `compute_style`; `compute_style` filters that already-ordered slice instead of collecting and sorting a `selected` Vec, removing up to four `Vec` allocations and sorts per element.
+- declarations: `apply_declaration` resolves the value as `Cow<str>` (borrowed from the parsed `Declaration` unless `var()` expansion is needed) instead of `.trim().to_string()`, removing one heap allocation per declaration applied per element.
+- compile: the document fingerprint folds each image asset's pixels in as an `fnv1a64` digest plus size instead of copying the whole pixel buffer into the fingerprint input; the same applies to image bytes in the compile cache key, so an asset-heavy page no longer builds multi-megabyte hash buffers (lower peak RAM, no growth copies).
+- cache: `load` no longer calls `document.validate()` after `decode`; `decode_with` already validates the decoded document, so a cache hit skips a second full node/link validation pass.
+
+Expected composition shift: compile-time CPU in build scripts (style resolution was 4x work per element; now base-only for most elements) and lower transient allocation volume during page compiles. Visuals and the compiled document semantics are unchanged.

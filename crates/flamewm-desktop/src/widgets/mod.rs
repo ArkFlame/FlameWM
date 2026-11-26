@@ -152,18 +152,53 @@ struct SyncKey {
     samples: SampleKey,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct SampleKey {
     cpu_percent: Option<u8>,
     cpu_count: usize,
-    /// Drawn memory text: percent, used GiB and total GiB, as shown on the widget.
-    memory: Option<(Option<u8>, String, String)>,
+    /// Memory inputs as drawn: percent, used KiB and total KiB. Kept numeric so a comparison
+    /// allocates nothing; the equality contract still follows the drawn text.
+    memory: Option<(Option<u8>, u64, u64)>,
     uptime_seconds: Option<u64>,
     cpu_history: VecDeque<u8>,
     memory_history: VecDeque<u8>,
     /// Network graph points as drawn (`scale_rates`), so idle traffic compares equal.
     net_rx_history: VecDeque<u8>,
     net_tx_history: VecDeque<u8>,
+}
+
+impl PartialEq for SampleKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cpu_percent == other.cpu_percent
+            && self.cpu_count == other.cpu_count
+            && memory_text_eq(self.memory, other.memory)
+            && self.uptime_seconds == other.uptime_seconds
+            && self.cpu_history == other.cpu_history
+            && self.memory_history == other.memory_history
+            && self.net_rx_history == other.net_rx_history
+            && self.net_tx_history == other.net_tx_history
+    }
+}
+
+/// Equal when both readings render the same percent, used and total text. Raw KiB that rounds
+/// to identical text must not repaint.
+fn memory_text_eq(
+    left: Option<(Option<u8>, u64, u64)>,
+    right: Option<(Option<u8>, u64, u64)>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (
+            Some((left_percent, left_used, left_total)),
+            Some((right_percent, right_used, right_total)),
+        ) => {
+            (left_percent, left_used, left_total) == (right_percent, right_used, right_total)
+                || (left_percent == right_percent
+                    && format_gib(left_used) == format_gib(right_used)
+                    && format_gib(left_total) == format_gib(right_total))
+        }
+        _ => false,
+    }
 }
 
 /// Slot-overlay capacity in cells: 32 columns by 18 rows. Must match `build.rs`.

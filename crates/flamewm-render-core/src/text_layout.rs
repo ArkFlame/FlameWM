@@ -180,7 +180,7 @@ pub fn layout_styled(
             if overflow == TextOverflow::Ellipsis && avail_ok {
                 push_ellipsized(&mut lines, &collapsed, size, avail_width, weight);
             } else {
-                push_measured(&mut lines, collapsed, size, weight);
+                push_measured(&mut lines, collapsed.into_owned(), size, weight);
             }
         } else if break_anywhere {
             push_chunks(&mut lines, &collapsed, size, avail_width, weight);
@@ -294,7 +294,19 @@ fn push_chunks(
     }
 }
 
-fn collapse_whitespace(input: &str) -> String {
+/// Collapses ASCII whitespace runs to one space and trims paragraph edges. Borrows the input
+/// untouched when it already is the collapsed form, so laying out unchanged text allocates
+/// nothing here.
+fn collapse_whitespace(input: &str) -> Cow<'_, str> {
+    let needs_collapse = input.starts_with(' ')
+        || input.ends_with(' ')
+        || input.contains("  ")
+        || input
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() && byte != b' ');
+    if !needs_collapse {
+        return Cow::Borrowed(input);
+    }
     let mut out = String::with_capacity(input.len());
     let mut pending_space = false;
     for ch in input.chars() {
@@ -308,7 +320,7 @@ fn collapse_whitespace(input: &str) -> String {
             out.push(ch);
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Greedy char-level chunks by measured caret position; degenerate avail yields one char per chunk.

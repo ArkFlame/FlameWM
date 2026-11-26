@@ -150,6 +150,13 @@ impl Run<'_> {
             .horizontal_kern(left, right, self.px)
             .unwrap_or(0.0)
     }
+
+    /// Unrounded advance of `c`, the same value [`Self::glyph`] stores, without rasterizing a
+    /// bitmap or touching the glyph cache. Measurement and caret paths only need advances, so
+    /// they must not pay for coverage they never paint.
+    fn advance(&self, c: char) -> f32 {
+        self.cache.font.metrics(c, self.px).advance_width
+    }
 }
 
 /// Runs `f` with the font at `px` pixels, or returns `None` when no font is installed.
@@ -186,15 +193,45 @@ fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Arc<GlyphMask>>) {
     (origins, glyphs)
 }
 
+/// Pen origin of every char plus the run end (`len = chars + 1`), accumulated in f32 exactly as
+/// [`shape`] does, but from advances only: no glyph is rasterized or cached.
+fn shape_origins(text: &str, run: &Run<'_>) -> Vec<f32> {
+    let mut origins = Vec::with_capacity(text.len() + 1);
+    let mut pen = 0.0f32;
+    let mut prev: Option<char> = None;
+    for character in text.chars() {
+        if let Some(left) = prev {
+            pen += run.kern(left, character);
+        }
+        origins.push(pen);
+        pen += run.advance(character);
+        prev = Some(character);
+    }
+    origins.push(pen);
+    origins
+}
+
+/// Final pen of `text`, accumulated in the exact order [`shape`] uses, with no allocation.
+fn advance_pen(text: &str, run: &Run<'_>) -> f32 {
+    let mut pen = 0.0f32;
+    let mut prev: Option<char> = None;
+    for character in text.chars() {
+        if let Some(left) = prev {
+            pen += run.kern(left, character);
+        }
+        pen += run.advance(character);
+        prev = Some(character);
+    }
+    pen
+}
+
 /// Advance width of `text` at `size` px, in fractional px. `None` when no font is installed.
 #[must_use]
 pub fn advance_width(text: &str, size: f32) -> Option<f32> {
     if size <= 0.0 {
         return None;
     }
-    with_run(size, |run| {
-        shape(text, run).0.last().copied().unwrap_or(0.0)
-    })
+    with_run(size, |run| advance_pen(text, run))
 }
 
 /// Caret x of every char boundary in `text` at `size` px, relative to the run origin.
@@ -206,7 +243,7 @@ pub fn caret_positions(text: &str, size: f32) -> Option<Vec<f32>> {
     if size <= 0.0 {
         return None;
     }
-    with_run(size, |run| shape(text, run).0)
+    with_run(size, |run| shape_origins(text, run))
 }
 
 /// Char index whose caret boundary is nearest to `x` (run-relative px), clamped to the run.
@@ -214,22 +251,35 @@ pub fn caret_positions(text: &str, size: f32) -> Option<Vec<f32>> {
 /// Inverse of [`caret_positions`]: `char_index_at(t, s, caret_positions(t, s)[k])` is `k`.
 #[must_use]
 pub fn char_index_at(text: &str, size: f32, x: f32) -> Option<usize> {
-    let origins = caret_positions(text, size)?;
-    Some(nearest_caret(&origins, x))
-}
-
-/// Index of the caret in `origins` nearest to `x`; ties keep the earlier caret.
-fn nearest_caret(origins: &[f32], x: f32) -> usize {
-    let mut best = 0usize;
-    let mut best_distance = f32::INFINITY;
-    for (index, origin) in origins.iter().enumerate() {
-        let distance = (origin - x).abs();
-        if distance < best_distance {
-            best = index;
-            best_distance = distance;
-        }
+    if size <= 0.0 {
+        return None;
     }
-    best
+    // Walk the pen once, keeping the nearest caret: hit-testing a pointer move must not build (or
+    // rasterize) the whole shaped run like the old `caret_positions`-and-index path did.
+    with_run(size, |run| {
+        let mut best = 0usize;
+        let mut best_distance = f32::INFINITY;
+        let mut pen = 0.0f32;
+        let mut prev: Option<char> = None;
+        let mut index = 0usize;
+        for character in text.chars() {
+            if let Some(left) = prev {
+                pen += run.kern(left, character);
+            }
+            let distance = (pen - x).abs();
+            if distance < best_distance {
+                best = index;
+                best_distance = distance;
+            }
+            pen += run.advance(character);
+            prev = Some(character);
+            index += 1;
+        }
+        if (pen - x).abs() < best_distance {
+            best = index;
+        }
+        best
+    })
 }
 
 /// Rasterizes `text` at `size` pixels with its baseline at (`pen_x`, `baseline_y`).
@@ -453,6 +503,21 @@ mod tests {
         );
     }
 
+    /// Reference nearest-caret search for the shaped origins; `char_index_at` streams the same
+    /// comparison without allocating.
+    fn nearest_caret(origins: &[f32], x: f32) -> usize {
+        let mut best = 0usize;
+        let mut best_distance = f32::INFINITY;
+        for (index, origin) in origins.iter().enumerate() {
+            let distance = (origin - x).abs();
+            if distance < best_distance {
+                best = index;
+                best_distance = distance;
+            }
+        }
+        best
+    }
+
     #[test]
     fn caret_hit_test_round_trips_every_boundary() {
         if !any_font() {
@@ -460,10 +525,8 @@ mod tests {
         }
         for size in [13.0f32, 16.0] {
             for text in sample_strings() {
-                // Shaping once per string: `char_index_at` re-shapes the whole run on every call,
-                // which made this quadratic in debug builds (~10 s). Every boundary goes through the
-                // nearest-caret search that `char_index_at` uses; the public entry point is checked
-                // at the clamps and at the middle boundary.
+                // Shaping once per string: `char_index_at` now streams the pen instead of
+                // re-shaping the whole run, so this stays linear per call.
                 let carets = caret_positions(&text, size).expect("carets");
                 for (index, &x) in carets.iter().enumerate() {
                     assert_eq!(

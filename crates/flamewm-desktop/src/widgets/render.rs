@@ -110,15 +110,33 @@ pub(crate) fn sync_widgets(
     }
     let time = local_wall_time();
     let placeholders = widget_placeholders(state, time);
-    let widgets = state.widgets.store.widgets();
-    // Wall time only reaches the document through time-showing widgets; without one, a
-    // second-by-second clock must not force a sync.
-    let needs_time = widgets.iter().any(|widget| {
-        matches!(
-            widget.kind,
-            WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom
-        )
-    });
+    // Compare the stored key field by field before rebuilding it: an unchanged turn then costs
+    // no settings/widget snapshot clone at all.
+    let needs_time = {
+        let widgets = state.widgets.store.widgets();
+        // Wall time only reaches the document through time-showing widgets; without one, a
+        // second-by-second clock must not force a sync.
+        let needs_time = widgets.iter().any(|widget| {
+            matches!(
+                widget.kind,
+                WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom
+            )
+        });
+        let unchanged = state.widgets.sync_key.as_ref().is_some_and(|key| {
+            sync_key_matches(
+                key,
+                state,
+                widgets,
+                &placeholders,
+                needs_time.then_some(time),
+                needs_time,
+            )
+        });
+        if unchanged {
+            return Ok(());
+        }
+        needs_time
+    };
     let mut key_placeholders = placeholders.clone();
     if !needs_time {
         key_placeholders.time.clear();
@@ -126,7 +144,7 @@ pub(crate) fn sync_widgets(
         key_placeholders.weekday.clear();
     }
     let key = SyncKey {
-        widgets: widgets.to_vec(),
+        widgets: state.widgets.store.widgets().to_vec(),
         settings: state.settings.clone(),
         weather: state.weather.clone(),
         media: state.widgets.media.clone(),
@@ -139,9 +157,6 @@ pub(crate) fn sync_widgets(
         time: needs_time.then_some(time),
         samples: state.widgets.sample_key(),
     };
-    if state.widgets.sync_key.as_ref() == Some(&key) {
-        return Ok(());
-    }
     for slot in 0..MAX_WIDGETS {
         let id = format!("widget-{}", slot + 1);
         let Some(widget) = state.widgets.store.widgets().get(slot).cloned() else {
@@ -238,4 +253,46 @@ pub(crate) fn sync_widgets(
 pub(super) fn projection_accent(state: &DesktopState) -> Rgb {
     let accent = crate::entry::accent_color(&state.settings);
     Rgb::new(accent.r, accent.g, accent.b)
+}
+
+/// Field-wise equality between the last stored sync key and the live inputs. Equivalent to
+/// `SyncKey` equality, but compares borrowed state so an unchanged turn clones nothing.
+fn sync_key_matches(
+    key: &SyncKey,
+    state: &DesktopState,
+    widgets: &[Widget],
+    placeholders: &Placeholders,
+    time: Option<WallTime>,
+    needs_time: bool,
+) -> bool {
+    key.widgets.as_slice() == widgets
+        && key.settings == state.settings
+        && key.weather == state.weather
+        && key.media == state.widgets.media
+        && key
+            .editing
+            .as_ref()
+            .map(|(widget, buffer)| (*widget, buffer.as_str()))
+            == state
+                .widgets
+                .editing
+                .as_ref()
+                .map(|edit| (edit.widget, edit.buffer.as_str()))
+        && placeholders_match(&key.placeholders, placeholders, needs_time)
+        && key.time == time
+        && WidgetState::key_is_current(&key.samples, &state.widgets.samples)
+}
+
+/// The stored placeholder line is cleared when no widget shows time, so compare those fields
+/// only when the widget set actually needs them.
+fn placeholders_match(stored: &Placeholders, live: &Placeholders, needs_time: bool) -> bool {
+    stored.username == live.username
+        && stored.hostname == live.hostname
+        && stored.cpu_percent == live.cpu_percent
+        && stored.memory_percent == live.memory_percent
+        && stored.uptime == live.uptime
+        && (!needs_time
+            || (stored.time == live.time
+                && stored.date == live.date
+                && stored.weekday == live.weekday))
 }
