@@ -13,6 +13,7 @@
 use super::*;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::utils::Scale;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU16, Ordering};
 
 /// Dock `opacity` and `blur` percents, as the shared settings resolve them.
@@ -33,12 +34,29 @@ impl DockMaterial {
 /// A rect as `(x, y, w, h)`, logical for a Dock site and physical inside a capture.
 pub(super) type RectKey = (i32, i32, i32, i32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum BackdropSite {
+    Dock(RectKey),
+    Window(WindowId),
+}
+
+pub(super) fn window_needs_backdrop(
+    visible: bool,
+    covered: bool,
+    material: DockMaterial,
+    flat: bool,
+) -> bool {
+    visible && !covered && material.needs_backdrop() && !flat
+}
+
 /// Everything a cached Dock backdrop was built from. Equal keys mean the cached pixels are current.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct BackdropKey {
+    pub(super) site: BackdropSite,
     pub(super) rect: RectKey,
     /// Dock corner radius in device pixels, as published by the Dock.
     pub(super) radius: u32,
+    pub(super) window_radii: [u8; 4],
     /// Output scale in thousandths, so a scale change recaptures at the new resolution.
     pub(super) scale_milli: u32,
     pub(super) material: DockMaterial,
@@ -47,7 +65,7 @@ pub(super) struct BackdropKey {
     pub(super) scene: Vec<(RectKey, CommitCounter)>,
 }
 
-/// A cached Dock backdrop: the key it was captured under and the buffer drawn beneath the Dock.
+/// A cached site backdrop: the key it was captured under and the rendered buffer.
 pub(super) struct DockBacking {
     pub(super) key: BackdropKey,
     pub(super) buffer: MemoryRenderBuffer,
@@ -95,6 +113,7 @@ pub(super) fn rounded_coverage(w: usize, h: usize, radius: f32, x: usize, y: usi
 /// A mapped strut surface that may be a translucent Dock.
 struct DockSite {
     index: usize,
+    site: BackdropSite,
     rect: RectKey,
     radius: u32,
 }
@@ -110,6 +129,12 @@ fn dock_sites(state: &State) -> Vec<DockSite> {
             let geometry = entry.surface.geometry();
             Some(DockSite {
                 index,
+                site: BackdropSite::Dock((
+                    geometry.loc.x,
+                    geometry.loc.y,
+                    geometry.size.w,
+                    geometry.size.h,
+                )),
                 rect: (
                     geometry.loc.x,
                     geometry.loc.y,
@@ -147,12 +172,9 @@ fn scene_beneath(
     region: Rectangle<i32, Physical>,
     scale: f64,
 ) -> Vec<Elem> {
-    use crate::scene::SceneItem;
-
     let below = crate::scene::front_to_back(state)
         .into_iter()
-        .skip_while(|item| !matches!(item, SceneItem::Unmanaged(index) if *index == site_index))
-        .skip(1);
+        .skip(site_index + 1);
     let mut elements = Vec::new();
     for element in scene_elements(state, renderer, decorations, below, true) {
         if region.overlaps(element.geometry(Scale::from(scale))) {
@@ -260,7 +282,12 @@ fn capture_dock(
     let mut pixels = crop_capture(&blurred, dims, (0, 0), w, h, scale);
     for y in 0..h {
         for x in 0..w {
-            pixels[(y * w + x) * 4 + 3] = rounded_coverage(w, h, radius, x, y);
+            let alpha = if key.site == BackdropSite::Dock(key.rect) {
+                rounded_coverage(w, h, radius, x, y)
+            } else {
+                client_mask_coverage(w, h, key.window_radii, x, y)
+            };
+            pixels[(y * w + x) * 4 + 3] = alpha;
         }
     }
     let buffer = MemoryRenderBuffer::from_slice(
@@ -274,6 +301,62 @@ fn capture_dock(
     Ok(DockBacking { key, buffer })
 }
 
+fn client_mask_coverage(w: usize, h: usize, radii: [u8; 4], x: usize, y: usize) -> u8 {
+    let corner = if x < usize::from(radii[0]) && y < usize::from(radii[0]) {
+        Some((0, radii[0]))
+    } else if x + usize::from(radii[1]) >= w && y < usize::from(radii[1]) {
+        Some((1, radii[1]))
+    } else if x + usize::from(radii[2]) >= w && y + usize::from(radii[2]) >= h {
+        Some((2, radii[2]))
+    } else if x < usize::from(radii[3]) && y + usize::from(radii[3]) >= h {
+        Some((3, radii[3]))
+    } else {
+        None
+    };
+    corner.map_or(255, |(index, radius)| {
+        let r = f32::from(radius);
+        let (cx, cy) = match index {
+            0 => (r, r),
+            1 => (w as f32 - r, r),
+            2 => (w as f32 - r, h as f32 - r),
+            _ => (r, h as f32 - r),
+        };
+        let dx = x as f32 + 0.5 - cx;
+        let dy = y as f32 + 0.5 - cy;
+        ((r + 0.5 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0) * 255.0).round() as u8
+    })
+}
+
+/// Corner radii and material a site is captured under: a Dock uses the shared Dock material, a
+/// managed window its own published material.
+fn site_parameters(
+    state: &State,
+    site: BackdropSite,
+    dock: DockMaterial,
+) -> ([u8; 4], DockMaterial) {
+    match site {
+        BackdropSite::Dock(_) => ([0; 4], dock),
+        BackdropSite::Window(id) => state.model.get(id).map_or(
+            (
+                [0; 4],
+                DockMaterial {
+                    opacity: 100,
+                    blur: 0,
+                },
+            ),
+            |m| {
+                (
+                    client_corner_radii(m, m.titlebars),
+                    DockMaterial {
+                        opacity: m.material.0,
+                        blur: m.material.1,
+                    },
+                )
+            },
+        ),
+    }
+}
+
 /// Refreshes the cached backdrop of every translucent Dock for this frame. Called before the frame
 /// elements are built, by the winit and DRM paths. While nothing beneath a Dock changes it costs
 /// one element build and an allocation-free stamp comparison: no stamp vector, render, readback or
@@ -283,10 +366,75 @@ pub(crate) fn refresh_dock_backdrops(
     renderer: &mut GlowRenderer,
 ) -> Result<(), Box<dyn Error>> {
     let material = current_dock_material();
-    let sites = dock_sites(state);
     let mut decorations = state.decorations.borrow_mut();
+    let mut sites = if material.needs_backdrop() && !glass_flat() {
+        dock_sites(state)
+    } else {
+        Vec::new()
+    };
+    let scene_order = crate::scene::front_to_back(state);
+    for site in &mut sites {
+        if let Some(position) = scene_order.iter().position(
+            |item| matches!(item, crate::scene::SceneItem::Unmanaged(index) if *index == site.index),
+        ) {
+            site.index = position;
+        }
+    }
+    if !glass_flat() {
+        let scale = state.output_scale();
+        let visible = client_backdrop_rect(state.output_rect(), scale);
+        for id in state.model.visible_top_first_iter() {
+            let Some(managed) = state.model.get(id) else {
+                continue;
+            };
+            let material = DockMaterial {
+                opacity: managed.material.0,
+                blur: managed.material.1,
+            };
+            if !window_needs_backdrop(
+                client_backdrop_rect(managed.rect, scale).overlaps(visible),
+                false,
+                material,
+                false,
+            ) || state.window_wl_surface(id).is_none()
+            {
+                continue;
+            }
+            let Some(index) = scene_order.iter().position(
+                |item| matches!(item, crate::scene::SceneItem::Managed(window) if *window == id),
+            ) else {
+                continue;
+            };
+            let front = scene_elements(
+                state,
+                renderer,
+                &mut decorations,
+                scene_order[..index].iter().cloned(),
+                true,
+            );
+            let mut occluders = Vec::new();
+            collect_occluders(&front, scale, &mut occluders);
+            let client = client_backdrop_rect(managed.rect, scale);
+            if occluders.iter().any(|outer| covers(*outer, client)) {
+                continue;
+            }
+            let rect = managed.rect;
+            let rect = (rect.x, rect.y, rect.w, rect.h);
+            sites.push(DockSite {
+                index,
+                site: BackdropSite::Window(id),
+                rect,
+                radius: u32::from(
+                    client_corner_radii(managed, managed.titlebars)[0]
+                        .max(client_corner_radii(managed, managed.titlebars)[1])
+                        .max(client_corner_radii(managed, managed.titlebars)[2])
+                        .max(client_corner_radii(managed, managed.titlebars)[3]),
+                ),
+            });
+        }
+    }
     // Flat (`reduceTransparency`) material is opaque and an opaque Dock hides the scene beneath it.
-    if !material.needs_backdrop() || glass_flat() || sites.is_empty() {
+    if glass_flat() {
         decorations.drop_docks();
         return Ok(());
     }
@@ -296,7 +444,8 @@ pub(crate) fn refresh_dock_backdrops(
     for site in sites {
         let region = physical_rect(site.rect, scale);
         let elements = scene_beneath(state, renderer, &mut decorations, site.index, region, scale);
-        let cached = decorations.docks.get(&site.rect);
+        let (window_radii, site_material) = site_parameters(state, site.site, material);
+        let cached = decorations.docks.get(&site.site);
         // The cheap key fields first: when the rect, radius, scale or material moved, a recapture is
         // due whatever the scene holds, and no stamp is needed. Otherwise compare the freshly built
         // elements against the cached stamp in place; a frame that changes nothing allocates no
@@ -304,33 +453,36 @@ pub(crate) fn refresh_dock_backdrops(
         if let Some(backing) = cached {
             let same_fields = backing.key.rect == site.rect
                 && backing.key.radius == site.radius
+                && backing.key.window_radii == window_radii
                 && backing.key.scale_milli == scale_milli
-                && backing.key.material == material;
+                && backing.key.material == site_material;
             if same_fields && scene_matches(&elements, region, scale, &backing.key.scene) {
-                live.push(site.rect);
+                live.push(site.site);
                 continue;
             }
         }
         let key = BackdropKey {
+            site: site.site,
             rect: site.rect,
             radius: site.radius,
+            window_radii,
             scale_milli,
-            material,
+            material: site_material,
             scene: scene_stamp(&elements, region, scale),
         };
         if needs_capture(
             &key,
             decorations
                 .docks
-                .get(&site.rect)
+                .get(&site.site)
                 .map(|backing| &backing.key),
         ) {
             let backing = capture_dock(renderer, &mut decorations, elements, key, region, scale)?;
-            decorations.docks.insert(site.rect, backing);
+            decorations.docks.insert(site.site, backing);
         }
-        live.push(site.rect);
+        live.push(site.site);
     }
-    decorations.docks.retain(|rect, _| live.contains(rect));
+    decorations.docks.retain(|site, _| live.contains(site));
     Ok(())
 }
 
@@ -349,7 +501,27 @@ impl Decorations {
         rect: RectKey,
         scale: f64,
     ) -> Option<Elem> {
-        let backing = self.docks.get(&rect)?;
+        let backing = self.docks.get(&BackdropSite::Dock(rect))?;
+        Self::backing_element(backing, renderer, rect, scale)
+    }
+
+    pub(super) fn window_backdrop(
+        &self,
+        renderer: &mut GlowRenderer,
+        id: WindowId,
+        rect: RectKey,
+        scale: f64,
+    ) -> Option<Elem> {
+        let backing = self.docks.get(&BackdropSite::Window(id))?;
+        Self::backing_element(backing, renderer, rect, scale)
+    }
+
+    fn backing_element(
+        backing: &DockBacking,
+        renderer: &mut GlowRenderer,
+        rect: RectKey,
+        scale: f64,
+    ) -> Option<Elem> {
         let origin = physical_point(rect.0, rect.1, scale);
         MemoryRenderBufferRenderElement::from_buffer(
             renderer,
@@ -377,8 +549,10 @@ mod tests {
         scene: &[(RectKey, CommitCounter)],
     ) -> BackdropKey {
         BackdropKey {
+            site: BackdropSite::Dock(rect),
             rect,
             radius,
+            window_radii: [0; 4],
             scale_milli: 1000,
             material: DockMaterial { opacity, blur },
             scene: scene.to_vec(),
@@ -460,6 +634,33 @@ mod tests {
             needs_capture(&rescaled, Some(&base)),
             "output scale changed"
         );
+    }
+
+    #[test]
+    fn site_identity_material_and_skip_policy_are_distinct() {
+        let rect = (1, 2, 30, 40);
+        assert_ne!(BackdropSite::Dock(rect), BackdropSite::Window(1));
+        let dock = key(rect, 0, 80, 20, &[]);
+        let mut window = dock.clone();
+        window.site = BackdropSite::Window(1);
+        assert!(needs_capture(&window, Some(&dock)));
+        let material = DockMaterial {
+            opacity: 80,
+            blur: 0,
+        };
+        assert!(window_needs_backdrop(true, false, material, false));
+        assert!(!window_needs_backdrop(false, false, material, false));
+        assert!(!window_needs_backdrop(true, true, material, false));
+        assert!(!window_needs_backdrop(true, false, material, true));
+        assert!(!window_needs_backdrop(
+            true,
+            false,
+            DockMaterial {
+                opacity: 100,
+                blur: 0
+            },
+            false
+        ));
     }
 
     #[test]

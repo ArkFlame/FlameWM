@@ -16,8 +16,8 @@ pub struct Decorations {
     /// Blurred desktop under override-redirect `XWayland` surfaces, keyed by their rect. Cleared
     /// with the desktop capture it was cropped from.
     pub(super) surfaces: HashMap<(i32, i32, i32, i32), MemoryRenderBuffer>,
-    /// Scene beneath each translucent strut surface (Dock), keyed by its logical rect. See `dock_backdrop`.
-    pub(super) docks: HashMap<RectKey, DockBacking>,
+    /// Scene beneath translucent Docks and managed windows, keyed by site identity.
+    pub(super) docks: HashMap<BackdropSite, DockBacking>,
     /// Dock-sized GL texture the dock scene is rendered into; reused while the size matches.
     pub(super) dock_scratch: Option<((usize, usize), GlesTexture)>,
     /// Rounded-client clip program, compiled on first use. `Some(Err(()))` records the already
@@ -477,6 +477,10 @@ impl Decorations {
     pub(super) fn retain(&mut self, live: impl Fn(WindowId) -> bool) {
         self.parts.retain(|window, _| live(*window));
         self.rings.retain(|window, _| live(*window));
+        self.docks.retain(|site, _| match site {
+            BackdropSite::Window(window) => live(*window),
+            BackdropSite::Dock(_) => true,
+        });
     }
 
     /// Drops every cached bar and outline ring. Used when the titlebar material or its ink changes,

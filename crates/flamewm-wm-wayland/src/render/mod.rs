@@ -596,6 +596,16 @@ fn scene_elements_into(
                     outline_radius(managed),
                     scale,
                 ));
+                let window_backdrop = !capture
+                    && window_needs_backdrop(
+                        true,
+                        false,
+                        DockMaterial {
+                            opacity: managed.material.0,
+                            blur: managed.material.1,
+                        },
+                        glass_flat(),
+                    );
                 let radii = client_corner_radii(managed, managed.titlebars)
                     .map(|radius| physical_radius(radius, scale));
                 let program = if radii.iter().any(|radius| *radius > 0) {
@@ -619,12 +629,27 @@ fn scene_elements_into(
                             (element, _) => element,
                         }),
                 );
+                if window_backdrop {
+                    out.extend(decorations.window_backdrop(
+                        renderer,
+                        id,
+                        (
+                            managed.rect.x,
+                            managed.rect.y,
+                            managed.rect.w,
+                            managed.rect.h,
+                        ),
+                        scale,
+                    ));
+                }
                 if managed.decorated() {
                     // A cell-grid client may commit a buffer shorter than its configured size. Paint
                     // the frame body behind the client over its full extent, so no desktop shows
                     // through the gap (KWin and xfwm4 paint a decorated window's body the same way).
                     // Pushed after the surface, so it sits below the client and the titlebar.
-                    out.push(Elem::Solid(client_backdrop(managed.rect, scale)));
+                    if !window_backdrop {
+                        out.push(Elem::Solid(client_backdrop(managed.rect, scale)));
+                    }
                     let focused = state.focused == Some(id);
                     let titlebar = Rect::new(frame.x, frame.y, frame.w, TITLEBAR_HEIGHT);
                     let hovered = match hovered_button {

@@ -18,9 +18,10 @@ use smithay::reexports::x11rb::connection::Connection;
 use smithay::reexports::x11rb::protocol::Event as X11Event;
 use smithay::reexports::x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, EventMask,
-    InputFocus, Window as X11Window, WindowClass,
+    InputFocus, PropMode, Window as X11Window, WindowClass,
 };
 use smithay::reexports::x11rb::rust_connection::RustConnection;
+use smithay::reexports::x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::selection::SelectionTarget;
 use smithay::wayland::selection::data_device::{
@@ -54,6 +55,7 @@ pub struct Props {
     strut_partial: Atom,
     /// Stadium corner radius (device px) the Dock publishes for its own shell-drawn pill.
     corner_radius: Atom,
+    window_material: Atom,
     net_wm_state: Atom,
     fullscreen: Atom,
     net_wm_name: Atom,
@@ -76,6 +78,7 @@ impl Props {
             strut: atom("_NET_WM_STRUT")?,
             strut_partial: atom("_NET_WM_STRUT_PARTIAL")?,
             corner_radius: atom("_FLAMEWM_DOCK_CORNER_RADIUS")?,
+            window_material: atom("_FLAMEWM_WINDOW_MATERIAL")?,
             net_wm_state: atom("_NET_WM_STATE")?,
             fullscreen: atom("_NET_WM_STATE_FULLSCREEN")?,
             net_wm_name: atom("_NET_WM_NAME")?,
@@ -108,7 +111,7 @@ impl Props {
 
     /// Select notifications before the initial property read so an intervening update is either
     /// reflected by that read or remains queued for the event source.
-    fn watch_dock(&mut self, window: X11Window) -> Result<(), Box<dyn Error>> {
+    fn watch_window(&mut self, window: X11Window) -> Result<(), Box<dyn Error>> {
         self.conn
             .change_window_attributes(
                 window,
@@ -122,7 +125,7 @@ impl Props {
 
     /// Stop selecting a Dock after unmap/destroy. A destroyed XID may already be invalid, so
     /// selection cleanup is best-effort; queued notifications are fenced by `watched_docks`.
-    fn unwatch_dock(&mut self, window: X11Window) {
+    fn unwatch_window(&mut self, window: X11Window) {
         if !self.watched_docks.remove(&window) {
             return;
         }
@@ -135,15 +138,15 @@ impl Props {
         let _ = self.conn.flush();
     }
 
-    /// Drain queued X11 events and return only currently watched Dock XIDs whose strut atoms
-    /// changed. Property values are fetched by the compositor callback, never on pointer motion.
+    /// Drain queued watched X11 property events; values are fetched by the compositor callback.
     fn drain_strut_events(&mut self) -> Result<HashSet<X11Window>, Box<dyn Error>> {
         let mut affected = HashSet::new();
         while let Some(event) = self.conn.poll_for_event()? {
             if let X11Event::PropertyNotify(event) = event
                 && self.watched_docks.contains(&event.window)
                 && (is_strut_property(event.atom, self.strut, self.strut_partial)
-                    || event.atom == self.corner_radius)
+                    || event.atom == self.corner_radius
+                    || event.atom == self.window_material)
             {
                 affected.insert(event.window);
             }
@@ -192,6 +195,19 @@ impl Props {
         Ok(true)
     }
 
+    fn publish_backdrop(&self) -> Result<(), Box<dyn Error>> {
+        let root = self.conn.setup().roots[0].root;
+        let atom = self
+            .conn
+            .intern_atom(false, b"_FLAMEWM_COMPOSITOR_BACKDROP")?
+            .reply()?
+            .atom;
+        self.conn
+            .change_property32(PropMode::REPLACE, root, atom, AtomEnum::CARDINAL, &[1])?
+            .check()?;
+        Ok(())
+    }
+
     fn read32(&self, window: X11Window, property: Atom, ty: AtomEnum) -> Vec<u32> {
         self.conn
             .get_property(false, window, property, ty, 0, 64)
@@ -237,6 +253,10 @@ impl Props {
             .unwrap_or(0)
     }
 
+    pub fn window_material(&self, window: X11Window) -> (u8, u8) {
+        parse_window_material(&self.read32(window, self.window_material, AtomEnum::CARDINAL))
+    }
+
     pub fn kind(&self, window: X11Window) -> Kind {
         let types = self.read32(window, self.window_type, AtomEnum::ATOM);
         if types.contains(&self.dock) {
@@ -265,6 +285,13 @@ impl Props {
             values[2] as i32,
             values[3] as i32,
         ])
+    }
+}
+
+fn parse_window_material(values: &[u32]) -> (u8, u8) {
+    match values {
+        [opacity, blur] => ((*opacity).min(100) as u8, (*blur).min(100) as u8),
+        _ => (100, 0),
     }
 }
 
@@ -390,6 +417,9 @@ impl State {
                         "flamewm-wayland: XWayland compositor selection unavailable: {error}"
                     ),
                 }
+                if let Err(error) = props.publish_backdrop() {
+                    eprintln!("flamewm-wayland: cannot publish compositor backdrop: {error}");
+                }
                 Some(props)
             }
             Err(error) => {
@@ -414,6 +444,7 @@ impl State {
                             }
                             None => return Ok(PostAction::Remove),
                         };
+                        state.refresh_window_material_ids(affected.iter().copied());
                         state.refresh_dock_strut_ids(affected);
                         Ok(PostAction::Continue)
                     }) {
@@ -453,6 +484,24 @@ impl State {
                 .is_some_and(|props| props.is_fullscreen(window.window_id()));
         self.model
             .add(id, Rect::new(cascade.x, cascade.y, w, h), workspace);
+        let watch_result = self
+            .props
+            .as_mut()
+            .map(|props| props.watch_window(window.window_id()));
+        if let Some(material) = self
+            .props
+            .as_ref()
+            .map(|props| props.window_material(window.window_id()))
+            && let Some(managed) = self.model.get_mut(id)
+        {
+            managed.material = material;
+        }
+        if let Some(Err(error)) = watch_result {
+            eprintln!(
+                "flamewm-wayland: cannot watch X11 window properties for 0x{:x}: {error}",
+                window.window_id()
+            );
+        }
         let title = self
             .props
             .as_ref()
@@ -471,7 +520,7 @@ impl State {
         let wid = window.window_id();
         if kind == Kind::Dock
             && let Some(props) = self.props.as_mut()
-            && let Err(error) = props.watch_dock(wid)
+            && let Err(error) = props.watch_window(wid)
         {
             eprintln!("flamewm-wayland: cannot watch Dock properties for 0x{wid:x}: {error}");
         }
@@ -551,6 +600,30 @@ impl State {
         }
     }
 
+    fn refresh_window_material_ids(&mut self, windows: impl IntoIterator<Item = X11Window>) {
+        let Some(props) = self.props.as_ref() else {
+            return;
+        };
+        let updates: Vec<_> = windows
+            .into_iter()
+            .filter_map(|xid| {
+                self.x11
+                    .iter()
+                    .find(|(_, window)| window.window_id() == xid)
+                    .map(|(id, _)| (*id, props.window_material(xid)))
+            })
+            .collect();
+        let mut changed = false;
+        for (id, material) in updates {
+            if let Some(managed) = self.model.get_mut(id) {
+                changed |= std::mem::replace(&mut managed.material, material) != material;
+            }
+        }
+        if changed {
+            self.request_redraw();
+        }
+    }
+
     /// Keep `XWayland`'s stack in the same relative order as the compositor scene: desktop, managed
     /// windows bottom-to-top, then override-redirect docks/menus bottom-to-top. Smithay synchronizes
     /// its internal stack in `raise_window`; failures are reported with the affected XID so input
@@ -603,8 +676,14 @@ impl State {
             .unmanaged
             .iter()
             .any(|entry| entry.kind == Kind::Dock && entry.surface.window_id() == wid);
-        if was_dock && let Some(props) = self.props.as_mut() {
-            props.unwatch_dock(wid);
+        let was_managed = self
+            .x11
+            .iter()
+            .any(|(_, managed)| managed.window_id() == wid);
+        if (was_dock || was_managed)
+            && let Some(props) = self.props.as_mut()
+        {
+            props.unwatch_window(wid);
         }
         self.unmanaged
             .retain(|entry| entry.surface.window_id() != wid);
@@ -928,6 +1007,23 @@ mod selection_tests {
                 "{selection:?} unfocused read"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod window_material_tests {
+    use super::parse_window_material;
+
+    #[test]
+    fn missing_or_malformed_material_uses_defaults() {
+        assert_eq!(parse_window_material(&[]), (100, 0));
+        assert_eq!(parse_window_material(&[50]), (100, 0));
+    }
+
+    #[test]
+    fn material_values_are_clamped_independently() {
+        assert_eq!(parse_window_material(&[140, 25]), (100, 25));
+        assert_eq!(parse_window_material(&[0, u32::MAX]), (0, 100));
     }
 }
 

@@ -183,6 +183,19 @@ impl X11App {
             return;
         };
         let installed = self.window_backdrop.as_ref().map(|state| &state.spec);
+        let requested = requested.filter(WindowBackdrop::is_translucent);
+        let material = requested.as_ref().and_then(|spec| {
+            super::window_material::material_words(spec.opacity_percent, spec.blur_percent)
+        });
+        // SAFETY: request dispatch runs on the app's live display thread.
+        unsafe {
+            super::window_material::publish_window_material(
+                self.display,
+                self.window,
+                &mut self.published_window_material,
+                material,
+            );
+        }
         let Some(next) = backdrop_replacement(installed, requested) else {
             return;
         };
@@ -219,6 +232,9 @@ impl X11App {
     ///
     /// Must run on the app's display thread, before the scene is cleared for a paint.
     pub(crate) unsafe fn refresh_window_backdrop(&mut self) {
+        if self.compositor_backdrop {
+            return;
+        }
         if !self
             .window_backdrop
             .as_ref()
@@ -266,6 +282,9 @@ impl X11App {
 
     /// Crops the desktop canvas under the window's rect and uploads it as the window snapshot.
     unsafe fn capture_window_backdrop(&mut self) -> Result<(), String> {
+        if self.compositor_backdrop {
+            return Ok(());
+        }
         let _capture_span = flamewm_profiler::start("render.backdrop.capture");
         let root = unsafe { self.root_size() };
         let root_window = unsafe { XRootWindow(self.display, self.screen) };

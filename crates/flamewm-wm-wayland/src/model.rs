@@ -132,6 +132,8 @@ pub struct Managed {
     pub workspace: usize,
     pub minimized: bool,
     pub mode: Mode,
+    /// Opacity and blur percentages published by X11 clients.
+    pub material: (u8, u8),
     /// `titlebars` as last applied by [`WindowModel::configure`]; false removes the band.
     pub titlebars: bool,
     /// Un-margined tile frame of a snapped window; edge-tile resize moves this, then re-applies margin.
@@ -387,7 +389,7 @@ impl WindowModel {
         self.windows.iter().find(|w| w.id == id)
     }
 
-    fn get_mut(&mut self, id: WindowId) -> Option<&mut Managed> {
+    pub(crate) fn get_mut(&mut self, id: WindowId) -> Option<&mut Managed> {
         self.windows.iter_mut().find(|w| w.id == id)
     }
 
@@ -414,6 +416,7 @@ impl WindowModel {
             workspace,
             minimized: false,
             mode: Mode::Normal,
+            material: (100, 0),
             titlebars: self.titlebars,
             snap_frame: flamewm_api::Rect::new(rect.x, rect.y, rect.w, rect.h),
             restore: rect,

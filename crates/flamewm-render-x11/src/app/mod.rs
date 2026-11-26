@@ -60,6 +60,7 @@ mod render;
 mod scroll;
 mod surface_backdrop;
 mod window_backdrop;
+mod window_material;
 
 pub(crate) use input::{pointer_button_from_raw, slider_value_from_pointer, wheel_scroll_delta};
 
@@ -286,6 +287,10 @@ pub(crate) struct X11App {
     /// Whole-window wallpaper snapshot for a Normal window with translucent fills.
     pub(crate) window_backdrop_pixmap: Option<surface_backdrop::SurfaceBackdrop>,
     pub(crate) window_backdrop: Option<window_backdrop::WindowBackdropState>,
+    /// Root compositor-backdrop support, sampled once when this app is created.
+    pub(crate) compositor_backdrop: bool,
+    /// Last material property value written by this app.
+    pub(crate) published_window_material: Option<[u32; 2]>,
     /// Latest client size from ConfigureNotify, reported once the X queue drains.
     pub(crate) pending_window_resize: Option<(u32, u32)>,
     /// Latest VisibilityNotify verdict (`true` = fully obscured), dispatched once per loop turn.
@@ -352,6 +357,8 @@ impl X11App {
         // (opaque or shape-backed) only when no real alpha channel exists.
         let argb_visual = match_argb32_visual(display, screen);
         // Genuine per-pixel alpha requires a compositing manager for Dock and Overlay surfaces.
+        let compositor_backdrop =
+            unsafe { window_material::read_compositor_backdrop(display, root) };
         let compositor = {
             let name = CString::new(format!("_NET_WM_CM_S{screen}"))
                 .expect("static compositor atom without NUL");
@@ -372,8 +379,13 @@ impl X11App {
             flamewm_api::graphics::LEGACY_PROVIDER_VARIABLE,
         );
         let core_requested = provider_request.as_deref() == Some("core");
-        let supported_argb =
-            composited_argb_for_surface(config.role, compositor, core_requested, supported_argb);
+        let supported_argb = composited_argb_for_surface(
+            config.role,
+            compositor,
+            compositor_backdrop,
+            core_requested,
+            supported_argb,
+        );
         let (visual, depth, mut alpha_mode) = supported_argb.map_or_else(
             || unsafe {
                 (
@@ -737,6 +749,8 @@ impl X11App {
             retired_backbuffer: None,
             surface_backdrop: None,
             window_backdrop_pixmap: None,
+            compositor_backdrop,
+            published_window_material: None,
             pending_window_resize: None,
             pending_visibility: None,
             backdrop_deadline: None,
@@ -832,10 +846,13 @@ fn shape_available(display: *mut Display) -> bool {
 fn composited_argb_for_surface<T>(
     role: X11WindowRole,
     compositor: bool,
+    compositor_backdrop: bool,
     core_requested: bool,
     supported_argb: Option<T>,
 ) -> Option<T> {
-    if compositor && !core_requested && matches!(role, X11WindowRole::Dock | X11WindowRole::Overlay)
+    if !core_requested
+        && ((compositor && matches!(role, X11WindowRole::Dock | X11WindowRole::Overlay))
+            || compositor_backdrop)
     {
         supported_argb
     } else {
@@ -1337,33 +1354,65 @@ mod surface_visual_selection_tests {
     fn overlay_uses_argb_only_with_compositor_supported_visual_and_non_core_provider() {
         let supported_visual = Some(());
         assert_eq!(
-            composited_argb_for_surface(X11WindowRole::Overlay, true, false, supported_visual),
+            composited_argb_for_surface(
+                X11WindowRole::Overlay,
+                true,
+                false,
+                false,
+                supported_visual
+            ),
             supported_visual
         );
         assert_eq!(
-            composited_argb_for_surface(X11WindowRole::Overlay, false, false, supported_visual),
+            composited_argb_for_surface(
+                X11WindowRole::Overlay,
+                false,
+                false,
+                false,
+                supported_visual
+            ),
             None,
             "without a compositor, keep the existing fallback"
         );
         assert_eq!(
-            composited_argb_for_surface(X11WindowRole::Overlay, true, true, supported_visual),
+            composited_argb_for_surface(
+                X11WindowRole::Overlay,
+                true,
+                false,
+                true,
+                supported_visual
+            ),
             None,
             "the core-provider request must keep the existing fallback"
         );
         assert_eq!(
-            composited_argb_for_surface(X11WindowRole::Overlay, true, false, None::<()>),
+            composited_argb_for_surface(X11WindowRole::Overlay, true, false, false, None::<()>),
             None,
             "without a validated ARGB visual, keep the existing fallback"
         );
         assert_eq!(
-            composited_argb_for_surface(X11WindowRole::Dock, true, false, supported_visual),
+            composited_argb_for_surface(X11WindowRole::Dock, true, false, false, supported_visual),
             supported_visual,
             "preserve Dock ARGB selection"
         );
         assert_eq!(
-            composited_argb_for_surface(X11WindowRole::Normal, true, false, supported_visual),
+            composited_argb_for_surface(
+                X11WindowRole::Normal,
+                true,
+                false,
+                false,
+                supported_visual
+            ),
             None,
             "other roles keep the existing default visual"
+        );
+    }
+
+    #[test]
+    fn compositor_backdrop_grants_argb_to_every_role() {
+        assert_eq!(
+            composited_argb_for_surface(X11WindowRole::Normal, false, true, false, Some(())),
+            Some(())
         );
     }
 }
