@@ -117,18 +117,21 @@ impl State {
             return;
         }
         let confined = constrained
-            .as_ref()
-            .filter(|(_, motion)| matches!(motion, MotionConstraint::Confined))
+            .filter(|(_, motion)| *motion == MotionConstraint::Confined)
             .map(|(surface, _)| surface);
         let previous = self.pointer;
         let (location, resolved) = match confined {
-            Some(surface) => self.confined_motion(surface, previous, location),
+            Some(surface) => self.confined_motion(&surface, previous, location),
             None => (location, None),
         };
         let primary = [self.output_rect()];
         let rects = crate::output_layout::pointer_layout(&self.pointer_layout, &primary);
         let (x, y) = crate::output_layout::clamp_point_to_layout(location.x, location.y, rects);
-        let location = Point::from((x, y));
+        let clamped = Point::from((x, y));
+        // A confined step already resolved its point; keep that answer only when the layout clamp
+        // left the point untouched.
+        let resolved = resolved.filter(|_| clamped == location);
+        let location = clamped;
         self.pointer = location;
         if let Some(grab) = self.grab {
             match grab {
@@ -164,7 +167,9 @@ impl State {
                         (target != SnapTarget::None).then(|| {
                             self.model
                                 .snap_client_geometry(id, target, self.pointer_work_area())
-                                .map_or(floating_frame, |client| frame_for_client(client, titlebars))
+                                .map_or(floating_frame, |client| {
+                                    frame_for_client(client, titlebars)
+                                })
                         })
                     } else {
                         None
@@ -176,20 +181,22 @@ impl State {
                         floating_frame,
                     );
                     // Content mode moves the real window; outline mode leaves it until release.
+                    let mut rect_changed = false;
                     if let Some(rect) = feedback.live {
                         let previous_rect = self.model.get(id).map(|window| window.rect);
                         self.model.set_rect(id, rect);
-                        let rect_changed = previous_rect != Some(rect);
-                        if rect_changed {
-                            // Only a cross-output step can change this window's home output (and
-                            // with it `wl_surface.enter` and the fractional scale). Rebuilding
-                            // every toplevel's home on each in-output step allocates a string and
-                            // clones a surface per window per pointer event.
-                            if previous_rect
+                        rect_changed = previous_rect != Some(rect);
+                        // Only a cross-output step can change this window's home output (and with
+                        // it `wl_surface.enter` and the fractional scale). Rebuilding every
+                        // toplevel's home on each in-output step allocates a string and clones a
+                        // surface per window per pointer event.
+                        if rect_changed
+                            && previous_rect
                                 .is_some_and(|before| home_output_changed(self, before, rect))
-                            {
-                                self.refresh_window_outputs();
-                            }
+                        {
+                            self.refresh_window_outputs();
+                        }
+                        if rect_changed {
                             self.pending_configure = Some(id);
                         }
                     }
@@ -308,9 +315,7 @@ impl State {
 
     fn locked_focus(&self) -> Option<WlSurface> {
         self.motion_constraint()
-            .and_then(|(surface, motion)| {
-                (motion == MotionConstraint::Locked).then_some(surface)
-            })
+            .and_then(|(surface, motion)| (motion == MotionConstraint::Locked).then_some(surface))
     }
 
     fn send_relative_motion(&mut self, surface: &WlSurface, delta: Point<f64, Logical>, time: u32) {
@@ -329,36 +334,56 @@ impl State {
         pointer.frame(self);
     }
 
-    /// Clamps a candidate position for a confined pointer: it keeps `previous` when the candidate
-    /// would leave the confining region (or the focused surface).
-    fn confined_location(
+    /// Confines a candidate position and, when the candidate is accepted, hands back the scene
+    /// target already resolved there. A confined pointer otherwise resolves the same point twice:
+    /// once to decide the step, then again for the hover and focus update.
+    fn confined_motion(
         &self,
+        surface: &WlSurface,
         previous: Point<f64, Logical>,
         candidate: Point<f64, Logical>,
-    ) -> Point<f64, Logical> {
+    ) -> (Point<f64, Logical>, Option<PointerTarget>) {
         let Some(pointer) = self.seat.get_pointer() else {
-            return candidate;
+            return (candidate, None);
         };
-        let Some(surface) = pointer.current_focus() else {
-            return candidate;
-        };
-        let confined = with_pointer_constraint(&surface, &pointer, |c| {
-            c.is_some_and(|c| c.is_active() && matches!(*c, PointerConstraint::Confined(_)))
-        });
-        if !confined {
-            return candidate;
-        }
-        let inside = match self.pointer_target(candidate).focus {
+        let resolved = self.pointer_target(candidate);
+        let inside = match resolved.focus.as_ref() {
             Some((hit, origin)) if hit == surface => {
-                let local = candidate - origin;
-                let contains = with_pointer_constraint(&surface, &pointer, |c| {
+                let local = candidate - *origin;
+                let contains = with_pointer_constraint(surface, &pointer, |c| {
                     c.and_then(|c| c.region().map(|r| region_hit(r, local)))
                 });
                 constraint_wanted(true, contains)
             }
             _ => false,
         };
-        confined_step(previous, candidate, inside)
+        let location = confined_step(previous, candidate, inside);
+        (location, inside.then_some(resolved))
+    }
+
+    /// Target for the window an active move or resize grab carries. The dragged frame follows the
+    /// pointer, so a full scene walk would only re-discover it every event; the decoration band
+    /// still yields no client focus, exactly as the routed walk does.
+    fn dragged_target(
+        &self,
+        id: WindowId,
+        location: Point<f64, Logical>,
+        resize: bool,
+    ) -> PointerTarget {
+        let Some(rect) = self.model.get(id).map(|window| window.rect) else {
+            return PointerTarget::default();
+        };
+        let origin = Point::from((f64::from(rect.x), f64::from(rect.y)));
+        let focus = rect
+            .contains(location.x, location.y)
+            .then(|| self.window_wl_surface(id))
+            .flatten()
+            .and_then(|surface| tree_focus_at(&surface, location, origin));
+        PointerTarget {
+            focus,
+            managed_hit: resize.then_some(Hit::Resize(id)),
+            scene_hit: true,
+        }
     }
 
     /// Activates or deactivates the pointer constraints of the surfaces the pointer left or entered.
@@ -424,6 +449,10 @@ impl State {
             return PointerTarget::default();
         }
 
+        // One managed hit answers "which window owns this point" for the whole walk, so resolve it
+        // lazily once: re-asking inside every managed entry rescans the window stack per entry,
+        // which is quadratic for a point no window covers (the desktop between windows).
+        let mut managed: Option<Option<Hit>> = None;
         first_hit(crate::scene::front_to_back(self), |item| match item {
             SceneItem::Layer { surface, origin } => {
                 let origin = origin.to_f64();
@@ -456,7 +485,7 @@ impl State {
                 })
             }
             SceneItem::Managed(id) => {
-                let hit = self.model.hit(location.x, location.y)?;
+                let hit = (*managed.get_or_insert_with(|| self.model.hit(location.x, location.y)))?;
                 let hit_id = match hit {
                     Hit::Button(window, _)
                     | Hit::Titlebar(window)
@@ -513,6 +542,17 @@ impl State {
         pointer.axis(self, frame);
         pointer.frame(self);
     }
+}
+
+/// True when a geometry change lands a window's home on a different output row.
+///
+/// Only such a step can change which output a window belongs to, so a drag rebuilds the output
+/// assignments then and not on every in-output step.
+fn home_output_changed(state: &State, previous: Rect, next: Rect) -> bool {
+    let primary = [state.output_rect()];
+    let outputs = crate::output_layout::pointer_layout(&state.pointer_layout, &primary);
+    crate::output_layout::output_for_rect(outputs, previous)
+        != crate::output_layout::output_for_rect(outputs, next)
 }
 
 /// A constraint is wanted while the pointer is over its surface and, when it has a region, inside.
