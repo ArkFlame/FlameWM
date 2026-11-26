@@ -1,5 +1,9 @@
 # Perf loop log (T0=2026-11-26T09:27:11-03:00)
 
+## u156: backdrop drag throttle
+
+Expected composition shift during a translucent-window drag: captures per second drop from about 60 to about 20; not runtime-measured. Verification omitted because cargo is prohibited.
+
 ## u150: managed-window scene backdrop
 
 Generalized the Dock scene cache to identify Dock and managed-window sites; managed windows capture beneath their own front-to-back scene position, draw their cached rounded client mask below client surfaces, and omit the opaque client fill when eligible. Flat, opaque, missing, or closed sites drop/refrain from retaining cache entries; capture-mode scene composition emits no backdrop elements. Static comparison remains in-place against the retained scene stamp. Added pure site identity/eligibility regression coverage. Verification intentionally omitted by handoff (cargo/git prohibited); static source inspection only, and Managed.material is supplied by u149.
@@ -120,3 +124,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - explorer startup 10 / idle 0 / 21 MB; terminal 14 / 0 / 30 MB; shell 13 / 0 / 22 MB; task-manager 32 / 4 / 31 MB.
 - Only idle cost is the task manager's 1 s /proc sampler (about 2% of one core, 100% of its own samples). Everything else parks.
 - Next: shrink the sampler cost (skip unchanged per-pid reads, reuse buffers) without losing rows.
+
+## u156 (backdrop drag throttle)
+- A moving translucent window reuses its cached backdrop (position-only change, same size, radii, scale, material, scene) for up to 50 ms instead of recapturing every frame. Dock sites never reuse. Expected shift: captures during a drag about 60/s down to about 20/s (each capture = scene render + readback + CPU blur). Not measured live; tests cover the reuse decision.

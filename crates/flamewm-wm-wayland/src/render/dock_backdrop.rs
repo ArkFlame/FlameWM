@@ -15,6 +15,7 @@ use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement
 use smithay::utils::Scale;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::Instant;
 
 /// Dock `opacity` and `blur` percents, as the shared settings resolve them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +70,7 @@ pub(super) struct BackdropKey {
 pub(super) struct DockBacking {
     pub(super) key: BackdropKey,
     pub(super) buffer: MemoryRenderBuffer,
+    pub(super) captured_at: Instant,
 }
 
 /// Dock material from the committed settings, packed as `opacity << 8 | blur`. The default is
@@ -93,6 +95,20 @@ fn current_dock_material() -> DockMaterial {
 /// key that is wanted now. Opaque material never reaches this check: the caller drops the cache.
 pub(super) fn needs_capture(wanted: &BackdropKey, cached: Option<&BackdropKey>) -> bool {
     cached != Some(wanted)
+}
+
+fn reuse_while_moving(cached: &DockBacking, wanted: &BackdropKey, now: Instant) -> bool {
+    let key = &cached.key;
+    key.site == wanted.site
+        && matches!(key.site, BackdropSite::Window(_))
+        && key.rect.2 == wanted.rect.2
+        && key.rect.3 == wanted.rect.3
+        && (key.rect.0 != wanted.rect.0 || key.rect.1 != wanted.rect.1)
+        && key.radius == wanted.radius
+        && key.window_radii == wanted.window_radii
+        && key.scale_milli == wanted.scale_milli
+        && key.material == wanted.material
+        && now.saturating_duration_since(cached.captured_at) < std::time::Duration::from_millis(50)
 }
 
 /// Coverage (0..=255) of pixel `(x, y)` inside a `w` x `h` rounded rectangle of corner `radius`,
@@ -298,7 +314,11 @@ fn capture_dock(
         Transform::Normal,
         None,
     );
-    Ok(DockBacking { key, buffer })
+    Ok(DockBacking {
+        key,
+        buffer,
+        captured_at: Instant::now(),
+    })
 }
 
 fn client_mask_coverage(w: usize, h: usize, radii: [u8; 4], x: usize, y: usize) -> u8 {
@@ -446,10 +466,9 @@ pub(crate) fn refresh_dock_backdrops(
         let elements = scene_beneath(state, renderer, &mut decorations, site.index, region, scale);
         let (window_radii, site_material) = site_parameters(state, site.site, material);
         let cached = decorations.docks.get(&site.site);
-        // The cheap key fields first: when the rect, radius, scale or material moved, a recapture is
-        // due whatever the scene holds, and no stamp is needed. Otherwise compare the freshly built
-        // elements against the cached stamp in place; a frame that changes nothing allocates no
-        // stamp and rebuilds no texture.
+        // Check the static exact-key path first, preserving one allocation-free stamp comparison
+        // per unchanged frame. A moving window may use its prior capture briefly if the scene
+        // beneath it still matches; Docks always retain the exact-key policy.
         if let Some(backing) = cached {
             let same_fields = backing.key.rect == site.rect
                 && backing.key.radius == site.radius
@@ -457,6 +476,22 @@ pub(crate) fn refresh_dock_backdrops(
                 && backing.key.scale_milli == scale_milli
                 && backing.key.material == site_material;
             if same_fields && scene_matches(&elements, region, scale, &backing.key.scene) {
+                live.push(site.site);
+                continue;
+            }
+            let wanted = BackdropKey {
+                site: site.site,
+                rect: site.rect,
+                radius: site.radius,
+                window_radii,
+                scale_milli,
+                material: site_material,
+                scene: backing.key.scene.clone(),
+            };
+            if matches!(site.site, BackdropSite::Window(_))
+                && reuse_while_moving(backing, &wanted, Instant::now())
+                && scene_matches(&elements, region, scale, &backing.key.scene)
+            {
                 live.push(site.site);
                 continue;
             }
@@ -557,6 +592,85 @@ mod tests {
             material: DockMaterial { opacity, blur },
             scene: scene.to_vec(),
         }
+    }
+
+    #[test]
+    fn moving_window_reuses_only_brief_position_changes() {
+        let now = Instant::now();
+        let mut cached = key((10, 20, 300, 40), 20, 80, 50, &[]);
+        cached.site = BackdropSite::Window(1);
+        let backing = DockBacking {
+            key: cached.clone(),
+            buffer: MemoryRenderBuffer::from_slice(
+                &[0, 0, 0, 0],
+                Fourcc::Argb8888,
+                (1, 1),
+                1,
+                Transform::Normal,
+                None,
+            ),
+            captured_at: now,
+        };
+        let mut wanted = cached.clone();
+        wanted.rect.0 += 1;
+        assert!(reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(49)
+        ));
+        assert!(!reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(50)
+        ));
+        wanted.rect.2 += 1;
+        assert!(!reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(1)
+        ));
+        wanted = cached.clone();
+        wanted.rect.0 += 1;
+        wanted.material.blur += 1;
+        assert!(!reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(1)
+        ));
+        wanted.material = cached.material;
+        wanted.radius += 1;
+        assert!(!reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(1)
+        ));
+        wanted = cached.clone();
+        wanted.rect.0 += 1;
+        wanted.window_radii[0] += 1;
+        assert!(!reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(1)
+        ));
+        wanted = cached.clone();
+        wanted.rect.0 += 1;
+        wanted.scale_milli += 1;
+        assert!(!reuse_while_moving(
+            &backing,
+            &wanted,
+            now + std::time::Duration::from_millis(1)
+        ));
+        cached.site = BackdropSite::Dock(cached.rect);
+        wanted.site = cached.site;
+        let dock_backing = DockBacking {
+            key: cached,
+            ..backing
+        };
+        assert!(!reuse_while_moving(
+            &dock_backing,
+            &wanted,
+            now + std::time::Duration::from_millis(1)
+        ));
     }
 
     fn committed(times: usize) -> CommitCounter {
