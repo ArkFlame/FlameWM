@@ -6,8 +6,9 @@
 //! [`BackdropKey`]. A recapture runs only when the rect, the material, the scale, the corner radius
 //! or the scene stamp changes; the stamp is the physical rect and commit counter of each element
 //! beneath the Dock that overlaps it, so a window moving, resizing, restacking or committing under
-//! the Dock is a change and nothing else is. A static scene costs one stamp comparison per frame:
-//! no render, readback or blur. Opaque material captures nothing.
+//! the Dock is a change and nothing else is. A static scene costs one element build and an
+//! allocation-free stamp comparison per frame: no render, readback or blur. Opaque material
+//! captures nothing.
 
 use super::*;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
@@ -136,8 +137,8 @@ fn physical_rect(rect: RectKey, scale: f64) -> Rectangle<i32, Physical> {
     Rectangle::new(origin, size)
 }
 
-/// The scene beneath `site_index` that overlaps `region`, front to back, with its stamp. Built in
-/// capture mode, so no Dock or menu backdrop is produced inside another backdrop's scene.
+/// The scene beneath `site_index` that overlaps `region`, front to back. Built in capture mode, so
+/// no Dock or menu backdrop is produced inside another backdrop's scene.
 fn scene_beneath(
     state: &State,
     renderer: &mut GlowRenderer,
@@ -145,7 +146,7 @@ fn scene_beneath(
     site_index: usize,
     region: Rectangle<i32, Physical>,
     scale: f64,
-) -> (Vec<Elem>, Vec<(RectKey, CommitCounter)>) {
+) -> Vec<Elem> {
     use crate::scene::SceneItem;
 
     let below = crate::scene::front_to_back(state)
@@ -153,15 +154,64 @@ fn scene_beneath(
         .skip_while(|item| !matches!(item, SceneItem::Unmanaged(index) if *index == site_index))
         .skip(1);
     let mut elements = Vec::new();
-    let mut stamp = Vec::new();
     for element in scene_elements(state, renderer, decorations, below, true) {
-        let geometry = element.geometry(Scale::from(scale));
-        if region.overlaps(geometry) {
-            stamp.push((rect_key(geometry), element.current_commit()));
+        if region.overlaps(element.geometry(Scale::from(scale))) {
             elements.push(element);
         }
     }
-    (elements, stamp)
+    elements
+}
+
+/// The stamp of `elements`: the physical rect and commit counter of each one overlapping `region`,
+/// in the order they are drawn. Produced only when a capture is due.
+fn scene_stamp(
+    elements: &[Elem],
+    region: Rectangle<i32, Physical>,
+    scale: f64,
+) -> Vec<(RectKey, CommitCounter)> {
+    let mut stamp = Vec::new();
+    for element in elements {
+        let geometry = element.geometry(Scale::from(scale));
+        if region.overlaps(geometry) {
+            stamp.push((rect_key(geometry), element.current_commit()));
+        }
+    }
+    stamp
+}
+
+/// Whether `wanted` is exactly the cached stamp, in order and length.
+fn stamp_matches(
+    wanted: impl Iterator<Item = (RectKey, CommitCounter)>,
+    cached: &[(RectKey, CommitCounter)],
+) -> bool {
+    let mut seen = 0;
+    for entry in wanted {
+        if cached.get(seen) != Some(&entry) {
+            return false;
+        }
+        seen += 1;
+    }
+    seen == cached.len()
+}
+
+/// Whether `elements` still carry exactly the cached scene stamp: same overlapping elements, same
+/// rects, same commit counters. Compares in place, so a frame that changes nothing allocates no
+/// stamp.
+fn scene_matches(
+    elements: &[Elem],
+    region: Rectangle<i32, Physical>,
+    scale: f64,
+    cached: &[(RectKey, CommitCounter)],
+) -> bool {
+    stamp_matches(
+        elements.iter().filter_map(|element| {
+            let geometry = element.geometry(Scale::from(scale));
+            region
+                .overlaps(geometry)
+                .then(|| (rect_key(geometry), element.current_commit()))
+        }),
+        cached,
+    )
 }
 
 /// Renders the overlapping scene into a Dock-sized target, reduces and blurs it, and builds the
@@ -225,8 +275,9 @@ fn capture_dock(
 }
 
 /// Refreshes the cached backdrop of every translucent Dock for this frame. Called before the frame
-/// elements are built, by the winit and DRM paths. Costs one scene-stamp comparison per Dock while
-/// nothing beneath it changes.
+/// elements are built, by the winit and DRM paths. While nothing beneath a Dock changes it costs
+/// one element build and an allocation-free stamp comparison: no stamp vector, render, readback or
+/// blur.
 pub(crate) fn refresh_dock_backdrops(
     state: &State,
     renderer: &mut GlowRenderer,
@@ -244,14 +295,28 @@ pub(crate) fn refresh_dock_backdrops(
     let mut live = Vec::with_capacity(sites.len());
     for site in sites {
         let region = physical_rect(site.rect, scale);
-        let (elements, scene) =
-            scene_beneath(state, renderer, &mut decorations, site.index, region, scale);
+        let elements = scene_beneath(state, renderer, &mut decorations, site.index, region, scale);
+        let cached = decorations.docks.get(&site.rect);
+        // The cheap key fields first: when the rect, radius, scale or material moved, a recapture is
+        // due whatever the scene holds, and no stamp is needed. Otherwise compare the freshly built
+        // elements against the cached stamp in place; a frame that changes nothing allocates no
+        // stamp and rebuilds no texture.
+        if let Some(backing) = cached {
+            let same_fields = backing.key.rect == site.rect
+                && backing.key.radius == site.radius
+                && backing.key.scale_milli == scale_milli
+                && backing.key.material == material;
+            if same_fields && scene_matches(&elements, region, scale, &backing.key.scene) {
+                live.push(site.rect);
+                continue;
+            }
+        }
         let key = BackdropKey {
             rect: site.rect,
             radius: site.radius,
             scale_milli,
             material,
-            scene,
+            scene: scene_stamp(&elements, region, scale),
         };
         if needs_capture(
             &key,
@@ -309,14 +374,14 @@ mod tests {
         radius: u32,
         opacity: u8,
         blur: u8,
-        scene: Vec<(RectKey, CommitCounter)>,
+        scene: &[(RectKey, CommitCounter)],
     ) -> BackdropKey {
         BackdropKey {
             rect,
             radius,
             scale_milli: 1000,
             material: DockMaterial { opacity, blur },
-            scene,
+            scene: scene.to_vec(),
         }
     }
 
@@ -374,22 +439,22 @@ mod tests {
     #[test]
     fn first_frame_and_every_key_field_recapture() {
         let scene = vec![((0, 0, 100, 100), committed(1))];
-        let base = key((10, 20, 300, 40), 20, 80, 50, scene.clone());
+        let base = key((10, 20, 300, 40), 20, 80, 50, &scene);
         assert!(needs_capture(&base, None), "no cached backdrop yet");
         assert!(
-            !needs_capture(&base, Some(&base.clone())),
+            !needs_capture(&base, Some(&base)),
             "identical key reuses the cache"
         );
 
-        let moved = key((11, 20, 300, 40), 20, 80, 50, scene.clone());
+        let moved = key((11, 20, 300, 40), 20, 80, 50, &scene);
         assert!(needs_capture(&moved, Some(&base)), "dock rect changed");
-        let material = key((10, 20, 300, 40), 20, 70, 50, scene.clone());
+        let material = key((10, 20, 300, 40), 20, 70, 50, &scene);
         assert!(needs_capture(&material, Some(&base)), "opacity changed");
-        let blur = key((10, 20, 300, 40), 20, 80, 60, scene.clone());
+        let blur = key((10, 20, 300, 40), 20, 80, 60, &scene);
         assert!(needs_capture(&blur, Some(&base)), "blur changed");
-        let radius = key((10, 20, 300, 40), 16, 80, 50, scene.clone());
+        let radius = key((10, 20, 300, 40), 16, 80, 50, &scene);
         assert!(needs_capture(&radius, Some(&base)), "corner radius changed");
-        let mut rescaled = base.clone();
+        let mut rescaled = key((10, 20, 300, 40), 20, 80, 50, &scene);
         rescaled.scale_milli = 2000;
         assert!(
             needs_capture(&rescaled, Some(&base)),
@@ -404,7 +469,7 @@ mod tests {
             0,
             80,
             50,
-            vec![((0, 0, 100, 100), committed(1))],
+            &[((0, 0, 100, 100), committed(1))],
         );
         // A commit on a window beneath the dock.
         let committed_again = key(
@@ -412,7 +477,7 @@ mod tests {
             0,
             80,
             50,
-            vec![((0, 0, 100, 100), committed(2))],
+            &[((0, 0, 100, 100), committed(2))],
         );
         assert!(needs_capture(&committed_again, Some(&base)));
         // The same window moved under the dock.
@@ -421,7 +486,7 @@ mod tests {
             0,
             80,
             50,
-            vec![((5, 0, 100, 100), committed(1))],
+            &[((5, 0, 100, 100), committed(1))],
         );
         assert!(needs_capture(&moved, Some(&base)));
         // A window restacked above another beneath the dock changes the order.
@@ -430,7 +495,7 @@ mod tests {
             0,
             80,
             50,
-            vec![
+            &[
                 ((0, 0, 50, 50), committed(0)),
                 ((0, 0, 100, 100), committed(1)),
             ],
@@ -440,7 +505,7 @@ mod tests {
             0,
             80,
             50,
-            vec![
+            &[
                 ((0, 0, 100, 100), committed(1)),
                 ((0, 0, 50, 50), committed(0)),
             ],
@@ -448,7 +513,7 @@ mod tests {
         assert!(needs_capture(&swapped, Some(&two)));
         // A static scene reuses the cache, however many frames ask.
         for _ in 0..3 {
-            assert!(!needs_capture(&base.clone(), Some(&base)));
+            assert!(!needs_capture(&base, Some(&base)));
         }
     }
 
@@ -479,6 +544,46 @@ mod tests {
             rounded_coverage(w, h, 0.0, 0, 0),
             255,
             "a square dock has no corner to cut"
+        );
+    }
+
+    #[test]
+    fn stamp_matches_needs_the_same_entries_in_the_same_order() {
+        let cached = vec![
+            ((0, 0, 10, 10), committed(1)),
+            ((20, 0, 10, 10), committed(2)),
+        ];
+        // A cache hit is an exact, ordered match; no allocation is needed to decide it.
+        assert!(stamp_matches(cached.iter().copied(), &cached));
+        assert!(
+            !stamp_matches(cached.iter().copied().take(1), &cached),
+            "a missing entry recaptures"
+        );
+        assert!(
+            !stamp_matches(
+                cached
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(((0, 0, 1, 1), committed(3)))),
+                &cached
+            ),
+            "an extra entry recaptures"
+        );
+        let swapped = vec![
+            ((20, 0, 10, 10), committed(2)),
+            ((0, 0, 10, 10), committed(1)),
+        ];
+        assert!(
+            !stamp_matches(swapped.iter().copied(), &cached),
+            "restacking recaptures"
+        );
+        let recommitted = vec![
+            ((0, 0, 10, 10), committed(2)),
+            ((20, 0, 10, 10), committed(2)),
+        ];
+        assert!(
+            !stamp_matches(recommitted.iter().copied(), &cached),
+            "a commit recaptures"
         );
     }
 }
