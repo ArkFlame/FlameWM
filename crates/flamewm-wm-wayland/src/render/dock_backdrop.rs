@@ -505,11 +505,15 @@ pub(crate) fn refresh_dock_backdrops(
                 material: site_material,
                 scene: backing.key.scene.clone(),
             };
+            // Bounded staleness (50 ms or MAX_STALE_FRAMES) replaces the scene check here: a sliding
+            // window crosses new element edges every frame, which would defeat the reuse.
             if matches!(site.site, BackdropSite::Window(_))
                 && reuse_while_moving(backing, &wanted, Instant::now())
-                && scene_matches(&elements, region, scale, &backing.key.scene)
             {
                 backing.reused.set(backing.reused.get().saturating_add(1));
+                // The window may stop moving now: guarantee a later frame that recaptures at the final
+                // position once the reuse limit passes, instead of leaving a stale backdrop on screen.
+                state.request_redraw();
                 live.push(site.site);
                 continue;
             }

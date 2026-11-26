@@ -135,3 +135,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - A moving window now also reuses its backdrop for up to 2 consecutive frames when frames are slower than 50 ms (MAX_STALE_FRAMES).
 - Measured with the scripted drag (90 steps, nested software GL, one run each): captures 73 -> 60, drag elapsed 6.9 s -> 5.4 s. Smaller than the ~30 captures expected: the reuse also requires the scene stamp beneath to match, and it changes as the window slides over different elements. Single runs, so noise is unquantified.
 - Next: let the scene check ignore the moving window's own motion over unchanged elements.
+
+## u156 follow-up 2: drop the scene check for moving windows
+- The moving-window reuse no longer requires the scene stamp beneath to match (a sliding window crosses new element edges every frame); staleness is bounded by 50 ms or 2 frames, and every reuse requests a redraw so a recapture at the final position always follows.
+- Measured, same scripted drag (90 steps, nested software GL, single runs): captures 73 -> 60 -> 24, drag elapsed 6.9 s -> 5.4 s -> 3.3 s. Final frame (drag9.png) shows the window at its end position with the blurred backdrop strip as in the static layout; no stale backdrop seen.
+- Risk: while moving, content beneath that changes (e.g. a video) can look up to 2 frames/50 ms stale; accepted.
