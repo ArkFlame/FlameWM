@@ -516,7 +516,19 @@ pub fn fill_sidebar_rows(rows:&mut Vec<SidebarRow>, places:&[Place]) {
     }
 }
 #[must_use]
-pub fn home_dir() -> PathBuf {flamewm_api::paths::home_dir().filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
+pub fn home_dir() -> PathBuf {
+    // The home directory of a session does not change, so the `is_dir` probe runs once instead
+    // of on every sidebar rebuild and path edit. A home that is currently absent (an unmounted
+    // network home) is not cached, so a later call after the mount appears still resolves it.
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(home) = HOME.get() { return home.clone(); }
+    if let Some(home) = flamewm_api::paths::home_dir()
+        && home.is_dir() {
+            let _ = HOME.set(home.clone());
+            return home;
+        }
+    PathBuf::from("/")
+}
 /// XDG config root (`XDG_CONFIG_HOME`, else `~/.config`).
 fn config_base(home:&Path) -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from)

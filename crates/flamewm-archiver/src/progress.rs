@@ -2,7 +2,9 @@
 //!
 //! `CancelToken` is checked before every entry and every read chunk. `Reporter` owns the running
 //! totals and feeds the caller's sink in coarse steps (about a hundred per operation), so memory
-//! stays bounded by the copy buffer and the UI is not woken once per chunk.
+//! stays bounded by the copy buffer and the UI is not woken once per chunk. The first step that
+//! carries bytes and the completion snapshot always report, so a caller sees real progress and a
+//! final total even for a job that is over within the emission interval.
 
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
@@ -61,8 +63,9 @@ const MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// Running totals plus cancel check for one operation.
 ///
 /// The sink is fed at most ~100 times per operation: every 1/100th of the totals, plus the
-/// completion snapshot. Each emission costs a channel send and a UI wake, so a per-chunk sink
-/// would repaint the progress window thousands of times for one large file.
+/// completion snapshot and the first snapshot that carries bytes. Each emission costs a channel
+/// send and a UI wake, so a per-chunk sink would repaint the progress window thousands of times
+/// for one large file.
 pub struct Reporter<'a> {
     sink: &'a mut dyn FnMut(Progress),
     cancel: &'a CancelToken,
@@ -75,6 +78,9 @@ pub struct Reporter<'a> {
     byte_step: u64,
     /// Entry step between emissions; never zero.
     entry_step: usize,
+    /// Whether a snapshot carrying bytes has been emitted. The first one skips the interval so
+    /// a caller sees real progress even when the whole job finishes in a few milliseconds.
+    first_bytes_emitted: bool,
     /// When the sink last received a snapshot; the constructor's initial one counts.
     last_emit: Option<Instant>,
 }
@@ -100,6 +106,7 @@ impl<'a> Reporter<'a> {
             pending_entries: 0,
             byte_step: (bytes_total / EMISSIONS_PER_OPERATION).max(MIN_BYTE_STEP),
             entry_step: (entries_total / EMISSIONS_PER_OPERATION as usize).max(1),
+            first_bytes_emitted: false,
             last_emit: Some(Instant::now()),
         }
     }
@@ -143,14 +150,22 @@ impl<'a> Reporter<'a> {
             return;
         }
         let now = Instant::now();
-        // Completion always reports; an intermediate step waits out the interval, so a fast
-        // archive cannot wake the window more than ten times a second.
-        if !complete
-            && self
-                .last_emit
-                .is_some_and(|last| now.duration_since(last) < MIN_INTERVAL)
-        {
-            return;
+        // Completion always reports. So does the first step that carries bytes: a caller learns
+        // that real work has started without waiting out the interval. Every later step and
+        // every entry-only step waits it out, so a fast archive still cannot wake the window
+        // more than ten times a second.
+        if !complete {
+            let first_bytes = !self.first_bytes_emitted && self.state.bytes_done > 0;
+            if !first_bytes
+                && self
+                    .last_emit
+                    .is_some_and(|last| now.duration_since(last) < MIN_INTERVAL)
+            {
+                return;
+            }
+            if self.state.bytes_done > 0 {
+                self.first_bytes_emitted = true;
+            }
         }
         self.last_emit = Some(now);
         self.pending_bytes = 0;
@@ -269,6 +284,28 @@ mod tests {
                 1,
                 "updates below both the byte and the entry step are coalesced"
             );
+        }
+    }
+
+    #[test]
+    fn reporter_reports_the_first_step_carrying_bytes_immediately() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        {
+            let cancel = CancelToken::new();
+            let mut sink = |progress: Progress| seen.borrow_mut().push(progress);
+            let mut reporter = Reporter::new(1_000_000, 1, &cancel, &mut sink);
+            // The first step carrying bytes reports at once, without waiting out the emit
+            // interval, so a caller learns that real work started even when the job is short.
+            reporter.add_bytes(64 * 1024);
+            assert_eq!(
+                seen.borrow().len(),
+                2,
+                "the first byte step is not throttled"
+            );
+            assert_eq!(seen.borrow()[1].bytes_done, 64 * 1024);
+            // Further steps inside the interval stay coalesced.
+            reporter.add_bytes(64 * 1024);
+            assert_eq!(seen.borrow().len(), 2);
         }
     }
 

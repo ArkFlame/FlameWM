@@ -157,11 +157,15 @@ pub fn gvfs_root() -> PathBuf {
 /// Share folders directly under the GVFS root, sorted by name. Each is one network location.
 #[must_use]
 pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
+    // `DirEntry::file_type` reads the d_type the kernel already returned with the directory
+    // batch, so listing the shares costs no per-entry `stat` on the FUSE mount (each probe
+    // could block on the network). Only filesystems that report DT_UNKNOWN fall back to lstat.
     let mut shares: Vec<PathBuf> = fs::read_dir(root)
         .into_iter()
         .flatten()
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.is_dir())
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
         .collect();
     shares.sort();
     shares

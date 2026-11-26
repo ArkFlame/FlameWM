@@ -1,0 +1,5 @@
+# Unit u130-fix-archiver-cancel-tests
+DONE
+Area: Reliability. 4 flamewm-archiver tests fail: tests::create_edit::cancel_mid_create_removes_partial_output (create_edit.rs:178 unwrap_err on Ok Summary), tests::safety::cancel_mid_extract_stops_and_removes_partial_file, ...cancel_mid_extract_removes_partial_compressed_tar_output, tests::listing_extract::cancel_removes_only_a_destination_it_created.
+Owned paths: crates/flamewm-archiver
+Task: Read AGENTS.md and .agents/skills/no-adhoc-scripts/SKILL.md first (NO python/ctx_execute/sleep). Run `cargo test -p flamewm-archiver` once. Find whether an earlier perf slice (git log -p on crates/flamewm-archiver/src/progress.rs and the copy/extract loops: throttled or batched cancel/progress checks) stopped cancellation being observed mid-job, or the tests are racy. Fix the PRODUCT so cancel is honoured promptly (check the cancel flag at least every chunk, cheaply via a relaxed atomic) without losing the perf win; only adjust tests if they are provably racy. Report the root cause and exit code of the test run.

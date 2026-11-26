@@ -446,61 +446,6 @@ pub(crate) fn refresh_workspace_projection(
     Ok(())
 }
 
-/// Names the desktop directory watch reported since the last rescan, plus an overflow flag that
-/// forces a full re-check. A launcher a burst never named reuses its cached stamp without a stat,
-/// so rescans on slow or network mounts never walk every `.desktop` file.
-#[derive(Default)]
-pub(crate) struct ChangedPaths {
-    inner: std::sync::Mutex<Changed>,
-}
-
-#[derive(Default)]
-struct Changed {
-    names: BTreeSet<std::ffi::OsString>,
-    /// At least one event was dropped, so every entry must be re-checked.
-    overflow: bool,
-}
-
-impl ChangedPaths {
-    /// Distinct names recorded before the set is abandoned for a full re-check. A watcher burst
-    /// larger than this costs as much as rescanning every launcher, so the bounded set is dropped
-    /// and `overflow` forces the same complete pass instead of growing without limit.
-    const NAMES_CAP: usize = 1024;
-
-    pub(crate) fn note(&self, name: &std::ffi::OsStr) {
-        let mut changed = self.lock();
-        if changed.overflow {
-            return;
-        }
-        if changed.names.len() >= Self::NAMES_CAP {
-            changed.names.clear();
-            changed.overflow = true;
-            return;
-        }
-        changed.names.insert(name.to_os_string());
-    }
-
-    pub(crate) fn note_overflow(&self) {
-        self.lock().overflow = true;
-    }
-
-    /// Consumes the recorded names; `None` means "unknown, re-check every entry".
-    fn take(&self) -> Option<BTreeSet<std::ffi::OsString>> {
-        let mut changed = self.lock();
-        let names = std::mem::take(&mut changed.names);
-        if std::mem::take(&mut changed.overflow) {
-            return None;
-        }
-        (!names.is_empty()).then_some(names)
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Changed> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
 /// Launcher metadata cache keyed by path, refreshed after every rescan.
 /// The Icon= value wins; per-kind defaults apply otherwise. Parsing stays in
 /// the applications owner; this cache only records the outcome. An entry whose
@@ -568,6 +513,61 @@ fn parse_launcher(path: &Path, stamp: LauncherStamp) -> LauncherMeta {
             valid: false,
             stamp,
         },
+    }
+}
+
+/// Names the desktop directory watch reported since the last rescan, plus an overflow flag that
+/// forces a full re-check. A launcher a burst never named reuses its cached stamp without a stat,
+/// so rescans on slow or network mounts never walk every `.desktop` file.
+#[derive(Default)]
+pub(crate) struct ChangedPaths {
+    inner: std::sync::Mutex<Changed>,
+}
+
+#[derive(Default)]
+struct Changed {
+    names: BTreeSet<std::ffi::OsString>,
+    /// At least one event was dropped, so every entry must be re-checked.
+    overflow: bool,
+}
+
+impl ChangedPaths {
+    /// Distinct names recorded before the set is abandoned for a full re-check. A watcher burst
+    /// larger than this costs as much as rescanning every launcher, so the bounded set is dropped
+    /// and `overflow` forces the same complete pass instead of growing without limit.
+    const NAMES_CAP: usize = 1024;
+
+    pub(crate) fn note(&self, name: &std::ffi::OsStr) {
+        let mut changed = self.lock();
+        if changed.overflow {
+            return;
+        }
+        if changed.names.len() >= Self::NAMES_CAP {
+            changed.names.clear();
+            changed.overflow = true;
+            return;
+        }
+        changed.names.insert(name.to_os_string());
+    }
+
+    pub(crate) fn note_overflow(&self) {
+        self.lock().overflow = true;
+    }
+
+    /// Consumes the recorded names; `None` means "unknown, re-check every entry".
+    fn take(&self) -> Option<BTreeSet<std::ffi::OsString>> {
+        let mut changed = self.lock();
+        let names = std::mem::take(&mut changed.names);
+        if std::mem::take(&mut changed.overflow) {
+            return None;
+        }
+        (!names.is_empty()).then_some(names)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Changed> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

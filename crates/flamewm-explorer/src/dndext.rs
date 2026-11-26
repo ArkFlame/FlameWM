@@ -50,9 +50,9 @@ pub struct ExtractReport {
     pub created: Vec<String>,
 }
 
-/// Checks the `DBus` names and that `dest` is an existing absolute directory without control
-/// characters (it is passed as a `GVariant` string).
-pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), ExtractError> {
+/// Pure checks on the `DBus` names and the destination string: no filesystem access, so the UI
+/// thread can run it before the extraction worker starts.
+pub fn validate_syntax(service: &str, path: &str, dest: &Path) -> Result<(), ExtractError> {
     if !valid_bus_name(service) {
         return Err(ExtractError::Rejected("invalid DBus service name".into()));
     }
@@ -67,6 +67,15 @@ pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), Ex
             "destination must be an absolute path".into(),
         ));
     }
+    Ok(())
+}
+
+/// Checks the `DBus` names and that `dest` is an existing absolute directory without control
+/// characters (it is passed as a `GVariant` string). The `is_dir` probe is a syscall that can
+/// block on a stale network mount, so it belongs on the worker; the UI thread runs
+/// `validate_syntax` and lets the worker run this once it has started.
+pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), ExtractError> {
+    validate_syntax(service, path, dest)?;
     if !dest.is_dir() {
         return Err(ExtractError::Rejected(
             "destination is not a directory".into(),
@@ -311,9 +320,11 @@ fn extract_blocking(
     })
 }
 
-/// Starts an extraction on a worker thread. Validation happens first and synchronously, so an
-/// invalid request never spawns anything. The result arrives on the returned channel; a dropped
-/// sender (worker died) is reported by the receiver as a disconnect, never a hang.
+/// Starts an extraction on a worker thread. The pure argument checks run first and synchronously,
+/// so a malformed request never spawns anything; the destination's `is_dir` syscall runs inside
+/// the worker, so a drop on a stale network mount cannot freeze the UI. The result arrives on the
+/// returned channel; a dropped sender (worker died) is reported by the receiver as a disconnect,
+/// never a hang.
 #[must_use]
 pub fn spawn_ark_extract(
     service: String,
@@ -322,7 +333,7 @@ pub fn spawn_ark_extract(
     cancel: CancellationToken,
 ) -> Receiver<Result<ExtractReport, ExtractError>> {
     let (tx, rx) = mpsc::channel();
-    if let Err(error) = validate_request(&service, &path, &dest) {
+    if let Err(error) = validate_syntax(&service, &path, &dest) {
         let _ = tx.send(Err(error));
         return rx;
     }

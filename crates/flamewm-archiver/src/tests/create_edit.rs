@@ -170,8 +170,11 @@ fn cancel_mid_create_removes_partial_output() {
         let archive = dir.path().join(name);
         let cancel = CancelToken::new();
         let trigger = cancel.clone();
+        // Progress is coalesced, so a short job may deliver only the first step snapshot. The
+        // copy loop re-checks the flag before every chunk, so cancelling on the first real
+        // progress still stops the job mid-file.
         let mut sink = |p: Progress| {
-            if p.bytes_done >= 1024 * 1024 {
+            if p.bytes_done > 0 {
                 trigger.cancel();
             }
         };

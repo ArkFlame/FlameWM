@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 /// shell writes `$HISTFILE` from its SIGHUP handler; the wait is the same one Terminator uses
 /// (`.vendor/terminator-master/terminatorlib/terminal.py`, `_wait_for_shell_exit`).
 const HANGUP_GRACE: Duration = Duration::from_millis(250);
-/// Poll interval while the hung-up child exits, so a tab close never waits the full grace on a
-/// shell that exits promptly.
+/// Sampling interval for the pre-pidfd fallback only. Kernels with `pidfd_open` (Linux 5.3+)
+/// block in `poll` on the child's pidfd instead, so a close costs one wait, not a wake every
+/// few milliseconds.
 const HANGUP_POLL: Duration = Duration::from_millis(5);
 
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
@@ -187,26 +188,13 @@ impl Drop for PtyProcess {
 /// signal to a child that already exited; the final `wait` reaps it either way.
 fn hangup_then_reap(child: &mut Child) -> io::Result<std::process::ExitStatus> {
     if let Ok(None) = child.try_wait() {
-        let _ = rustix::process::kill_process(
-            rustix::process::Pid::from_child(&*child),
-            rustix::process::Signal::HUP,
-        );
-        let deadline = Instant::now() + HANGUP_GRACE;
-        let mut exited = false;
-        while Instant::now() < deadline {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    exited = true;
-                    break;
-                }
-                Ok(None) => std::thread::sleep(HANGUP_POLL),
-                // An unreapable child is best left to the final `wait`.
-                Err(_) => {
-                    exited = true;
-                    break;
-                }
-            }
-        }
+        let pid = rustix::process::Pid::from_child(&*child);
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
+        // Block on the child's pidfd with the grace as the poll timeout: one syscall wait
+        // instead of a wake every `HANGUP_POLL`, and none at all once it exits. Kernels before
+        // `pidfd_open` (Linux 5.3) fall back to sampling.
+        let exited = wait_for_exit(pid, HANGUP_GRACE)
+            .unwrap_or_else(|| sample_until_exit(child, HANGUP_GRACE));
         // A child that ignored the hangup (a foreground program with its own handler, or a
         // stopped job) must still be gone before the master closes.
         if !exited {
@@ -214,6 +202,40 @@ fn hangup_then_reap(child: &mut Child) -> io::Result<std::process::ExitStatus> {
         }
     }
     child.wait()
+}
+
+/// Waits up to `grace` for `pid` to exit, blocking in `poll` on its pidfd. `None` when pidfds are
+/// unavailable, so the caller can fall back to sampling.
+fn wait_for_exit(pid: rustix::process::Pid, grace: Duration) -> Option<bool> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()?;
+    let timeout = Timespec {
+        tv_sec: grace.as_secs() as _,
+        tv_nsec: grace.subsec_nanos().into(),
+    };
+    let mut fds = [PollFd::new(&pidfd, PollFlags::IN)];
+    loop {
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(0) => return Some(false),
+            Ok(_) => return Some(true),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Pre-pidfd fallback: samples the child until it exits or `grace` elapses.
+fn sample_until_exit(child: &mut Child, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => std::thread::sleep(HANGUP_POLL),
+            // An unreapable child is best left to the final `wait`.
+            Err(_) => return true,
+        }
+    }
+    false
 }
 
 fn winsize(size: PtySize) -> Winsize {

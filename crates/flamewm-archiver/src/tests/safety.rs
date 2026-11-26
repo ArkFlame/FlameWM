@@ -189,8 +189,10 @@ fn cancel_mid_extract_stops_and_removes_partial_file() {
     let out = dir.path().join("out");
     let cancel = CancelToken::new();
     let trigger = cancel.clone();
+    // Progress is coalesced, so a short job may deliver only the first step snapshot. The copy
+    // loop re-checks the flag before every chunk, so this still stops extraction mid-file.
     let mut sink = |p: Progress| {
-        if p.bytes_done >= 1024 * 1024 {
+        if p.bytes_done > 0 {
             trigger.cancel();
         }
     };
@@ -235,8 +237,10 @@ fn cancel_mid_extract_removes_partial_compressed_tar_output() {
     let out = dir.path().join("out");
     let cancel = CancelToken::new();
     let trigger = cancel.clone();
+    // Progress is coalesced, so a short job may deliver only the first step snapshot. The copy
+    // loop re-checks the flag before every chunk, so this still stops extraction mid-file.
     let mut sink = |p: Progress| {
-        if p.bytes_done >= 1024 * 1024 {
+        if p.bytes_done > 0 {
             trigger.cancel();
         }
     };
