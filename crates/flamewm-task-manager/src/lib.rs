@@ -247,6 +247,7 @@ struct Application {
     window: (f32, f32),
     message: String,
     actions: SyncSender<WorkerMsg>,
+    window_visible: bool,
 }
 impl Application {
     fn new(theme: SettingsSnapshot, actions: SyncSender<WorkerMsg>) -> Self {
@@ -284,6 +285,7 @@ impl Application {
             window: (WIDTH as f32, HEIGHT as f32),
             message: "Monitoring active · updates every second".into(),
             actions,
+            window_visible: true,
         }
     }
     fn accept(&mut self, snapshot: model::Snapshot) {
@@ -356,7 +358,9 @@ impl Application {
         if std::mem::take(&mut self.graphs_dirty) {
             self.paint_graphs(doc)?;
         }
-        self.paint_table(doc, accent)?;
+        if self.window_visible {
+            self.paint_table(doc, accent)?;
+        }
         self.paint_menus(doc)
     }
     fn paint_theme(&self, doc: &mut impl UiDocumentAccess, accent: u32) -> Result<(), String> {
@@ -1310,6 +1314,7 @@ pub fn run() -> Result<(), String> {
                 UiControllerEvent::Visibility { obscured } => {
                     hidden.store(*obscured, Ordering::Relaxed);
                     visibility_gate.set_visible(!*obscured);
+                    event_window.borrow_mut().window_visible = !*obscured;
                     // Interrupt the sampler's 1 s wait: a hide parks it now, an uncover samples now.
                     let _ = visibility_tx.try_send(WorkerMsg::VisibilityChanged);
                     Ok(())
