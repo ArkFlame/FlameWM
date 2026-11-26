@@ -88,9 +88,15 @@ impl LockLoop {
             self.retry_background_restore(runtime);
         }
         self.animate(runtime, now);
-        // A lost grab is retried every turn; the lock is never dropped by a failed retry.
-        self.session.borrow_mut().try_grab();
-        keep_lock_step("raise lock surfaces", || self.raise_surfaces(runtime));
+        // Stacking and the grab are safety nets, not per-frame work: at most once a second,
+        // while the Ribbons animation wakes this loop at frame rate. Focus and keymap events
+        // re-grab immediately through `read_keys`, and a shown or rebuilt surface raises itself.
+        if now.saturating_duration_since(self.last_housekeeping) >= HOUSEKEEPING {
+            self.last_housekeeping = now;
+            // A lost grab is retried; the lock is never dropped by a failed retry.
+            self.session.borrow_mut().try_grab();
+            keep_lock_step("raise lock surfaces", || self.raise_surfaces(runtime));
+        }
         self.repaint(runtime);
         Ok(())
     }

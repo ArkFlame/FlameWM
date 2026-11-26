@@ -149,13 +149,13 @@ impl ShellLoop {
             ));
         self.shell.apply_bootstrap(snapshot);
         if let Some(settings) = settings {
-            self.apply_settings_snapshot(settings);
+            self.apply_settings_snapshot(&settings);
         }
     }
 
     pub(crate) fn note_signal(&mut self, signal: &flamewm_control_wire::ControlSignal) {
         if let flamewm_control_wire::ControlSignal::SettingsSnapshotChanged { snapshot } = signal {
-            self.apply_settings_snapshot(snapshot.clone());
+            self.apply_settings_snapshot(snapshot);
         }
         self.shell.mark_signal(signal);
     }

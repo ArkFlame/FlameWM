@@ -935,7 +935,7 @@ fn execute() -> Result<(), String> {
             if let Ok(snapshot) = startup_settings_rx.try_recv() {
                 settings_state
                     .borrow_mut()
-                    .apply_settings_snapshot(snapshot);
+                    .apply_settings_snapshot(&snapshot);
             }
             // The one-shot settings worker is finished: its closed write end reads EOF forever,
             // so the fd must be unregistered or the reactor would wake on it every loop.
@@ -957,7 +957,7 @@ fn execute() -> Result<(), String> {
                     |snapshot| {
                         mutation_state
                             .borrow_mut()
-                            .apply_settings_snapshot(snapshot);
+                            .apply_settings_snapshot(&snapshot);
                     },
                 );
                 flamewm_reactor::FdAction::Continue

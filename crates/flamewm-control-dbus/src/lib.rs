@@ -19,7 +19,7 @@ use flamewm_control_core::{
     ControlError, ControlRequest, ControlResponse, Dispatcher, OBJECT_PATH,
 };
 use flamewm_control_wire::{
-    WireCall, WireReply, WireSignal, WireValue, decode_call, decode_reply, decode_signal,
+    WireCall, WireReply, WireSignal, WireValue, decode_call, decode_reply, decode_signal_owned,
     encode_call, encode_reply, encode_signal,
 };
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
@@ -31,6 +31,7 @@ pub struct ControlServer {
     pump: BusPump,
     dispatcher: Dispatcher,
     capture_owner: RefCell<CaptureOwner>,
+    published: RefCell<PublishedRevisions>,
 }
 
 impl ControlServer {
@@ -41,6 +42,7 @@ impl ControlServer {
             pump,
             dispatcher: Dispatcher::new(),
             capture_owner: RefCell::new(CaptureOwner::default()),
+            published: RefCell::new(PublishedRevisions::default()),
         })
     }
 
@@ -56,6 +58,7 @@ impl ControlServer {
         let pump = &self.pump;
         let dispatcher = &self.dispatcher;
         let capture_owner = &self.capture_owner;
+        let published = &self.published;
         pump.on_ready(|message| {
             if let Some(name) = name_owner_lost(message) {
                 release_lost_capture_owner(dispatcher, host, capture_owner, &name);
@@ -74,7 +77,7 @@ impl ControlServer {
                         pump.send(reply)?;
                     }
                     for signal in signals {
-                        send_signal(pump, &signal)?;
+                        publish_signal(pump, published, &signal)?;
                     }
                     Ok(())
                 },
@@ -96,7 +99,7 @@ impl ControlServer {
     }
 
     pub fn emit_signal(&self, signal: &ControlSignal) -> FlameResult<()> {
-        send_signal(&self.pump, signal)
+        publish_signal(&self.pump, &self.published, signal)
     }
 }
 
@@ -283,6 +286,78 @@ fn name_owner_lost(message: &Message) -> Option<String> {
     }
 }
 
+/// Snapshot revisions already written on this bus connection, per signal family.
+///
+/// Every snapshot signal carries the snapshot's own compare-and-swap revision (displays carry the
+/// topology generation), which moves exactly when the snapshot content changes. The WM already
+/// coalesces some duplicates per turn, but the same revision can still be published again from a
+/// later turn (a display and a panel publish in one flush, a workspace snapshot in two). Writing it
+/// again re-marshals the whole dictionary for every subscriber for no state change, so an unchanged
+/// revision is dropped before encoding. State lives per connection: a fresh connection always
+/// publishes its first snapshot, and clients fetch their initial state on connect.
+#[derive(Debug, Default)]
+struct PublishedRevisions {
+    settings: Option<u64>,
+    workspaces: Option<u64>,
+    panels: Option<u64>,
+    displays: Option<u64>,
+    topology: Option<u64>,
+    system: Option<u64>,
+    weather: Option<u64>,
+}
+
+impl PublishedRevisions {
+    /// Records `key` in `slot`; `true` when that same revision was already published.
+    fn seen(slot: &mut Option<u64>, key: u64) -> bool {
+        if *slot == Some(key) {
+            return true;
+        }
+        *slot = Some(key);
+        false
+    }
+
+    /// `true` when this signal repeats a snapshot revision already published on this connection.
+    /// Signals without a content revision (windows, shortcuts, switcher, requests) always send.
+    fn already_published(&mut self, signal: &ControlSignal) -> bool {
+        match signal {
+            ControlSignal::SettingsSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.settings, snapshot.revision)
+            }
+            ControlSignal::WorkspacesSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.workspaces, snapshot.revision)
+            }
+            ControlSignal::PanelsSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.panels, snapshot.revision)
+            }
+            ControlSignal::DisplaysSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.displays, snapshot.generation)
+            }
+            ControlSignal::TopologyChanged { generation } => {
+                Self::seen(&mut self.topology, *generation)
+            }
+            ControlSignal::SystemSnapshotChanged { snapshot } => {
+                Self::seen(&mut self.system, snapshot.revision)
+            }
+            ControlSignal::WeatherFeedChanged { snapshot } => {
+                Self::seen(&mut self.weather, snapshot.revision)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Encodes and writes one signal unless it repeats a snapshot revision already published.
+fn publish_signal(
+    pump: &BusPump,
+    published: &RefCell<PublishedRevisions>,
+    signal: &ControlSignal,
+) -> FlameResult<()> {
+    if published.borrow_mut().already_published(signal) {
+        return Ok(());
+    }
+    send_signal(pump, signal)
+}
+
 fn send_signal(pump: &BusPump, signal: &ControlSignal) -> FlameResult<()> {
     let signal = encode_signal(signal);
     let mut message = Message::new_signal(OBJECT_PATH, &signal.interface, &signal.member)
@@ -413,12 +488,9 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     let interface = message.interface()?.to_string();
     let member = message.member()?.to_string();
     let args = wire_args(message.get_items()).ok()?;
-    decode_signal(&WireSignal {
-        interface,
-        member,
-        args,
-    })
-    .ok()
+    // Hand the decoded arguments over instead of re-cloning the whole snapshot into a
+    // borrowed `WireSignal` first: every signal carries a full dictionary on the hot path.
+    decode_signal_owned(interface, member, args).ok()
 }
 fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResult<()> {
     let items = values
@@ -594,7 +666,7 @@ fn error_code_for_name(name: &str) -> Option<ErrorCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_control_wire::{SwitcherEntry, system_dict};
+    use flamewm_control_wire::{SwitcherEntry, decode_signal, system_dict};
 
     #[test]
     fn non_string_element_in_string_array_is_an_error_not_a_panic() {
@@ -605,6 +677,25 @@ mod tests {
         assert!(
             collect_string_array(vec![WireValue::String("a".into()), WireValue::I32(3)]).is_err()
         );
+    }
+
+    #[test]
+    fn repeated_snapshot_revision_is_coalesced_before_encoding() {
+        let mut published = PublishedRevisions::default();
+        let snapshot = ControlSignal::SettingsSnapshotChanged {
+            snapshot: flamewm_api::settings::SettingsSnapshot::new(3),
+        };
+        assert!(!published.already_published(&snapshot));
+        assert!(published.already_published(&snapshot));
+        // A newer revision is a real state change and is published again.
+        let newer = ControlSignal::SettingsSnapshotChanged {
+            snapshot: flamewm_api::settings::SettingsSnapshot::new(4),
+        };
+        assert!(!published.already_published(&newer));
+        // Requests and request-style signals carry no content revision, so they always send.
+        let request = ControlSignal::LauncherToggleRequested;
+        assert!(!published.already_published(&request));
+        assert!(!published.already_published(&request));
     }
 
     fn signal_message(signal: &ControlSignal) -> Message {

@@ -13,4 +13,8 @@ workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-toml = { version = "=0.8.23" }
+# Parse-only: the rules tests call `toml::from_str` and never serialise. Pinned to the toml 1.x line
+# because it shares `toml_parser`/`winnow` 1 with the build graph (`proc-macro-crate`); the 0.8 line
+# added a second `toml_edit` 0.22 + `toml_datetime` 0.6 + `winnow` 0.7 copy to Cargo.lock for a
+# test-only reader. "display" (the `toml_writer` half) stays off.
+toml = { version = "=1.2.3", default-features = false, features = ["parse", "serde", "std"] }

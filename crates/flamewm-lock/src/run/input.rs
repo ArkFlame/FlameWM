@@ -65,7 +65,7 @@ impl LockLoop {
             self.power_revision += 1;
         }
         if let PowerEffect::Perform(action) = self.power.handle(event) {
-            power::perform_on_worker(action, self.power_tx.clone());
+            power::perform_on_worker(action, self.power_tx.clone(), self.waker.clone());
         }
     }
 
@@ -73,6 +73,7 @@ impl LockLoop {
         let secret = self.state.begin_authentication();
         let user = self.username.clone();
         let outcome_tx = self.outcome_tx.clone();
+        let waker = self.waker.clone();
         let spawned = thread::Builder::new()
             .name("flamewm-lock-pam".to_string())
             .spawn(move || {
@@ -80,9 +81,12 @@ impl LockLoop {
                 drop(secret);
                 // The receiver lives as long as the loop; a send error means it is gone.
                 let _ = outcome_tx.send(outcome);
+                // Apply the result at once instead of on the next idle tick.
+                let _ = waker.wake();
             });
         if spawned.is_err() {
             let _ = self.outcome_tx.send(Outcome::Unavailable);
+            let _ = self.waker.wake();
         }
     }
 }

@@ -18,7 +18,7 @@ flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 x11rb.workspace = true
-rustix = { version = "=1.1.4", default-features = false, features = ["fs", "process", "std"] }
+rustix = { workspace = true, features = ["fs", "process", "std"] }
 signal-hook.workspace = true
 
 [lints]
