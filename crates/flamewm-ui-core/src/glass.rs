@@ -11,8 +11,8 @@
 //! Dark: regular glass `rgba(234,244,255,.12)`, 28px blur, saturate 170%, rim `.17`.
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::settings_groups::is_group_custom;
@@ -295,30 +295,28 @@ fn ink_for(appearance: Appearance) -> Option<Palette> {
     ink_for_key(InkKey::from_appearance(appearance))
 }
 
-fn ink_for_key(key: InkKey) -> Option<Palette> {
-    let cache = ink_cache();
-    {
-        let cache = cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(hit) = cache.get(&key) {
-            return *hit;
-        }
-    }
-    let resolved = ink_for_uncached(key);
-    let mut cache = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if cache.len() >= INK_CACHE_CAP {
-        cache.clear();
-    }
-    cache.insert(key, resolved);
-    resolved
+thread_local! {
+    /// Pure ink solves, one per distinct [`InkKey`] on this thread. A thread-local map keeps the
+    /// per-frame `resolve` and text-token projections off a shared mutex: the solve is pure in the
+    /// key, so a per-thread copy cannot disagree with another thread's.
+    static INK_CACHE: RefCell<HashMap<InkKey, Option<Palette>>> = RefCell::new(HashMap::new());
+    /// Pure regular-glass materials, one per distinct [`Appearance`] on this thread.
+    static REGULAR_CACHE: RefCell<HashMap<Appearance, (u32, u16, u16)>> = RefCell::new(HashMap::new());
 }
 
-fn ink_cache() -> &'static Mutex<HashMap<InkKey, Option<Palette>>> {
-    static CACHE: OnceLock<Mutex<HashMap<InkKey, Option<Palette>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn ink_for_key(key: InkKey) -> Option<Palette> {
+    if let Some(hit) = INK_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let resolved = ink_for_uncached(key);
+    INK_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= INK_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(key, resolved);
+    });
+    resolved
 }
 
 fn ink_for_uncached(key: InkKey) -> Option<Palette> {
@@ -422,31 +420,21 @@ const INK_CACHE_CAP: usize = 16;
 /// The legibility solve is the expensive part of [`resolve`]: WCAG luminance uses `powf` and the
 /// scrim floor runs two binary searches. Every consumer rebuilds the same [`Appearance`] per frame,
 /// so one cache hit replaces the whole solve. The result is pure in `Appearance`, so no entry can
-/// go stale when settings change: the changed value hashes to a different key.
+/// go stale when settings change: the changed value hashes to a different key. The map is
+/// thread-local, so paint threads never serialise on one cache lock.
 fn regular(appearance: Appearance) -> (u32, u16, u16) {
-    let cache = regular_cache();
-    {
-        let cache = cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(hit) = cache.get(&appearance) {
-            return *hit;
-        }
+    if let Some(hit) = REGULAR_CACHE.with(|cache| cache.borrow().get(&appearance).copied()) {
+        return hit;
     }
     let resolved = regular_uncached(appearance);
-    let mut cache = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if cache.len() >= REGULAR_CACHE_CAP {
-        cache.clear();
-    }
-    cache.insert(appearance, resolved);
+    REGULAR_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= REGULAR_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(appearance, resolved);
+    });
     resolved
-}
-
-fn regular_cache() -> &'static Mutex<HashMap<Appearance, (u32, u16, u16)>> {
-    static CACHE: OnceLock<Mutex<HashMap<Appearance, (u32, u16, u16)>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn regular_uncached(appearance: Appearance) -> (u32, u16, u16) {
@@ -583,14 +571,15 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         Some(SettingValue::Text(value)) if value == "blur-only" => TaskbarMode::BlurOnly,
         _ => defaults.taskbar_mode,
     };
-    let legacy_blur_px =
-        percent("surfaceBlurPercent").map(|value| (u16::from(value.min(100)) * 40 / 100) as u8);
-    let glass_blur_px = match (percent_u8_key(snapshot, "glassBlurPx"), legacy_blur_px) {
-        (Some(px), _) => px,
-        (None, Some(px)) => px,
-        (None, None) => defaults.glass_blur_px,
-    }
-    .min(54);
+    // The glass key is the live one; read the legacy percent only while it is absent, so a desktop
+    // that already carries `glassBlurPx` skips one settings lookup per appearance build.
+    let glass_blur_px = match percent_u8_key(snapshot, "glassBlurPx") {
+        Some(px) => px.min(54),
+        None => percent("surfaceBlurPercent")
+            .map(|value| (u16::from(value.min(100)) * 40 / 100) as u8)
+            .unwrap_or(defaults.glass_blur_px)
+            .min(54),
+    };
     let glass_opacity_percent = glass_opacity_from_settings(snapshot);
     let custom_tint = match snapshot.values.get("taskbarCustomTint") {
         Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
@@ -665,7 +654,9 @@ pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
 }
 
 /// `appearance` is `light` (case-insensitive). `system` and `dark` resolve to the Dark palette.
-fn appearance_is_light(snapshot: &SettingsSnapshot) -> bool {
+/// Public so a token projection that only needs this flag skips building a full [`Appearance`].
+#[must_use]
+pub fn appearance_is_light(snapshot: &SettingsSnapshot) -> bool {
     matches!(
         snapshot.values.get("appearance"),
         Some(SettingValue::Text(value)) if value.eq_ignore_ascii_case("light")

@@ -59,10 +59,18 @@ pub fn next_focusable_where(
             // Tab press is pure overhead in the key path.
             let mut index = current;
             for _ in 1..count {
+                // Bounded wrap instead of a `% count` division per candidate; `index` is always
+                // below `count`, so the two forms are equal.
                 index = if reverse {
-                    index.wrapping_add(count - 1) % count
+                    if index == 0 {
+                        count - 1
+                    } else {
+                        index - 1
+                    }
+                } else if index + 1 == count {
+                    0
                 } else {
-                    index.wrapping_add(1) % count
+                    index + 1
                 };
                 if focusable(index) {
                     return Some(index as u32);

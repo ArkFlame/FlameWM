@@ -89,12 +89,14 @@ pub fn nav_row_token_values(light: bool) -> [(&'static str, UiColor); 2] {
 }
 
 /// Writes the settings nav-row fills for the snapshot's appearance. Only documents that declare
-/// `--nav-hover` and `--nav-pressed` call this.
+/// `--nav-hover` and `--nav-pressed` call this. Reads the `light` flag directly: projecting two
+/// overlay colours does not need the tint, blur, taskbar or backdrop inputs a full `Appearance`
+/// build parses.
 pub fn project_nav_row_tokens(
     document: &mut impl UiDocumentAccess,
     snapshot: &SettingsSnapshot,
 ) -> Result<(), String> {
-    for (name, value) in nav_row_token_values(glass::appearance_from_settings(snapshot).light) {
+    for (name, value) in nav_row_token_values(glass::appearance_is_light(snapshot)) {
         document.color_variable(name, value)?;
     }
     Ok(())
