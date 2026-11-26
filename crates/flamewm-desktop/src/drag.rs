@@ -1,31 +1,45 @@
 use super::*;
 
+/// Applies the latest coalesced item-drag pointer once per flush. Motion events only stage the
+/// position, so a fast drag never reprojects the ghost chrome per input event.
+pub(super) fn apply_pending_motion(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let Some((x, y)) = state.drag_pending.take() else {
+        return Ok(());
+    };
+    show_drag_ghost(document, state, x, y)
+}
+
 pub(super) fn show_drag_ghost(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
     x: f32,
     y: f32,
 ) -> Result<(), String> {
-    let Some(ghost) = state.drag_ghost.as_ref() else {
+    let Some(output) = state.drag_ghost.as_ref().map(|ghost| ghost.output.clone()) else {
         return Ok(());
     };
-    let scale = grid_for_output(state, &ghost.output).visual_scale_percent();
-    let ghost = state.drag_ghost.as_mut().expect("observed ghost");
+    let scale = grid_for_output(state, &output).visual_scale_percent();
+    let Some(ghost) = state.drag_ghost.as_mut() else {
+        return Ok(());
+    };
     let factor = f32::from(scale) / 100.0;
-    let kind = ghost.kind;
-    ghost.visible = true;
+    let first_show = !ghost.chrome_projected;
     let gx = x - ghost.offset_x;
     let gy = y - ghost.offset_y;
+    ghost.visible = true;
     document.position("desktop-drag-ghost", gx, gy)?;
+    if !first_show {
+        drag_ghost_motion_counter().increment();
+        return Ok(());
+    }
+    drag_ghost_show_counter().increment();
+    let kind = ghost.kind;
+    let count = ghost.count.max(1);
     document.position("desktop-drag-ghost-icon", 18.0 * factor, 5.0 * factor)?;
     document.size("desktop-drag-ghost-icon", 44.0 * factor, 44.0 * factor)?;
-    projection::project_drag_ghost_icon_scaled(
-        document,
-        &mut state.icons,
-        kind,
-        ghost.icon_override.as_deref(),
-        scale,
-    )?;
     let [line1, line2] = flamewm_desktop_core::presentation::desktop_label_lines(
         &ghost.label,
         76.0 * factor,
@@ -46,28 +60,56 @@ pub(super) fn show_drag_ghost(
     document.font_size("desktop-drag-ghost-count", 11.0 * factor)?;
     document.text("desktop-drag-ghost-label-1", line1)?;
     document.text("desktop-drag-ghost-label-2", line2)?;
-    document.text(
-        "desktop-drag-ghost-count",
-        format!("{}", ghost.count.max(1)),
-    )?;
+    document.text("desktop-drag-ghost-count", format!("{count}"))?;
     document.visible("desktop-drag-ghost-count", ghost.count > 1)?;
     document.visible("desktop-drag-ghost", true)?;
     // During a drag the *single* visible item follows the pointer. The
     // originals retain their model/layout slots and are restored on release;
     // leaving them painted makes the drag appear frozen at its start cell.
+    // Hiding is a one-time transition: repeated flushes keep them hidden.
     set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, false)?;
+    ghost.chrome_projected = true;
+    // Resolve the icon from the warm cache once; a miss stays on the fallback
+    // and `sync_drag_ghost` swaps in the drained raster later.
+    let resolved = projection::project_drag_ghost_icon_scaled(
+        document,
+        &mut state.icons,
+        kind,
+        ghost.icon_override.as_deref(),
+        scale,
+    )?;
+    ghost.icon_resolved = resolved;
     Ok(())
 }
 
 pub(super) fn sync_drag_ghost(
     document: &mut impl UiDocumentAccess,
-    state: &DesktopState,
+    state: &mut DesktopState,
 ) -> Result<(), String> {
-    let ghost = state.drag_ghost.as_ref().filter(|ghost| ghost.visible);
-    document.visible("desktop-drag-ghost", ghost.is_some())?;
-    if let Some(ghost) = ghost {
-        set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, false)?;
+    let Some(ghost) = state.drag_ghost.as_ref().filter(|ghost| ghost.visible) else {
+        return document.visible("desktop-drag-ghost", false);
+    };
+    if !ghost.chrome_projected || ghost.icon_resolved {
+        // Nothing left to project (or the chrome was not fully shown): keep source tiles
+        // hidden, since a slot sync may have re-projected them visible.
+        return set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, false);
     }
+    let Some(output) = state.drag_ghost.as_ref().map(|ghost| ghost.output.clone()) else {
+        return Ok(());
+    };
+    let scale = grid_for_output(state, &output).visual_scale_percent();
+    let Some(ghost) = state.drag_ghost.as_mut() else {
+        return Ok(());
+    };
+    let kind = ghost.kind;
+    let resolved = projection::project_drag_ghost_icon_scaled(
+        document,
+        &mut state.icons,
+        kind,
+        ghost.icon_override.as_deref(),
+        scale,
+    )?;
+    ghost.icon_resolved = resolved;
     Ok(())
 }
 
@@ -90,6 +132,7 @@ pub(super) fn hide_drag_ghost(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
+    state.drag_pending = None;
     if let Some(ghost) = state.drag_ghost.take() {
         set_source_tiles_visible(document, state.model.items(), &ghost.source_ids, true)?;
     }

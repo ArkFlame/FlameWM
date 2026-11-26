@@ -369,13 +369,7 @@ impl SettingsView {
         Command::None
     }
 
-    fn theme_key(
-        &mut self,
-        name: &str,
-        event: &UiKeyEvent,
-        themes: &[Theme],
-        selected: Option<Theme>,
-    ) -> Command {
+    fn theme_key(&mut self, name: &str, event: &UiKeyEvent, themes: &[Theme]) -> Command {
         match name {
             "up" => {
                 self.selected = self.selected.saturating_sub(1);
@@ -386,32 +380,34 @@ impl SettingsView {
                 return self.preview_selected(themes);
             }
             "return" | "enter" => {
-                if let Some(theme) = selected {
-                    return Command::Apply(theme.name);
+                if let Some(theme) = themes.get(self.selected) {
+                    return Command::Apply(theme.name.clone());
                 }
             }
             "f" if event.modifiers.is_empty() => return Command::Apply(FOLLOW_FLAMEWM.into()),
             "c" => {
-                if let Some(theme) = selected {
-                    return Command::Copy(theme.name);
+                if let Some(theme) = themes.get(self.selected) {
+                    return Command::Copy(theme.name.clone());
                 }
             }
-            "e" => match selected {
+            "e" => match themes.get(self.selected) {
                 Some(theme) if !theme.builtin => {
                     self.slot = 0;
-                    self.edit = Some(theme);
+                    self.edit = Some(theme.clone());
                     self.message = "Enter sets the selected colour. Esc leaves editing.".into();
                 }
                 _ => self.message = "Built-in themes are read-only. Press C to copy one.".into(),
             },
-            "r" => match selected {
-                Some(theme) if !theme.builtin => self.mode = Mode::Rename(theme.name),
+            "r" => match themes.get(self.selected) {
+                Some(theme) if !theme.builtin => {
+                    self.mode = Mode::Rename(theme.name.clone());
+                }
                 _ => {
                     self.message = "Built-in themes cannot be renamed. Press C to copy one.".into();
                 }
             },
-            "delete" | "d" => match selected {
-                Some(theme) if !theme.builtin => return Command::Delete(theme.name),
+            "delete" | "d" => match themes.get(self.selected) {
+                Some(theme) if !theme.builtin => return Command::Delete(theme.name.clone()),
                 _ => self.message = "Built-in themes cannot be deleted.".into(),
             },
             "k" => return Command::CycleCursor,
@@ -436,14 +432,15 @@ impl SettingsView {
     }
 
     fn opacity_key(&mut self, name: &str) -> Command {
-        let options = opacity_options();
         match name {
             "up" => self.opacity_selected = self.opacity_selected.saturating_sub(1),
-            "down" => self.opacity_selected = (self.opacity_selected + 1).min(options.len() - 1),
+            "down" => {
+                self.opacity_selected = (self.opacity_selected + 1).min(OPACITY_COUNT - 1);
+            }
             "return" | "enter" => return Command::Persist,
             _ => return Command::None,
         }
-        Command::Opacity(options[self.opacity_selected])
+        Command::Opacity(opacity_at(self.opacity_selected))
     }
 
     /// Settings rows: tab strip, hint, blank, the current tab's body and a status line. `rows` is the body height.
@@ -459,8 +456,12 @@ impl SettingsView {
         let fg = palette.foreground;
         let muted = mix(fg, palette.background, 60);
         let mut out: Vec<Vec<Run>> = Vec::new();
-        let line = |text: String, colour: u32, bg: Option<u32>, bold: bool| {
-            vec![text_run(0, &clip(&text, cols), colour, bg, bold)]
+        // Trims the already-built row in place: no second copy per row per frame.
+        let line = |mut text: String, colour: u32, bg: Option<u32>, bold: bool| {
+            if let Some((end, _)) = text.char_indices().nth(cols) {
+                text.truncate(end);
+            }
+            vec![text_run(0, &text, colour, bg, bold)]
         };
 
         let mut strip = Vec::new();
@@ -550,8 +551,8 @@ impl SettingsView {
                 true,
             )),
             Tab::Opacity => {
-                for (index, percent) in opacity_options()
-                    .into_iter()
+                for (index, percent) in (0..OPACITY_COUNT)
+                    .map(opacity_at)
                     .enumerate()
                     .skip(top)
                     .take(list_rows)
@@ -588,10 +589,6 @@ impl SettingsView {
         out.truncate(rows);
         out
     }
-}
-
-fn clip(text: &str, cols: usize) -> String {
-    text.chars().take(cols).collect()
 }
 
 fn mix(a: u32, b: u32, weight_a: u32) -> u32 {

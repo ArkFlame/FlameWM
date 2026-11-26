@@ -1,4 +1,5 @@
 use super::*;
+use std::time::SystemTime;
 
 /// Once startup (wallpaper decode, icon loads, first paints) has settled, its freed heap is handed
 /// back.
@@ -27,6 +28,24 @@ pub(crate) struct LauncherMeta {
     pub(crate) icon: String,
     pub(crate) name: String,
     pub(crate) valid: bool,
+    /// File identity captured when this entry was parsed; an unchanged stamp reuses the entry
+    /// after a rescan instead of re-reading and re-parsing the `.desktop` file.
+    pub(crate) stamp: LauncherStamp,
+}
+
+/// Cheap file identity for launcher cache reuse (`len` plus last modification time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LauncherStamp {
+    pub(crate) len: u64,
+    pub(crate) modified: Option<SystemTime>,
+}
+
+/// Desktop selection styling last written to the document: fill alpha, accent and the exact
+/// selected set. A sync whose inputs match this snapshot issues no document writes.
+pub(crate) struct SelectionVisuals {
+    pub(crate) fill_alpha: u8,
+    pub(crate) accent: UiColor,
+    pub(crate) selected: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +93,8 @@ pub(crate) struct DesktopState {
     pub(crate) sticky: sticky::StickyState,
     pub(crate) widgets: widgets::WidgetState,
     pub(crate) selection: SelectionModel,
+    /// Selection styling last projected; equal inputs skip the per-item document writes.
+    pub(crate) selection_visuals: Option<SelectionVisuals>,
     pub(crate) selection_start: Option<Point>,
     /// Latest rubber pointer position; applied once per flush so motion never redraws per event.
     pub(crate) rubber_pending: Option<Point>,
@@ -83,11 +104,15 @@ pub(crate) struct DesktopState {
     /// Overlay rect currently shown; `None` while hidden (initially hidden by the first-paint guard).
     pub(crate) selection_overlay: Option<Rect>,
     pub(crate) item_drag: Option<ItemDrag>,
+    /// Latest item-drag pointer; applied once per flush so motion never rebuilds the ghost.
+    pub(crate) drag_pending: Option<(f32, f32)>,
     pub(crate) launchers: BTreeMap<PathBuf, LauncherMeta>,
     pub(crate) menu: Option<MenuState>,
     /// Rects of the menus and confirm currently shown (logical px); empty when none is open.
     pub(crate) menu_rects: Vec<Rect>,
     pub(crate) wheel_hover: Option<usize>,
+    /// Sector and accent of the highlight raster already uploaded; an equal pair reuses it.
+    pub(crate) wheel_highlight: Option<(usize, [u8; 3])>,
     pub(crate) wheel_mode: WheelMode,
     pub(crate) pending_delete: Option<Vec<PathBuf>>,
     pub(crate) last_click: Option<ClickRecord>,
@@ -147,6 +172,10 @@ pub(crate) struct DragGhost {
     pub(crate) offset_y: f32,
     pub(crate) count: usize,
     pub(crate) visible: bool,
+    /// Constant chrome (geometry, labels, icon) already projected; later motion only moves it.
+    pub(crate) chrome_projected: bool,
+    /// The icon raster currently shown came from the warm cache, so a drain can still replace it.
+    pub(crate) icon_resolved: bool,
 }
 
 #[derive(Clone)]

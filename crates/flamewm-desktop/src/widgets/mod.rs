@@ -66,7 +66,7 @@ mod sampling;
 
 pub(crate) use actions::{cancel_transient, handle_action, handle_text_input, is_widget_action};
 pub(crate) use gesture::{apply_pending_drag, widget_metrics};
-pub(crate) use lifecycle::{poll, refresh_media, set_obscured};
+pub(crate) use lifecycle::{is_obscured, poll, refresh_media, set_obscured};
 pub(crate) use panels::{hide_panels, open_gallery, place_config, place_gallery, widget_menu_rows};
 pub(crate) use render::{assign_layers, sync_widgets};
 

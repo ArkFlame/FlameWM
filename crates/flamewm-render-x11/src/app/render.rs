@@ -232,7 +232,9 @@ impl X11App {
         let mut plan = RedrawPlan::Full;
         if !cache_valid {
             self.ensure_xft();
-            let layout = self.layout.as_mut().expect("layout retained above");
+            let Some(layout) = self.layout.as_mut() else {
+                return Err("redraw has no retained layout".to_owned());
+            };
             // Paint text widths (glyph runs and layout) come from the same Xft measure as layout.
             let interaction = self.interaction;
             let paint_nodes = &mut self.paint_nodes;
@@ -330,7 +332,9 @@ impl X11App {
         // Single shape per changed frame, from retained commands.
         {
             let _shape_guard = flamewm_profiler::start("render.shape");
-            let cached = self.cached_paint.as_ref().expect("paint cached above");
+            let Some(cached) = self.cached_paint.as_ref() else {
+                return Err("redraw has no cached paint".to_owned());
+            };
             let backdrop_radius = backdrop_corner_radius_px(document, self.width, self.height);
             unsafe {
                 self.refresh_shape_mask_from_coverage_scaled(

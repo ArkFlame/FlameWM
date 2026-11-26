@@ -1,6 +1,7 @@
 //! Linux procfs sampler. All filesystem reads run off the X11/UI thread.
 //! PID plus process start-time is the authority for selecting a live process.
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::time::Instant;
 
@@ -12,7 +13,6 @@ pub struct Process {
     pub depth: u32,
     pub start: u64,
     pub name: String,
-    pub uid: u32,
     pub user: String,
     pub state: char,
     pub nice: i32,
@@ -51,6 +51,10 @@ pub struct Sampler {
     tasks: HashMap<u32, Cached>,
     /// Reused read buffer for every procfs file of a sample.
     scratch: Vec<u8>,
+    /// Reused `/proc/<pid>/<file>` path, so no `format!` allocation per task read.
+    path: String,
+    /// Reused pid list, so the per-sample walk allocates nothing.
+    pids: Vec<u32>,
     tick: u64,
     page_bytes: u64,
     user_cache: Option<HashMap<u32, String>>,
@@ -181,7 +185,6 @@ pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
         start: fields[19].parse().ok()?,
         virt_kib: fields[20].parse::<u64>().ok()? / 1024,
         rss_kib: pages.saturating_mul(page_bytes) / 1024,
-        uid: u32::MAX,
         ticks: utime.saturating_add(stime),
         ..Process::default()
     })
@@ -216,6 +219,12 @@ fn read_proc<'a>(buf: &'a mut Vec<u8>, path: &str) -> Option<&'a [u8]> {
     }
     Some(buf.as_slice())
 }
+/// Writes `/proc/<pid>/<leaf>` into the sampler's reused path buffer: no `format!` per read.
+fn proc_path<'a>(path: &'a mut String, pid: u32, leaf: &str) -> &'a str {
+    path.clear();
+    let _ = write!(path, "/proc/{pid}/{leaf}");
+    path.as_str()
+}
 fn sanitize(text: &str, max_chars: usize) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -230,8 +239,8 @@ pub fn parse_uid(status: &str) -> u32 {
         .and_then(|v| v.split_whitespace().next()?.parse().ok())
         .unwrap_or(u32::MAX)
 }
-fn command(scratch: &mut Vec<u8>, pid: u32, name: &str) -> String {
-    if let Some(bytes) = read_proc(scratch, &format!("/proc/{pid}/cmdline")) {
+fn command(scratch: &mut Vec<u8>, path: &mut String, pid: u32, name: &str) -> String {
+    if let Some(bytes) = read_proc(scratch, proc_path(path, pid, "cmdline")) {
         let args = String::from_utf8_lossy(bytes);
         // `sanitize` already maps every control byte, including the NUL argument separators,
         // to a space, so no intermediate replacement string is needed.
@@ -358,19 +367,23 @@ impl Sampler {
         }
         self.tick += 1;
         let tick = self.tick;
-        let mut pids: Vec<u32> = self.tasks.keys().copied().collect();
+        // Reused pid list: discovery appends, then one sort/dedup pass over the same buffer.
+        self.pids.clear();
+        self.pids.extend(self.tasks.keys().copied());
         if discovery_due(tick)
             && let Ok(entries) = fs::read_dir("/proc")
         {
-            pids.extend(
+            self.pids.extend(
                 entries
                     .flatten()
                     .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
             );
         }
-        pids.sort_unstable();
-        pids.dedup();
-        for pid in pids {
+        self.pids.sort_unstable();
+        self.pids.dedup();
+        result.processes.reserve(self.pids.len());
+        for index in 0..self.pids.len() {
+            let pid = self.pids[index];
             let Some(task) = self.sample_task(pid, tick, now.total, cpu_count) else {
                 continue;
             };
@@ -402,8 +415,10 @@ impl Sampler {
     /// One task per sample: `stat` every time (CPU and RSS), `status` and `cmdline` only when
     /// the cached static fields are stale. Returns `None` for tasks that vanished mid-read.
     fn sample_task(&mut self, pid: u32, tick: u64, total: u64, cpu_count: f64) -> Option<Process> {
-        if let Some(cached) = self.tasks.get_mut(&pid)
-            && !self.hot.contains(&pid)
+        // Hot pids are re-read every tick, so their cached replay copy would never be used.
+        let hot = self.hot.contains(&pid);
+        if !hot
+            && let Some(cached) = self.tasks.get_mut(&pid)
             && !slow_due(pid, tick)
             && let Some(last) = cached.last.clone()
         {
@@ -412,7 +427,7 @@ impl Sampler {
             cached.seen = tick;
             return Some(last);
         }
-        let text = read_proc(&mut self.scratch, &format!("/proc/{pid}/stat"))?;
+        let text = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "stat"))?;
         let mut task = parse_stat(pid, std::str::from_utf8(text).ok()?, self.page_bytes)?;
         let cached = self.tasks.entry(pid).or_default();
         // Same PID and start time as the previous sample: the delta is meaningful. PID reuse
@@ -430,7 +445,7 @@ impl Sampler {
             || cached.name != task.name
             || tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
         if stale {
-            let status = read_proc(&mut self.scratch, &format!("/proc/{pid}/status"));
+            let status = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "status"));
             cached.uid = status
                 .and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .map_or(u32::MAX, parse_uid);
@@ -447,7 +462,7 @@ impl Sampler {
                     }
                 });
             // exec can replace argv without changing PID/starttime; the refresh bounds that lag.
-            cached.command = command(&mut self.scratch, pid, &task.name);
+            cached.command = command(&mut self.scratch, &mut self.path, pid, &task.name);
             cached.refreshed = tick;
         }
         if cached.name != task.name {
@@ -456,10 +471,9 @@ impl Sampler {
         cached.start = task.start;
         cached.ticks = task.ticks;
         cached.seen = tick;
-        task.uid = cached.uid;
         task.user.clone_from(&cached.user);
         task.command.clone_from(&cached.command);
-        cached.last = Some(task.clone());
+        cached.last = (!hot).then(|| task.clone());
         Some(task)
     }
 }

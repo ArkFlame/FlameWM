@@ -324,10 +324,10 @@ pub(crate) fn sync_conversion_preview(
     let Some(outcome) = outcome else {
         return Ok(());
     };
-    let preview = state
-        .conversion_preview
-        .take()
-        .expect("preview observed above");
+    let Some(preview) = state.conversion_preview.take() else {
+        document.visible("desktop-convert-preview", false)?;
+        return Ok(());
+    };
     document.visible("desktop-convert-preview", false)?;
     match outcome {
         Ok(path) => {

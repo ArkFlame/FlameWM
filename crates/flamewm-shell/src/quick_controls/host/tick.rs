@@ -157,6 +157,12 @@ pub(crate) fn apply_system_snapshot(
     snapshot: &mut QuickControlSnapshot,
     system: flamewm_api::system::SystemSnapshot,
 ) -> bool {
+    // A bump of the provider revision already says the content changed: skip the deep compare
+    // of every audio/network/media field. Only an unbumped push pays for the equality check.
+    if snapshot.system.revision != system.revision {
+        snapshot.system = system;
+        return true;
+    }
     if snapshot.system == system {
         return false;
     }

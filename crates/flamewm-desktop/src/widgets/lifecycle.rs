@@ -16,6 +16,12 @@ pub(super) fn visibility_effect(was_obscured: bool, obscured: bool) -> Option<Vi
     }
 }
 
+/// True while the desktop window is fully obscured: projection and sampling are suspended and
+/// deferred until the uncover turn.
+pub(crate) fn is_obscured(state: &DesktopState) -> bool {
+    state.widgets.obscured
+}
+
 /// Applies a `VisibilityNotify` verdict. While obscured, no sampling and no document sync run and
 /// the wake deadline is dropped, so the reactor does not spin on a past deadline. On uncover the
 /// cached sync key is discarded: writes made while covered bypass the key, so the resume sync

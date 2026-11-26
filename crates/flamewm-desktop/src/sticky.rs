@@ -48,11 +48,15 @@ pub(crate) struct StickyState {
     pub(crate) notes_enabled: bool,
     edit: Option<StickyEdit>,
     gesture: Option<StickyGesture>,
+    /// Latest gesture-motion pointer; previewed once per flush, not per input event.
+    pending_pointer: Option<(f32, f32)>,
     persist_pending: bool,
     persist_armed: bool,
     persist_due: Option<Instant>,
     /// Consecutive failed saves; drives the retry backoff and resets on success.
     persist_failures: u32,
+    /// Slots whose nodes were last shown, so an emptied slot is cleared exactly once.
+    shown: [bool; STICKY_SLOTS],
     /// Reactor wake deadline; set to `persist_due` while a save is armed.
     wake: WakeDeadline,
 }
@@ -65,10 +69,12 @@ impl StickyState {
             notes_enabled,
             edit: None,
             gesture: None,
+            pending_pointer: None,
             persist_pending: false,
             persist_armed: false,
             persist_due: None,
             persist_failures: 0,
+            shown: [true; STICKY_SLOTS],
             wake: WakeDeadline::default(),
         }
     }
@@ -146,7 +152,7 @@ struct StickyGesture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StickyGestureMode {
     Move,
-    Resize,
+    Resize(ResizeCorner),
 }
 
 /// Shares the reactor wake deadline with sticky state. No timer is registered: while
@@ -231,25 +237,35 @@ pub(crate) fn sync_sticky(
         .filter(|_| show_any);
     for slot in 0..STICKY_SLOTS {
         let number = slot + 1;
-        let id = format!("sticky-{number}");
-        if let Some(note) = visible.get(slot) {
+        let note = visible.get(slot).filter(|_| show_any);
+        if let Some(note) = note {
             let editing = state
                 .sticky
                 .edit
                 .as_ref()
                 .filter(|edit| edit.note_id == note.id)
                 .map(|edit| edit.buffer.as_str());
-            sync_sticky_slot(document, number, note, editing, show_any)?;
-        } else {
-            document.visible(&id, false)?;
-            document.text(&format!("sticky-{number}-text"), String::new())?;
-            let _ = document.visible(&format!("sticky-{number}-drag"), false);
-            for corner in ["nw", "ne", "sw", "se"] {
-                let _ = document.visible(&format!("sticky-{number}-resize-{corner}"), false);
-            }
+            sync_sticky_slot(document, number, note, editing, true)?;
+            state.sticky.shown[slot] = true;
+        } else if state.sticky.shown[slot] {
+            // Cleared exactly once per empty transition; idle flushes skip every write.
+            hide_sticky_slot(document, number)?;
+            state.sticky.shown[slot] = false;
         }
     }
     sync_sticky_move_preview(document, preview)
+}
+
+/// Hides one sticky slot's note, text and its drag/resize handles.
+fn hide_sticky_slot(document: &mut impl UiDocumentAccess, number: usize) -> Result<(), String> {
+    let id = format!("sticky-{number}");
+    document.visible(&id, false)?;
+    document.text_ref(&format!("sticky-{number}-text"), "")?;
+    let _ = document.visible(&format!("sticky-{number}-drag"), false);
+    for corner in ["nw", "ne", "sw", "se"] {
+        let _ = document.visible(&format!("sticky-{number}-resize-{corner}"), false);
+    }
+    Ok(())
 }
 
 fn sync_sticky_slot(
@@ -273,11 +289,10 @@ fn sync_sticky_slot(
         },
     )?;
     let text_id = format!("sticky-{number}-text");
-    let text = match editing {
-        Some(buffer) => projection::caret_text(buffer, true),
-        None => note.text.clone(),
-    };
-    document.text(&text_id, text)?;
+    match editing {
+        Some(buffer) => document.text(&text_id, projection::caret_text(buffer, true))?,
+        None => document.text_ref(&text_id, &note.text)?,
+    }
     document.font_size(&text_id, f32::from(note.text_size))?;
     document.font_weight(&text_id, if note.bold { 700 } else { 400 })?;
     document.foreground(
@@ -326,6 +341,7 @@ fn commit_sticky_edit(sticky: &mut StickyState) {
 pub(crate) fn cancel_edit_and_gesture(sticky: &mut StickyState) {
     commit_sticky_edit(sticky);
     sticky.gesture = None;
+    sticky.pending_pointer = None;
 }
 
 /// Creates a note at `anchor` on the active workspace, respecting the slot cap.
@@ -464,19 +480,71 @@ fn handle_move_action(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let (preview, committed) = apply_move_event(&mut state.sticky, action, state.grid.work_area);
-    if action.phase == UiActionPhase::Release {
-        if committed {
-            sticky_move_counter().increment();
-            flush_now(state);
+    // Motion only stages the pointer; the flush turn previews and repaints once.
+    if action.phase == UiActionPhase::Motion {
+        if state.sticky.gesture.is_some() {
+            state.sticky.pending_pointer = Some((action.x, action.y));
         }
-        return sync_sticky(document, state);
+        return Ok(());
     }
-    if preview.is_some() {
+    state.sticky.pending_pointer = None;
+    let (preview, committed) = apply_move_event(&mut state.sticky, action, state.grid.work_area);
+    if committed {
         sticky_move_counter().increment();
-        return sync_sticky(document, state);
+        flush_now(state);
+    } else if preview.is_some() {
+        sticky_move_counter().increment();
     }
-    Ok(())
+    sync_sticky(document, state)
+}
+
+/// Applies the latest coalesced sticky move or resize pointer once per flush.
+pub(crate) fn apply_pending_gesture(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let work_area = state.grid.work_area;
+    let Some((x, y)) = state.sticky.pending_pointer.take() else {
+        return Ok(());
+    };
+    let outcome = {
+        let Some(gesture) = state.sticky.gesture.as_mut() else {
+            return Ok(());
+        };
+        match gesture.mode {
+            StickyGestureMode::Move => {
+                let before = gesture.preview;
+                let preview = update_move_preview(gesture, x, y, work_area);
+                if preview.is_some() && gesture.preview != before {
+                    Some(None)
+                } else {
+                    None
+                }
+            }
+            StickyGestureMode::Resize(corner) => Some(Some((
+                gesture.note_id.clone(),
+                resize_rect(
+                    gesture.original,
+                    corner,
+                    (x - gesture.start_x) as i32,
+                    (y - gesture.start_y) as i32,
+                    work_area,
+                ),
+            ))),
+        }
+    };
+    match outcome {
+        None => Ok(()),
+        Some(None) => {
+            sticky_move_counter().increment();
+            sync_sticky(document, state)
+        }
+        Some(Some((note_id, rect))) => {
+            state.sticky.store.set_rect(&note_id, rect);
+            sticky_resize_counter().increment();
+            sync_sticky(document, state)
+        }
+    }
 }
 
 fn apply_move_event(
@@ -563,6 +631,7 @@ fn handle_slot(
                     moved: false,
                     preview: None,
                 });
+                state.sticky.pending_pointer = None;
                 sticky_edit_counter().increment();
                 return sync_sticky(document, state);
             }
@@ -590,15 +659,28 @@ fn handle_slot(
             UiActionPhase::Press => {
                 state.sticky.gesture = Some(StickyGesture {
                     note_id,
-                    mode: StickyGestureMode::Resize,
+                    mode: StickyGestureMode::Resize(corner),
                     start_x: action.x,
                     start_y: action.y,
                     original: note.rect,
                     moved: false,
                     preview: None,
                 });
+                state.sticky.pending_pointer = None;
             }
-            UiActionPhase::Motion | UiActionPhase::Release => {
+            UiActionPhase::Motion => {
+                // Coalesced: the flush turn applies the latest pointer once.
+                if state
+                    .sticky
+                    .gesture
+                    .as_ref()
+                    .is_some_and(|gesture| gesture.note_id == note_id)
+                {
+                    state.sticky.pending_pointer = Some((action.x, action.y));
+                }
+            }
+            UiActionPhase::Release => {
+                state.sticky.pending_pointer = None;
                 if let Some(gesture) = state
                     .sticky
                     .gesture
@@ -614,11 +696,9 @@ fn handle_slot(
                     );
                     state.sticky.store.set_rect(&note_id, rect);
                     sticky_resize_counter().increment();
-                    if action.phase == UiActionPhase::Release {
-                        state.sticky.gesture = None;
-                        state.sticky.arm_persist(Instant::now());
-                        flush_now(state);
-                    }
+                    state.sticky.gesture = None;
+                    state.sticky.arm_persist(Instant::now());
+                    flush_now(state);
                     sync_sticky(document, state)?;
                 }
             }

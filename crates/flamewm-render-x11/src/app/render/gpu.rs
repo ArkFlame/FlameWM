@@ -38,11 +38,17 @@ impl X11App {
         let rgba = rgba?;
         let (width, height) = (self.width, self.height);
         // Over the transparent scene the ops already leave premultiplied colour, which is what
-        // the ARGB32 words hold, so the bytes pack as they are.
-        let words: Vec<u32> = rgba
-            .chunks_exact(4)
-            .map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]]))
-            .collect();
+        // the ARGB32 words hold, so the bytes pack as they are. The word buffer is retained for
+        // the next frame, like the RGBA scratch it packs.
+        let mut words = std::mem::take(&mut self.gpu_frame_words);
+        words.clear();
+        if words.capacity() < rgba.len() / 4 {
+            words.reserve_exact(rgba.len() / 4);
+        }
+        words.extend(
+            rgba.chunks_exact(4)
+                .map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])),
+        );
         // SAFETY: the backbuffer and the ARGB visual belong to this app; checked above. A depth-32
         // backbuffer takes the ARGB words; any other depth takes the same premultiplied colour as an
         // opaque image, as XRender would leave it over the cleared scene.
@@ -66,16 +72,28 @@ impl X11App {
                 self.upload_opaque_fallback(self.backbuffer, &rgba, width, height, width, height)
             })
         };
-        uploaded.ok().map(|()| {
-            static LOGGED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                eprintln!(
-                    "FLAMEWM_RENDER_GPU_FRAME whole-frame gpu paint active ({width}x{height})"
-                );
-            }
-            count
-        })
+        let ok = uploaded.is_ok();
+        self.retain_gpu_frame_scratch(rgba, words);
+        if !ok {
+            return None;
+        }
+        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("FLAMEWM_RENDER_GPU_FRAME whole-frame gpu paint active ({width}x{height})");
+        }
+        Some(count)
+    }
+
+    /// Puts the whole-frame scratch taken by [`Self::paint_full_gpu`] back, so the next frame
+    /// reuses its allocations instead of faulting fresh pages. Bounded like the software backend's
+    /// frame scratch: a frame above the cap (a 4K desktop) allocates per paint instead of pinning
+    /// tens of megabytes of a hidden surface.
+    fn retain_gpu_frame_scratch(&mut self, rgba: Vec<u8>, words: Vec<u32>) {
+        const CAP_BYTES: usize = 16 * 1024 * 1024;
+        if rgba.len().max(words.len() * 4) <= CAP_BYTES {
+            self.gpu_frame_rgba = rgba;
+            self.gpu_frame_words = words;
+        }
     }
 
     /// The RGBA8 pixels of one whole frame on the GPU, or `None` when a command keeps the XRender
@@ -109,13 +127,18 @@ impl X11App {
                 return None;
             }
         };
-        // The scene starts transparent, exactly as `clear_scene` leaves it.
-        let mut rgba = vec![0_u8; width as usize * height as usize * 4];
+        // The scene starts transparent, exactly as `clear_scene` leaves it. The RGBA scratch is
+        // retained between frames so a steady-state paint does not fault fresh pages each time.
+        let len = width as usize * height as usize * 4;
+        let mut rgba = std::mem::take(&mut self.gpu_frame_rgba);
+        rgba.clear();
+        rgba.resize(len, 0);
         if crate::accel::try_gpu_batch(&mut rgba, width, height, &ops) {
             flamewm_profiler::CounterPoint::new("render.gpu_frame.lowered").increment();
             Some(rgba)
         } else {
             gpu_frame::count_fallback("gpu-batch");
+            self.gpu_frame_rgba = rgba;
             None
         }
     }

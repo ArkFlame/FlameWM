@@ -33,6 +33,8 @@ enum State {
 pub struct Parser {
     state: State,
     params: Vec<Vec<u16>>,
+    /// Cleared `;` group allocations kept for the next sequence, so SGR-heavy output stops allocating per group.
+    spare: Vec<Vec<u16>>,
     in_number: bool,
     intermediates: Vec<u8>,
     prefix: Option<u8>,
@@ -40,6 +42,9 @@ pub struct Parser {
     utf8: Vec<u8>,
     utf8_need: usize,
 }
+
+/// Bound on kept group allocations; longer sequences still parse, the extras just allocate as before.
+const SPARE_GROUPS: usize = 8;
 
 impl Default for Parser {
     fn default() -> Self {
@@ -53,6 +58,7 @@ impl Parser {
         Self {
             state: State::Ground,
             params: vec![Vec::new()],
+            spare: Vec::new(),
             in_number: false,
             intermediates: Vec::new(),
             prefix: None,
@@ -68,13 +74,22 @@ impl Parser {
         }
     }
 
-    /// Keeps the first group's allocation for the next sequence, so SGR-heavy output does not allocate per sequence.
+    /// Keeps the first group's allocation and the extra `;` groups for the next sequence, so SGR-heavy output
+    /// (`\x1b[1;31;4m`) does not allocate a `Vec` per parameter per sequence.
     fn reset_params(&mut self) {
-        self.params.truncate(1);
-        match self.params.first_mut() {
-            Some(first) => first.clear(),
-            None => self.params.push(Vec::new()),
+        let mut groups = std::mem::take(&mut self.params);
+        if let Some(first) = groups.first_mut() {
+            first.clear();
+        } else {
+            groups.push(Vec::new());
         }
+        for mut extra in groups.drain(1..) {
+            extra.clear();
+            if self.spare.len() < SPARE_GROUPS {
+                self.spare.push(extra);
+            }
+        }
+        self.params = groups;
     }
 
     fn clear_csi(&mut self) {
@@ -94,13 +109,14 @@ impl Parser {
     }
 
     fn digit(&mut self, value: u8) {
+        let Some(group) = self.params.last_mut() else {
+            return;
+        };
         if !self.in_number {
-            if let Some(group) = self.params.last_mut() {
-                group.push(0);
-            }
+            group.push(0);
             self.in_number = true;
         }
-        if let Some(last) = self.params.last_mut().and_then(|group| group.last_mut()) {
+        if let Some(last) = group.last_mut() {
             *last = last.saturating_mul(10).saturating_add(u16::from(value));
         }
     }
@@ -292,7 +308,9 @@ impl Parser {
     fn separator(&mut self, byte: u8) {
         self.finish_value();
         if byte == b';' {
-            self.params.push(Vec::new());
+            // Reuse a cleared group allocation from an earlier sequence when one is pooled.
+            let group = self.spare.pop().unwrap_or_default();
+            self.params.push(group);
         }
     }
 

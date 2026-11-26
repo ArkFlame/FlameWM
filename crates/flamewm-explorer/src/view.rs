@@ -49,21 +49,6 @@ impl ColumnSort {
     }
 }
 
-/// Human type label used by the Type column and the Properties dialog.
-#[must_use]
-pub fn type_label(entry: &Entry) -> String {
-    if entry.symlink {
-        return "Link".into();
-    }
-    if entry.directory {
-        return "Folder".into();
-    }
-    match entry.path.extension().and_then(|e| e.to_str()) {
-        Some(ext) => format!("{} file", ext.to_ascii_lowercase()),
-        None => "File".into(),
-    }
-}
-
 /// Folders always group first; the chosen column orders the rest; name breaks ties.
 pub fn sort_entries(entries: &mut [Entry], sort: ColumnSort) {
     entries.sort_by(|a, b| column_order(a, b, sort));
@@ -84,7 +69,9 @@ fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
             Column::Name => a.lower_name.cmp(&b.lower_name),
             Column::Size => a.size.cmp(&b.size),
             Column::Modified => a.modified.cmp(&b.modified),
-            Column::Type => type_label(a).cmp(&type_label(b)),
+            // Comparing the label values instead of the formatted labels: "Type" used to format two
+            // Strings per comparison (and two per adjacent pair in `is_sorted_by`).
+            Column::Type => type_order(a).cmp(&type_order(b)),
         };
         if sort.descending {
             order.reverse()
@@ -93,6 +80,64 @@ fn column_order(a: &Entry, b: &Entry, sort: ColumnSort) -> std::cmp::Ordering {
         }
         .then_with(|| a.name.cmp(&b.name))
     })
+}
+
+/// Comparable form of [`type_label`] that borrows the extension instead of formatting a String.
+#[derive(PartialEq, Eq)]
+enum TypeOrder<'a> {
+    /// No extension: labelled "File".
+    Plain,
+    Folder,
+    Link,
+    Extension(&'a str),
+}
+
+impl TypeOrder<'_> {
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Plain => 0,
+            Self::Folder => 1,
+            Self::Link => 2,
+            Self::Extension(_) => 3,
+        }
+    }
+}
+
+impl Ord for TypeOrder<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Self::Extension(a), Self::Extension(b)) => cmp_ignore_ascii_case(a, b),
+            // The rank order matches the byte order of the labels: "File" < "Folder" < "Link" < "<ext> file".
+            _ => self.rank().cmp(&other.rank()),
+        }
+    }
+}
+
+impl PartialOrd for TypeOrder<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// The value `type_label` compares: kind for links and folders, the ASCII-lowercased extension otherwise.
+fn type_order(entry: &Entry) -> TypeOrder<'_> {
+    if entry.symlink {
+        return TypeOrder::Link;
+    }
+    if entry.directory {
+        return TypeOrder::Folder;
+    }
+    match entry.path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => TypeOrder::Extension(ext),
+        None => TypeOrder::Plain,
+    }
+}
+
+/// Orders two strings as their `to_ascii_lowercase` forms would, without allocating either copy.
+fn cmp_ignore_ascii_case(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(|byte| byte.to_ascii_lowercase())
+        .cmp(b.bytes().map(|byte| byte.to_ascii_lowercase()))
 }
 
 /// Index of the first name, starting at `from` and wrapping, whose lowercase form starts with `prefix`.
@@ -333,10 +378,23 @@ mod tests {
     }
 
     #[test]
-    fn type_label_uses_extension_and_kind() {
-        assert_eq!(type_label(&entry("x", true, 0, 0)), "Folder");
-        assert_eq!(type_label(&entry("Photo.JPG", false, 0, 0)), "jpg file");
-        assert_eq!(type_label(&entry("README", false, 0, 0)), "File");
+    fn type_column_orders_by_kind_then_extension() {
+        let mut entries = vec![
+            entry("Photo.JPG", false, 0, 0),
+            entry("README", false, 0, 0),
+            entry("zdir", true, 0, 0),
+            entry("a.txt", false, 0, 0),
+        ];
+        sort_entries(
+            &mut entries,
+            ColumnSort {
+                column: Column::Type,
+                descending: false,
+            },
+        );
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        // Folders first, then "File" (no extension), then the lowercased extension labels in order.
+        assert_eq!(names, ["zdir", "README", "Photo.JPG", "a.txt"]);
     }
 
     #[test]

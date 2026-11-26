@@ -3,6 +3,11 @@ use super::*;
 /// Coalesce queued commands: consecutive OPENs collapse to the newest;
 /// CLOSE/SHUTDOWN are best-effort singletons and never duplicate work.
 pub(crate) fn coalesce_commands(queue: &mut VecDeque<Command>) -> VecDeque<Command> {
+    // Nothing can collapse with zero or one command: keep the queue's buffer instead of
+    // rebuilding (and reallocating) it on every idle helper turn.
+    if queue.len() <= 1 {
+        return core::mem::take(queue);
+    }
     let mut out: VecDeque<Command> = VecDeque::new();
     for cmd in queue.drain(..) {
         if matches!(&cmd, Command::Open(req) if req.scope.is_none()) {

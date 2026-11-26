@@ -3,7 +3,7 @@
 //! is unit tested and drives the screen.
 use std::sync::Arc;
 
-use crate::glyphs::{Arm, blend, glyph_rects};
+use crate::glyphs::{Arm, Rects, blend, glyph_rects};
 use crate::screen::{Cell, Color, CursorShape, Dirty, Screen, attr};
 use crate::themes::Palette;
 
@@ -144,6 +144,7 @@ fn row_runs(
     };
     let (cursor_row, cursor_col) = screen.cursor();
     let show_cursor = cursor_drawn(screen, options);
+    let block = options.cursor_shape == CursorShape::Block;
     let mut runs: Vec<Run> = Vec::new();
     let mut col = 0;
     while col < line.len() {
@@ -157,7 +158,6 @@ fn row_runs(
             .selection
             .is_some_and(|span| span.contains(index, col));
         let cursor = show_cursor && row == cursor_row && col == cursor_col;
-        let block = options.cursor_shape == CursorShape::Block;
         let (mut fg, bg) = cell_colours(cell, palette, selected, cursor && block);
         let mut ch = cell.ch;
         if cursor && !block {
@@ -170,36 +170,35 @@ fn row_runs(
         }
         let bold = cell.attrs & attr::BOLD != 0;
         let bg_drawn = bg_visible(bg, palette);
-        match glyph_rects(ch, fg, bg) {
-            Some(rects) => {
-                if bg_drawn.is_some() {
-                    push_text(
-                        &mut runs,
-                        Text {
-                            col,
-                            cells: width,
-                            ch: ' ',
-                            fg,
-                            bg: bg_drawn,
-                            bold,
-                        },
-                    );
-                }
-                if !extend_bands(&mut runs, col, &rects) {
-                    for (arm, colour) in rects {
-                        runs.push(Run {
-                            col,
-                            cells: width,
-                            text: "\u{a0}".into(),
-                            fg: colour,
-                            bg: Some(colour),
-                            bold,
-                            shape: Some(arm),
-                        });
-                    }
+        if let Some(rects) = glyph_rects(ch, fg, bg) {
+            if bg_drawn.is_some() {
+                push_text(
+                    &mut runs,
+                    Text {
+                        col,
+                        cells: width,
+                        ch: ' ',
+                        fg,
+                        bg: bg_drawn,
+                        bold,
+                    },
+                );
+            }
+            if !extend_bands(&mut runs, col, &rects) {
+                for &(arm, colour) in rects.as_slice() {
+                    runs.push(Run {
+                        col,
+                        cells: width,
+                        text: "\u{a0}".into(),
+                        fg: colour,
+                        bg: Some(colour),
+                        bold,
+                        shape: Some(arm),
+                    });
                 }
             }
-            None => push_text(
+        } else {
+            push_text(
                 &mut runs,
                 Text {
                     col,
@@ -209,7 +208,7 @@ fn row_runs(
                     bg: bg_drawn,
                     bold,
                 },
-            ),
+            );
         }
         col += width;
     }
@@ -224,6 +223,8 @@ pub struct RunCache {
     cursor: Option<(usize, usize)>,
     selection: Option<Span>,
     rows: Vec<Row>,
+    /// Per-frame row scratch, kept so an update allocates no state bitmap.
+    stale: Vec<bool>,
     /// Rows rebuilt by the last `update`.
     pub rebuilt: usize,
 }
@@ -244,7 +245,10 @@ impl RunCache {
         let key_matches = self.key.as_ref().is_some_and(|(kept, offset, shape)| {
             kept == palette && *offset == options.view_offset && *shape == options.cursor_shape
         });
-        let mut stale = vec![false; rows];
+        // Reuse the scratch rows across frames: an update marks rows, it does not allocate the bitmap.
+        let mut stale = std::mem::take(&mut self.stale);
+        stale.clear();
+        stale.resize(rows, false);
         if !key_matches || self.rows.len() != rows || dirty == Dirty::All {
             stale.fill(true);
         } else {
@@ -281,6 +285,7 @@ impl RunCache {
         for row in (0..rows).filter(|&row| stale[row]) {
             self.rows[row] = Row::from(row_runs(screen, palette, options, top, row));
         }
+        self.stale = stale;
         self.cursor = cursor;
         self.selection = options.selection;
         &self.rows
@@ -315,12 +320,12 @@ fn push_text(runs: &mut Vec<Run>, cell: Text) {
             && last.bold == cell.bold
             && last.col + last.cells == cell.col
     });
-    if mergeable {
-        let last = runs.last_mut().expect("checked above");
-        last.text.push(cell.ch);
-        last.cells += cell.cells;
-    } else {
-        runs.push(Run {
+    match runs.last_mut() {
+        Some(last) if mergeable => {
+            last.text.push(cell.ch);
+            last.cells += cell.cells;
+        }
+        _ => runs.push(Run {
             col: cell.col,
             cells: cell.cells,
             text: cell.ch.to_string(),
@@ -328,27 +333,30 @@ fn push_text(runs: &mut Vec<Run>, cell: Text) {
             bg: cell.bg,
             bold: cell.bold,
             shape: None,
-        });
+        }),
     }
 }
 
 /// Grows the trailing band runs to cover one more cell when `rects` are full-width bands of the same colours. Returns
 /// false when they do not line up, so the caller starts new runs.
-fn extend_bands(runs: &mut [Run], col: usize, rects: &[(Arm, u32)]) -> bool {
+fn extend_bands(runs: &mut [Run], col: usize, rects: &Rects) -> bool {
     let n = rects.len();
     if n == 0 || runs.len() < n {
         return false;
     }
     let start = runs.len() - n;
     let tail = &mut runs[start..];
-    let fits = tail.iter().zip(rects).all(|(run, (arm, colour))| {
-        let full = |a: &Arm, cells: f32| a.x0 == 0.0 && a.x1 == cells;
-        run.shape.is_some_and(|shape| {
-            full(&shape, run.cells as f32) && shape.y0 == arm.y0 && shape.y1 == arm.y1
-        }) && run.fg == *colour
-            && run.col + run.cells == col
-            && full(arm, 1.0)
-    });
+    let fits = tail
+        .iter()
+        .zip(rects.as_slice())
+        .all(|(run, (arm, colour))| {
+            let full = |a: &Arm, cells: f32| a.x0 == 0.0 && a.x1 == cells;
+            run.shape.is_some_and(|shape| {
+                full(&shape, run.cells as f32) && shape.y0 == arm.y0 && shape.y1 == arm.y1
+            }) && run.fg == *colour
+                && run.col + run.cells == col
+                && full(arm, 1.0)
+        });
     if fits {
         for run in tail {
             run.cells += 1;

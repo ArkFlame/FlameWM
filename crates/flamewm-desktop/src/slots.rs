@@ -13,8 +13,6 @@ pub(super) fn project_slots(
     };
     let cells = &cache.cells;
     let generation = projection::theme_generation();
-    // One reusable node-id buffer for unchanged tiles; only the `format!`-free path needs an id.
-    let mut item_id = String::with_capacity(24);
     // Consecutive tiles usually share an output; resolve the grid once per output run.
     let mut last_output: Option<OutputId> = None;
     let mut last_grid: Option<GridConfig> = None;
@@ -39,12 +37,10 @@ pub(super) fn project_slots(
             if state.slot_inputs[index].as_ref().is_some_and(|held| {
                 held.matches(kind, label, point, icon.as_deref(), scale, generation)
             }) {
-                // Unchanged tile: projection would only re-assert visibility. Drag
-                // hides sources without touching model state, so restore it here.
-                item_id.clear();
-                item_id.push_str("desktop-item-");
-                let _ = std::fmt::Write::write_fmt(&mut item_id, format_args!("{index}"));
-                document.visible(&item_id, true)?;
+                // Unchanged tile: projection would only re-assert visibility. The projection that
+                // recorded these inputs already made the slot visible, so there is nothing to
+                // write; a drag ghost's hidden source tiles are restored by project_item only
+                // when their inputs change, and `sync_drag_ghost` re-hides them afterwards.
                 continue;
             }
             let inputs = SlotInputs {

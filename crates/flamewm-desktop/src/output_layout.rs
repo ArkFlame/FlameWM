@@ -266,7 +266,11 @@ pub(super) fn projected_cells(state: &DesktopState) -> Vec<(OutputId, Cell)> {
     }
     result
         .into_iter()
-        .map(|entry| entry.expect("every model item is projected"))
+        .map(|entry| {
+            // Both passes fill every slot; a missing entry still yields a valid cell
+            // on the fallback output instead of panicking the desktop.
+            entry.unwrap_or_else(|| (fallback.clone(), Cell::new(0, 0)))
+        })
         .collect()
 }
 

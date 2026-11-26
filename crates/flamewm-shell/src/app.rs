@@ -143,6 +143,10 @@ pub(crate) struct ShellLoop {
     pub(crate) dock_menu_slot: Option<usize>,
     pub(crate) dock_menu_items: Vec<flamewm_shell_core::dock::DockMenuAction>,
     pub(crate) settings_projection_pending: bool,
+    /// A real settings snapshot changed the accent/theme the task slots render with, so the
+    /// next settings projection must reproject every slot. A domain-only refresh reuses the
+    /// slots it just projected and only needs the style pass.
+    pub(crate) settings_full_reprojection: bool,
     pub(crate) icon_loader: Option<IconLoader>,
     pub(crate) task_icon_cache: async_projection::TaskIconCache,
     pub(crate) loader_root: std::path::PathBuf,
@@ -212,10 +216,13 @@ impl ShellLoop {
         dispatcher: Option<std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
         loader_root: std::path::PathBuf,
         quick_program: String,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        // A missing wake pipe is a startup failure, not a panic: report it to the caller.
+        let result_wake = flamewm_shell::weather_host::ResultWake::new()
+            .map_err(|error| format!("create result wake pair: {error}"))?;
         let quick_control =
             flamewm_shell::quick_controls::QuickControlSupervisor::new(quick_program);
-        Self {
+        Ok(Self {
             shell,
             surfaces,
             start_model,
@@ -266,6 +273,7 @@ impl ShellLoop {
             dock_menu_slot: None,
             dock_menu_items: Vec::new(),
             settings_projection_pending: false,
+            settings_full_reprojection: false,
             icon_loader: None,
             task_icon_cache: Default::default(),
             loader_root,
@@ -290,14 +298,14 @@ impl ShellLoop {
             usage_focus: None,
             media_focus: None,
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
-            result_wake: flamewm_shell::weather_host::ResultWake::new().expect("result wake pair"),
+            result_wake,
             wake: None,
             auto_time_zone_applied: None,
             time_zone_changed: false,
             zone_settle_at: None,
             start_icons_stale: false,
             pointer_position: None,
-        }
+        })
     }
 }
 

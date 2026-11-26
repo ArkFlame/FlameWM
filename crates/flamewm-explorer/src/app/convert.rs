@@ -4,6 +4,39 @@ use flamewm_conversion_core::conversion::{convert_file, offered_formats};
 /// Picker rows shown at once (one column); formats beyond this are not offered from Explorer.
 pub(crate) const CONVERT_SLOTS: usize = 8;
 
+/// `offered_formats` scans `PATH` (a stat per directory) and probes the local codecs, and the picker is
+/// re-projected while it is open: the offer and its uppercased labels are built once per source file.
+struct PickerCache { path: PathBuf, labels: Rc<Vec<String>> }
+thread_local! {
+    static PICKER_CACHE: RefCell<Option<PickerCache>> = const { RefCell::new(None) };
+    static CONVERT_IDS: RefCell<Option<Rc<Vec<String>>>> = const { RefCell::new(None) };
+}
+fn picker_labels(path: &Path) -> Rc<Vec<String>> {
+    PICKER_CACHE.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if let Some(cached) = cell.as_ref()
+            && cached.path.as_path() == path
+        {
+            return Rc::clone(&cached.labels);
+        }
+        let labels = Rc::new(
+            offered_formats(path)
+                .iter()
+                .map(|format| format.to_ascii_uppercase())
+                .collect::<Vec<_>>(),
+        );
+        *cell = Some(PickerCache { path: path.to_path_buf(), labels: Rc::clone(&labels) });
+        labels
+    })
+}
+fn convert_ids() -> Rc<Vec<String>> {
+    CONVERT_IDS.with(|cell| {
+        Rc::clone(cell.borrow_mut().get_or_insert_with(|| {
+            Rc::new((0..CONVERT_SLOTS).map(|slot| format!("convert-choice-{slot}")).collect::<Vec<String>>())
+        }))
+    })
+}
+
 impl ExplorerApp {
     /// Opens the "Convert to" picker for `path`, or reports why the file cannot be converted.
     pub(crate) fn open_convert_picker(&mut self, path: PathBuf) {
@@ -70,16 +103,12 @@ impl ExplorerApp {
 
     /// Projects the picker: one labelled button per offered format, centred in the window.
     pub(crate) fn project_convert_picker(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let formats = self
-            .convert_picker
-            .as_deref()
-            .map(offered_formats)
-            .unwrap_or_default();
-        doc.visible("convert-dialog", self.convert_picker.is_some())?;
-        if self.convert_picker.is_none() {
+        let labels = self.convert_picker.as_deref().map(picker_labels);
+        doc.visible("convert-dialog", labels.is_some())?;
+        let Some(labels) = labels else {
             return Ok(());
-        }
-        let rows = formats.len().min(CONVERT_SLOTS) as f32;
+        };
+        let rows = labels.len().min(CONVERT_SLOTS) as f32;
         let (width, height) = (300.0, 77.0 + rows * 35.0 + 85.0 + 16.0);
         doc.size("convert-dialog", width, height)?;
         doc.position(
@@ -87,14 +116,14 @@ impl ExplorerApp {
             ((self.window.0 - width) / 2.0).max(0.0),
             ((self.window.1 - height) / 2.0).max(0.0),
         )?;
-        for slot in 0..CONVERT_SLOTS {
-            let id = format!("convert-choice-{slot}");
-            match formats.get(slot) {
-                Some(format) => {
-                    doc.visible(&id, true)?;
-                    doc.text(&id, format.to_ascii_uppercase())?;
+        let ids = convert_ids();
+        for (slot, id) in ids.iter().enumerate() {
+            match labels.get(slot) {
+                Some(label) => {
+                    doc.visible(id, true)?;
+                    doc.text_ref(id, label)?;
                 }
-                None => doc.visible(&id, false)?,
+                None => doc.visible(id, false)?,
             }
         }
         Ok(())

@@ -237,6 +237,10 @@ pub(crate) struct X11App {
     pub(crate) cached_paint: Option<CachedPaint>,
     /// Per-node paint memo behind `cached_paint`; re-emits only nodes whose inputs changed.
     pub(crate) paint_nodes: scroll::PaintNodeCache,
+    /// Retained whole-frame scratch of the GPU paint path: the RGBA8 scene and the ARGB32 words
+    /// packed from it. Reused between frames so a steady surface does not fault fresh pages.
+    pub(crate) gpu_frame_rgba: Vec<u8>,
+    pub(crate) gpu_frame_words: Vec<u32>,
     pub(crate) cached_layout_key: Option<LayoutKey>,
     /// Hash of the bounding-shape spans last applied to `window` (None = unknown/clipped).
     pub(crate) shape_applied: std::cell::Cell<Option<u64>>,
@@ -704,6 +708,8 @@ impl X11App {
             layout: None,
             cached_paint: None,
             paint_nodes: Default::default(),
+            gpu_frame_rgba: Vec::new(),
+            gpu_frame_words: Vec::new(),
             cached_layout_key: None,
             shape_applied: std::cell::Cell::new(None),
             static_shape_applied: std::cell::Cell::new(None),

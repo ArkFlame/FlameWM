@@ -1,7 +1,7 @@
 use flamewm_api::system::MAX_VOLUME_PERCENT;
 use flamewm_api::system::{
-    AudioEndpointKind, AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction,
-    ServiceAvailability, SystemAction, SystemSnapshot,
+    AudioEndpointKind, AudioEndpointSnapshot, AudioMuteAction, AudioSnapshot, AudioTarget,
+    AudioVolumeAction, ServiceAvailability, SystemAction, SystemSnapshot,
 };
 use flamewm_control_core::ControlRequest;
 use flamewm_shell_core::{AudioPopoverModel, AudioView};
@@ -226,11 +226,27 @@ pub fn default_source_row(snapshot: &AudioSnapshot) -> Option<RowSource> {
 }
 
 fn default_row_of_kind(snapshot: &AudioSnapshot, kind: AudioEndpointKind) -> Option<RowSource> {
+    default_endpoint_of_kind(snapshot, kind).map(RowSource::from_endpoint)
+}
+
+/// The default endpoint of `kind` as the raw model reading, without building the row's
+/// owned id/label strings. Per-turn readers (the volume OSD) use this.
+fn default_endpoint_of_kind(
+    snapshot: &AudioSnapshot,
+    kind: AudioEndpointKind,
+) -> Option<&AudioEndpointSnapshot> {
     snapshot
         .endpoints()
         .iter()
         .find(|endpoint| endpoint.is_default && endpoint.kind == kind)
-        .map(RowSource::from_endpoint)
+}
+
+/// Live `(volume_percent, muted)` of the default output sink, allocation-free: the volume OSD
+/// reads it on every shell turn and only needs those two fields.
+#[must_use]
+pub fn default_sink_level(snapshot: &AudioSnapshot) -> Option<(u8, bool)> {
+    default_endpoint_of_kind(snapshot, AudioEndpointKind::Sink)
+        .map(|endpoint| (endpoint.volume_percent, endpoint.muted))
 }
 
 /// Resolve a stable endpoint/stream row id into one revision-fenced action.

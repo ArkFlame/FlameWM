@@ -45,12 +45,10 @@ impl X11App {
         }
         // Borrow retained commands by index: build fresh only when cache
         // invalid; single coverage/shape per frame; no clone path.
-        let count = self
-            .cached_paint
-            .as_ref()
-            .expect("paint cached above")
-            .commands
-            .len();
+        let Some(cached) = self.cached_paint.as_ref() else {
+            return Err("paint_full has no cached paint".to_owned());
+        };
+        let count = cached.commands.len();
         {
             let _draw_guard = flamewm_profiler::start("render.draw");
             unsafe { self.prefetch_text_shadow_masks(count, document, scale) };

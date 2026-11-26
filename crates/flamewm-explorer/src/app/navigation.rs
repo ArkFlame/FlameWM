@@ -112,7 +112,7 @@ impl ExplorerApp {
         let names=tab.visible().map(|e|e.name.as_str()).collect::<Vec<_>>();
         let from=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
         if let Some(index)=view::typeahead_match(&names,&self.typed,from) {
-            let path=tab.visible_nth(index).expect("index from typeahead").path.clone();
+            let Some(path)=tab.visible_nth(index).map(|entry|entry.path.clone()) else {return;};
             let rows=self.visible_rows();
             let tab=self.model.tab_mut();
             tab.select_one(path);

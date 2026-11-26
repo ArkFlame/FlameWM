@@ -5,6 +5,7 @@ mod model;
 mod sample_gate;
 
 use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -166,6 +167,22 @@ impl Application {
         self.graphs_dirty = true;
         self.metrics_dirty = true;
     }
+    /// One process matches the search box: name, command or PID contains the query.
+    fn matches(&self, process: &model::Process, query: &str) -> bool {
+        query.is_empty()
+            || process.name.to_lowercase().contains(query)
+            || process.command.to_lowercase().contains(query)
+            || process.pid.to_string().contains(query)
+    }
+    /// Matching processes without ordering: lets scrolling find its bound without a full sort.
+    fn matching_count(&self) -> usize {
+        let query = self.query.to_lowercase();
+        self.snapshot
+            .processes
+            .iter()
+            .filter(|process| self.matches(process, &query))
+            .count()
+    }
     fn sorted(&self) -> Vec<usize> {
         let query = self.query.to_lowercase();
         let mut hits: Vec<usize> = self
@@ -173,12 +190,7 @@ impl Application {
             .processes
             .iter()
             .enumerate()
-            .filter(|(_, process)| {
-                query.is_empty()
-                    || process.name.to_lowercase().contains(&query)
-                    || process.command.to_lowercase().contains(&query)
-                    || process.pid.to_string().contains(&query)
-            })
+            .filter(|(_, process)| self.matches(process, &query))
             .map(|(index, _)| index)
             .collect();
         // Name keys are lowercased once per process per sort, not twice per comparison.
@@ -428,44 +440,75 @@ impl Application {
         }
         self.rows.clear();
         let total = self.snapshot.mem_total.max(1);
+        // One id and one value buffer for the whole table: a visible row costs no `String`
+        // allocation per cell, and `text_ref` skips unchanged cells inside the document.
+        let mut id = String::with_capacity(32);
+        let mut value = String::with_capacity(96);
         for slot in 0..ROWS {
+            id.clear();
+            let _ = write!(id, "row-{slot}");
             let visible = slot < self.viewport && self.first + slot < hits.len();
-            doc.visible(&format!("row-{slot}"), visible)?;
+            doc.visible(&id, visible)?;
             if !visible {
                 continue;
             }
             let p = &self.snapshot.processes[hits[self.first + slot]];
             self.rows.push((p.pid, p.start));
-            let id = |name: &str| format!("r-{slot}-{name}");
             let indent = INDENTS[p.depth.min(8) as usize];
-            doc.text(&id("name"), format!("{indent}{}", display_name(p)))?;
-            doc.background(&id("dot"), UiColor::from_rgb(state_color(p.state), 255))?;
-            doc.text(&id("pid"), p.pid.to_string())?;
-            doc.text_ref(&id("user"), &p.user)?;
-            doc.text_ref(&id("state"), state_name(p.state))?;
-            doc.text(&id("threads"), p.threads.to_string())?;
-            doc.text(&id("pri"), p.priority.to_string())?;
-            doc.text(&id("nice"), p.nice.to_string())?;
-            doc.text(&id("virt"), memory_text(p.virt_kib))?;
-            doc.text(&id("cpu"), format!("{:.1}%", p.cpu))?;
-            doc.text(&id("mem"), memory_text(p.rss_kib))?;
-            doc.text_ref(&id("cmd"), &p.command)?;
+            cell_id(&mut id, slot, "name");
+            value.clear();
+            let _ = write!(value, "{indent}{}", display_name(p));
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "dot");
+            doc.background(&id, UiColor::from_rgb(state_color(p.state), 255))?;
+            cell_id(&mut id, slot, "pid");
+            value.clear();
+            let _ = write!(value, "{}", p.pid);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "user");
+            doc.text_ref(&id, &p.user)?;
+            cell_id(&mut id, slot, "state");
+            doc.text_ref(&id, state_name(p.state))?;
+            cell_id(&mut id, slot, "threads");
+            value.clear();
+            let _ = write!(value, "{}", p.threads);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "pri");
+            value.clear();
+            let _ = write!(value, "{}", p.priority);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "nice");
+            value.clear();
+            let _ = write!(value, "{}", p.nice);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "virt");
+            memory_text_into(&mut value, p.virt_kib);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "cpu");
+            value.clear();
+            let _ = write!(value, "{:.1}%", p.cpu);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "mem");
+            memory_text_into(&mut value, p.rss_kib);
+            doc.text_ref(&id, &value)?;
+            cell_id(&mut id, slot, "cmd");
+            doc.text_ref(&id, &p.command)?;
             let memory_share = 100.0 * p.rss_kib as f64 / total as f64;
+            cell_id(&mut id, slot, "cpu");
+            doc.background(&id, UiColor::from_rgb(HEAT_RGB, heat_alpha(p.cpu / 50.0)))?;
+            cell_id(&mut id, slot, "mem");
             doc.background(
-                &id("cpu"),
-                UiColor::from_rgb(HEAT_RGB, heat_alpha(p.cpu / 50.0)),
-            )?;
-            doc.background(
-                &id("mem"),
+                &id,
                 UiColor::from_rgb(HEAT_RGB, heat_alpha(memory_share / 10.0)),
             )?;
-            let row = format!("row-{slot}");
+            id.clear();
+            let _ = write!(id, "row-{slot}");
             if self.selected == Some((p.pid, p.start)) {
-                doc.background(&row, UiColor::from_rgb(accent, 60))?;
+                doc.background(&id, UiColor::from_rgb(accent, 60))?;
             } else if self.hovered == Some(slot) {
-                doc.background(&row, UiColor::from_rgb(accent, 32))?;
+                doc.background(&id, UiColor::from_rgb(accent, 32))?;
             } else {
-                doc.background_clear(&row)?;
+                doc.background_clear(&id)?;
             }
         }
         Ok(())
@@ -473,6 +516,10 @@ impl Application {
     fn paint_menus(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         doc.visible("context", self.context)?;
         doc.visible("confirm", self.confirm)?;
+        // No menu open: skip the title/label formatting and the selected-process scan entirely.
+        if !self.context && !self.confirm {
+            return Ok(());
+        }
         if let Some(process) = self.selected_process() {
             doc.text(
                 "context-title",
@@ -528,7 +575,7 @@ impl Application {
                 .and_then(|(_, dy)| dy.parse::<f32>().ok())
                 .unwrap_or(0.0);
             if dy != 0.0 && event.y >= LIST_TOP as f32 {
-                let max = self.sorted().len().saturating_sub(self.viewport);
+                let max = self.matching_count().saturating_sub(self.viewport);
                 if dy > 0.0 {
                     self.first = (self.first + 3).min(max);
                 } else {
@@ -717,24 +764,31 @@ impl Application {
     }
 }
 /// The kernel cuts `comm` to 15 bytes; the executable name from the command line is the full one.
-fn display_name(process: &model::Process) -> String {
+fn display_name(process: &model::Process) -> &str {
     const COMM_LIMIT: usize = 15;
     if process.name.len() < COMM_LIMIT {
-        return process.name.clone();
+        return process.name.as_str();
     }
     process
         .command
         .split_whitespace()
         .next()
         .and_then(|program| program.rsplit('/').next())
-        .filter(|program| program.starts_with(&process.name))
-        .map_or_else(|| process.name.clone(), str::to_owned)
+        .filter(|program| program.starts_with(process.name.as_str()))
+        .unwrap_or(process.name.as_str())
 }
-fn memory_text(kib: u64) -> String {
+/// Writes one row-cell element id into the reused buffer: no `format!` per cell per paint.
+fn cell_id(id: &mut String, slot: usize, cell: &str) {
+    id.clear();
+    let _ = write!(id, "r-{slot}-{cell}");
+}
+/// Formats a memory size into the reused buffer; `text_ref` then skips unchanged cells.
+fn memory_text_into(out: &mut String, kib: u64) {
+    out.clear();
     if kib >= 1024 * 1024 {
-        format!("{:.2} GB", kib as f64 / 1_048_576.0)
+        let _ = write!(out, "{:.2} GB", kib as f64 / 1_048_576.0);
     } else {
-        format!("{:.1} MB", kib as f64 / 1024.0)
+        let _ = write!(out, "{:.1} MB", kib as f64 / 1024.0);
     }
 }
 fn rate(bytes_per_second: f64) -> String {
@@ -1079,8 +1133,13 @@ mod tests {
         assert_eq!(rate(512.0), "512 B/s");
         assert_eq!(rate(2048.0), "2.0 KiB/s");
         assert_eq!(rate(3.0 * 1_048_576.0), "3.0 MiB/s");
-        assert_eq!(memory_text(2048), "2.0 MB");
-        assert_eq!(memory_text(3 * 1024 * 1024), "3.00 GB");
+        let memory = |kib| {
+            let mut text = String::new();
+            memory_text_into(&mut text, kib);
+            text
+        };
+        assert_eq!(memory(2048), "2.0 MB");
+        assert_eq!(memory(3 * 1024 * 1024), "3.00 GB");
     }
     #[test]
     fn default_rows_fit_without_clipping_and_resize_is_bounded() {

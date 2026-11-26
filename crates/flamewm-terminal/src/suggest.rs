@@ -313,7 +313,7 @@ fn compact_lines(text: &str) -> String {
         if uses == 0 || !admissible(&command) {
             continue;
         }
-        if let Some(entry) = totals.get_mut(command.as_ref()) {
+        if let Some(entry) = totals.get_mut(&*command) {
             entry.0 += uses;
             entry.1 = index;
         } else {
@@ -658,8 +658,8 @@ fn printable(text: &str) -> bool {
 
 impl LineInput {
     #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
+    pub fn text(&self) -> String {
+        self.text.clone()
     }
 
     /// True when a suggestion may be drawn: the line is exact and the cursor sits at its end.

@@ -35,9 +35,14 @@ pub fn blurred_argb_words(
 }
 
 pub(super) fn opaque_argb_words(rgba: &[u8]) -> Vec<u32> {
-    rgba.chunks_exact(4)
-        .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
-        .collect()
+    // Pre-sized: this runs once per blurred backdrop per frame over a whole window-sized image.
+    let mut words = Vec::with_capacity(rgba.len() / 4);
+    for p in rgba.chunks_exact(4) {
+        words.push(
+            0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]),
+        );
+    }
+    words
 }
 
 /// Gaussian blur through the shared scratch buffers. A failure keeps the input pixels.
@@ -119,21 +124,29 @@ pub(super) fn bilinear_argb_words(
         bilinear_taps(small_h, height),
     );
     let stride = small_w as usize * 4;
+    let line_len = width as usize * 3;
     // Each small row's horizontal blend is shared by every output row that taps it, so it is
-    // computed once per small row. The integers match `bilinear_word` exactly.
-    let mut lines: Vec<Option<Vec<u32>>> = vec![None; small_h as usize];
+    // computed once per small row. Neighbouring taps differ by at most one row, so two retained
+    // line buffers, keyed by their source row, replace the one allocation per small row the old
+    // table held. The integers match `bilinear_word` exactly.
+    let mut lines: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
+    let mut line_rows: [Option<u32>; 2] = [None, None];
     let mut words = Vec::with_capacity((width * height) as usize);
     for &(r0, r1, wy) in &rows {
-        for r in [r0, r1] {
-            if lines[r].is_none() {
-                let mut line = vec![0u32; width as usize * 3];
-                horizontal_line(&small[r * stride..(r + 1) * stride], &cols, &mut line);
-                lines[r] = Some(line);
+        for row in [r0, r1] {
+            let row = row as u32;
+            let slot = (row & 1) as usize;
+            if line_rows[slot] != Some(row) {
+                let line = &mut lines[slot];
+                // `horizontal_line` writes every element, so only a size change fills anything.
+                line.resize(line_len, 0);
+                let start = row as usize * stride;
+                horizontal_line(&small[start..start + stride], &cols, line);
+                line_rows[slot] = Some(row);
             }
         }
-        let (Some(top), Some(bottom)) = (&lines[r0], &lines[r1]) else {
-            unreachable!("both tapped rows were filled above");
-        };
+        let top = &lines[(r0 & 1) as usize];
+        let bottom = &lines[(r1 & 1) as usize];
         words.extend(
             top.chunks_exact(3)
                 .zip(bottom.chunks_exact(3))

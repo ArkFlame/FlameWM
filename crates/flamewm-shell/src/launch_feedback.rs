@@ -61,6 +61,9 @@ pub struct LaunchFeedback {
     /// Last `(x, y, side)` sent to `move_resize`; unchanged placement sends no request.
     placed: Option<(i32, i32, u32)>,
     scale_applied: Option<u32>,
+    /// `(side, spans)` of the pending-dot `XShape`; a relaunch at the same size reuses it
+    /// instead of re-sampling every pixel of the dot silhouette.
+    dot_mask: Option<(u32, Vec<(u32, u32, u32)>)>,
 }
 
 /// Pure cadence rule: fast while the pointer moved within [`MOTION_WINDOW`], slow once still.
@@ -93,6 +96,7 @@ impl LaunchFeedback {
             concealed: false,
             placed: None,
             scale_applied: None,
+            dot_mask: None,
         })
     }
 
@@ -250,7 +254,22 @@ impl LaunchFeedback {
             // The dot silhouette is the only pixel set while pending. Without an explicit
             // mask the coverage fallback is the full rounded backdrop square.
             let surface = self.surface(runtime)?;
-            runtime.set_surface_shape_mask(surface, Some(dot_shape_spans(side)))?;
+            // A relaunch at the same badge size reuses the previous dot mask instead of
+            // re-sampling the silhouette pixel by pixel.
+            let cached = self
+                .dot_mask
+                .as_ref()
+                .filter(|entry| entry.0 == side)
+                .map(|entry| entry.1.clone());
+            let mask = match cached {
+                Some(spans) => spans,
+                None => {
+                    let spans = dot_shape_spans(side);
+                    self.dot_mask = Some((side, spans.clone()));
+                    spans
+                }
+            };
+            runtime.set_surface_shape_mask(surface, Some(mask))?;
             runtime.with_document(surface, |doc| {
                 for id in DOT_IDS {
                     doc.visible(id, true)?;

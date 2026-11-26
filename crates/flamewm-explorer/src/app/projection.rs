@@ -14,6 +14,8 @@ struct SlotIds {
     row:String, name:String, name_dim:String, size:String, modified:String, kind:String,
     ico_thumb:String, ico:[String; ROW_ICONS.len()],
 }
+/// Node ids for one Open With row.
+struct ChooserIds { choice:String, label:String, icon:String }
 /// Every template id the projection writes, built once per process. The projection runs on each
 /// input and glide frame, so the roughly one thousand `format!("…-{slot}")` calls it made per frame
 /// were the largest steady-state allocation source in the explorer window.
@@ -21,6 +23,7 @@ struct IdTables {
     sidebar:Vec<SidebarIds>, rows:Vec<SlotIds>, tabs:Vec<String>, menus:Vec<String>,
     col_sep:[String;3], col_grip:[String;3], sort_asc:[String;4], sort_desc:[String;4],
     crumbs:Vec<String>, dialog_lines:[String;4], dialog_buttons:[String;4],
+    chooser:Vec<ChooserIds>,
 }
 thread_local! {
     static ID_TABLES:RefCell<Option<Rc<IdTables>>>=RefCell::new(None);
@@ -61,6 +64,11 @@ impl IdTables {
             crumbs:(0..BREADCRUMB_SLOTS).map(|i|format!("breadcrumb-{i}")).collect(),
             dialog_lines:std::array::from_fn(|i|format!("dialog-line-{i}")),
             dialog_buttons:std::array::from_fn(|i|format!("dialog-b{}",i+1)),
+            chooser:(0..CHOICE_ROWS).map(|slot|ChooserIds{
+                choice:format!("openwith-choice-{slot}"),
+                label:format!("openwith-label-{slot}"),
+                icon:format!("openwith-icon-{slot}"),
+            }).collect(),
         }
     }
 }
@@ -73,15 +81,149 @@ fn display_home(path:&Path)->String {
     HOME_DIR.with(|cell|display_location(path,cell.get_or_init(home_dir)))
 }
 
+/// Address bar text for the last folder: `display_location` formats a new string per call and the
+/// bar is re-projected on every wake, so the same folder reuses its text.
+thread_local! {
+    static ADDRESS_TEXT:RefCell<Option<(PathBuf,Rc<String>)>>=const { RefCell::new(None) };
+}
+fn cached_address(path:&Path)->Rc<String> {
+    ADDRESS_TEXT.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        if let Some((cached,text))=cell.as_ref() && cached.as_path()==path {return Rc::clone(text);}
+        let text=Rc::new(display_home(path));
+        *cell=Some((path.to_path_buf(),Rc::clone(&text)));
+        text
+    })
+}
+
+/// Tab titles, kept per tab path so a projection does not rebuild them from `file_name` (which
+/// allocates through `to_string_lossy`) for every tab on every wake.
+thread_local! {
+    static TAB_TITLES:RefCell<Vec<(PathBuf,Rc<String>)>>=const { RefCell::new(Vec::new()) };
+}
+
+/// Item count for the status strip, rebuilt only when the counts change (text_ref then skips the copy).
+thread_local! {
+    static COUNT_TEXT:RefCell<Option<((usize,usize),Rc<String>)>>=const { RefCell::new(None) };
+}
+fn cached_count(total:usize,selected:usize)->Rc<String> {
+    COUNT_TEXT.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        if let Some((cached,text))=cell.as_ref() && *cached==(total,selected) {return Rc::clone(text);}
+        let text=Rc::new(view::items_text(total,selected));
+        *cell=Some(((total,selected),Rc::clone(&text)));
+        text
+    })
+}
+/// Free-space label, rebuilt only when the statvfs sample changes.
+thread_local! {
+    static FREE_TEXT:RefCell<Option<(Option<u64>,Rc<String>)>>=const { RefCell::new(None) };
+}
+fn cached_free(free:Option<u64>)->Rc<String> {
+    FREE_TEXT.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        if let Some((cached,text))=cell.as_ref() && *cached==free {return Rc::clone(text);}
+        let text=Rc::new(free.map_or_else(String::new,|bytes|format!("{} left",flamewm_api::format::human_size(bytes))));
+        *cell=Some((free,Rc::clone(&text)));
+        text
+    })
+}
+
+/// Progress rows depend on one snapshot. The snapshot is compared, not copied, so a transfer that is
+/// not advancing costs no string formatting on the exploration window's frames.
+struct ProgressLabels { label:String, percent:String, current:String, bytes:String }
+thread_local! {
+    static PROGRESS_TEXT:RefCell<Option<(Option<progress::Snapshot>,Rc<ProgressLabels>)>>=const { RefCell::new(None) };
+}
+fn cached_progress(snapshot:Option<&progress::Snapshot>)->Rc<ProgressLabels> {
+    PROGRESS_TEXT.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        if let Some((cached,text))=cell.as_ref() && cached.as_ref()==snapshot {return Rc::clone(text);}
+        let text=Rc::new(match snapshot {
+            Some(snapshot)=>ProgressLabels{
+                label:snapshot.label(),
+                percent:format!("{}%",snapshot.percent()),
+                current:snapshot.current.clone().unwrap_or_else(||"Starting…".into()),
+                bytes:snapshot.bytes_text(),
+            },
+            None=>ProgressLabels{label:String::new(),percent:String::new(),current:"Starting…".into(),bytes:String::new()},
+        });
+        *cell=Some((snapshot.cloned(),Rc::clone(&text)));
+        text
+    })
+}
+
+/// Reused sidebar row buffer: `sidebar_rows` allocated a result vector plus one index vector per
+/// group on every projection.
+thread_local! {
+    static SIDEBAR_ROWS:RefCell<Vec<SidebarRow>>=const { RefCell::new(Vec::new()) };
+}
+
+/// Identity of the thumbnail requests one full pass makes: the listing generation and the first
+/// visible row. A projection that shows the same window re-requests exactly the rows that are already
+/// queued, so the queue is left alone instead of cloning and re-hashing every waiting key.
+struct ThumbPassKey { path:PathBuf, revision:u64, first:usize, rows:usize }
+thread_local! {
+    static THUMB_PASS:RefCell<Option<ThumbPassKey>>=const { RefCell::new(None) };
+}
+/// `true` when this pass shows a different window than the last one and must restart the queue.
+fn thumb_pass_changed(tab:&flamewm_explorer::Tab,first:usize,rows:usize)->bool {
+    THUMB_PASS.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        if let Some(key)=cell.as_ref()
+            && key.path==tab.path() && key.revision==tab.revision() && key.first==first && key.rows==rows
+        {return false;}
+        *cell=Some(ThumbPassKey{path:tab.path().to_path_buf(),revision:tab.revision(),first,rows});
+        true
+    })
+}
+
+/// Breadcrumb labels depend only on the current path: rebuilding them on every projection walked all
+/// components and allocated one string plus one ancestor path per crumb.
+thread_local! {
+    static CRUMBS:RefCell<Option<(PathBuf,Rc<Vec<(String,PathBuf)>>)>>=const { RefCell::new(None) };
+}
+fn breadcrumbs_cached(path:&Path)->Rc<Vec<(String,PathBuf)>> {
+    CRUMBS.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        if let Some((cached,crumbs))=cell.as_ref() && cached.as_path()==path {return Rc::clone(crumbs);}
+        let crumbs=Rc::new(breadcrumbs(path));
+        *cell=Some((path.to_path_buf(),Rc::clone(&crumbs)));
+        crumbs
+    })
+}
+
 /// Row text depends only on the entry itself, so it is formatted when the entry at a slot changes
 /// instead of on every frame. `day` keeps the relative "Today"/"Yesterday" label correct at midnight.
 struct LabelKey {
     path:PathBuf, size:u64, modified:Option<std::time::SystemTime>, directory:bool, symlink:bool, day:chrono::NaiveDate,
 }
-struct RowLabels { size:String, modified:String, kind:String, thumbnailable:bool }
+/// Everything a row shows that derives only from its entry: the three labels, the icon family, and the
+/// thumbnail key. `file_icon` lowercases the extension and `ThumbKey::of` clones the path, so building
+/// them per frame cost two allocations per visible row on every full projection.
+struct RowLabels { size:String, modified:String, kind:String, icon:&'static str, thumb:Option<ThumbKey> }
 thread_local! {
     static ROW_LABELS:RefCell<Vec<Option<(LabelKey,RowLabels)>>>=RefCell::new(Vec::new());
+    /// Which slots held an entry in the last full projection. A glide frame moves those rows and touches
+    /// nothing else, so it no longer re-filters the listing up to the scroll origin to rebuild them.
+    static ROW_OCCUPANCY:RefCell<[bool;ROW_SLOTS]>=const { RefCell::new([false;ROW_SLOTS]) };
 }
+/// Local date, refreshed at most once per second: `Local::now` resolves the time zone and the date is
+/// only used to invalidate "Today"/"Yesterday" labels.
+thread_local! {
+    static TODAY:RefCell<Option<(Instant,chrono::NaiveDate)>>=const { RefCell::new(None) };
+}
+fn today_cached()->chrono::NaiveDate {
+    TODAY.with(|cell|{
+        let mut cell=cell.borrow_mut();
+        let now=Instant::now();
+        if let Some((taken,day))=cell.as_ref() && now.duration_since(*taken)<Duration::from_secs(1) {return *day;}
+        let day=chrono::Local::now().date_naive();
+        *cell=Some((now,day));
+        day
+    })
+}
+
 /// Labels for row `slot`, rebuilt only when its entry or the local date changes.
 fn row_labels<'a>(cache:&'a mut Vec<Option<(LabelKey,RowLabels)>>,slot:usize,entry:&Entry,day:chrono::NaiveDate)->&'a RowLabels {
     if cache.len()<=slot {cache.resize_with(slot+1,||None);}
@@ -98,11 +240,18 @@ fn row_labels<'a>(cache:&'a mut Vec<Option<(LabelKey,RowLabels)>>,slot:usize,ent
                 size:entry.size_label(),
                 modified:entry.modified_label(),
                 kind:view::kind_name(entry),
-                thumbnailable:thumbs::thumb_format(&entry.path).is_some(),
+                icon:view::file_icon(entry),
+                // The key carries a path clone and a normalised extension; remote paths never thumbnail.
+                thumb:(!remote::is_remote(&entry.path)).then(||ThumbKey::of(entry)).flatten(),
             }));
     }
-    &cache[slot].as_ref().expect("slot filled above").1
+    &cache[slot].as_ref().map_or(&EMPTY_LABELS,|(_,labels)|labels)
 }
+/// Fallback for a slot the fill above did not produce (it always does): keeps the projection free of a
+/// panic path if that invariant ever breaks.
+const EMPTY_LABELS:RowLabels=RowLabels{
+    size:String::new(), modified:String::new(), kind:String::new(), icon:"file", thumb:None,
+};
 
 /// What decides the context-menu offer. Building it is cheap; the flags it guards are not
 /// (`offered_formats` walks `PATH` and stats each candidate), and an open menu re-projects on every wake.
@@ -153,7 +302,11 @@ impl ExplorerApp {
                     overflow:self.menu_overflow, ark:self.ark, places_len:self.places.len(), place_state,
                 },Rc::new(flags)));
             }
-            Rc::clone(&cell.as_ref().expect("menu state filled above").1)
+            match cell.as_ref() {
+                Some((_,flags))=>Rc::clone(flags),
+                // The fill above always stores a state; keep the projection panic-free if it ever did not.
+                None=>Rc::new(Vec::new()),
+            }
         })
     }
     /// One context-menu entry's offer state; the arms cover the sidebar, entry and background menus.
@@ -192,46 +345,68 @@ impl ExplorerApp {
         let ids=IdTables::get();
         let tab=self.model.tab();
         // The path bar always shows the folder; search text belongs to the search field only.
-        let address=match self.edit {Some(EditMode::Path)=>self.field.display(),Some(EditMode::Mode)=>format!("Permissions: {}|",self.field.text),_=>display_home(tab.path())};
-        doc.text("address-text",address)?;
-        let crumbs=if self.edit.is_none() {breadcrumbs(tab.path())} else {Vec::new()};
+        match self.edit {
+            Some(EditMode::Path)=>doc.text_ref("address-text",&self.field.display())?,
+            Some(EditMode::Mode)=>doc.text_ref("address-text",&format!("Permissions: {}|",self.field.text))?,
+            _=>{let address=cached_address(tab.path()); doc.text_ref("address-text",address.as_str())?;}
+        }
+        let crumbs:Option<Rc<Vec<(String,PathBuf)>>>=if self.edit.is_none() {Some(breadcrumbs_cached(tab.path()))} else {None};
         for slot in 0..BREADCRUMB_SLOTS {
             let id=&ids.crumbs[slot];
-            doc.visible(id,slot<crumbs.len())?;
-            if let Some((label,_))=crumbs.get(slot) {doc.text_ref(id,label)?;}
+            let crumb=crumbs.as_ref().and_then(|crumbs|crumbs.get(slot));
+            doc.visible(id,crumb.is_some())?;
+            if let Some((label,_))=crumb {doc.text_ref(id,label)?;}
         }
-        doc.visible("address-text",crumbs.is_empty())?;
+        doc.visible("address-text",crumbs.as_ref().is_none_or(|crumbs|crumbs.is_empty()))?;
         doc.background("address-text",if matches!(self.edit,Some(EditMode::Path)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
         // Toolbar fields have fixed widths (the layout engine cannot shrink them): drop the path bar first, then search, so they never overlap.
         doc.visible("address",self.window.0>=480.0)?;
         doc.visible("search-toggle",self.window.0>=400.0)?;
         // The field shows only the query: a plain placeholder when empty, and the clear button while a search is active.
-        let search=match self.edit {
-            Some(EditMode::Search)=>self.field.display(),
-            _ if self.search_rows.is_some()=>self.search_text.clone(),
-            _=>"Search".to_owned(),
-        };
-        doc.text("search-text",search)?;
+        match self.edit {
+            Some(EditMode::Search)=>doc.text_ref("search-text",&self.field.display())?,
+            _ if self.search_rows.is_some()=>doc.text_ref("search-text",&self.search_text)?,
+            _=>doc.text_ref("search-text","Search")?,
+        }
         doc.background("search-text",if matches!(self.edit,Some(EditMode::Search)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
         doc.visible("search-clear",self.search_rows.is_some())?;
         doc.text_ref("menu-connect-label","Connect to Server…")?;
-        doc.text("menu-hidden-label",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
-        doc.text("menu-showtype-label",format!("Show Type Column: {}",if self.show_type {"On"} else {"Off"}))?;
+        doc.text_ref("menu-hidden-label",if self.model.hidden {"Show Hidden Files: On"} else {"Show Hidden Files: Off"})?;
+        doc.text_ref("menu-showtype-label",if self.show_type {"Show Type Column: On"} else {"Show Type Column: Off"})?;
         doc.foreground("nav-back",if tab.can_back(){self.theme.text()}else{self.theme.muted()})?;
         doc.foreground("nav-forward",if tab.can_forward(){self.theme.text()}else{self.theme.muted()})?;
         // Native Finder-style chrome: a single tab has no visible tab strip.
         let tab_strip=self.model.tabs.len()>1;
         doc.visible("tabs",tab_strip)?;
-        for (i,id) in ids.tabs.iter().enumerate() {
-            let exists=tab_strip && i<self.model.tabs.len();
-            doc.visible(id,exists)?;
-            if exists {
-                let title=self.model.tabs[i].path().file_name().unwrap_or_default().to_string_lossy().into_owned();
-                doc.text(id,if title.is_empty(){"System".into()}else{title})?;
-                doc.background(id,if i==self.model.active{self.theme.selected()}else{self.theme.card()})?;
-            }
+        if tab_strip {
+            TAB_TITLES.with(|cell|->Result<(),String>{
+                let mut titles=cell.borrow_mut();
+                titles.truncate(self.model.tabs.len());
+                for (i,tab) in self.model.tabs.iter().enumerate() {
+                    if titles.get(i).is_some_and(|(cached,_)|cached.as_path()==tab.path()) {continue;}
+                    let name=tab.path().file_name().unwrap_or_default().to_string_lossy();
+                    let title=Rc::new(if name.is_empty(){"System".to_string()}else{name.into_owned()});
+                    if let Some(slot)=titles.get_mut(i) {*slot=(tab.path().to_path_buf(),title);}
+                    else {titles.push((tab.path().to_path_buf(),title));}
+                }
+                for (i,id) in ids.tabs.iter().enumerate() {
+                    let exists=i<self.model.tabs.len();
+                    doc.visible(id,exists)?;
+                    if let Some((_,title))=titles.get(i) {
+                        doc.text_ref(id,title.as_str())?;
+                        doc.background(id,if i==self.model.active{self.theme.selected()}else{self.theme.card()})?;
+                    }
+                }
+                Ok(())
+            })?;
+        } else {
+            for id in &ids.tabs {doc.visible(id,false)?;}
         }
-        let rows=sidebar_rows(&self.places);
+        // One reused buffer: the row list depends only on the places, and the projection runs on
+        // every wake, so it no longer allocates a result vector plus one index vector per group.
+        SIDEBAR_ROWS.with(|cell|->Result<(),String>{
+        let mut rows=cell.borrow_mut();
+        fill_sidebar_rows(&mut rows,&self.places);
         for (slot,slot_ids) in ids.sidebar.iter().enumerate() {
             // Each slot shows either a group heading or a place button; the other element stays hidden.
             match rows.get(slot) {
@@ -270,6 +445,8 @@ impl ExplorerApp {
                 }
             }
         }
+        Ok(())
+        })?;
         // Only Details shows the metadata columns; Icons shows names alone.
         // The header and every row share one geometry: flow cells with identical fixed widths.
         doc.position("columns",SIDEBAR_WIDTH,header_top(tab_strip))?;
@@ -339,27 +516,32 @@ impl ExplorerApp {
             doc.visible("drag-ghost-file",!folder)?;
             doc.position("drag-ghost",drag.pointer.0-12.0,drag.pointer.1+16.0)?;
         }
-        let status=if self.row_drag.as_ref().is_some_and(|drag|drag.dragging) {
+        let drag_status;
+        let status:&str=if self.row_drag.as_ref().is_some_and(|drag|drag.dragging) {
             if let Some(folder)=self.drop_folder.as_deref() {
-                format!("Drop into {} · Move (Ctrl to copy)",folder.file_name().unwrap_or_default().to_string_lossy())
-            } else {"Drag onto a folder to move · Hold Ctrl to copy".into()}
-        } else {self.activity.as_ref().unwrap_or(&self.model.status).clone()};
-        doc.text("status-message",status)?;
-        doc.text("status-count",view::items_text(tab.entries.len(),tab.selected_paths.len()))?;
+                drag_status=format!("Drop into {} · Move (Ctrl to copy)",folder.file_name().unwrap_or_default().to_string_lossy());
+                &drag_status
+            } else {"Drag onto a folder to move · Hold Ctrl to copy"}
+        } else {self.activity.as_deref().unwrap_or(self.model.status.as_str())};
+        doc.text_ref("status-message",status)?;
+        let count=cached_count(tab.entries.len(),tab.selected_paths.len());
+        doc.text_ref("status-count",count.as_str())?;
         // Free space and usage come from statvfs; the bar fills by the share of the filesystem in use.
         let space=view::fs_space(tab.path());
-        doc.text("status-free",space.map_or(String::new(),|(free,_)|format!("{} left",flamewm_api::format::human_size(free))))?;
+        let free=cached_free(space.map(|(free,_)|free));
+        doc.text_ref("status-free",free.as_str())?;
         let used=space.map_or(0.0,|(free,total)|if total>0 {1.0-free as f32/total as f32} else {0.0});
         doc.size("usage-fill",USAGE_TRACK_WIDTH*used.clamp(0.0,1.0),4.0)?;
         // The progress window and the activity entry render one shared snapshot, so
         // the strip always agrees with the window. Nothing here touches the filesystem.
         let snapshot=self.progress.as_ref();
-        doc.text("job-progress",snapshot.map_or(String::new(),progress::Snapshot::label))?;
+        let job=cached_progress(snapshot);
+        doc.text_ref("job-progress",&job.label)?;
         doc.visible("progress-popup",snapshot.is_some())?;
         let fraction=snapshot.map_or(0.0,|s|f32::from(s.percent())/100.0);
-        doc.text("progress-percent",snapshot.map_or(String::new(),|s|format!("{}%",s.percent())))?;
-        doc.text("progress-current",snapshot.and_then(|s|s.current.clone()).unwrap_or_else(||"Starting…".into()))?;
-        doc.text("progress-bytes",snapshot.map_or(String::new(),progress::Snapshot::bytes_text))?;
+        doc.text_ref("progress-percent",&job.percent)?;
+        doc.text_ref("progress-current",&job.current)?;
+        doc.text_ref("progress-bytes",&job.bytes)?;
         doc.size("progress-fill",PROGRESS_TRACK_WIDTH*fraction,8.0)?;
         doc.visible("context-popup",self.context.is_some() && !self.chooser_loading && self.chooser.is_none())?;
         self.project_chooser(doc)?;
@@ -402,18 +584,38 @@ impl ExplorerApp {
     /// A glide frame (`full == false`) only moves rows and toggles their visibility: the origin is unchanged, so each
     /// slot keeps the text, icon and background of the last full projection.
     pub(crate) fn project_rows(&self, doc:&mut impl UiDocumentAccess, full:bool)->Result<(),String> {
+        let top=list_top(self.model.tabs.len()>1);
+        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
+        let glide=self.glide.offset(Instant::now());
+        // A glide frame moves only the rows the last full pass filled: their text, icons and backgrounds
+        // are already right, so the listing is not filtered again up to the scroll origin or even walked.
+        if !full {
+            let ids=IdTables::get();
+            return ROW_OCCUPANCY.with(|occupancy|->Result<(),String>{
+                for (slot,occupied) in occupancy.borrow().iter().enumerate() {
+                    if !*occupied {continue;}
+                    let row=&ids.rows[slot];
+                    let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
+                    let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+                    doc.visible(&row.row,in_view)?;
+                    doc.position(&row.row,SIDEBAR_WIDTH,y)?;
+                }
+                Ok(())
+            });
+        }
         let tab=self.model.tab();
         let kind_shown=self.show_type;
         let rows=self.visible_rows();
         let origin=self.origin(rows);
-        let top=list_top(self.model.tabs.len()>1);
-        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
-        let glide=self.glide.offset(Instant::now());
-        // A full pass replaces the thumbnail requests: stale jobs leave the queue before any visible row asks again.
-        if full
-            && let Some(queue)=self.thumb_queue.as_ref() {self.thumbs.borrow_mut().start_pass(queue);}
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
+        // A full pass replaces the thumbnail requests, but only when the window it shows changed:
+        // pruning and re-requesting the same rows cloned every queued key and re-hashed the pending
+        // set on each wake. Search results are re-ordered when the walk finishes, so they always restart.
+        if let Some(queue)=self.thumb_queue.as_ref()
+            && (self.search_rows.is_some() || thumb_pass_changed(tab,first,rows)) {
+            self.thumbs.borrow_mut().start_pass(queue);
+        }
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
         match self.search_rows.as_ref() {
             Some(results)=>{
@@ -424,22 +626,24 @@ impl ExplorerApp {
             },
         }
         let ids=IdTables::get();
-        let today=chrono::Local::now().date_naive();
-        ROW_LABELS.with(|cell|->Result<(),String>{
+        let today=today_cached();
+        let occupancy=ROW_LABELS.with(|cell|->Result<[bool;ROW_SLOTS],String>{
             let mut labels=cell.borrow_mut();
+            let mut occupancy=[false;ROW_SLOTS];
             for slot in 0..ROW_SLOTS {
                 let row=&ids.rows[slot];
                 let index=flamewm_explorer::row_slot_index(origin,slot);
                 let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
                 let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied().flatten())} else {None};
                 let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+                occupancy[slot]=entry.is_some();
                 if let Some(entry)=entry {
                     // Contents are set even off-view, so a row that glides into view later already shows its entry.
                     doc.visible(&row.row,in_view)?;
                     doc.position(&row.row,SIDEBAR_WIDTH,y)?;
-                    if !full {continue;}
                     doc.size(&row.row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
                     let text=row_labels(&mut labels,slot,entry,today);
+
                     doc.text_ref(&row.name,&entry.name)?;
                     doc.text_ref(&row.size,&text.size)?;
                     doc.text_ref(&row.modified,&text.modified)?;
@@ -461,24 +665,28 @@ impl ExplorerApp {
                         doc.text_ref(&row.name,&self.field.display())?;
                         doc.background(&row.name,if self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
                     } else {doc.background(&row.name,self.theme.clear())?;}
-                    self.project_row_icon(doc,slot,entry,in_view,text.thumbnailable)?;
+                    self.project_row_icon(doc,slot,entry,in_view,text.icon,text.thumb.as_ref())?;
                     doc.background(&row.row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) || tab.selected_paths.contains(&entry.path) {
                         self.theme.selected()
                     }
                         else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
                 } else {doc.visible(&row.row,false)?;}
             }
-            Ok(())
-        })
+            Ok(occupancy)
+        })?;
+        ROW_OCCUPANCY.with(|cell|*cell.borrow_mut()=occupancy);
+        Ok(())
     }
 
-    pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry, in_view:bool, thumbnailable:bool)->Result<(),String> {
-        let icon=view::file_icon(entry);
-        // A row that cannot carry a thumbnail never builds a cache key or probes the cache.
-        let thumbnail=if thumbnailable {self.row_thumbnail(entry,in_view)} else {None};
+    pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry, in_view:bool, icon:&'static str, thumb:Option<&ThumbKey>)->Result<(),String> {
+        // The key is built with the row labels, so a full pass no longer clones the path per image row.
+        let thumbnail=thumb.and_then(|key|self.row_thumbnail(key,in_view));
         let ids=IdTables::get();
         let ids=&ids.rows[slot];
-        match row_icon_choice(entry,thumbnail.as_ref()) {
+        // Only the thumbnail branch asks `row_icon_choice`; the type branch reuses the icon family the
+        // row labels already resolved instead of lowercasing the extension a second time.
+        let choice=if thumbnail.is_some() {row_icon_choice(entry,thumbnail.as_ref())} else {RowIcon::Type(icon)};
+        match choice {
             RowIcon::Thumbnail(id)=>{
                 let Some((_,pixels))=thumbnail else {return self.show_type_icon(doc,slot,icon)};
                 // The thumbnail draws in the same square as the type glyph. The element is sized to
@@ -521,16 +729,14 @@ impl ExplorerApp {
 
     /// Cached thumbnail for an image row. A cache miss queues one decode and shows the type icon meanwhile.
     /// Only rows in view queue a decode: a row scrolled off-screen in the same pass is not decoded.
-    pub(crate) fn row_thumbnail(&self, entry:&Entry, in_view:bool)->Option<(u64,Arc<Vec<u8>>)> {
-        if remote::is_remote(&entry.path) {return None;}
-        let key=ThumbKey::of(entry)?;
+    pub(crate) fn row_thumbnail(&self, key:&ThumbKey, in_view:bool)->Option<(u64,Arc<Vec<u8>>)> {
         let mut cache=self.thumbs.borrow_mut();
-        match cache.lookup(&key) {
+        match cache.lookup(key) {
             Lookup::Ready(id,pixels)=>Some((id,pixels)),
             Lookup::Failed=>None,
             Lookup::Missing=>{
-                if in_view && cache.begin(&key)
-                    && let Some(queue)=&self.thumb_queue {queue.push(key);}
+                if in_view && cache.begin(key)
+                    && let Some(queue)=&self.thumb_queue {queue.push(key.clone());}
                 None
             }
         }
@@ -636,26 +842,27 @@ impl ExplorerApp {
             doc.text("openwith-mime",format!("{} · {} compatible apps",chooser.mime,
                 chooser.apps.iter().filter(|app|app.associated).count()))?;
             let choices=chooser.page_choices();
-            for slot in 0..CHOICE_ROWS {
-                let id=format!("openwith-choice-{slot}");
+            let ids=IdTables::get();
+            for (slot,slot_ids) in ids.chooser.iter().enumerate() {
+                let id=&slot_ids.choice;
                 if let Some((index,choice))=choices.get(slot) {
-                    doc.visible(&id,true)?;
+                    doc.visible(id,true)?;
                     let suffix=if choice.is_default {" · Default"} else if !choice.associated {" · Other app"} else {""};
-                    doc.text(&format!("openwith-label-{slot}"),format!("{}{suffix}",choice.entry.name()))?;
-                    let icon_id=format!("openwith-icon-{slot}");
+                    doc.text(&slot_ids.label,format!("{}{suffix}",choice.entry.name()))?;
+                    let icon_id=&slot_ids.icon;
                     match choice.icon.as_ref() {
                         Some(icon)=>{
                             // Rows bind their icon by application id, so a slot reused for another app rebinds on change.
                             // A rejected raster hides the slot instead of aborting the projection: a failed bind must
                             // never leave the dialog (or the rows below it) unprojected.
                             let source=format!("explorer-app-icon-{}",choice.entry.id().as_str());
-                            let bound=doc.image_rgba8_shared(&icon_id,source,icon.width,icon.height,Arc::clone(&icon.pixels)).is_ok();
-                            doc.visible(&icon_id,bound)?;
+                            let bound=doc.image_rgba8_shared(icon_id,source,icon.width,icon.height,Arc::clone(&icon.pixels)).is_ok();
+                            doc.visible(icon_id,bound)?;
                         }
-                        None=>doc.visible(&icon_id,false)?,
+                        None=>doc.visible(icon_id,false)?,
                     }
-                    doc.background(&id,if chooser.selected==Some(*index){self.theme.selected()}else{self.theme.card()})?;
-                }else{doc.visible(&id,false)?;}
+                    doc.background(id,if chooser.selected==Some(*index){self.theme.selected()}else{self.theme.card()})?;
+                }else{doc.visible(id,false)?;}
             }
             doc.text("openwith-page",format!("{} / {}",chooser.page+1,chooser.page_count()))?;
             doc.visible("openwith-prev",chooser.page_count()>1)?;
@@ -667,7 +874,8 @@ impl ExplorerApp {
         }else{
             doc.text("openwith-title","Finding installed applications…".into())?;
             doc.text("openwith-mime","Reading desktop MIME handlers".into())?;
-            for slot in 0..CHOICE_ROWS{doc.visible(&format!("openwith-choice-{slot}"),false)?;}
+            let ids=IdTables::get();
+            for slot_ids in &ids.chooser {doc.visible(&slot_ids.choice,false)?;}
             for id in ["openwith-prev","openwith-next","openwith-all","openwith-once","openwith-always"] {doc.visible(id,false)?;}
             doc.text("openwith-page",String::new())?;
         }

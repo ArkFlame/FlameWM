@@ -1,6 +1,6 @@
 //! Scrollback line storage. A history line keeps its characters as UTF-8 text plus one run per stretch of equal
-//! style, which is far smaller than a `Cell` per column for ordinary output. Lines whose style changes too often
-//! to pay for the runs stay as plain cells. Either form round-trips every cell exactly.
+//! style, which is far smaller than a `Cell` per column for ordinary output. A one-style line stores no run list at
+//! all; lines whose style changes too often to pay for the runs stay as plain cells. Every form round-trips exactly.
 use std::borrow::Cow;
 use std::mem::size_of;
 
@@ -18,6 +18,13 @@ pub(super) struct StyleRun {
 #[derive(Debug)]
 pub(super) enum History {
     Plain(Line),
+    /// One style across the line: shell and build output, where a `runs` boxed slice would be pure overhead.
+    Uniform {
+        text: Box<str>,
+        fg: Color,
+        bg: Color,
+        attrs: u16,
+    },
     Packed {
         text: Box<str>,
         runs: Box<[StyleRun]>,
@@ -25,11 +32,11 @@ pub(super) enum History {
 }
 
 impl History {
-    /// Packs `line` (already trimmed, see `history_len`) into the smaller of the two forms. Borrowed so the live row's buffer is reused.
+    /// Packs `line` (already trimmed, see `history_len`) into the smaller of the three forms. Borrowed so the live row's buffer is reused.
     pub(super) fn pack(line: &[Cell]) -> Self {
         let mut text = String::with_capacity(line.len());
-        // Sized for the worst case (every cell its own run) so the scroll path does not regrow it per line.
-        let mut runs: Vec<StyleRun> = Vec::with_capacity(line.len());
+        // Ordinary output has a handful of runs; starting small avoids reserving a run per column for every line.
+        let mut runs: Vec<StyleRun> = Vec::with_capacity(line.len().min(8));
         for cell in line {
             text.push(cell.ch);
             match runs.last_mut() {
@@ -46,9 +53,18 @@ impl History {
         }
         let packed = text.len() + runs.len() * size_of::<StyleRun>();
         if packed < std::mem::size_of_val(line) {
-            Self::Packed {
-                text: text.into_boxed_str(),
-                runs: runs.into_boxed_slice(),
+            if let [run] = runs.as_slice() {
+                Self::Uniform {
+                    text: text.into_boxed_str(),
+                    fg: run.fg,
+                    bg: run.bg,
+                    attrs: run.attrs,
+                }
+            } else {
+                Self::Packed {
+                    text: text.into_boxed_str(),
+                    runs: runs.into_boxed_slice(),
+                }
             }
         } else {
             Self::Plain(line.to_vec())
@@ -59,6 +75,21 @@ impl History {
     pub(super) fn cells(&self) -> Cow<'_, Line> {
         match self {
             Self::Plain(line) => Cow::Borrowed(line),
+            Self::Uniform {
+                text,
+                fg,
+                bg,
+                attrs,
+            } => Cow::Owned(
+                text.chars()
+                    .map(|ch| Cell {
+                        ch,
+                        fg: *fg,
+                        bg: *bg,
+                        attrs: *attrs,
+                    })
+                    .collect(),
+            ),
             Self::Packed { text, runs } => {
                 let mut chars = text.chars();
                 let mut line = Vec::with_capacity(runs.iter().map(|run| run.len as usize).sum());
@@ -93,13 +124,13 @@ mod tests {
     }
 
     #[test]
-    fn uniform_text_packs_and_round_trips() {
+    fn uniform_text_stores_no_run_list_and_round_trips() {
         let line: Line = "hello wörld 世界"
             .chars()
             .map(|c| cell(c, Color::Default, 0))
             .collect();
         let history = History::pack(&line);
-        assert!(matches!(history, History::Packed { .. }));
+        assert!(matches!(history, History::Uniform { .. }));
         assert_eq!(*history.cells(), line);
     }
 

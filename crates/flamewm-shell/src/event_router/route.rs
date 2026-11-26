@@ -208,9 +208,18 @@ impl ShellLoop {
         let typed = (is_keyboard && event.action.phase == ActionPhase::Release)
             .then_some(event.action.text.as_deref())
             .flatten();
-        let menu_rows = menu_row_actions(self.context_menu.as_ref(), self.shell.snapshot());
+        let key_press = action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press;
+        // Only keyboard menu navigation or activation reads these rows. Pointer, wheel and hover
+        // events (the bulk of the stream) must not allocate one action string per menu row.
+        let menu_rows = if key_press
+            || typed.is_some_and(|text| matches!(text, "\n" | "\r" | " "))
+        {
+            menu_row_actions(self.context_menu.as_ref(), self.shell.snapshot())
+        } else {
+            Vec::new()
+        };
         let overflow_rows = menu_rows.len();
-        if action == "__flamewm.ui.key" && event.action.phase == ActionPhase::Press {
+        if key_press {
             let payload = event.action.text.as_deref().unwrap_or_default();
             if overflow_menu_closes_on(payload, overflow_rows) {
                 return self.close_transients(runtime);

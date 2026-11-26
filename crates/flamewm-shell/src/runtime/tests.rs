@@ -1218,20 +1218,6 @@ fn single_output_contexts_match_legacy_single_context() {
     assert_eq!(Some(contexts[0].clone()), legacy);
 }
 
-#[test]
-fn hotplug_removal_of_one_output_removes_only_its_panel_surface() {
-    let mut snapshot = two_output_snapshot();
-    snapshot.displays.outputs[1].connected = false;
-    let existing = vec![
-        flamewm_api::OutputId::new("HDMI-1"),
-        flamewm_api::OutputId::new("HDMI-2"),
-    ];
-    let stale = panel_surface_outputs_to_remove(&existing, &snapshot);
-    assert_eq!(stale, vec![flamewm_api::OutputId::new("HDMI-2")]);
-    let kept = panel_surface_outputs_to_remove(&existing[..1], &snapshot);
-    assert!(kept.is_empty());
-}
-
 // TRIGGER: panel_reconciliation_plan edge-switch branch (artifact differs by edge).
 // MUTATION: restore the update arm for an edge change, which keeps the horizontal artifact.
 #[test]

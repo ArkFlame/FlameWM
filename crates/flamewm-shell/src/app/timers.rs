@@ -209,8 +209,10 @@ impl ShellLoop {
         let system = &snapshot.system;
         // The live "raise maximum volume" cap, the same value the mixer slider uses.
         let max = self.audio_settings.max_percent();
-        let volume = flamewm_shell::taskbar::status::audio::default_endpoint_row(&system.audio)
-            .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted, max));
+        // Raw reading only: building a row's owned id/label strings per turn would allocate on
+        // every shell wake for two fields the card needs.
+        let volume = flamewm_shell::taskbar::status::audio::default_sink_level(&system.audio)
+            .map(|(volume, muted)| flamewm_shell::osd::Level::new(volume, muted, max));
         let brightness = (system.brightness.availability
             == flamewm_api::system::ServiceAvailability::Available)
             .then(|| flamewm_shell::osd::Level::brightness(system.brightness.percent));

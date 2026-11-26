@@ -175,6 +175,8 @@ impl Tab {
     /// Frees the listing of a hidden tab (capacity included). Path, selection and scroll are kept.
     pub fn release_entries(&mut self) { self.entries=Vec::new(); self.revision+=1; }
     pub fn path(&self) -> &Path { &self.history[self.cursor] }
+    /// Listing generation. Projection caches that key on the entry set (thumbnail pass) compare it.
+    #[must_use] pub fn revision(&self) -> u64 { self.revision }
     /// Replace a vanished current directory without retaining it in history.
     pub fn replace_current(&mut self, path: PathBuf) { self.history[self.cursor]=path; self.reset(); }
     pub fn visit(&mut self, path: PathBuf) {
@@ -384,14 +386,23 @@ pub enum SidebarRow { Heading(&'static str), Place(usize) }
 
 /// Groups places into sidebar rows. A heading is emitted only for a non-empty group.
 pub fn sidebar_rows(places:&[Place]) -> Vec<SidebarRow> {
-    let mut rows=Vec::with_capacity(places.len()+3);
-    for group in [PlaceGroup::Places,PlaceGroup::Devices,PlaceGroup::Network,PlaceGroup::Pinned] {
-        let members:Vec<usize>=places.iter().enumerate().filter(|(_,p)|p.group==group).map(|(i,_)|i).collect();
-        if members.is_empty() {continue;}
-        rows.push(SidebarRow::Heading(group.heading()));
-        rows.extend(members.into_iter().map(SidebarRow::Place));
-    }
+    let mut rows=Vec::with_capacity(places.len()+4);
+    fill_sidebar_rows(&mut rows,places);
     rows
+}
+/// Fills `rows` with the group headings and places, keeping the vector's capacity. The projection
+/// runs on every wake, so it reuses one buffer instead of allocating a result vector plus one index
+/// vector per group each frame.
+pub fn fill_sidebar_rows(rows:&mut Vec<SidebarRow>, places:&[Place]) {
+    rows.clear();
+    for group in [PlaceGroup::Places,PlaceGroup::Devices,PlaceGroup::Network,PlaceGroup::Pinned] {
+        let mut heading=false;
+        for (index,place) in places.iter().enumerate() {
+            if place.group!=group {continue;}
+            if !heading {rows.push(SidebarRow::Heading(group.heading()));heading=true;}
+            rows.push(SidebarRow::Place(index));
+        }
+    }
 }
 pub fn home_dir() -> PathBuf {std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
 pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {

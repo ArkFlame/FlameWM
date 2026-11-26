@@ -63,6 +63,9 @@ struct NotificationHost {
     center_active: Vec<u32>,
     /// Tab-order row with keyboard focus; `None` when no row is focused.
     center_focus: Option<usize>,
+    /// True when the provider queued a view change since the last projection. Only then is
+    /// `active()` cloned; an unchanged turn costs no allocation.
+    active_dirty: bool,
     /// Set when an outside press closed the centre; consumes the same click's opener release.
     closed_by_press: Option<Instant>,
     /// Loads toast icons by theme name; spawned on the first named icon.
@@ -158,6 +161,7 @@ impl NotificationHost {
             center_revision: None,
             center_active: Vec::new(),
             center_focus: None,
+            active_dirty: true,
             closed_by_press: None,
             icons: None,
             icon_root,
@@ -289,7 +293,10 @@ impl NotificationHost {
             self.center_open = false;
             return;
         }
-        if let Err(error) = self.refresh_center(runtime) {
+        // Opening after a toast may have expired: project against the live active set. A closed
+        // centre keeps the last known ids; a queued provider update reprojects on the next tick.
+        let active = self.center_open.then(|| self.provider.active());
+        if let Err(error) = self.refresh_center(runtime, active.as_deref()) {
             eprintln!("flamewm-shell: notification center update failed: {error}");
         }
     }
@@ -357,7 +364,9 @@ impl NotificationHost {
             }
         }
         self.center_revision = None;
-        if let Err(error) = self.refresh_center(runtime) {
+        // A command (dismiss, mute, clear) changes the active set: project against it.
+        let active = self.provider.active();
+        if let Err(error) = self.refresh_center(runtime, Some(&active)) {
             eprintln!("flamewm-shell: notification center update failed: {error}");
         }
     }
@@ -392,7 +401,8 @@ impl NotificationHost {
             notification_center::KeyAction::Focus(index) => {
                 self.center_focus = Some(index);
                 self.center_revision = None;
-                if let Err(error) = self.refresh_center(runtime) {
+                // A focus move never changes which notifications are active.
+                if let Err(error) = self.refresh_center(runtime, None) {
                     eprintln!("flamewm-shell: notification center update failed: {error}");
                 }
             }
@@ -410,30 +420,51 @@ impl NotificationHost {
         true
     }
 
-    /// Re-projects the center only when it is open and history changed since the last projection.
-    fn refresh_center(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+    /// Re-projects the center only when it is open and something changed since the last
+    /// projection. `active` is the freshly fetched active toast set when the provider queued an
+    /// update; `None` reuses the ids of the last projection, so a history-only change (mute, DND,
+    /// clear) reprojects without cloning every active view again.
+    fn refresh_center(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        active: Option<&[notifications::NotificationView]>,
+    ) -> Result<(), String> {
         if !self.center_open {
             return Ok(());
         }
         let revision = self.provider.history().revision();
-        let active: Vec<u32> = self
-            .provider
-            .active()
-            .iter()
-            .map(|active| active.id)
-            .collect();
-        if self.center_revision == Some(revision) && self.center_active == active {
-            return Ok(());
+        // Compare the live ids without materializing a `Vec` first: an unchanged open centre
+        // reprojects on every wake, and cloning its id list there allocated needlessly.
+        if self.center_revision == Some(revision) {
+            match active {
+                Some(views) => {
+                    if views.len() == self.center_active.len()
+                        && views
+                            .iter()
+                            .zip(&self.center_active)
+                            .all(|(view, id)| view.id == *id)
+                    {
+                        return Ok(());
+                    }
+                }
+                None => return Ok(()),
+            }
         }
+        let active_ids: Vec<u32> = match active {
+            Some(views) => views.iter().map(|view| view.id).collect(),
+            None => self.center_active.clone(),
+        };
         let mut view = notification_center::view(self.provider.history());
-        notification_center::hide_inactive_actions(&mut view, |id| active.contains(&id));
+        notification_center::hide_inactive_actions(&mut view, |id| active_ids.contains(&id));
         let nodes = notification_center::nodes_with_focus(&view, self.center_focus);
         runtime
             .with_document(self.center, |document| {
                 for node in &nodes {
                     match node {
                         notification_center::Node::Text { id, value } => {
-                            document.text(id, value.clone())?;
+                            // Borrowed write: an unchanged value allocates nothing and marks no
+                            // damage, so a focus-only reprojection repaints nothing.
+                            document.text_ref(id, value)?;
                         }
                         notification_center::Node::Visible { id, shown } => {
                             document.visible(id, *shown)?;
@@ -455,7 +486,7 @@ impl NotificationHost {
             .map_err(|error| format!("project notification center: {error:?}"))?;
         self.center_view = view;
         self.center_revision = Some(revision);
-        self.center_active = active;
+        self.center_active = active_ids;
         Ok(())
     }
 
@@ -568,16 +599,25 @@ impl NotificationHost {
         self.provider
             .expire(std::time::Instant::now())
             .map_err(|error| error.message)?;
-        let _ = self.provider.drain_ui_updates();
-        self.refresh_center(runtime)?;
-        let next = self.provider.active().into_iter().last();
+        // The provider queues one typed update per view change (upsert, close, reset), so an
+        // empty drain means the toasts and their history are unchanged. A passive turn then
+        // never clones the active views, whose icon pixels would be copied on every wake.
+        if !self.provider.drain_ui_updates().is_empty() {
+            self.active_dirty = true;
+        }
         self.poll_icon(runtime, wake)?;
+        if !self.active_dirty {
+            // History-only changes (dismiss, mute, DND, clear) still reproject the centre.
+            self.refresh_center(runtime, None)?;
+            self.publish_toast_deadline(wake);
+            return Ok(());
+        }
+        self.active_dirty = false;
+        let active = self.provider.active();
+        self.refresh_center(runtime, Some(&active))?;
+        let next = active.into_iter().last();
         if self.visible == next {
-            if let Some(deadline) = self.provider.next_deadline() {
-                if let Some(wake) = wake {
-                    wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
-                }
-            }
+            self.publish_toast_deadline(wake);
             return Ok(());
         }
         self.visible.clone_from(&next);
@@ -629,12 +669,18 @@ impl NotificationHost {
                 .hide(self.surface)
                 .map_err(|error| format!("hide notification: {error:?}"))?;
         }
-        if let Some(deadline) = self.provider.next_deadline() {
-            if let Some(wake) = wake {
-                wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
-            }
-        }
+        self.publish_toast_deadline(wake);
         Ok(())
+    }
+
+    /// Publishes the earliest toast expiry as the reactor wake, keeping any earlier deadline.
+    fn publish_toast_deadline(&self, wake: Option<&flamewm_reactor::WakeDeadline>) {
+        let Some(deadline) = self.provider.next_deadline() else {
+            return;
+        };
+        if let Some(wake) = wake {
+            wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
+        }
     }
 }
 
@@ -815,7 +861,7 @@ fn execute() -> Result<(), String> {
         dispatcher,
         loader_root,
         current_exe_program(),
-    )));
+    )?));
     // StatusNotifier host: shares this reactor's bus source, no thread or timer.
     if bus_offline {
         let attach_state = Rc::clone(&state);
@@ -988,12 +1034,16 @@ fn execute() -> Result<(), String> {
     }
     // Volume OSD and weather: the tick publishes their deadlines to the reactor wake slot.
     state.borrow_mut().attach_wake(reactor.wake_deadline());
-    let tick_profile_flag = Arc::clone(&profile_due);
-    reactor
-        .register_timer(Duration::from_secs(5), false, move || {
-            tick_profile_flag.store(true, Ordering::Release);
-        })
-        .map_err(|error| format!("register profile one-shot: {error}"))?;
+    // First profiler window. A disabled profiler reports nothing, so the shell must not
+    // keep a five-second wake for it: gate the one-shot exactly like the repeating timer.
+    if flamewm_profiler::enabled() {
+        let tick_profile_flag = Arc::clone(&profile_due);
+        reactor
+            .register_timer(Duration::from_secs(5), false, move || {
+                tick_profile_flag.store(true, Ordering::Release);
+            })
+            .map_err(|error| format!("register profile one-shot: {error}"))?;
+    }
     // Weather and IP-lookup completions: one wake per finished worker; the tick applies the result.
     {
         let result_fd = state.borrow().result_wake.fd();

@@ -131,16 +131,46 @@ fn sync_item_selection(
     }
 }
 
+/// Repaints the selected-tile chrome only for items whose selection state changed, or every
+/// selected tile when the selection style changed. A sync whose inputs equal the last projected
+/// snapshot issues no document writes and clones nothing.
 pub(super) fn sync_selection_visuals(
     document: &mut impl UiDocumentAccess,
-    state: &DesktopState,
+    state: &mut DesktopState,
 ) -> Result<(), String> {
     let (fill_alpha, accent) = selection_style(&state.settings);
+    let previous = std::mem::take(&mut state.selection_visuals);
+    let style_changed = previous.as_ref().map_or(true, |projected| {
+        projected.fill_alpha != fill_alpha || projected.accent != accent
+    });
+    if !style_changed
+        && previous
+            .as_ref()
+            .is_some_and(|projected| projected.selected == *state.selection.selected())
+    {
+        state.selection_visuals = previous;
+        return Ok(());
+    }
+    // First pass has no snapshot: rewrite every slot so the template's initial state is not
+    // trusted, exactly like the previous unconditional pass.
+    let first_pass = previous.is_none();
     for (index, item) in state.model.items().enumerate() {
         let selected = state.selection.selected().contains(&item.id);
+        let was_selected = previous
+            .as_ref()
+            .is_some_and(|projected| projected.selected.contains(&item.id));
+        if !first_pass && selected == was_selected && !(selected && style_changed) {
+            continue;
+        }
         let slot = format!("desktop-item-{index}");
         sync_item_selection(document, &slot, selected, fill_alpha, accent)?;
     }
+    let selected_now = state.selection.selected().clone();
+    state.selection_visuals = Some(SelectionVisuals {
+        fill_alpha,
+        accent,
+        selected: selected_now,
+    });
     Ok(())
 }
 

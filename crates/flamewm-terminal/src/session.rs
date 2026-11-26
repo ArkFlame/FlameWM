@@ -164,7 +164,10 @@ fn read_loop(
                         Ok(extra) => batch.extend_from_slice(&buffer[..extra]),
                     }
                 }
-                let bytes = std::mem::replace(&mut batch, Vec::new());
+                // Send the filled batch and pre-size the next one to the same length: a flood then allocates once
+                // per event instead of regrowing from an empty `Vec`, while prompt echoes stay tiny.
+                let next = batch.len().min(BATCH_BYTES);
+                let bytes = std::mem::replace(&mut batch, Vec::with_capacity(next));
                 if events.send(SessionEvent::Output { id, bytes }).is_err() {
                     return;
                 }

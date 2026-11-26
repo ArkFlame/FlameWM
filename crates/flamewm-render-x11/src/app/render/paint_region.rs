@@ -89,12 +89,10 @@ impl X11App {
         document: &RuntimeDocument,
         scale: f32,
     ) -> Result<u64, String> {
-        let count = self
-            .cached_paint
-            .as_ref()
-            .expect("paint cached above")
-            .commands
-            .len();
+        let Some(cached) = self.cached_paint.as_ref() else {
+            return Err("paint_region has no cached paint".to_owned());
+        };
+        let count = cached.commands.len();
         let viewport = (self.width, self.height);
         let mut visits = 0u64;
         for index in 0..count {

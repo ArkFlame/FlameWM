@@ -52,6 +52,7 @@ impl ShellLoop {
         self.leave_empty_favorites_category();
         self.settings_cache = Some(snapshot);
         self.settings_projection_pending = true;
+        self.settings_full_reprojection = true;
         self.set_auto_time_zone(desired_zone);
         // This runs on the settings signal, not an X event: wake the loop so the tick
         // projects the change now instead of at the next pointer or clock event.
@@ -147,6 +148,10 @@ impl ShellLoop {
         if !self.settings_projection_pending {
             return Ok(());
         }
+        // A domain refresh only needs the style pass: it reprojected the task slots itself from
+        // the unchanged settings. Only a real settings snapshot changed the accent those slots
+        // render with, so only then do they need a full reprojection.
+        let full_reprojection = std::mem::take(&mut self.settings_full_reprojection);
         let Some(snapshot) = self.settings_cache.as_ref() else {
             self.settings_projection_pending = false;
             return Ok(());
@@ -197,33 +202,37 @@ impl ShellLoop {
         }
         // The focused task underline takes its colour from the settings accent; re-project the task slots
         // now so a settings change (or a first settings arrival after the last task update) cannot leave it stale.
-        let shell_snapshot = self.shell.snapshot();
-        // Taskbar item settings (tray, clock, pager visibility) follow the same reprojection.
-        let task_changed = flamewm_shell::runtime::ChangedDomains {
-            windows: true,
-            workspaces: true,
-            system: true,
-            ..Default::default()
-        };
-        let loader = &mut self.icon_loader;
-        let items = crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref());
-        let icon_cache = &mut self.task_icon_cache;
-        let _ = projection::for_each_panel_record(
-            shell_snapshot,
-            self.surfaces.panel_outputs(),
-            |handle, view| {
-                runtime.with_document(handle, |document| {
-                    async_projection::project_panel_for_changed(
-                        document,
-                        view.with_items(items)
-                            .with_task_progress(&self.task_progress),
-                        loader.as_mut(),
-                        icon_cache,
-                        task_changed,
-                    )
-                })
-            },
-        );
+        // A domain refresh already projected the slots, so it skips this whole block.
+        if full_reprojection {
+            let shell_snapshot = self.shell.snapshot();
+            // Taskbar item settings (tray, clock, pager visibility) follow the same reprojection.
+            let task_changed = flamewm_shell::runtime::ChangedDomains {
+                windows: true,
+                workspaces: true,
+                system: true,
+                ..Default::default()
+            };
+            let loader = &mut self.icon_loader;
+            let items =
+                crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref());
+            let icon_cache = &mut self.task_icon_cache;
+            let _ = projection::for_each_panel_record(
+                shell_snapshot,
+                self.surfaces.panel_outputs(),
+                |handle, view| {
+                    runtime.with_document(handle, |document| {
+                        async_projection::project_panel_for_changed(
+                            document,
+                            view.with_items(items)
+                                .with_task_progress(&self.task_progress),
+                            loader.as_mut(),
+                            icon_cache,
+                            task_changed,
+                        )
+                    })
+                },
+            );
+        }
         self.apply_start_backdrop(runtime);
         self.apply_start_slide(runtime);
         self.apply_taskbar_backdrop(runtime);
@@ -241,7 +250,8 @@ impl ShellLoop {
         }
         self.settings_projection_pending = false;
         // Favorites live in the Start model, so an open Start menu reprojects them now.
-        if self.start_open {
+        // Only a settings snapshot can change them; a domain refresh already projected Start.
+        if full_reprojection && self.start_open {
             self.project_start(runtime)?;
         }
         self.apply_taskbar_frame(runtime);

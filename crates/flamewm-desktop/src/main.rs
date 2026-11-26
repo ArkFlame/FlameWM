@@ -241,16 +241,19 @@ pub fn main() -> Result<(), String> {
             ),
             widgets: widgets::WidgetState::new(widget_store, widget_path),
             selection: SelectionModel::default(),
+            selection_visuals: None,
             selection_start: None,
             rubber_pending: None,
             selection_output: None,
             rubber_items: Vec::new(),
             selection_overlay: None,
             item_drag: None,
+            drag_pending: None,
             launchers: BTreeMap::new(),
             menu: None,
             menu_rects: Vec::new(),
             wheel_hover: None,
+            wheel_highlight: None,
             wheel_mode: WheelMode::default(),
             pending_delete: None,
             last_click: None,
@@ -389,19 +392,26 @@ pub fn main() -> Result<(), String> {
                 let mut state = state_cell.borrow_mut();
                 // Pointer hover arrives at input rate and every handler ignores it except the
                 // convert-wheel sector, which dedupes itself. A full refresh per motion event is
-                // pure cost, so hover skips it. Resize and visibility do not read the model and
-                // the flush pass refreshes later in the same turn, so they skip the pre-refresh
-                // instead of projecting twice.
-                let hover = matches!(
+                // pure cost, so hover skips it. Motion actions (selection rubber, item and widget
+                // drags) only stage pending state for the flush turn, and external XDND drag
+                // events only stage a drop, so they skip the pre-refresh too. Resize and
+                // visibility do not read the model and the flush pass refreshes later in the same
+                // turn, so they skip the pre-refresh instead of projecting twice. A fully
+                // obscured desktop defers every projection until the uncover flush.
+                let transient = matches!(
                     event,
-                    UiControllerEvent::Action(action) if action.phase == UiActionPhase::Hover
+                    UiControllerEvent::Action(action)
+                        if matches!(action.phase, UiActionPhase::Hover | UiActionPhase::Motion)
                 );
                 let handled_by_flush = matches!(
                     event,
-                    UiControllerEvent::Resized { .. } | UiControllerEvent::Visibility { .. }
+                    UiControllerEvent::Resized { .. }
+                        | UiControllerEvent::Visibility { .. }
+                        | UiControllerEvent::Drag(_)
                 );
-                if !hover
+                if !transient
                     && !handled_by_flush
+                    && !widgets::is_obscured(&state)
                     && let Err(error) = refresh_all(document, &mut state)
                 {
                     eprintln!("desktop: refresh failed (continuing): {error}");
@@ -466,6 +476,12 @@ pub fn main() -> Result<(), String> {
                 if let Err(error) = apply_pending_rubber(document, &mut state) {
                     eprintln!("desktop: rubber update failed (continuing): {error}");
                 }
+                if let Err(error) = drag::apply_pending_motion(document, &mut state) {
+                    eprintln!("desktop: drag ghost update failed (continuing): {error}");
+                }
+                if let Err(error) = sticky::apply_pending_gesture(document, &mut state) {
+                    eprintln!("desktop: sticky gesture update failed (continuing): {error}");
+                }
                 if let Err(error) = widgets::apply_pending_drag(document, &mut state) {
                     eprintln!("desktop: widget drag update failed (continuing): {error}");
                 }
@@ -480,7 +496,15 @@ pub fn main() -> Result<(), String> {
                     eprintln!("desktop: downloads notice failed: {error}");
                 }
                 let _completed_workspace_present = state.workspace_present_span.take();
-                if let Err(error) = refresh_all(document, &mut state) {
+                if widgets::is_obscured(&state) {
+                    // Fully covered: the compositor shows nothing, so defer every projection and
+                    // keep the dirty flags armed for the uncover flush. Only completed icon
+                    // results are applied, so the bounded result cache cannot back up while the
+                    // desktop is covered.
+                    if let Err(error) = apply_pending_icon_results(document, &mut state) {
+                        eprintln!("desktop: icon apply failed (continuing): {error}");
+                    }
+                } else if let Err(error) = refresh_all(document, &mut state) {
                     eprintln!("desktop: refresh failed (continuing): {error}");
                 }
                 if let Err(error) = widgets::poll(document, &mut state) {

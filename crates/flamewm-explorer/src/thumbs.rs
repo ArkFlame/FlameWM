@@ -88,15 +88,6 @@ pub fn thumb_format(path: &Path) -> Option<ThumbFormat> {
     }
 }
 
-/// Raster-only view of [`thumb_format`], for callers that can only handle single-bitmap formats.
-#[must_use]
-pub fn source_format(path: &Path) -> Option<ImageSourceFormat> {
-    match thumb_format(path)? {
-        ThumbFormat::Raster(format) => Some(format),
-        _ => None,
-    }
-}
-
 fn read_uint(bytes: &[u8], at: usize, len: usize, big_endian: bool) -> Option<u32> {
     let raw = bytes.get(at..at + len)?;
     let value = if big_endian {

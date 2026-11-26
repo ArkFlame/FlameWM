@@ -41,7 +41,7 @@ pub(crate) fn handle_event(
                         .map(|number| number - 1);
                     if let Some(index) = index {
                         let count =
-                            wheel_slot_labels(state.wheel_mode, wheel_path(state).as_deref()).len();
+                            wheel_slot_count(state.wheel_mode, wheel_path(state).as_deref());
                         if index < count {
                             return handle_menu_action(
                                 &format!("convert.slot.{index}"),
@@ -433,22 +433,16 @@ pub(crate) fn handle_item(
                     offset_y: drag.start_y - origin.y as f32,
                     count: drag.originals.len(),
                     visible: false,
+                    chrome_projected: false,
+                    icon_resolved: false,
                 });
             }
             if let Some(drag_state) = state.item_drag.as_mut() {
                 drag_state.moved = true;
             }
             state.last_click = None;
-            if state
-                .drag_ghost
-                .as_ref()
-                .is_some_and(|ghost| !ghost.visible)
-            {
-                drag_ghost_show_counter().increment();
-            } else {
-                drag_ghost_motion_counter().increment();
-            }
-            show_drag_ghost(document, state, action.x, action.y)?;
+            // Coalesced: only the latest pointer position is applied, once per flush.
+            state.drag_pending = Some((action.x, action.y));
         }
         UiActionPhase::Release => {
             let Some(drag) = state.item_drag.take() else {

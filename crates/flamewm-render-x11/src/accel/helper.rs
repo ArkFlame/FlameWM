@@ -28,6 +28,10 @@ pub(super) struct RemoteGpu {
     stdin: ChildStdin,
     stdout: ChildStdout,
     device: String,
+    /// Retained wire scratch: one request body and one reply body, so a batch never allocates a
+    /// whole-frame buffer per call.
+    request: Vec<u8>,
+    reply: Vec<u8>,
 }
 
 impl RemoteGpu {
@@ -46,15 +50,18 @@ impl RemoteGpu {
             stdin,
             stdout,
             device: String::new(),
+            request: Vec::new(),
+            reply: Vec::new(),
         };
-        let handshake = read_message(&mut remote.stdout)?;
-        remote.device = String::from_utf8_lossy(&parse_reply(&handshake)?).into_owned();
+        read_message(&mut remote.stdout, &mut remote.reply)?;
+        remote.device = String::from_utf8_lossy(reply_payload(&remote.reply)?).into_owned();
         Ok(remote)
     }
 
-    fn call(&mut self, request: &[u8]) -> Result<Vec<u8>, String> {
-        write_message(&mut self.stdin, request)?;
-        parse_reply(&read_message(&mut self.stdout)?)
+    /// Sends `self.request` and reads the reply into `self.reply`.
+    fn exchange(&mut self) -> Result<(), String> {
+        write_message(&mut self.stdin, &self.request)?;
+        read_message(&mut self.stdout, &mut self.reply)
     }
 }
 
@@ -111,12 +118,14 @@ impl PixelBackend for RemoteGpu {
         height: u32,
         ops: &[PixelOp<'_>],
     ) -> Result<(), String> {
-        let request = encode_request(width, height, pixels, ops)?;
-        let frame = self.call(&request)?;
+        self.request.clear();
+        encode_request_into(&mut self.request, width, height, pixels, ops)?;
+        self.exchange()?;
+        let frame = reply_payload(&self.reply)?;
         if frame.len() != pixels.len() {
             return Err("helper returned a frame of the wrong size".to_owned());
         }
-        pixels.copy_from_slice(&frame);
+        pixels.copy_from_slice(frame);
         Ok(())
     }
 }
@@ -133,25 +142,43 @@ pub fn serve_gpu_helper() -> Result<(), String> {
             return Err(error);
         }
     };
-    write_message(&mut output, &reply_ok(gpu.device().as_bytes()))?;
+    // One message buffer, one frame buffer and one reply buffer for the life of the helper: a
+    // request reuses their capacity instead of allocating a whole frame per call.
+    let mut body = Vec::new();
+    let mut frame = Vec::new();
+    let mut reply = reply_ok(gpu.device().as_bytes());
+    write_message(&mut output, &reply)?;
     loop {
         // A closed or broken stdin means the parent is gone or dropped the slot: exit cleanly.
-        let Ok(body) = read_message(&mut input) else {
+        if read_message(&mut input, &mut body).is_err() {
             return Ok(());
-        };
-        let reply = match serve_one(&mut gpu, &body) {
-            Ok(frame) => reply_ok(&frame),
-            Err(error) => reply_error(&error),
-        };
+        }
+        reply.clear();
+        match serve_one(&mut gpu, &body, &mut frame, &mut reply) {
+            Ok(()) => {}
+            Err(error) => {
+                reply.push(1);
+                reply.extend_from_slice(error.as_bytes());
+            }
+        }
         write_message(&mut output, &reply)?;
     }
 }
 
-fn serve_one(gpu: &mut gles::GpuBlur, body: &[u8]) -> Result<Vec<u8>, String> {
+/// Runs one decoded request into `frame` and writes the status byte plus the result into `reply`.
+fn serve_one(
+    gpu: &mut gles::GpuBlur,
+    body: &[u8],
+    frame: &mut Vec<u8>,
+    reply: &mut Vec<u8>,
+) -> Result<(), String> {
     let request = decode_request(body)?;
-    let mut frame = request.frame.to_vec();
-    gpu.paint_batch(&mut frame, request.width, request.height, &request.ops)?;
-    Ok(frame)
+    frame.clear();
+    frame.extend_from_slice(request.frame);
+    gpu.paint_batch(frame, request.width, request.height, &request.ops)?;
+    reply.push(0);
+    reply.extend_from_slice(frame);
+    Ok(())
 }
 
 /// `FLAMEWM_GPU_HELPER` overrides the path; otherwise the helper sits next to this binary.
@@ -180,16 +207,17 @@ fn write_message(out: &mut impl Write, body: &[u8]) -> Result<(), String> {
         .map_err(io_error("helper write failed"))
 }
 
-fn read_message(input: &mut impl Read) -> Result<Vec<u8>, String> {
+fn read_message(input: &mut impl Read, body: &mut Vec<u8>) -> Result<(), String> {
     let mut len = [0_u8; 4];
     input
         .read_exact(&mut len)
         .map_err(io_error("helper read failed"))?;
-    let mut body = vec![0_u8; u32::from_le_bytes(len) as usize];
+    let len = u32::from_le_bytes(len) as usize;
+    body.clear();
+    body.resize(len, 0);
     input
-        .read_exact(&mut body)
-        .map_err(io_error("helper read failed"))?;
-    Ok(body)
+        .read_exact(body.as_mut_slice())
+        .map_err(io_error("helper read failed"))
 }
 
 fn reply_ok(payload: &[u8]) -> Vec<u8> {
@@ -205,12 +233,18 @@ fn reply_error(text: &str) -> Vec<u8> {
     reply
 }
 
-fn parse_reply(body: &[u8]) -> Result<Vec<u8>, String> {
+/// The frame or device text of a reply body, borrowed from `body`.
+fn reply_payload(body: &[u8]) -> Result<&[u8], String> {
     match body.split_first() {
-        Some((0, payload)) => Ok(payload.to_vec()),
+        Some((0, payload)) => Ok(payload),
         Some((_, text)) => Err(String::from_utf8_lossy(text).into_owned()),
         None => Err("empty helper reply".to_owned()),
     }
+}
+
+#[cfg(test)]
+fn parse_reply(body: &[u8]) -> Result<Vec<u8>, String> {
+    reply_payload(body).map(<[u8]>::to_vec)
 }
 
 fn put_u32(out: &mut Vec<u8>, value: u32) {
@@ -261,31 +295,31 @@ fn put_box(out: &mut Vec<u8>, rect: BoxRect) {
     put_u32(out, rect.3);
 }
 
-fn encode_request(
+fn encode_request_into(
+    out: &mut Vec<u8>,
     width: u32,
     height: u32,
     frame: &[u8],
     ops: &[PixelOp<'_>],
-) -> Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(frame.len() + 64);
-    put_u32(&mut out, width);
-    put_u32(&mut out, height);
-    put_bytes(&mut out, frame)?;
+) -> Result<(), String> {
+    put_u32(out, width);
+    put_u32(out, height);
+    put_bytes(out, frame)?;
     put_u32(
-        &mut out,
+        out,
         u32::try_from(ops.len()).map_err(|_| "too many helper ops".to_owned())?,
     );
     for op in ops {
         match *op {
             PixelOp::FillRoundedRect { outer, hole, color } => {
                 out.push(TAG_FILL);
-                put_rect(&mut out, outer);
-                put_opt_rect(&mut out, hole);
+                put_rect(out, outer);
+                put_opt_rect(out, hole);
                 out.extend_from_slice(&color);
             }
             PixelOp::Blur { radius } => {
                 out.push(TAG_BLUR);
-                put_f32(&mut out, radius);
+                put_f32(out, radius);
             }
             PixelOp::BlendMask {
                 x,
@@ -296,11 +330,11 @@ fn encode_request(
                 color,
             } => {
                 out.push(TAG_MASK);
-                put_i32(&mut out, x);
-                put_i32(&mut out, y);
-                put_u32(&mut out, width);
-                put_u32(&mut out, height);
-                put_bytes(&mut out, mask)?;
+                put_i32(out, x);
+                put_i32(out, y);
+                put_u32(out, width);
+                put_u32(out, height);
+                put_bytes(out, mask)?;
                 out.extend_from_slice(&color);
             }
             PixelOp::BlendImage {
@@ -311,11 +345,11 @@ fn encode_request(
                 rgba,
             } => {
                 out.push(TAG_IMAGE);
-                put_i32(&mut out, x);
-                put_i32(&mut out, y);
-                put_u32(&mut out, width);
-                put_u32(&mut out, height);
-                put_bytes(&mut out, rgba)?;
+                put_i32(out, x);
+                put_i32(out, y);
+                put_u32(out, width);
+                put_u32(out, height);
+                put_bytes(out, rgba)?;
             }
             PixelOp::BackdropBlur {
                 clip,
@@ -324,10 +358,10 @@ fn encode_request(
                 radius,
             } => {
                 out.push(TAG_BACKDROP);
-                put_box(&mut out, clip);
-                put_box(&mut out, node);
-                put_u32(&mut out, corner);
-                put_f32(&mut out, radius);
+                put_box(out, clip);
+                put_box(out, node);
+                put_u32(out, corner);
+                put_f32(out, radius);
             }
             PixelOp::FillRoundedRectClipped {
                 outer,
@@ -336,13 +370,26 @@ fn encode_request(
                 clip,
             } => {
                 out.push(TAG_FILL_CLIPPED);
-                put_rect(&mut out, outer);
-                put_opt_rect(&mut out, hole);
+                put_rect(out, outer);
+                put_opt_rect(out, hole);
                 out.extend_from_slice(&color);
-                put_box(&mut out, clip);
+                put_box(out, clip);
             }
         }
     }
+    Ok(())
+}
+
+/// Test-only allocating wrapper around [`encode_request_into`].
+#[cfg(test)]
+fn encode_request(
+    width: u32,
+    height: u32,
+    frame: &[u8],
+    ops: &[PixelOp<'_>],
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(frame.len() + 64);
+    encode_request_into(&mut out, width, height, frame, ops)?;
     Ok(out)
 }
 

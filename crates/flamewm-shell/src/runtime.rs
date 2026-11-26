@@ -451,26 +451,6 @@ pub fn panel_contexts_for_snapshot(
         .collect()
 }
 
-/// Pure hotplug seam: panel surfaces (keyed by output) whose output is no
-/// longer a connected panel output in `snapshot`. Only those are removed.
-#[must_use]
-pub fn panel_surface_outputs_to_remove(
-    existing: &[flamewm_api::OutputId],
-    snapshot: &ShellSnapshot,
-) -> Vec<flamewm_api::OutputId> {
-    existing
-        .iter()
-        .filter(|id| {
-            !snapshot
-                .displays
-                .outputs
-                .iter()
-                .any(|output| output.connected && output.id == **id)
-        })
-        .cloned()
-        .collect()
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PanelReconcilePlan {
     update: Vec<flamewm_api::OutputId>,

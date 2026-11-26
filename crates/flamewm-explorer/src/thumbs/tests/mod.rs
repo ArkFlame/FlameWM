@@ -93,7 +93,6 @@ fn image_vector_icon_and_launcher_rows_are_thumbnailable() {
     for name in ["f.bmp", "g.ppm", "h.txt", "noext"] {
         assert_eq!(thumb_format(Path::new(name)), None, "{name}");
     }
-    assert_eq!(source_format(Path::new("v.svg")), None);
     assert_eq!(
         ThumbKey::of(&entry_of(Path::new("v.svg"))).map(|k| k.path),
         Some(PathBuf::from("v.svg"))

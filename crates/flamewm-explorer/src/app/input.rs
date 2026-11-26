@@ -389,8 +389,9 @@ impl ExplorerApp {
                 if self.pending_navigation.is_none() {self.model.append_scan(generation,&path,first,entries);}
             },
             WorkerResult::Scanned{generation,path,entries}=>{
-                if self.pending_navigation.as_ref().is_some_and(|(g,tab,candidate)|*g==generation && *tab==self.model.active && candidate.path()==path) {
-                    let (_,_,candidate)=self.pending_navigation.take().expect("matching candidate");
+                let matches_pending=self.pending_navigation.as_ref().is_some_and(|(g,tab,candidate)|*g==generation && *tab==self.model.active && candidate.path()==path);
+                if matches_pending {
+                    let Some((_,_,candidate))=self.pending_navigation.take() else {return;};
                     match entries {
                         Ok(items)=>{
                             self.clear_search();
@@ -427,7 +428,10 @@ impl ExplorerApp {
                 // Local listings filter hidden names in `list_directory`; remote chunks are filtered here.
                 if !self.model.hidden {rows.retain(|entry|!entry.name.starts_with('.'));}
                 if self.model.append_listing(generation,&path,rows) {
-                    view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);
+                    // Servers usually return rows already in order: the sortedness scan is O(n) where
+                    // the unconditional sort was O(n log n) and ran again for every appended chunk.
+                    let tab=self.model.tab_mut();
+                    if !view::is_sorted_by(&tab.entries,self.column_sort) {view::sort_entries(&mut tab.entries,self.column_sort);}
                 }
             },
             WorkerResult::RemoteDone{generation,path,failure}=>{

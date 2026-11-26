@@ -202,6 +202,15 @@ pub(crate) fn refresh_all(
     refresh_workspace_projection(document, state)?;
     refresh_if_changed(document, state)?;
     apply_pending_icon_results(document, state)?;
+    // A live drag ghost that painted the fallback icon upgrades as soon as its drained raster
+    // lands; without a slot sync the miss would otherwise keep the fallback until release.
+    if state
+        .drag_ghost
+        .as_ref()
+        .is_some_and(|ghost| ghost.visible && !ghost.icon_resolved)
+    {
+        sync_drag_ghost(document, state)?;
+    }
     sync_conversion_preview(document, state)?;
     sticky::poll_persist(document, state)
 }
@@ -439,28 +448,56 @@ pub(crate) fn refresh_workspace_projection(
 
 /// Launcher metadata cache keyed by path, refreshed after every rescan.
 /// The Icon= value wins; per-kind defaults apply otherwise. Parsing stays in
-/// the applications owner; this cache only records the outcome.
+/// the applications owner; this cache only records the outcome. An entry whose
+/// file stamp is unchanged is reused, so a rescan triggered by any other file in
+/// the desktop directory does not re-read and re-parse every launcher.
 pub(crate) fn refresh_launchers(state: &mut DesktopState) {
-    state.launchers.clear();
+    let mut previous = std::mem::take(&mut state.launchers);
+    let mut next = BTreeMap::new();
     for item in state.model.items() {
         if item.kind != DesktopItemKind::DesktopLauncher {
             continue;
         }
-        let meta = match DesktopEntry::from_file(&item.path) {
-            Ok(Some(entry)) => LauncherMeta {
-                icon: entry.icon().to_owned(),
-                name: flamewm_applications::desktop_file_display_name(&item.path)
-                    .unwrap_or_else(|| entry.name().to_owned()),
-                valid: true,
-            },
-            Ok(None) | Err(_) => LauncherMeta {
-                icon: String::new(),
-                name: flamewm_applications::desktop_file_display_name(&item.path)
-                    .unwrap_or_default(),
-                valid: false,
-            },
-        };
-        state.launchers.insert(item.path.clone(), meta);
+        let stamp = launcher_stamp(&item.path);
+        let meta = previous
+            .remove(&item.path)
+            .filter(|held| held.stamp == stamp && stamp.modified.is_some())
+            .unwrap_or_else(|| parse_launcher(&item.path, stamp));
+        next.insert(item.path.clone(), meta);
+    }
+    state.launchers = next;
+}
+
+/// File identity for launcher cache reuse. An unreadable file yields `modified: None`, which is
+/// never reused, so a transient stat failure is retried on the next refresh.
+fn launcher_stamp(path: &Path) -> LauncherStamp {
+    match fs::metadata(path) {
+        Ok(metadata) => LauncherStamp {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        Err(_) => LauncherStamp {
+            len: 0,
+            modified: None,
+        },
+    }
+}
+
+fn parse_launcher(path: &Path, stamp: LauncherStamp) -> LauncherMeta {
+    match DesktopEntry::from_file(path) {
+        Ok(Some(entry)) => LauncherMeta {
+            icon: entry.icon().to_owned(),
+            name: flamewm_applications::desktop_file_display_name(path)
+                .unwrap_or_else(|| entry.name().to_owned()),
+            valid: true,
+            stamp,
+        },
+        Ok(None) | Err(_) => LauncherMeta {
+            icon: String::new(),
+            name: flamewm_applications::desktop_file_display_name(path).unwrap_or_default(),
+            valid: false,
+            stamp,
+        },
     }
 }
 

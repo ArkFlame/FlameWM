@@ -285,14 +285,17 @@ impl ShellLoop {
                 lookup(&entry.app_id).map_or_else(|| entry.app_id.clone(), |app| app.name.clone())
             })
             .collect();
-        let state: DockSync = (
-            frame.clone(),
-            placed,
-            names.clone(),
-            layout.entries.clone(),
-            settings.squared_corners,
-        );
-        if self.dock_last.as_ref() != Some(&state) {
+        // Compare against the last published dock frame by reference, so an idle tick does not
+        // clone the frame, the name list or the entry list just to throw them away.
+        let squared = settings.squared_corners;
+        let unchanged = self.dock_last.as_ref().is_some_and(|last| {
+            last.0 == frame
+                && last.1 == placed
+                && last.2 == names
+                && last.3 == layout.entries
+                && last.4 == squared
+        });
+        if !unchanged {
             let icon_px = (settings.icon_size * scale).round() as u32;
             let icon_names: Vec<String> = layout
                 .entries
@@ -342,7 +345,7 @@ impl ShellLoop {
             }
             let _ = runtime.redraw(surface);
             self.dock_entries.clone_from(&layout.entries);
-            self.dock_last = Some(state);
+            self.dock_last = Some((frame.clone(), placed, names, layout.entries.clone(), squared));
         }
         self.place_dock(
             runtime,

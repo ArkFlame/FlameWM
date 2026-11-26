@@ -327,7 +327,13 @@ impl Screen {
         let capture = self.full_region() && !self.alt_active;
         let blank = self.blank();
         // Rotate the region and blank the row that wrapped to the bottom in place: no per-line row allocation.
-        self.dirty_all = true;
+        // A captured line shifts the window a scrolled-back view shows, so that case still rebuilds everything.
+        if capture {
+            self.dirty_all = true;
+        } else {
+            // Only the scrolled region changed; rows outside it (a status line, a fixed header) stay clean.
+            self.dirty_rows[top..=bottom].fill(true);
+        }
         let grid = if self.alt_active {
             &mut self.alt
         } else {
@@ -350,7 +356,8 @@ impl Screen {
     fn scroll_down(&mut self, count: usize) {
         let (top, bottom) = (self.scroll_top, self.scroll_bottom);
         let blank = self.blank();
-        self.dirty_all = true;
+        // Only the scrolled region changed, so narrow the damage instead of rebuilding the whole grid.
+        self.dirty_rows[top..=bottom].fill(true);
         let grid = if self.alt_active {
             &mut self.alt
         } else {
@@ -421,9 +428,7 @@ impl Screen {
             return;
         }
         let line = self.row_mut(row);
-        for cell in &mut line[from..to] {
-            *cell = blank;
-        }
+        line[from..to].fill(blank);
     }
 
     fn erase_lines(&mut self, from: usize, to: usize) {

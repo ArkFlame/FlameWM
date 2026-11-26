@@ -128,7 +128,17 @@ pub(crate) fn wheel_hit_at(state: &DesktopState, x: f32, y: f32) -> Option<usize
         .as_ref()
         .and_then(|id| state.model.items().find(|item| &item.id == id))
         .map(|item| &item.path)?;
-    (index < wheel_slot_labels(state.wheel_mode, Some(path)).len()).then_some(index)
+    (index < wheel_slot_count(state.wheel_mode, Some(path))).then_some(index)
+}
+
+/// Number of live segments without building any label string; hover hit tests use this.
+pub(crate) fn wheel_slot_count(mode: WheelMode, path: Option<&Path>) -> usize {
+    match (mode, path) {
+        (WheelMode::Actions, _) => WheelAction::ALL.len(),
+        (_, None) => 0,
+        (WheelMode::Convert, Some(path)) => offered_formats(path).len(),
+        (WheelMode::Tools, Some(path)) => offered_tools(path).len(),
+    }
 }
 
 /// Labels for the eight segments of the current mode. Actions need no file.
@@ -280,17 +290,24 @@ pub(crate) fn update_wheel_hover(
     state.wheel_hover = sector;
     if let Some(index) = sector {
         let accent = accent_color(&state.settings);
-        document.image_rgba8(
-            "convert-wheel-highlight",
-            RuntimeImage {
-                source: format!("convert-wheel-sector-{index}"),
-                width: convert_wheel::WHEEL_SIZE,
-                height: convert_wheel::WHEEL_SIZE,
-                pixels: convert_wheel::highlight_pixels(index, [accent.r, accent.g, accent.b]),
-            },
-        )?;
+        let accent_rgb = [accent.r, accent.g, accent.b];
+        // The raster is a full 328x328 layer: upload it only when the sector or accent changed.
+        if state.wheel_highlight != Some((index, accent_rgb)) {
+            document.image_rgba8(
+                "convert-wheel-highlight",
+                RuntimeImage {
+                    source: format!("convert-wheel-sector-{index}"),
+                    width: convert_wheel::WHEEL_SIZE,
+                    height: convert_wheel::WHEEL_SIZE,
+                    pixels: convert_wheel::highlight_pixels(index, accent_rgb),
+                },
+            )?;
+            state.wheel_highlight = Some((index, accent_rgb));
+        }
         document.visible("convert-wheel-highlight", true)?;
     } else {
+        // Drop the cached raster: a later reopen may target a rebuilt document.
+        state.wheel_highlight = None;
         document.visible("convert-wheel-highlight", false)?;
     }
     Ok(())

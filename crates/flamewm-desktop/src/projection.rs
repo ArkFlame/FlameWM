@@ -488,7 +488,7 @@ pub fn project_drag_ghost_icon_scaled(
     kind: DesktopItemKind,
     icon_override: Option<&str>,
     scale: u16,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let key = ParallelIconService::icon_key_scaled(kind, icon_override, scale);
     // Miss: Flame fallback now, HIGH request queued, drain replaces it.
     let cached = icons.cached(&key);
@@ -503,7 +503,7 @@ pub fn project_drag_ghost_icon_scaled(
     if miss {
         icons.request_high(key);
     }
-    Ok(())
+    Ok(!miss)
 }
 
 pub fn project_conversion_preview_icon_scaled(
