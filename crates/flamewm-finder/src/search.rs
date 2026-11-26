@@ -4,6 +4,9 @@
 //! Syntax: free words are name/path terms that must all match. `type:ext` keeps files with that
 //! extension; `in:folder` keeps paths under that folder (`~` expands to the home folder).
 
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
+
 use crate::index::{Entry, Index};
 
 /// Matches kept for display. The total count is still reported.
@@ -161,6 +164,29 @@ pub fn score(entry: &Entry, query: &Query, now: i64) -> Option<i64> {
     Some(total + recency_bonus(entry.modified, now) - depth)
 }
 
+/// One ranked match. Orders best-first by score, then by path, so a bounded heap can drop the
+/// worst match without collecting and sorting every candidate first.
+#[derive(PartialEq, Eq)]
+struct Candidate<'a> {
+    score: i64,
+    path: &'a str,
+    index: usize,
+}
+
+impl Ord for Candidate<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score
+            .cmp(&other.score)
+            .then_with(|| other.path.cmp(self.path))
+    }
+}
+
+impl PartialOrd for Candidate<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Ranks the index for `query`. An empty query returns the recent-files view.
 #[must_use]
 pub fn rank(index: &Index, query: &Query, now: i64) -> Hits {
@@ -180,21 +206,32 @@ pub fn rank(index: &Index, query: &Query, now: i64) -> Hits {
             recent: true,
         };
     }
-    let mut scored: Vec<(i64, usize)> = index
-        .entries
-        .iter()
-        .enumerate()
-        .filter_map(|(i, entry)| score(entry, query, now).map(|value| (value, i)))
-        .collect();
-    let total = scored.len();
-    scored.sort_unstable_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| index.entries[a.1].path.cmp(&index.entries[b.1].path))
-    });
-    scored.truncate(DISPLAY_LIMIT);
+    // Keep only the display limit in a min-heap, so a query over the whole index allocates a few
+    // kilobytes instead of one tuple per entry, and sorts the kept matches only.
+    let mut best: BinaryHeap<Reverse<Candidate<'_>>> = BinaryHeap::with_capacity(DISPLAY_LIMIT + 1);
+    let mut total = 0usize;
+    for (index, entry) in index.entries.iter().enumerate() {
+        let Some(value) = score(entry, query, now) else {
+            continue;
+        };
+        total += 1;
+        let candidate = Candidate {
+            score: value,
+            path: entry.path.as_str(),
+            index,
+        };
+        if best.len() < DISPLAY_LIMIT {
+            best.push(Reverse(candidate));
+        } else if best.peek().is_some_and(|Reverse(worst)| candidate > *worst) {
+            best.pop();
+            best.push(Reverse(candidate));
+        }
+    }
+    let mut scored: Vec<Candidate<'_>> = best.into_iter().map(|Reverse(item)| item).collect();
+    scored.sort_unstable_by(|a, b| b.cmp(a));
     Hits {
         total,
-        indices: scored.into_iter().map(|(_, i)| i).collect(),
+        indices: scored.into_iter().map(|item| item.index).collect(),
         recent: false,
     }
 }

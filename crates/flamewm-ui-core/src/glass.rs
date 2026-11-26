@@ -11,6 +11,9 @@
 //! Dark: regular glass `rgba(234,244,255,.12)`, 28px blur, saturate 170%, rim `.17`.
 //! Light: clear glass `rgba(255,255,255,.045)`, 13px blur, saturate 155%, rim `.23`.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::settings_groups::is_group_custom;
 use flamewm_skin::palette::{
@@ -188,7 +191,7 @@ pub enum MaterialRole {
 }
 
 /// Taskbar/Dock material mode (`taskbarMaterialMode`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskbarMode {
     BlurOnly,
     Inherit,
@@ -196,7 +199,7 @@ pub enum TaskbarMode {
 }
 
 /// Resolved appearance inputs, one per persisted setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Appearance {
     /// `reduceTransparency`.
     pub reduce_transparency: bool,
@@ -262,7 +265,37 @@ fn scrim_for(appearance: Appearance) -> Option<(u32, u16)> {
 }
 
 /// Ink palette for the glass over the published backdrop; `None` without one.
+///
+/// The WCAG solve inside `glass_ink` (luminance `powf` plus two scrim binary searches) is the
+/// expensive part, and every projection rebuilds the same [`Appearance`] per frame. The result is
+/// pure in `Appearance`, so a small cache cannot go stale.
 fn ink_for(appearance: Appearance) -> Option<Palette> {
+    let cache = ink_cache();
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(hit) = cache.get(&appearance) {
+            return *hit;
+        }
+    }
+    let resolved = ink_for_uncached(appearance);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= INK_CACHE_CAP {
+        cache.clear();
+    }
+    cache.insert(appearance, resolved);
+    resolved
+}
+
+fn ink_cache() -> &'static Mutex<HashMap<Appearance, Option<Palette>>> {
+    static CACHE: OnceLock<Mutex<HashMap<Appearance, Option<Palette>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn ink_for_uncached(appearance: Appearance) -> Option<Palette> {
     let backdrop = Rgb(appearance.backdrop_rgb?);
     let tint = Rgb(glass_tint_rgb(appearance));
     let alpha = permille_to_alpha(u16::from(appearance.glass_opacity_percent) * 10);
@@ -347,8 +380,46 @@ const fn standard_rgb(appearance: Appearance) -> u32 {
     }
 }
 
+/// Cap for the appearance-keyed material cache. A live desktop holds a handful of distinct glass
+/// appearances, so a full cache is reset rather than grown.
+const REGULAR_CACHE_CAP: usize = 16;
+
+/// Same rationale as `REGULAR_CACHE_CAP`: a live desktop has a handful of distinct ink appearances.
+const INK_CACHE_CAP: usize = 16;
+
 /// Regular glass material from the glass opacity and blur settings.
+///
+/// The legibility solve is the expensive part of [`resolve`]: WCAG luminance uses `powf` and the
+/// scrim floor runs two binary searches. Every consumer rebuilds the same [`Appearance`] per frame,
+/// so one cache hit replaces the whole solve. The result is pure in `Appearance`, so no entry can
+/// go stale when settings change: the changed value hashes to a different key.
 fn regular(appearance: Appearance) -> (u32, u16, u16) {
+    let cache = regular_cache();
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(hit) = cache.get(&appearance) {
+            return *hit;
+        }
+    }
+    let resolved = regular_uncached(appearance);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= REGULAR_CACHE_CAP {
+        cache.clear();
+    }
+    cache.insert(appearance, resolved);
+    resolved
+}
+
+fn regular_cache() -> &'static Mutex<HashMap<Appearance, (u32, u16, u16)>> {
+    static CACHE: OnceLock<Mutex<HashMap<Appearance, (u32, u16, u16)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn regular_uncached(appearance: Appearance) -> (u32, u16, u16) {
     let tint = glass_tint_rgb(appearance);
     let alpha = u16::from(appearance.glass_opacity_percent) * 10;
     let blur = u16::from(appearance.glass_blur_px);
@@ -523,10 +594,7 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
             .unwrap_or(defaults.taskbar_opacity_percent)
             .min(75),
         taskbar_custom_tint: custom_tint.unwrap_or(defaults.taskbar_custom_tint),
-        light: matches!(
-            snapshot.values.get("appearance"),
-            Some(SettingValue::Text(value)) if value.eq_ignore_ascii_case("light")
-        ),
+        light: appearance_is_light(snapshot),
         backdrop_rgb: wallpaper_mean_rgb(snapshot),
     }
 }
@@ -535,7 +603,9 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
 /// Shares the selector with `palette_from_settings` so both follow one `appearance` value.
 #[must_use]
 pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
-    let light = appearance_from_settings(snapshot).light;
+    // Overlays only need the light flag, not the full material resolution (tint parsing, blur
+    // mapping, backdrop lookup) that building an `Appearance` costs on every projection.
+    let light = appearance_is_light(snapshot);
     if high_contrast_from_settings(snapshot) {
         return Overlays::high_contrast(light);
     }
@@ -544,6 +614,14 @@ pub fn overlays_from_settings(snapshot: &SettingsSnapshot) -> Overlays {
     } else {
         Overlays::DARK
     }
+}
+
+/// `appearance` is `light` (case-insensitive). `system` and `dark` resolve to the Dark palette.
+fn appearance_is_light(snapshot: &SettingsSnapshot) -> bool {
+    matches!(
+        snapshot.values.get("appearance"),
+        Some(SettingValue::Text(value)) if value.eq_ignore_ascii_case("light")
+    )
 }
 
 /// `highContrast` toggle (WCAG 1.4.6 and 1.4.11 palette). Default off.

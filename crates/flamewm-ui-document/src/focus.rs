@@ -55,16 +55,20 @@ pub fn next_focusable_where(
             }
         }
         Some(current) => {
-            let steps = 1..count;
-            let order: Box<dyn Iterator<Item = usize>> = if reverse {
-                Box::new(steps.map(move |step| (current + count - step) % count))
-            } else {
-                Box::new(steps.map(move |step| (current + step) % count))
-            };
-            order
-                .filter(|&index| focusable(index))
-                .map(|index| index as u32)
-                .next()
+            // Walk the remaining `count - 1` positions without allocating: a boxed iterator per
+            // Tab press is pure overhead in the key path.
+            let mut index = current;
+            for _ in 1..count {
+                index = if reverse {
+                    index.wrapping_add(count - 1) % count
+                } else {
+                    index.wrapping_add(1) % count
+                };
+                if focusable(index) {
+                    return Some(index as u32);
+                }
+            }
+            None
         }
     }
 }

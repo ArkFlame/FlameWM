@@ -1,5 +1,121 @@
 use super::super::*;
 
+/// Tab strip slots compiled into the template (`tab-0`…`tab-4`).
+const TAB_SLOTS:usize=5;
+
+/// Node ids for one sidebar slot, formatted once instead of on every projection.
+struct SidebarIds {
+    head:String, head_label:String, prow:String, place:String, place_label:String,
+    pact:String, pact_eject:String, pact_mount:String,
+    ico:[String; PLACE_ICONS.len()],
+}
+/// Node ids for one list row slot.
+struct SlotIds {
+    row:String, name:String, name_dim:String, size:String, modified:String, kind:String,
+    ico_thumb:String, ico:[String; ROW_ICONS.len()],
+}
+/// Every template id the projection writes, built once per process. The projection runs on each
+/// input and glide frame, so the roughly one thousand `format!("…-{slot}")` calls it made per frame
+/// were the largest steady-state allocation source in the explorer window.
+struct IdTables {
+    sidebar:Vec<SidebarIds>, rows:Vec<SlotIds>, tabs:Vec<String>, menus:Vec<String>,
+    col_sep:[String;3], col_grip:[String;3], sort_asc:[String;4], sort_desc:[String;4],
+    crumbs:Vec<String>, dialog_lines:[String;4], dialog_buttons:[String;4],
+}
+thread_local! {
+    static ID_TABLES:RefCell<Option<Rc<IdTables>>>=RefCell::new(None);
+}
+impl IdTables {
+    fn get()->Rc<IdTables> {
+        ID_TABLES.with(|cell|Rc::clone(cell.borrow_mut().get_or_insert_with(||Rc::new(Self::build()))))
+    }
+    fn build()->Self {
+        Self {
+            sidebar:(0..SIDEBAR_SLOTS).map(|slot|SidebarIds{
+                head:format!("sb-head-{slot}"),
+                head_label:format!("sb-head-label-{slot}"),
+                prow:format!("prow-{slot}"),
+                place:format!("place-{slot}"),
+                place_label:format!("place-label-{slot}"),
+                pact:format!("pact-{slot}"),
+                pact_eject:format!("pact-eject-{slot}"),
+                pact_mount:format!("pact-mount-{slot}"),
+                ico:PLACE_ICONS.map(|kind|format!("pico-{slot}-{kind}")),
+            }).collect(),
+            rows:(0..ROW_SLOTS).map(|slot|SlotIds{
+                row:format!("row-{slot}"),
+                name:format!("name-{slot}"),
+                name_dim:format!("name-dim-{slot}"),
+                size:format!("size-{slot}"),
+                modified:format!("modified-{slot}"),
+                kind:format!("kind-{slot}"),
+                ico_thumb:format!("ico-{slot}-thumb"),
+                ico:ROW_ICONS.map(|kind|format!("ico-{slot}-{kind}")),
+            }).collect(),
+            tabs:(0..TAB_SLOTS).map(|i|format!("tab-{i}")).collect(),
+            menus:MENU_ITEMS.iter().map(|item|format!("menu-{item}")).collect(),
+            col_sep:["mod","size","kind"].map(|key|format!("col-sep-{key}")),
+            col_grip:["mod","size","kind"].map(|key|format!("col-grip-{key}")),
+            sort_asc:["name","mod","size","kind"].map(|key|format!("sort-{key}-asc")),
+            sort_desc:["name","mod","size","kind"].map(|key|format!("sort-{key}-desc")),
+            crumbs:(0..BREADCRUMB_SLOTS).map(|i|format!("breadcrumb-{i}")).collect(),
+            dialog_lines:std::array::from_fn(|i|format!("dialog-line-{i}")),
+            dialog_buttons:std::array::from_fn(|i|format!("dialog-b{}",i+1)),
+        }
+    }
+}
+
+/// `HOME` resolved once: `home_dir` stats the candidate, and the address bar asks on every projection.
+thread_local! {
+    static HOME_DIR:std::cell::OnceCell<PathBuf>=const { std::cell::OnceCell::new() };
+}
+fn display_home(path:&Path)->String {
+    HOME_DIR.with(|cell|display_location(path,cell.get_or_init(home_dir)))
+}
+
+/// Row text depends only on the entry itself, so it is formatted when the entry at a slot changes
+/// instead of on every frame. `day` keeps the relative "Today"/"Yesterday" label correct at midnight.
+struct LabelKey {
+    path:PathBuf, size:u64, modified:Option<std::time::SystemTime>, directory:bool, symlink:bool, day:chrono::NaiveDate,
+}
+struct RowLabels { size:String, modified:String, kind:String, thumbnailable:bool }
+thread_local! {
+    static ROW_LABELS:RefCell<Vec<Option<(LabelKey,RowLabels)>>>=RefCell::new(Vec::new());
+}
+/// Labels for row `slot`, rebuilt only when its entry or the local date changes.
+fn row_labels<'a>(cache:&'a mut Vec<Option<(LabelKey,RowLabels)>>,slot:usize,entry:&Entry,day:chrono::NaiveDate)->&'a RowLabels {
+    if cache.len()<=slot {cache.resize_with(slot+1,||None);}
+    let stale=match cache[slot].as_ref() {
+        Some((key,_))=>key.path!=entry.path||key.size!=entry.size||key.modified!=entry.modified
+            ||key.directory!=entry.directory||key.symlink!=entry.symlink||key.day!=day,
+        None=>true,
+    };
+    if stale {
+        cache[slot]=Some((LabelKey{
+                path:entry.path.clone(), size:entry.size, modified:entry.modified,
+                directory:entry.directory, symlink:entry.symlink, day,
+            },RowLabels{
+                size:entry.size_label(),
+                modified:entry.modified_label(),
+                kind:view::kind_name(entry),
+                thumbnailable:thumbs::thumb_format(&entry.path).is_some(),
+            }));
+    }
+    &cache[slot].as_ref().expect("slot filled above").1
+}
+
+/// What decides the context-menu offer. Building it is cheap; the flags it guards are not
+/// (`offered_formats` walks `PATH` and stats each candidate), and an open menu re-projects on every wake.
+struct MenuKey {
+    context_place:Option<usize>, context_on_entry:bool, selected:Option<PathBuf>,
+    many:bool, in_trash:bool, searching:bool, overflow:bool, ark:bool, places_len:usize,
+    /// Kind and state of the sidebar place the menu targets: mount and bookmark offers depend on them.
+    place_state:Option<(bool,bool,PlaceGroup)>,
+}
+thread_local! {
+    static MENU_ENABLED:RefCell<Option<(MenuKey,Rc<Vec<bool>>)>>=RefCell::new(None);
+}
+
 impl ExplorerApp {
     /// The rubber-band overlay is the only node a rubber drag changes before release.
     pub(crate) fn project_rubber(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
@@ -15,16 +131,74 @@ impl ExplorerApp {
         Ok(())
     }
 
+    /// Whether each `MENU_ITEMS` entry is offered for the current context, cached until that context
+    /// changes. `offered_formats` walks `PATH` with a stat per directory; recomputing the flags on every
+    /// wake while a menu is open put filesystem work on the UI thread per frame.
+    fn menu_enabled(&self,selected:Option<&Path>,many:bool,in_trash:bool,searching:bool)->Rc<Vec<bool>> {
+        let place_state=self.context_place.and_then(|i|self.places.get(i)).map(|p|(p.removable,p.mounted(),p.group));
+        MENU_ENABLED.with(|cell|{
+            let mut cell=cell.borrow_mut();
+            let stale=match cell.as_ref() {
+                Some((cached,_))=>cached.context_place!=self.context_place||cached.context_on_entry!=self.context_on_entry
+                    ||cached.selected.as_deref()!=selected||cached.many!=many||cached.in_trash!=in_trash
+                    ||cached.searching!=searching||cached.overflow!=self.menu_overflow||cached.ark!=self.ark
+                    ||cached.places_len!=self.places.len()||cached.place_state!=place_state,
+                None=>true,
+            };
+            if stale {
+                let flags=MENU_ITEMS.iter().map(|item|self.menu_item_enabled(item,selected,many,in_trash,searching)).collect::<Vec<_>>();
+                *cell=Some((MenuKey{
+                    context_place:self.context_place, context_on_entry:self.context_on_entry,
+                    selected:selected.map(Path::to_path_buf), many, in_trash, searching,
+                    overflow:self.menu_overflow, ark:self.ark, places_len:self.places.len(), place_state,
+                },Rc::new(flags)));
+            }
+            Rc::clone(&cell.as_ref().expect("menu state filled above").1)
+        })
+    }
+    /// One context-menu entry's offer state; the arms cover the sidebar, entry and background menus.
+    fn menu_item_enabled(&self,item:&str,selected:Option<&Path>,many:bool,in_trash:bool,searching:bool)->bool {
+        if self.context_place.is_some() {
+            // Sidebar menu: bookmarks can be renamed or removed, mounted devices unmounted or ejected.
+            match item {
+                "placerename"|"placeremove"=>self.context_place.is_some_and(|i|self.is_bookmark(i)),
+                "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable && p.mounted())),
+                "open"|"newtab"|"properties"=>self.context_place.is_some(),
+                "emptytrash"=>self.context_place_path().is_some_and(|path|path==self.trash_base.join("files")),
+                _=>false,
+            }
+        } else {match item {
+            // Folder-only actions: a file entry offers none; a folder entry offers its own; the background offers the current folder.
+            "newfolder"=>!self.context_on_entry,
+            "terminal"|"bookmark"|"newtab"=>!self.context_on_entry || self.selected_folder().is_some(),
+            "paste"=>true,
+            "emptytrash"=>in_trash,
+            "extract"=>self.ark && self.context_on_entry && !many && selected.is_some_and(is_archive),
+            "compress"=>self.ark && self.context_on_entry && selected.is_some(),
+            "copy"|"cut"|"trash"|"duplicate"=>self.context_on_entry && selected.is_some(),
+            "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected.is_some(),
+            // Offered only for a local regular file whose format has at least one conversion target.
+            "convert"=>self.context_on_entry && !many && selected.is_some_and(|p|!remote::is_remote(p) && p.is_file() && !flamewm_conversion_core::conversion::offered_formats(p).is_empty()),
+            "setwallpaper"=>self.context_on_entry && !many && selected.is_some_and(|p|!remote::is_remote(p) && p.is_file() && thumbs::thumb_format(p).is_some_and(crate::thumbs::ThumbFormat::is_image)),
+            "opencontaining"=>searching && self.context_on_entry && !many && selected.is_some(),
+            "restore"=>in_trash && self.context_on_entry && selected.is_some(),
+            "hidden"|"showtype"|"connect"=>self.menu_overflow,
+            _=>false,
+        }}
+    }
+
     pub(crate) fn project(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
         self.theme.project(doc)?;
+        let ids=IdTables::get();
         let tab=self.model.tab();
         // The path bar always shows the folder; search text belongs to the search field only.
-        let address=match self.edit {Some(EditMode::Path)=>self.field.display(),Some(EditMode::Mode)=>format!("Permissions: {}|",self.field.text),_=>display_location(tab.path(),&home_dir())};
+        let address=match self.edit {Some(EditMode::Path)=>self.field.display(),Some(EditMode::Mode)=>format!("Permissions: {}|",self.field.text),_=>display_home(tab.path())};
         doc.text("address-text",address)?;
         let crumbs=if self.edit.is_none() {breadcrumbs(tab.path())} else {Vec::new()};
         for slot in 0..BREADCRUMB_SLOTS {
-            doc.visible(&format!("breadcrumb-{slot}"),slot<crumbs.len())?;
-            if let Some((label,_))=crumbs.get(slot) {doc.text(&format!("breadcrumb-{slot}"),label.clone())?;}
+            let id=&ids.crumbs[slot];
+            doc.visible(id,slot<crumbs.len())?;
+            if let Some((label,_))=crumbs.get(slot) {doc.text_ref(id,label)?;}
         }
         doc.visible("address-text",crumbs.is_empty())?;
         doc.background("address-text",if matches!(self.edit,Some(EditMode::Path)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
@@ -40,7 +214,7 @@ impl ExplorerApp {
         doc.text("search-text",search)?;
         doc.background("search-text",if matches!(self.edit,Some(EditMode::Search)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
         doc.visible("search-clear",self.search_rows.is_some())?;
-        doc.text("menu-connect-label","Connect to Server…".to_string())?;
+        doc.text_ref("menu-connect-label","Connect to Server…")?;
         doc.text("menu-hidden-label",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
         doc.text("menu-showtype-label",format!("Show Type Column: {}",if self.show_type {"On"} else {"Off"}))?;
         doc.foreground("nav-back",if tab.can_back(){self.theme.text()}else{self.theme.muted()})?;
@@ -48,48 +222,51 @@ impl ExplorerApp {
         // Native Finder-style chrome: a single tab has no visible tab strip.
         let tab_strip=self.model.tabs.len()>1;
         doc.visible("tabs",tab_strip)?;
-        for i in 0..5 {
+        for (i,id) in ids.tabs.iter().enumerate() {
             let exists=tab_strip && i<self.model.tabs.len();
-            doc.visible(&format!("tab-{i}"),exists)?;
+            doc.visible(id,exists)?;
             if exists {
                 let title=self.model.tabs[i].path().file_name().unwrap_or_default().to_string_lossy().into_owned();
-                doc.text(&format!("tab-{i}"),if title.is_empty(){"System".into()}else{title})?;
-                doc.background(&format!("tab-{i}"),if i==self.model.active{self.theme.selected()}else{self.theme.card()})?;
+                doc.text(id,if title.is_empty(){"System".into()}else{title})?;
+                doc.background(id,if i==self.model.active{self.theme.selected()}else{self.theme.card()})?;
             }
         }
         let rows=sidebar_rows(&self.places);
-        for slot in 0..SIDEBAR_SLOTS {
+        for (slot,slot_ids) in ids.sidebar.iter().enumerate() {
             // Each slot shows either a group heading or a place button; the other element stays hidden.
             match rows.get(slot) {
                 Some(SidebarRow::Heading(title)) => {
-                    doc.visible(&format!("sb-head-{slot}"),true)?;
-                    doc.text(&format!("sb-head-label-{slot}"),(*title).to_owned())?;
-                    doc.visible(&format!("prow-{slot}"),false)?;
-                    doc.visible(&format!("place-{slot}"),false)?;
+                    doc.visible(&slot_ids.head,true)?;
+                    doc.text_ref(&slot_ids.head_label,title)?;
+                    doc.visible(&slot_ids.prow,false)?;
+                    doc.visible(&slot_ids.place,false)?;
                 }
                 Some(SidebarRow::Place(index)) => {
                     let place=&self.places[*index];
                     let selected=!place.path.as_os_str().is_empty() && place.path==tab.path();
                     let unmounted=!place.mounted();
-                    doc.visible(&format!("sb-head-{slot}"),false)?;
-                    doc.visible(&format!("prow-{slot}"),true)?;
-                    doc.visible(&format!("place-{slot}"),true)?;
-                    for kind in PLACE_ICONS {doc.visible(&format!("pico-{slot}-{kind}"),kind==place.icon)?;}
+                    doc.visible(&slot_ids.head,false)?;
+                    doc.visible(&slot_ids.prow,true)?;
+                    doc.visible(&slot_ids.place,true)?;
+                    for (kind,icon_id) in PLACE_ICONS.iter().zip(&slot_ids.ico) {doc.visible(icon_id,*kind==place.icon)?;}
                     // Inline place rename: the label becomes the field.
-                    let label=if matches!(self.edit,Some(EditMode::PlaceName)) && self.rename_target.as_ref()==Some(&place.path) {self.field.display()} else {place.name.clone()};
-                    doc.text(&format!("place-label-{slot}"),label)?;
-                    doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {self.theme.muted()} else {self.theme.text()})?;
-                    doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.clear()})?;
+                    if matches!(self.edit,Some(EditMode::PlaceName)) && self.rename_target.as_ref()==Some(&place.path) {
+                        doc.text_ref(&slot_ids.place_label,&self.field.display())?;
+                    } else {
+                        doc.text_ref(&slot_ids.place_label,&place.name)?;
+                    }
+                    doc.foreground(&slot_ids.place_label,if unmounted && place.device.is_some() {self.theme.muted()} else {self.theme.text()})?;
+                    doc.background(&slot_ids.place,if selected {self.theme.selected()} else {self.theme.clear()})?;
                     // Device rows get a Dolphin-style button: eject while mounted, mount while not.
                     let device=place.device.is_some();
-                    doc.visible(&format!("pact-{slot}"),device)?;
-                    doc.visible(&format!("pact-eject-{slot}"),device && place.mounted())?;
-                    doc.visible(&format!("pact-mount-{slot}"),device && unmounted)?;
+                    doc.visible(&slot_ids.pact,device)?;
+                    doc.visible(&slot_ids.pact_eject,device && place.mounted())?;
+                    doc.visible(&slot_ids.pact_mount,device && unmounted)?;
                 }
                 None => {
-                    doc.visible(&format!("sb-head-{slot}"),false)?;
-                    doc.visible(&format!("prow-{slot}"),false)?;
-                    doc.visible(&format!("place-{slot}"),false)?;
+                    doc.visible(&slot_ids.head,false)?;
+                    doc.visible(&slot_ids.prow,false)?;
+                    doc.visible(&slot_ids.place,false)?;
                 }
             }
         }
@@ -108,11 +285,11 @@ impl ExplorerApp {
         doc.size("col-size",self.widths.size,HEADER_HEIGHT)?;
         doc.size("col-kind",self.widths.kind,HEADER_HEIGHT)?;
         doc.visible("col-kind",kind_shown)?;
-        for (key,x,shown) in [("mod",mod_x,true),("size",size_x,true),("kind",kind_x,kind_shown)] {
-            doc.position(&format!("col-sep-{key}"),x,0.0)?;
-            doc.visible(&format!("col-sep-{key}"),shown)?;
-            doc.position(&format!("col-grip-{key}"),x-COLUMN_GRIP_HALF,0.0)?;
-            doc.visible(&format!("col-grip-{key}"),shown)?;
+        for (i,(x,shown)) in [(mod_x,true),(size_x,true),(kind_x,kind_shown)].into_iter().enumerate() {
+            doc.position(&ids.col_sep[i],x,0.0)?;
+            doc.visible(&ids.col_sep[i],shown)?;
+            doc.position(&ids.col_grip[i],x-COLUMN_GRIP_HALF,0.0)?;
+            doc.visible(&ids.col_grip[i],shown)?;
         }
         // The engine has no flex-shrink, so a tall sidebar would push the status strip out of the window.
         // The body gets an explicit height: window minus toolbar/tabs, the two 1px hairlines and the status strip.
@@ -123,10 +300,10 @@ impl ExplorerApp {
         // The sidebar is a row child that would otherwise keep its content height and paint over the status strip.
         doc.size("places",SIDEBAR_WIDTH,body_h)?;
         // Sort direction is a drawn triangle per column; only the active column shows one.
-        for (column,key) in [(Column::Name,"name"),(Column::Modified,"mod"),(Column::Size,"size"),(Column::Type,"kind")] {
+        for (i,column) in [Column::Name,Column::Modified,Column::Size,Column::Type].into_iter().enumerate() {
             let active=self.column_sort.column==column;
-            doc.visible(&format!("sort-{key}-asc"),active&&!self.column_sort.descending)?;
-            doc.visible(&format!("sort-{key}-desc"),active&&self.column_sort.descending)?;
+            doc.visible(&ids.sort_asc[i],active&&!self.column_sort.descending)?;
+            doc.visible(&ids.sort_desc[i],active&&self.column_sort.descending)?;
         }
         self.project_rows(doc,true)?;
         // Scrollbar: drawn only while some entries are outside the window; thumb size and position follow the window.
@@ -189,40 +366,15 @@ impl ExplorerApp {
         self.project_convert_picker(doc)?;
         self.project_dialog(doc)?;
         let selected_path=self.selected();
-        let mut shown:Vec<&str>=Vec::new();
         let many=self.model.tab().selected_paths.len()>1;
         let in_trash=tab.path()==self.trash_base.join("files").as_path();
         let searching=self.search_rows.is_some();
-        for item in MENU_ITEMS {
-            let enabled=if self.context_place.is_some() {
-                // Sidebar menu: bookmarks can be renamed or removed, mounted devices unmounted or ejected.
-                match item {
-                    "placerename"|"placeremove"=>self.context_place.is_some_and(|i|self.is_bookmark(i)),
-                    "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable && p.mounted())),
-                    "open"|"newtab"|"properties"=>self.context_place.is_some(),
-                    "emptytrash"=>self.context_place_path().is_some_and(|path|path==self.trash_base.join("files")),
-                    _=>false,
-                }
-            } else {match item {
-                // Folder-only actions: a file entry offers none; a folder entry offers its own; the background offers the current folder.
-                "newfolder"=>!self.context_on_entry,
-                "terminal"|"bookmark"|"newtab"=>!self.context_on_entry || self.selected_folder().is_some(),
-                "paste"=>true,
-                "emptytrash"=>in_trash,
-                "extract"=>self.ark && self.context_on_entry && !many && selected_path.as_deref().is_some_and(is_archive),
-                "compress"=>self.ark && self.context_on_entry && selected_path.is_some(),
-                "copy"|"cut"|"trash"|"duplicate"=>self.context_on_entry && selected_path.is_some(),
-                "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected_path.is_some(),
-                // Offered only for a local regular file whose format has at least one conversion target.
-                "convert"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(|p|!remote::is_remote(p) && p.is_file() && !flamewm_conversion_core::conversion::offered_formats(p).is_empty()),
-                "setwallpaper"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(|p|!remote::is_remote(p) && p.is_file() && thumbs::thumb_format(p).is_some_and(crate::thumbs::ThumbFormat::is_image)),
-                "opencontaining"=>searching && self.context_on_entry && !many && selected_path.is_some(),
-                "restore"=>in_trash && self.context_on_entry && selected_path.is_some(),
-                "hidden"|"showtype"|"connect"=>self.menu_overflow,
-                _=>false,
-            }};
-            doc.visible(&format!("menu-{item}"),enabled)?;
-            if enabled {shown.push(item);}
+        let enabled=self.menu_enabled(selected_path.as_deref(),many,in_trash,searching);
+        let mut shown:Vec<&str>=Vec::new();
+        for (index,item) in MENU_ITEMS.into_iter().enumerate() {
+            let offered=enabled.get(index).copied().unwrap_or(false);
+            doc.visible(&ids.menus[index],offered)?;
+            if offered {shown.push(item);}
         }
         if let Some((x,y))=self.context {
             // Shared desktop context-menu metrics; hidden actions consume no space.
@@ -232,7 +384,10 @@ impl ExplorerApp {
             // Rows that fit the window; a taller menu shows a window-sized slice that the wheel moves through.
             let fit=(((self.window.1-2.0*pad)/row_h).floor().max(0.0) as usize).min(shown.len());
             let first=self.context_scroll.min(shown.len()-fit);
-            for (index,item) in shown.iter().enumerate() {doc.visible(&format!("menu-{item}"),index>=first && index<first+fit)?;}
+            for (index,item) in shown.iter().enumerate() {
+                let Some(position)=MENU_ITEMS.iter().position(|candidate|candidate==item) else {continue;};
+                doc.visible(&ids.menus[position],index>=first && index<first+fit)?;
+            }
             let height=fit as f32*row_h+2.0*pad;
             // The overflow menu hangs from the right edge of its button; other menus open at the pointer.
             let left=if self.menu_overflow {x-210.0} else {x};
@@ -268,52 +423,61 @@ impl ExplorerApp {
                 for (slot, entry) in tab.visible().skip(first).take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }
             },
         }
-        for slot in 0..ROW_SLOTS {
-            let row=format!("row-{slot}");
-            let index=flamewm_explorer::row_slot_index(origin,slot);
-            let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
-            let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied().flatten())} else {None};
-            let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
-            if let Some(entry)=entry {
-                // Contents are set even off-view, so a row that glides into view later already shows its entry.
-                doc.visible(&row,in_view)?;
-                doc.position(&row,SIDEBAR_WIDTH,y)?;
-                if !full {continue;}
-                doc.size(&row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
-                doc.text_ref(&format!("name-{slot}"),&entry.name)?;
-                doc.text(&format!("size-{slot}"),entry.size_label())?;
-                doc.text(&format!("modified-{slot}"),entry.modified_label())?;
-                doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
-                doc.size(&format!("modified-{slot}"),self.widths.modified,ROW_HEIGHT)?;
-                doc.size(&format!("size-{slot}"),self.widths.size,ROW_HEIGHT)?;
-                doc.size(&format!("kind-{slot}"),self.widths.kind,ROW_HEIGHT)?;
-                doc.visible(&format!("kind-{slot}"),kind_shown)?;
-                // Dot files show the dimmed name twin (`name-dim-*`, CSS colour). Foreground overrides cannot reach a
-                // text child, and the icon raster is shared, so the icon stays full strength.
-                let dim=entry.name.starts_with('.');
-                doc.visible(&format!("name-{slot}"),!dim)?;
-                doc.visible(&format!("name-dim-{slot}"),dim)?;
-                doc.text_ref(&format!("name-dim-{slot}"),&entry.name)?;
-                // Inline rename: the name cell shows the field with its caret; a selected stem is highlighted.
-                if matches!(self.edit,Some(EditMode::Rename)) && self.rename_target.as_ref()==Some(&entry.path) {
-                    doc.visible(&format!("name-{slot}"),true)?;
-                    doc.visible(&format!("name-dim-{slot}"),false)?;
-                    doc.text(&format!("name-{slot}"),self.field.display())?;
-                    doc.background(&format!("name-{slot}"),if self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
-                } else {doc.background(&format!("name-{slot}"),self.theme.clear())?;}
-                self.project_row_icon(doc,slot,entry,in_view)?;
-                doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) || tab.selected_paths.contains(&entry.path) {
-                    self.theme.selected()
-                }
-                    else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
-            } else {doc.visible(&row,false)?;}
-        }
-        Ok(())
+        let ids=IdTables::get();
+        let today=chrono::Local::now().date_naive();
+        ROW_LABELS.with(|cell|->Result<(),String>{
+            let mut labels=cell.borrow_mut();
+            for slot in 0..ROW_SLOTS {
+                let row=&ids.rows[slot];
+                let index=flamewm_explorer::row_slot_index(origin,slot);
+                let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
+                let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied().flatten())} else {None};
+                let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+                if let Some(entry)=entry {
+                    // Contents are set even off-view, so a row that glides into view later already shows its entry.
+                    doc.visible(&row.row,in_view)?;
+                    doc.position(&row.row,SIDEBAR_WIDTH,y)?;
+                    if !full {continue;}
+                    doc.size(&row.row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
+                    let text=row_labels(&mut labels,slot,entry,today);
+                    doc.text_ref(&row.name,&entry.name)?;
+                    doc.text_ref(&row.size,&text.size)?;
+                    doc.text_ref(&row.modified,&text.modified)?;
+                    doc.text_ref(&row.kind,&text.kind)?;
+                    doc.size(&row.modified,self.widths.modified,ROW_HEIGHT)?;
+                    doc.size(&row.size,self.widths.size,ROW_HEIGHT)?;
+                    doc.size(&row.kind,self.widths.kind,ROW_HEIGHT)?;
+                    doc.visible(&row.kind,kind_shown)?;
+                    // Dot files show the dimmed name twin (`name-dim-*`, CSS colour). Foreground overrides cannot reach a
+                    // text child, and the icon raster is shared, so the icon stays full strength.
+                    let dim=entry.name.starts_with('.');
+                    doc.visible(&row.name,!dim)?;
+                    doc.visible(&row.name_dim,dim)?;
+                    doc.text_ref(&row.name_dim,&entry.name)?;
+                    // Inline rename: the name cell shows the field with its caret; a selected stem is highlighted.
+                    if matches!(self.edit,Some(EditMode::Rename)) && self.rename_target.as_ref()==Some(&entry.path) {
+                        doc.visible(&row.name,true)?;
+                        doc.visible(&row.name_dim,false)?;
+                        doc.text_ref(&row.name,&self.field.display())?;
+                        doc.background(&row.name,if self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
+                    } else {doc.background(&row.name,self.theme.clear())?;}
+                    self.project_row_icon(doc,slot,entry,in_view,text.thumbnailable)?;
+                    doc.background(&row.row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) || tab.selected_paths.contains(&entry.path) {
+                        self.theme.selected()
+                    }
+                        else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
+                } else {doc.visible(&row.row,false)?;}
+            }
+            Ok(())
+        })
     }
 
-    pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry, in_view:bool)->Result<(),String> {
+    pub(crate) fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry, in_view:bool, thumbnailable:bool)->Result<(),String> {
         let icon=view::file_icon(entry);
-        let thumbnail=self.row_thumbnail(entry,in_view);
+        // A row that cannot carry a thumbnail never builds a cache key or probes the cache.
+        let thumbnail=if thumbnailable {self.row_thumbnail(entry,in_view)} else {None};
+        let ids=IdTables::get();
+        let ids=&ids.rows[slot];
         match row_icon_choice(entry,thumbnail.as_ref()) {
             RowIcon::Thumbnail(id)=>{
                 let Some((_,pixels))=thumbnail else {return self.show_type_icon(doc,slot,icon)};
@@ -321,19 +485,18 @@ impl ExplorerApp {
                 // ROW_ICON_BOX explicitly, which overrides the stylesheet's larger `.row-thumb` rule:
                 // the name cell never jumps when a thumbnail arrives, and the 24px rule can never
                 // squeeze the 18px glyph out of its cell.
-                let thumb_id=format!("ico-{slot}-thumb");
-                doc.size(&thumb_id,ROW_ICON_BOX,ROW_ICON_BOX)?;
+                doc.size(&ids.ico_thumb,ROW_ICON_BOX,ROW_ICON_BOX)?;
                 let mut bound=self.thumb_bound.borrow_mut();
                 if bound[slot]!=Some(id) {
                     // A document that rejects the raster must not blank the row (or abort the whole
                     // projection, which would leave every later slot with a stale icon): fall back to
                     // the embedded type icon for this slot instead.
-                    let bound_ok=doc.image_rgba8_shared(&thumb_id,format!("explorer-thumb-{id}"),THUMB_SIZE,THUMB_SIZE,pixels).is_ok();
+                    let bound_ok=doc.image_rgba8_shared(&ids.ico_thumb,format!("explorer-thumb-{id}"),THUMB_SIZE,THUMB_SIZE,pixels).is_ok();
                     bound[slot]=bound_ok.then_some(id);
                     if !bound_ok {drop(bound);return self.show_type_icon(doc,slot,icon);}
                 }
-                for kind in ROW_ICONS {doc.visible(&format!("ico-{slot}-{kind}"),false)?;}
-                doc.visible(&thumb_id,true)?;
+                for icon_id in &ids.ico {doc.visible(icon_id,false)?;}
+                doc.visible(&ids.ico_thumb,true)?;
             }
             RowIcon::Type(icon)=>self.show_type_icon(doc,slot,icon)?,
         }
@@ -345,11 +508,13 @@ impl ExplorerApp {
     /// explicitly so it stays visible even if the stylesheet's `.row-ico` box changes.
     pub(crate) fn show_type_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, icon:&'static str)->Result<(),String> {
         self.thumb_bound.borrow_mut()[slot]=None;
-        doc.visible(&format!("ico-{slot}-thumb"),false)?;
-        for kind in ROW_ICONS {
-            let shown=kind==icon;
-            doc.visible(&format!("ico-{slot}-{kind}"),shown)?;
-            if shown {doc.size(&format!("ico-{slot}-{kind}"),ROW_ICON_BOX,ROW_ICON_BOX)?;}
+        let ids=IdTables::get();
+        let ids=&ids.rows[slot];
+        doc.visible(&ids.ico_thumb,false)?;
+        for (kind,icon_id) in ROW_ICONS.iter().zip(&ids.ico) {
+            let shown=*kind==icon;
+            doc.visible(icon_id,shown)?;
+            if shown {doc.size(icon_id,ROW_ICON_BOX,ROW_ICON_BOX)?;}
         }
         Ok(())
     }
@@ -437,18 +602,18 @@ impl ExplorerApp {
         doc.size("dialog",dialog_w,200.0)?;
         doc.position("dialog",((self.window.0-dialog_w)/2.0).max(0.0),150f32.min((self.window.1-200.0).max(8.0)))?;
         let (title,lines,buttons)=Self::dialog_model(dialog);
+        let ids=IdTables::get();
         doc.text("dialog-title",title)?;
         for (i,line) in (0..4).zip(lines.into_iter().chain(std::iter::repeat(String::new()))) {
-            doc.text(&format!("dialog-line-{i}"),line)?;
+            doc.text(&ids.dialog_lines[i],line)?;
         }
         for (i,label) in buttons.iter().enumerate() {
-            let id=format!("dialog-b{}",i+1);
-            doc.visible(&id,label.is_some())?;
-            if let Some(label)=label {doc.text(&id,(*label).to_owned())?;}
+            doc.visible(&ids.dialog_buttons[i],label.is_some())?;
+            if let Some(label)=label {doc.text(&ids.dialog_buttons[i],(*label).to_owned())?;}
         }
         // The focused button carries the ring; Enter activates it (WAI-ARIA APG alertdialog).
-        let focused=super::input::dialog_focus_slot(&buttons,self.dialog_focus).map(|i|format!("dialog-b{}",i+1));
-        doc.set_focus_node(focused.as_deref())?;
+        let focused=super::input::dialog_focus_slot(&buttons,self.dialog_focus).map(|i|ids.dialog_buttons[i].as_str());
+        doc.set_focus_node(focused)?;
         Ok(())
     }
 

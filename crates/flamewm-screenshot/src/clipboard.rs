@@ -50,11 +50,10 @@ pub fn spawn_owner(path: &Path, temporary: bool) -> Result<(), String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(err)?;
-    // Avoid returning before the new owner actually takes CLIPBOARD.
+    // Avoid returning before the new owner actually takes CLIPBOARD. The first polls are tight so
+    // a ready helper is noticed in about a millisecond, then the wait backs off to the old 10 ms.
+    let mut wait = std::time::Duration::from_millis(1);
     for _ in 0..100 {
-        if child.try_wait().map_err(err)?.is_some() {
-            return Err("clipboard owner exited before claiming selection".into());
-        }
         let owner = conn
             .get_selection_owner(selection)
             .map_err(err)?
@@ -64,7 +63,11 @@ pub fn spawn_owner(path: &Path, temporary: bool) -> Result<(), String> {
         if owner != NONE && owner != previous {
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        if child.try_wait().map_err(err)?.is_some() {
+            return Err("clipboard owner exited before claiming selection".into());
+        }
+        std::thread::sleep(wait);
+        wait = (wait * 2).min(std::time::Duration::from_millis(10));
     }
     Err("clipboard owner did not become ready".into())
 }

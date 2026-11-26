@@ -147,7 +147,7 @@ impl Finder {
                     .and_then(|slot| slot.parse::<usize>().ok());
                 if let Some(slot) = slot {
                     let position = self.first + slot;
-                    if position < self.items().len() {
+                    if position < self.item_count() {
                         self.navigating = true;
                         let repeat = self.last_click.is_some_and(|(prior, at)| {
                             prior == position && at.elapsed() < DOUBLE_CLICK

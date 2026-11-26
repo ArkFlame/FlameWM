@@ -111,14 +111,18 @@ impl<C: Connector> Pool<C> {
         let Ok(mut slots) = self.slots.lock() else {
             return Vec::new();
         };
-        let stale: Vec<ConnKey> = slots
-            .iter()
-            .filter(|(_, s)| now.duration_since(s.used) > self.idle)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in &stale {
-            slots.remove(k);
+        if slots.is_empty() {
+            return Vec::new();
         }
+        let mut stale: Vec<ConnKey> = Vec::new();
+        slots.retain(|key, slot| {
+            if now.duration_since(slot.used) > self.idle {
+                stale.push(key.clone());
+                false
+            } else {
+                true
+            }
+        });
         stale
     }
 }

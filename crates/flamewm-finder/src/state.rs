@@ -79,7 +79,7 @@ impl Finder {
         } else {
             Vec::new()
         };
-        let len = self.items().len();
+        let len = self.item_count();
         self.selected = self.selected.min(len.saturating_sub(1));
     }
 
@@ -139,29 +139,53 @@ impl Finder {
         self.refresh();
     }
 
-    /// Items of the current view: result files, commands, or folder scopes.
-    pub(super) fn items(&self) -> Vec<Item> {
+    /// Number of rows in the current view, without materializing the rows.
+    pub(super) fn item_count(&self) -> usize {
+        match palette::mode(&self.query) {
+            Mode::Files => self.quick_count() + self.hits.indices.len(),
+            Mode::Commands(filter) => palette::command_matches(&filter).len(),
+            Mode::Scopes(filter) => palette::scope_choices(&self.home, &filter).len(),
+        }
+    }
+
+    /// One row of the current view. A repaint of `ROW_SLOTS` rows allocates nothing for files,
+    /// where the result list can hold thousands of rows.
+    pub(super) fn item_at(&self, position: usize) -> Option<Item> {
         match palette::mode(&self.query) {
             Mode::Files => {
-                let mut items: Vec<Item> = self.answer.iter().cloned().map(Item::Calc).collect();
-                items.extend(self.app_hits.iter().map(|&i| Item::App(i)));
-                items.extend(self.actions.iter().copied().map(Item::Action));
-                items.extend(self.hits.indices.iter().map(|&i| Item::Entry(i)));
-                items
+                let mut index = position;
+                if let Some(answer) = &self.answer {
+                    if index == 0 {
+                        return Some(Item::Calc(answer.clone()));
+                    }
+                    index -= 1;
+                }
+                if let Some(&app) = self.app_hits.get(index) {
+                    return Some(Item::App(app));
+                }
+                index = index.checked_sub(self.app_hits.len())?;
+                if let Some(&action) = self.actions.get(index) {
+                    return Some(Item::Action(action));
+                }
+                index = index.checked_sub(self.actions.len())?;
+                self.hits
+                    .indices
+                    .get(index)
+                    .map(|&entry| Item::Entry(entry))
             }
             Mode::Commands(filter) => palette::command_matches(&filter)
                 .into_iter()
-                .map(Item::Command)
-                .collect(),
+                .nth(position)
+                .map(Item::Command),
             Mode::Scopes(filter) => palette::scope_choices(&self.home, &filter)
                 .into_iter()
-                .map(Item::Scope)
-                .collect(),
+                .nth(position)
+                .map(Item::Scope),
         }
     }
 
     pub(super) fn selected_item(&self) -> Option<Item> {
-        self.items().into_iter().nth(self.selected)
+        self.item_at(self.selected)
     }
 
     /// True when results appear as tiles: always for the home view, and for results once the user
@@ -182,7 +206,7 @@ impl Finder {
     }
 
     pub(super) fn select(&mut self, position: usize) {
-        let len = self.items().len();
+        let len = self.item_count();
         if len == 0 {
             self.selected = 0;
             return;

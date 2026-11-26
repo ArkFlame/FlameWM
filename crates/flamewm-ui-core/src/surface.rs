@@ -27,9 +27,17 @@ const DEFAULT_SURFACE_RIM_PERCENT: u8 = crate::glass::DARK.rim_percent;
 /// `settings_projection::surface_background`; invalid colours fall back to the default.
 #[must_use]
 pub fn surface_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    surface_fill_with(snapshot, crate::glass::appearance_from_settings(snapshot))
+}
+
+/// [`surface_fill`] for a caller that already resolved the appearance, so one projection resolves
+/// the settings once instead of once per surface it paints.
+fn surface_fill_with(
+    snapshot: &SettingsSnapshot,
+    appearance: crate::glass::Appearance,
+) -> SurfaceFill {
     // Menus, popups and Start take the GlassRegular resolver: alpha comes from glassOpacityPercent,
     // reduceTransparency makes it opaque. `surfaceColor` stays the user tint when glass is translucent.
-    let appearance = crate::glass::appearance_from_settings(snapshot);
     let material = crate::glass::resolve(
         crate::glass::MaterialRole::GlassRegular,
         appearance,
@@ -110,6 +118,7 @@ const LIGHT_TASKBAR_MIN_ALPHA: u8 = 204;
 /// Tint. Reduce transparency yields the opaque Dock solid.
 #[must_use]
 pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
+    let appearance = crate::glass::appearance_from_settings(snapshot);
     // highContrast (WCAG 1.4.11): the taskbar and its capsules take the opaque palette surface, the
     // same as menus and Start, whatever the Dock material, tint or glass alpha says.
     if crate::glass::high_contrast_from_settings(snapshot) {
@@ -121,11 +130,8 @@ pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     }
     // Inherit is the shared surface: same surfaceColor, glass alpha and reduce-transparency solid
     // as popups and widgets, so the taskbar cannot drift from them.
-    if crate::glass::appearance_from_settings(snapshot).taskbar_mode
-        == crate::glass::TaskbarMode::Inherit
-    {
-        let mut fill = surface_fill(snapshot);
-        let appearance = crate::glass::appearance_from_settings(snapshot);
+    if appearance.taskbar_mode == crate::glass::TaskbarMode::Inherit {
+        let mut fill = surface_fill_with(snapshot, appearance);
         // Light ink is dark: a translucent light bar over a dark wallpaper reads as dark glass
         // with dark text (Pass 12). Only the taskbar takes the floor; popups keep the glass alpha.
         if appearance.light && !appearance.reduce_transparency {
@@ -135,7 +141,7 @@ pub fn dock_fill(snapshot: &SettingsSnapshot) -> SurfaceFill {
     }
     let material = crate::glass::resolve(
         crate::glass::MaterialRole::Dock,
-        crate::glass::appearance_from_settings(snapshot),
+        appearance,
         100,
         crate::glass::RendererCaps {
             backdrop_blur: true,
@@ -193,20 +199,39 @@ fn outline_width(snapshot: &SettingsSnapshot, key: &str) -> u32 {
     .clamp(1, MAX_OUTLINE_WIDTH)
 }
 
-fn outline_fill(snapshot: &SettingsSnapshot, prefix: &str) -> SurfaceFill {
-    let rgb = match snapshot.values.get(&format!("{prefix}Color")) {
+/// Setting keys of one outline group.
+struct OutlineKeys {
+    color: &'static str,
+    opacity: &'static str,
+    width: &'static str,
+}
+
+const SURFACE_OUTLINE_KEYS: OutlineKeys = OutlineKeys {
+    color: "surfaceOutlineColor",
+    opacity: "surfaceOutlineOpacity",
+    width: "surfaceOutlineWidth",
+};
+
+const WINDOW_OUTLINE_KEYS: OutlineKeys = OutlineKeys {
+    color: "windowOutlineColor",
+    opacity: "windowOutlineOpacity",
+    width: "windowOutlineWidth",
+};
+
+fn outline_fill(snapshot: &SettingsSnapshot, keys: OutlineKeys) -> SurfaceFill {
+    let rgb = match snapshot.values.get(keys.color) {
         Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
         _ => None,
     }
     .unwrap_or(0x0099_9999);
-    let opacity = match snapshot.values.get(&format!("{prefix}Opacity")) {
+    let opacity = match snapshot.values.get(keys.opacity) {
         Some(SettingValue::Percent(value)) => (*value).min(100),
         _ => DEFAULT_SURFACE_RIM_PERCENT,
     };
     SurfaceFill {
         rgb,
         alpha: ((u16::from(opacity) * 255) / 100) as u8,
-        width: outline_width(snapshot, &format!("{prefix}Width")),
+        width: outline_width(snapshot, keys.width),
     }
 }
 
@@ -214,7 +239,7 @@ fn outline_fill(snapshot: &SettingsSnapshot, prefix: &str) -> SurfaceFill {
 /// neutral gray (#999999), 50 %, 1 px by default. All native surface renderers consume this contract.
 #[must_use]
 pub fn surface_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
-    outline_fill(snapshot, "surfaceOutline")
+    outline_fill(snapshot, SURFACE_OUTLINE_KEYS)
 }
 
 /// Window frame outline. It inherits the surface outline unless `customWindowOutline` is on, in
@@ -237,7 +262,7 @@ pub fn window_outline_stroke(snapshot: &SettingsSnapshot) -> SurfaceFill {
         snapshot.values.get("customWindowOutline"),
         Some(SettingValue::Boolean(true))
     ) {
-        outline_fill(snapshot, "windowOutline")
+        outline_fill(snapshot, WINDOW_OUTLINE_KEYS)
     } else {
         surface_stroke(snapshot)
     }

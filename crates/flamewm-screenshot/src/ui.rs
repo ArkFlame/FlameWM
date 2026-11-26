@@ -272,7 +272,9 @@ impl<'a, C: Connection> Overlay<'a, C> {
             ));
         }
         // A Print shortcut can launch us before the triggering key is released.
-        // Retry rather than entering a modal UI with an ungrabbable Escape key.
+        // Retry rather than entering a modal UI with an ungrabbable Escape key. Tight first polls
+        // notice the release in a millisecond; the wait then backs off to the old 10 ms.
+        let mut wait = std::time::Duration::from_millis(1);
         for _ in 0..50 {
             let keyboard = conn
                 .grab_keyboard(false, win, CURRENT_TIME, GrabMode::ASYNC, GrabMode::ASYNC)
@@ -282,7 +284,8 @@ impl<'a, C: Connection> Overlay<'a, C> {
             if keyboard.status == GrabStatus::SUCCESS {
                 return Ok(overlay);
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(wait);
+            wait = (wait * 2).min(std::time::Duration::from_millis(10));
         }
         Err("cannot select region: X11 keyboard grab unavailable".into())
     }

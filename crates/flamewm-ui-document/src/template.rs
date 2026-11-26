@@ -29,10 +29,42 @@ struct LayoutMemo {
     layout: flamewm_render_core::LayoutResult,
 }
 
+/// Lays out `document` at `viewport` unless the memo already holds that exact pass. The cache key is
+/// layout plus geometry revision, so paint-only edits reuse the retained boxes and isolated absolute
+/// moves re-measure exactly as before.
+fn cached_layout<'m>(
+    document: &RuntimeDocument,
+    viewport: (f32, f32),
+    memo: &'m mut Option<LayoutMemo>,
+) -> &'m flamewm_render_core::LayoutResult {
+    // Isolated absolute boxes move and re-measure without a layout revision, so their geometry
+    // revision counts too.
+    let revision = (document.layout_revision(), document.geometry_revision());
+    let fresh = memo
+        .as_ref()
+        .is_some_and(|memo| memo.revision == revision && memo.viewport == viewport);
+    if !fresh {
+        *memo = Some(LayoutMemo {
+            revision,
+            viewport,
+            layout: flamewm_render_core::LayoutEngine::compute(
+                document,
+                viewport.0,
+                viewport.1,
+                flamewm_render_core::InteractionState::default(),
+            ),
+        });
+    }
+    &memo.as_ref().expect("layout memo was just filled").layout
+}
+
 pub struct UiDocumentView<'a> {
     pub(crate) document: &'a mut RuntimeDocument,
     /// Outgoing-drag request slot; `None` for windows without XDND.
     pub(crate) file_drag: Option<flamewm_render_core::backdrop::FileDragSlot>,
+    /// Layout for repeated `layout_box` reads inside one event; handlers query several boxes in a
+    /// row and the full document layout must not be rebuilt for each one.
+    layout_memo: RefCell<Option<LayoutMemo>>,
 }
 
 impl UiDocument {
@@ -76,6 +108,7 @@ impl<'a> UiDocumentView<'a> {
         Self {
             document,
             file_drag,
+            layout_memo: RefCell::new(None),
         }
     }
 }
@@ -335,30 +368,10 @@ impl UiDocument {
     /// id is absent from the template.
     pub fn layout_box_by_id(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         let index = self.document.node_by_id(id)?;
-        // Layout-keyed: paint-only edits (colors) keep the retained boxes valid. Isolated absolute
-        // boxes move and re-measure without a layout revision, so their geometry revision counts too.
-        let revision = (
-            self.document.layout_revision(),
-            self.document.geometry_revision(),
-        );
+        // Layout-keyed: paint-only edits (colors) keep the retained boxes valid.
         let mut memo = self.layout_memo.borrow_mut();
-        let fresh = memo
-            .as_ref()
-            .is_some_and(|memo| memo.revision == revision && memo.viewport == viewport);
-        if !fresh {
-            let layout = flamewm_render_core::LayoutEngine::compute(
-                &self.document,
-                viewport.0,
-                viewport.1,
-                flamewm_render_core::InteractionState::default(),
-            );
-            *memo = Some(LayoutMemo {
-                revision,
-                viewport,
-                layout,
-            });
-        }
-        let rect = memo.as_ref()?.layout.boxes.get(index as usize)?.rect;
+        let layout = cached_layout(&self.document, viewport, &mut memo);
+        let rect = layout.boxes.get(index as usize)?.rect;
         Some((rect.x, rect.y, rect.width, rect.height))
     }
 
@@ -634,12 +647,8 @@ impl UiDocumentAccess for UiDocumentView<'_> {
     fn layout_box(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         let document: &RuntimeDocument = &*self.document;
         let index = document.node_by_id(id)?;
-        let layout = flamewm_render_core::LayoutEngine::compute(
-            document,
-            viewport.0,
-            viewport.1,
-            flamewm_render_core::InteractionState::default(),
-        );
+        let mut memo = self.layout_memo.borrow_mut();
+        let layout = cached_layout(document, viewport, &mut memo);
         let rect = layout.boxes.get(index as usize)?.rect;
         Some((rect.x, rect.y, rect.width, rect.height))
     }

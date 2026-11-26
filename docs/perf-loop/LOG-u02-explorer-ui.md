@@ -1,0 +1,6 @@
+# u02-explorer-ui
+- Explorer projection: interned every template node id once per process (`IdTables`) instead of `format!("…-{slot}")` per row/sidebar/tab/column/sort/menu/breadcrumb/dialog per frame; drops ~1k short allocations per projection, the largest steady-state CPU slice of scroll/glide redraws.
+- Explorer rows: row text (size, modified, kind) and thumbnail eligibility cached per slot keyed by entry path/size/mtime plus the local date (`row_labels`), so `chrono` date formatting and label allocation no longer run per row per frame, and non-image rows skip `ThumbKey::of` (path clone + extension lowercase) entirely.
+- Explorer address bar: `home_dir()` memoised in a thread-local `OnceCell`; it stat'ed `$HOME` on every projection, a per-frame filesystem syscall that no longer touches disk.
+- Explorer context menu: enabled flags memoised (`menu_enabled`) on context/selection/place state; previously `offered_formats` walked `PATH` with a stat per directory (and `selected_folder` scanned the whole listing) on every wake while a menu was open.
+- Explorer projection: constant labels use `text_ref`, unavailable device/place/sort ids come from the cached tables, and the menu offer logic lives in one method instead of inline per-frame branches.

@@ -120,7 +120,8 @@ impl MediaStore {
     /// Copies `src` into the store and returns the managed copy.
     pub fn import(&self, src: &Path, kind: MediaKind) -> Result<ImportedMedia, MediaError> {
         let file = open_source(src)?;
-        let bytes = read_source(file)?;
+        let hint = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+        let bytes = read_source_hinted(file, hint)?;
         self.import_bytes(&bytes, kind)
     }
 
@@ -313,7 +314,12 @@ fn open_source(src: &Path) -> Result<File, MediaError> {
 
 /// Reads at most `MAX_SOURCE_BYTES` from `reader`.
 pub fn read_source<R: Read>(reader: R) -> Result<Vec<u8>, MediaError> {
-    let mut bytes = Vec::new();
+    read_source_hinted(reader, 0)
+}
+
+/// Same as [`read_source`], pre-sizing the buffer from a known length.
+fn read_source_hinted<R: Read>(reader: R, hint: u64) -> Result<Vec<u8>, MediaError> {
+    let mut bytes = Vec::with_capacity(hint.min(MAX_SOURCE_BYTES) as usize);
     reader.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_SOURCE_BYTES {
         return Err(MediaError::TooLarge);

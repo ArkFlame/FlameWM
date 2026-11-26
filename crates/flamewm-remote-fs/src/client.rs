@@ -23,6 +23,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FIRST_PAGE: usize = 64;
 const PAGE: usize = 512;
+/// Coalesce transfer progress to one event per this many bytes or this interval.
+const PROGRESS_STEP: u64 = 1024 * 1024;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const COPY_BLOCK: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
@@ -439,6 +442,7 @@ fn list_stream(
     let mut last = Instant::now();
     // Symlink names that point at directories; known once the prefix before the ls rows has arrived.
     let mut links: Option<HashSet<String>> = None;
+    let mut start = 0usize;
     loop {
         if cancel.is_cancelled() {
             proc.kill();
@@ -450,22 +454,30 @@ fn list_stream(
                 carry.extend_from_slice(&d);
                 if links.is_none() {
                     links = split_link_prefix(&mut carry);
+                    start = 0;
                 }
                 let Some(known) = links.as_ref() else {
                     continue;
                 };
-                while let Some(pos) = carry.iter().position(|&b| b == b'\n') {
-                    let line = String::from_utf8_lossy(&carry[..pos]).into_owned();
-                    carry.drain(..=pos);
-                    if let Some(e) = parse_listing_line(&line) {
+                while let Some(offset) = carry[start..].iter().position(|&b| b == b'\n') {
+                    let pos = start + offset;
+                    if let Some(e) =
+                        parse_listing_line(&String::from_utf8_lossy(&carry[start..pos]))
+                    {
                         page.push(mark_link_dir(e, known));
                     }
+                    start = pos + 1;
                     // Check per line: one read may carry many rows, and the first page must stay small.
                     if page.len() >= limit {
                         all.extend_from_slice(&page);
                         let _ = tx.send(ListEvent::Chunk(std::mem::take(&mut page)));
                         limit = PAGE;
                     }
+                }
+                if start > 0 {
+                    // Compact consumed bytes once per read instead of shifting the buffer per line.
+                    carry.drain(..start);
+                    start = 0;
                 }
             }
             ReadEvent::Idle => {
@@ -479,7 +491,7 @@ fn list_stream(
     }
     // No prefix marker means the remote shell skipped the link probe; list the rows without link resolution.
     let known = links.unwrap_or_default();
-    for line in carry.split(|&b| b == b'\n') {
+    for line in carry[start..].split(|&b| b == b'\n') {
         if let Some(e) = parse_listing_line(&String::from_utf8_lossy(line)) {
             page.push(mark_link_dir(e, &known));
         }
@@ -543,6 +555,8 @@ fn download_job(
     let mut proc = sh.transport.spawn(&key, &shell::cat(&path), false)?;
     let mut done = 0u64;
     let mut last = Instant::now();
+    let mut last_sent = 0u64;
+    let mut last_tick = Instant::now();
     let result = (|| -> Result<(), Error> {
         loop {
             if cancel.is_cancelled() {
@@ -554,7 +568,12 @@ fn download_job(
                     last = Instant::now();
                     file.write_all(&d)?;
                     done += d.len() as u64;
-                    let _ = tx.send(TransferEvent::Progress { done, total });
+                    if done - last_sent >= PROGRESS_STEP || last_tick.elapsed() >= PROGRESS_INTERVAL
+                    {
+                        last_sent = done;
+                        last_tick = Instant::now();
+                        let _ = tx.send(TransferEvent::Progress { done, total });
+                    }
                 }
                 ReadEvent::Idle => {
                     if last.elapsed() > sh.idle {
@@ -570,6 +589,9 @@ fn download_job(
             return Err(classify(status, &stderr, &key, &path));
         }
         file.flush()?;
+        if done > last_sent {
+            let _ = tx.send(TransferEvent::Progress { done, total });
+        }
         Ok(())
     })();
     drop(file);
@@ -614,6 +636,8 @@ fn upload_job(
     let mut buf = vec![0u8; COPY_BLOCK];
     let mut done = 0u64;
     let mut write_failed = false;
+    let mut last_sent = 0u64;
+    let mut last_tick = Instant::now();
     let result = (|| -> Result<(), Error> {
         loop {
             if cancel.is_cancelled() {
@@ -630,6 +654,16 @@ fn upload_job(
                 break;
             }
             done += n as u64;
+            if done - last_sent >= PROGRESS_STEP || last_tick.elapsed() >= PROGRESS_INTERVAL {
+                last_sent = done;
+                last_tick = Instant::now();
+                let _ = tx.send(TransferEvent::Progress {
+                    done,
+                    total: Some(total),
+                });
+            }
+        }
+        if done > last_sent {
             let _ = tx.send(TransferEvent::Progress {
                 done,
                 total: Some(total),

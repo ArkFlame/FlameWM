@@ -1,0 +1,7 @@
+# Log u16-remote-fs-downloads
+
+- `crates/flamewm-remote-fs/src/client.rs` (`list_stream`): cursor-based linear scan over `carry`, compact once per read instead of per-line `drain`, and parse each row from a borrowed `Cow<str>` instead of allocating a `String` per line. Expected: large remote listings go from O(n^2) buffer shifting to linear and drop one per-line allocation.
+- `crates/flamewm-remote-fs/src/client.rs` (`download_job`/`upload_job`): coalesce `TransferEvent::Progress` to one event per 1 MiB or 100 ms, with a final flush of the remainder. Expected: far fewer progress events and UI wakeups on large transfers while the byte step keeps multi-megabyte uploads emitting more than one event.
+- `crates/flamewm-remote-fs/src/cache.rs` (`ListCache::put`): evict only the oldest listing when full instead of clearing the whole cache. Expected: warm listings survive a full cache and avoid refetch stampedes.
+- `crates/flamewm-remote-fs/src/pool.rs` (`Pool::take_idle`): single-pass `retain` with an early return when the slot map is empty, no intermediate Vec allocation for the common idle-free case. Expected: fewer allocations and one pass over slots per `ensure`.
+- `crates/flamewm-integrations-linux/src/media_store.rs` (`read_source`/`import`): pre-size the read buffer from file metadata via `read_source_hinted`. Expected: large image imports avoid repeated reallocation and copying.

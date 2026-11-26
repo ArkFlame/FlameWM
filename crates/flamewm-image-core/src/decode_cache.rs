@@ -78,8 +78,10 @@ fn read_entry(entry: &Path) -> Option<RgbaImage> {
     if bytes.len() != HEADER_LEN + expected {
         return None;
     }
-    let pixels = bytes.split_off(HEADER_LEN);
-    let image = RgbaImage::from_rgba8(width, height, pixels)?;
+    // Drop the header inside the same allocation: `split_off` would allocate and copy the whole
+    // raster a second time before the read buffer is freed.
+    bytes.drain(..HEADER_LEN);
+    let image = RgbaImage::from_rgba8(width, height, bytes)?;
     touch(entry);
     Some(image)
 }

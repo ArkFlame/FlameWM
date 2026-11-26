@@ -85,6 +85,10 @@ pub fn extract_with_password(
     }
     let mut rep = Reporter::new(bytes_total, entries_total, cancel, sink);
     let mut summary = Summary::default();
+    // Last relative parent directory whose safety was checked and that exists. Archives stream
+    // entries of one directory together, so this removes a per-entry symlink walk and
+    // `create_dir_all` for all but the first file of every directory.
+    let mut ready_parent: Option<PathBuf> = None;
     let outcome = visit_with_password(archive, password, |entry: Entry, data: &mut dyn Read| {
         rep.check()?;
         let Some(rel) = safe_path::sanitize(&entry.path)? else {
@@ -93,7 +97,15 @@ pub fn extract_with_password(
         if !is_selected(&rel, &roots, nothing_selected) {
             return Ok(());
         }
-        extract_one(dest, &rel, &entry, data, &mut rep, &mut summary)?;
+        extract_one(
+            dest,
+            &rel,
+            &entry,
+            data,
+            &mut rep,
+            &mut summary,
+            &mut ready_parent,
+        )?;
         rep.finish_entry();
         Ok(())
     });
@@ -123,19 +135,37 @@ fn extract_one(
     data: &mut dyn Read,
     rep: &mut Reporter<'_>,
     summary: &mut Summary,
+    ready_parent: &mut Option<PathBuf>,
 ) -> Result<()> {
     match entry.kind {
         Kind::Dir => {
             safe_path::reject_symlinks(dest, rel)?;
             fs::create_dir_all(dest.join(rel))?;
+            // Entries that follow usually live in this freshly checked directory.
+            *ready_parent = Some(rel.to_path_buf());
             summary.dirs += 1;
         }
         Kind::File => {
-            summary.bytes += write_file(dest, rel, data, entry.mode, rep)?;
+            summary.bytes += write_file(dest, rel, data, entry.mode, rep, ready_parent)?;
             summary.files += 1;
         }
         Kind::Symlink | Kind::Other => summary.skipped += 1,
     }
+    Ok(())
+}
+
+/// Makes sure `rel`'s parent exists under `dest` and holds no symlink, skipping the check when
+/// this very parent was already prepared for the previous entry.
+fn prepare_parent(dest: &Path, rel: &Path, ready_parent: &mut Option<PathBuf>) -> Result<()> {
+    let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+    if ready_parent.as_deref() == Some(parent) {
+        return Ok(());
+    }
+    // Checks `dest` and every existing component of the relative parent; the entry's own name is
+    // checked below by `symlink_metadata`.
+    safe_path::reject_symlinks(dest, parent)?;
+    fs::create_dir_all(dest.join(parent))?;
+    *ready_parent = Some(parent.to_path_buf());
     Ok(())
 }
 
@@ -145,12 +175,10 @@ fn write_file(
     data: &mut dyn Read,
     mode: Option<u32>,
     rep: &mut Reporter<'_>,
+    ready_parent: &mut Option<PathBuf>,
 ) -> Result<u64> {
-    safe_path::reject_symlinks(dest, rel)?;
+    prepare_parent(dest, rel, ready_parent)?;
     let target = dest.join(rel);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
     // Do not truncate a shared inode or open a device, FIFO, or other special node.
     // This check does not protect against concurrent replacement or hard-link creation.
     match fs::symlink_metadata(&target) {

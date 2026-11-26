@@ -1,7 +1,8 @@
 //! Typed progress and cancellation shared by every long archive operation.
 //!
 //! `CancelToken` is checked before every entry and every read chunk. `Reporter` owns the running
-//! totals and calls the caller's sink after each chunk, so memory stays bounded by the copy buffer.
+//! totals and feeds the caller's sink in coarse steps (about a hundred per operation), so memory
+//! stays bounded by the copy buffer and the UI is not woken once per chunk.
 
 use std::io::{self, Read, Write};
 use std::sync::Arc;
@@ -48,11 +49,28 @@ pub struct Summary {
     pub bytes: u64,
 }
 
+/// Smallest byte step between two progress emissions.
+const MIN_BYTE_STEP: u64 = 64 * 1024;
+/// Emissions per operation when the totals are known (the bar moves in 1% steps).
+const EMISSIONS_PER_OPERATION: u64 = 100;
+
 /// Running totals plus cancel check for one operation.
+///
+/// The sink is fed at most ~100 times per operation: every 1/100th of the totals, plus the
+/// completion snapshot. Each emission costs a channel send and a UI wake, so a per-chunk sink
+/// would repaint the progress window thousands of times for one large file.
 pub struct Reporter<'a> {
     sink: &'a mut dyn FnMut(Progress),
     cancel: &'a CancelToken,
     state: Progress,
+    /// Bytes counted since the last emission.
+    pending_bytes: u64,
+    /// Entries finished since the last emission.
+    pending_entries: usize,
+    /// Byte step between emissions; never zero.
+    byte_step: u64,
+    /// Entry step between emissions; never zero.
+    entry_step: usize,
 }
 
 impl<'a> Reporter<'a> {
@@ -72,6 +90,10 @@ impl<'a> Reporter<'a> {
             sink,
             cancel,
             state,
+            pending_bytes: 0,
+            pending_entries: 0,
+            byte_step: (bytes_total / EMISSIONS_PER_OPERATION).max(MIN_BYTE_STEP),
+            entry_step: (entries_total / EMISSIONS_PER_OPERATION as usize).max(1),
         }
     }
 
@@ -94,12 +116,28 @@ impl<'a> Reporter<'a> {
 
     pub fn add_bytes(&mut self, n: u64) {
         self.state.bytes_done += n;
-        (self.sink)(self.state);
+        self.pending_bytes += n;
+        self.maybe_emit();
     }
 
     pub fn finish_entry(&mut self) {
         self.state.entries_done += 1;
-        (self.sink)(self.state);
+        self.pending_entries += 1;
+        self.maybe_emit();
+    }
+
+    /// Reports the current totals when a step or the end of the operation is reached.
+    fn maybe_emit(&mut self) {
+        let complete = self.state.bytes_done >= self.state.bytes_total
+            && self.state.entries_done >= self.state.entries_total;
+        if complete
+            || self.pending_bytes >= self.byte_step
+            || self.pending_entries >= self.entry_step
+        {
+            self.pending_bytes = 0;
+            self.pending_entries = 0;
+            (self.sink)(self.state);
+        }
     }
 }
 
@@ -127,6 +165,10 @@ impl Read for Tracked<'_, '_> {
     }
 }
 
+/// Copy buffer. Eight times the `io::copy` default, so a large entry needs one eighth of the
+/// read/write syscall pairs.
+const COPY_BUFFER: usize = 64 * 1024;
+
 /// Copies `src` into `dst` through the reporter. Returns the bytes copied.
 pub fn copy_tracked(
     src: &mut dyn Read,
@@ -134,9 +176,19 @@ pub fn copy_tracked(
     rep: &mut Reporter<'_>,
 ) -> Result<u64> {
     rep.check()?;
-    let mut tracked = Tracked::new(src, rep);
-    match io::copy(&mut tracked, dst) {
-        Ok(n) => Ok(n),
-        Err(err) => Err(tracked.rep.fail(err)),
+    let mut buffer = vec![0_u8; COPY_BUFFER];
+    let mut total = 0_u64;
+    loop {
+        // Cancel between chunks, like the `Tracked` reader does for tar entries.
+        rep.check()?;
+        let n = match src.read(&mut buffer) {
+            Ok(0) => return Ok(total),
+            Ok(n) => n,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(rep.fail(err)),
+        };
+        dst.write_all(&buffer[..n]).map_err(|err| rep.fail(err))?;
+        rep.add_bytes(n as u64);
+        total += n as u64;
     }
 }

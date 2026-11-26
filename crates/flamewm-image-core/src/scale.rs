@@ -103,38 +103,81 @@ fn scale_bilinear(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]
 
 /// First covered source index and normalised coverage weights for one destination index.
 pub(crate) fn area_tap(src_len: usize, dst_len: usize, destination: usize) -> (usize, Vec<f32>) {
+    let mut weights = Vec::new();
+    let first = push_area_tap(src_len, dst_len, destination, &mut weights);
+    (first, weights)
+}
+
+/// Appends the coverage weights of one destination index to `weights` and returns the first
+/// covered source index. The same arithmetic `area_tap` exposes, without the per-tap allocation.
+fn push_area_tap(
+    src_len: usize,
+    dst_len: usize,
+    destination: usize,
+    weights: &mut Vec<f32>,
+) -> usize {
     let ratio = src_len as f64 / dst_len as f64;
     let start = destination as f64 * ratio;
     let end = (destination + 1) as f64 * ratio;
     let first = start.floor() as usize;
     let last = (end.ceil() as usize).min(src_len);
-    let mut weights: Vec<f32> = (first..last)
-        .map(|index| {
-            let lo = start.max(index as f64);
-            let hi = end.min((index + 1) as f64);
-            (hi - lo).max(0.0) as f32
-        })
-        .collect();
-    let total: f32 = weights.iter().sum();
+    let base = weights.len();
+    weights.extend((first..last).map(|index| {
+        let lo = start.max(index as f64);
+        let hi = end.min((index + 1) as f64);
+        (hi - lo).max(0.0) as f32
+    }));
+    let total: f32 = weights[base..].iter().sum();
     if total > 0.0 {
-        for weight in &mut weights {
+        for weight in &mut weights[base..] {
             *weight /= total;
         }
     }
-    (first, weights)
+    first
+}
+
+/// Every tap of one axis, packed into three flat buffers instead of one `Vec` per destination
+/// index: a 4000-to-1000 downscale needs three allocations, not two thousand.
+struct TapTable {
+    first: Vec<usize>,
+    /// Start of each destination's weights in `weights`; has `dst_len + 1` entries.
+    offsets: Vec<u32>,
+    weights: Vec<f32>,
+}
+
+impl TapTable {
+    fn new(src_len: usize, dst_len: usize) -> Self {
+        let mut first = Vec::with_capacity(dst_len);
+        let mut offsets = Vec::with_capacity(dst_len + 1);
+        let mut weights = Vec::with_capacity(dst_len * 2);
+        offsets.push(0);
+        for destination in 0..dst_len {
+            first.push(push_area_tap(src_len, dst_len, destination, &mut weights));
+            offsets.push(weights.len() as u32);
+        }
+        Self {
+            first,
+            offsets,
+            weights,
+        }
+    }
+
+    fn tap(&self, destination: usize) -> (usize, &[f32]) {
+        let start = self.offsets[destination] as usize;
+        let end = self.offsets[destination + 1] as usize;
+        (self.first[destination], &self.weights[start..end])
+    }
 }
 
 fn scale_area(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]) {
     let target_w = width as usize;
     let src_w = source.width as usize;
-    let x_taps: Vec<_> = (0..target_w)
-        .map(|destination| area_tap(src_w, target_w, destination))
-        .collect();
-    let y_taps: Vec<_> = (0..height as usize)
-        .map(|destination| area_tap(source.height as usize, height as usize, destination))
-        .collect();
-    for (y, (first_row, row_weights)) in y_taps.iter().enumerate() {
-        for (x, (first_col, col_weights)) in x_taps.iter().enumerate() {
+    let x_taps = TapTable::new(src_w, target_w);
+    let y_taps = TapTable::new(source.height as usize, height as usize);
+    for y in 0..height as usize {
+        let (first_row, row_weights) = y_taps.tap(y);
+        for x in 0..target_w {
+            let (first_col, col_weights) = x_taps.tap(x);
             let mut acc = [0f32; 4];
             for (row_offset, row_weight) in row_weights.iter().enumerate() {
                 let row = (first_row + row_offset) * src_w;

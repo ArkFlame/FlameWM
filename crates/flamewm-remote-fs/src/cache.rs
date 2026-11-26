@@ -44,11 +44,19 @@ impl ListCache {
         if generation != self.generation {
             return;
         }
-        if self.map.len() >= MAX_ENTRIES {
+        if self.map.len() >= MAX_ENTRIES && !self.map.contains_key(&key) {
             let ttl = self.ttl;
             self.map.retain(|_, (at, _)| at.elapsed() <= ttl);
             if self.map.len() >= MAX_ENTRIES {
-                self.map.clear();
+                // Evict only the oldest listing instead of dropping every warm entry.
+                if let Some(oldest) = self
+                    .map
+                    .iter()
+                    .min_by_key(|(_, (at, _))| *at)
+                    .map(|(k, _)| k.clone())
+                {
+                    self.map.remove(&oldest);
+                }
             }
         }
         self.map.insert(key, (Instant::now(), Arc::new(entries)));

@@ -96,15 +96,24 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
 /// itself (zoom above 100%) or a copy already scaled to `display` (zoom below 100%).
 #[must_use]
 pub fn crop(base: &RgbaImage, display: (u32, u32), rect: Rect) -> Vec<u8> {
-    let (bw, bh) = (u64::from(base.width), u64::from(base.height));
-    let (dw, dh) = (u64::from(display.0.max(1)), u64::from(display.1.max(1)));
-    let mut out = Vec::with_capacity(rect.w as usize * rect.h as usize * 4);
+    let bw = u64::from(base.width);
+    let bh = u64::from(base.height);
+    let dw = u64::from(display.0.max(1));
+    let dh = u64::from(display.1.max(1));
+    let row_len = rect.w as usize * 4;
+    let mut out = Vec::with_capacity(row_len * rect.h as usize);
+    if rect.w == 0 || rect.h == 0 || base.width == 0 || base.height == 0 {
+        return out;
+    }
+    // Column mapping is the same for every row: compute each source column once, not per pixel.
+    let columns: Vec<usize> = (0..rect.w)
+        .map(|ox| ((u64::from(rect.x + ox) * bw / dw).min(bw - 1) as usize) * 4)
+        .collect();
     for oy in 0..rect.h {
-        let sy = (u64::from(rect.y + oy) * bh / dh).min(bh.saturating_sub(1));
-        for ox in 0..rect.w {
-            let sx = (u64::from(rect.x + ox) * bw / dw).min(bw.saturating_sub(1));
-            let at = ((sy * bw + sx) * 4) as usize;
-            out.extend_from_slice(&base.pixels[at..at + 4]);
+        let sy = (u64::from(rect.y + oy) * bh / dh).min(bh - 1) as usize;
+        let row = &base.pixels[sy * base.width as usize * 4..];
+        for &column in &columns {
+            out.extend_from_slice(&row[column..column + 4]);
         }
     }
     out

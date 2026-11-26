@@ -25,14 +25,14 @@ impl Finder {
     pub(super) fn paint_query(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let typing = !self.query.is_empty();
         if typing {
-            doc.text("query", self.query.clone())?;
+            doc.text_ref("query", &self.query)?;
             doc.foreground("query", UiColor::from_rgb(self.palette.text, 255))?;
         } else {
-            doc.text("query", PLACEHOLDERS[self.placeholder].to_owned())?;
+            doc.text_ref("query", PLACEHOLDERS[self.placeholder])?;
             doc.foreground("query", UiColor::from_rgb(self.palette.subtle, 255))?;
         }
         doc.visible("clear", typing)?;
-        let items = self.items().len();
+        let items = self.item_count();
         let count = match palette::mode(&self.query) {
             _ if !typing => String::new(),
             Mode::Files => match self.hits.total + self.quick_count() {
@@ -60,16 +60,16 @@ impl Finder {
             Mode::Commands(_) => "Commands",
             Mode::Scopes(_) => "Folders",
         };
-        doc.text("section", label.to_owned())?;
+        doc.text_ref("section", label)?;
         doc.foreground("section", UiColor::from_rgb(self.palette.subtle, 255))
     }
 
     pub(super) fn paint_items(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let items = self.items();
+        let count = self.item_count();
         let tiles = self.tiles_shown();
         doc.visible("grid", tiles)?;
         doc.visible("list", !tiles)?;
-        doc.visible("empty", items.is_empty())?;
+        doc.visible("empty", count == 0)?;
         let empty_text = match palette::mode(&self.query) {
             _ if self.walking && self.view().is_empty() => "Indexing files...",
             Mode::Commands(_) => "No commands match",
@@ -77,16 +77,16 @@ impl Finder {
             Mode::Files if self.query.is_empty() => "Nothing to show yet",
             Mode::Files => "No files match",
         };
-        doc.text("empty-text", empty_text.to_owned())?;
+        doc.text_ref("empty-text", empty_text)?;
         let now = now_secs();
         for slot in 0..ROW_SLOTS {
             let position = self.first + slot;
-            let item = items.get(position);
+            let item = self.item_at(position);
             let selected = position == self.selected;
             if tiles {
-                self.paint_tile(doc, slot, item, selected, now)?;
+                self.paint_tile(doc, slot, item.as_ref(), selected, now)?;
             } else {
-                self.paint_row(doc, slot, item, selected, now)?;
+                self.paint_row(doc, slot, item.as_ref(), selected, now)?;
             }
         }
         Ok(())
@@ -100,23 +100,29 @@ impl Finder {
         selected: bool,
         now: i64,
     ) -> Result<(), String> {
-        let row = format!("row-{slot}");
+        let mut id = String::with_capacity(16);
+        id.push_str("row-");
+        write_slot(&mut id, slot, None);
         let Some(item) = item else {
-            return doc.visible(&row, false);
+            return doc.visible(&id, false);
         };
-        doc.visible(&row, true)?;
+        doc.visible(&id, true)?;
         doc.background(
-            &row,
+            &id,
             UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }),
         )?;
         let (kind, pieces, parent, meta) = match item {
             Item::Entry(position) => {
-                let entry = self.view().entries[*position].clone();
+                // Borrow the entry for this row instead of cloning its two strings per paint.
+                let view = self.view();
+                let Some(entry) = view.entries.get(*position) else {
+                    return doc.visible(&id, false);
+                };
                 (
-                    Kind::of(&entry),
+                    Kind::of(entry),
                     search::segments(entry.name(), &self.parsed.terms),
                     format::parent_for_display(&entry.path, &self.home),
-                    meta_line(&entry, now),
+                    meta_line(entry, now),
                 )
             }
             Item::Command(spec) => (
@@ -139,7 +145,7 @@ impl Finder {
             ),
             Item::App(position) => {
                 let Some(app) = self.apps.get(*position) else {
-                    return doc.visible(&row, false);
+                    return doc.visible(&id, false);
                 };
                 let detail = if app.comment.is_empty() {
                     app.generic_name.clone()
@@ -160,10 +166,19 @@ impl Finder {
                 String::new(),
             ),
         };
-        self.paint_icon(doc, &format!("ico-{slot}"), kind)?;
+        id.clear();
+        id.push_str("ico-");
+        write_slot(&mut id, slot, None);
+        self.paint_icon(doc, &id, kind)?;
         self.paint_segments(doc, slot, pieces)?;
-        doc.text(&format!("parent-{slot}"), parent)?;
-        doc.text(&format!("meta-{slot}"), meta)
+        id.clear();
+        id.push_str("parent-");
+        write_slot(&mut id, slot, None);
+        doc.text_ref(&id, &parent)?;
+        id.clear();
+        id.push_str("meta-");
+        write_slot(&mut id, slot, None);
+        doc.text_ref(&id, &meta)
     }
 
     pub(super) fn paint_tile(
@@ -178,15 +193,18 @@ impl Finder {
         let Some(Item::Entry(position)) = item else {
             return doc.visible(&tile, false);
         };
-        let entry = self.view().entries[*position].clone();
+        let view = self.view();
+        let Some(entry) = view.entries.get(*position) else {
+            return doc.visible(&tile, false);
+        };
         doc.visible(&tile, true)?;
         doc.background(
             &tile,
             UiColor::from_rgb(0x00ff_ffff, if selected { 36 } else { 0 }),
         )?;
-        self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(&entry))?;
+        self.paint_icon(doc, &format!("tile-{slot}-ico"), Kind::of(entry))?;
         doc.text_ref(&format!("tile-name-{slot}"), entry.name())?;
-        doc.text(&format!("tile-meta-{slot}"), meta_line(&entry, now))
+        doc.text(&format!("tile-meta-{slot}"), meta_line(entry, now))
     }
 
     /// Shows the glyph for `kind` under `prefix` and hides the others.
@@ -196,8 +214,15 @@ impl Finder {
         prefix: &str,
         kind: Kind,
     ) -> Result<(), String> {
+        // One reused buffer: a repaint hides every other kind, so formatting per candidate would
+        // allocate `KINDS.len()` strings for each visible row.
+        let mut id = String::with_capacity(prefix.len() + 12);
         for candidate in KINDS {
-            doc.visible(&format!("{prefix}-{}", candidate.slug()), candidate == kind)?;
+            id.clear();
+            id.push_str(prefix);
+            id.push('-');
+            id.push_str(candidate.slug());
+            doc.visible(&id, candidate == kind)?;
         }
         Ok(())
     }
@@ -209,8 +234,11 @@ impl Finder {
         pieces: Vec<(String, bool)>,
     ) -> Result<(), String> {
         let pieces = fold_pieces(pieces, SEGMENT_SLOTS);
+        let mut id = String::with_capacity(16);
         for segment in 0..SEGMENT_SLOTS {
-            let id = format!("seg-{slot}-{segment}");
+            id.clear();
+            id.push_str("seg-");
+            write_slot(&mut id, slot, Some(segment));
             match pieces.get(segment) {
                 Some((text, hit)) => {
                     doc.visible(&id, true)?;
@@ -229,15 +257,13 @@ impl Finder {
     }
 
     pub(super) fn paint_status(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let view = self.view();
         let text = if self.walking {
-            format!("Indexing · {} files", format::count(self.view().len()))
-        } else if self.view().truncated {
-            format!(
-                "{} files · index limit reached",
-                format::count(self.view().len())
-            )
+            format!("Indexing · {} files", format::count(view.len()))
+        } else if view.truncated {
+            format!("{} files · index limit reached", format::count(view.len()))
         } else {
-            format!("{} files", format::count(self.view().len()))
+            format!("{} files", format::count(view.len()))
         };
         doc.text("status", text)
     }
@@ -389,4 +415,27 @@ impl Finder {
             );
         doc.text("setup-4", cache)
     }
+}
+
+/// Appends `slot` and optionally `-segment`, so node ids need no per-row `format!`.
+fn write_slot(buffer: &mut String, slot: usize, segment: Option<usize>) {
+    push_decimal(buffer, slot);
+    if let Some(segment) = segment {
+        buffer.push('-');
+        push_decimal(buffer, segment);
+    }
+}
+
+fn push_decimal(buffer: &mut String, mut value: usize) {
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + u8::try_from(value % 10).unwrap_or(0);
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    buffer.push_str(std::str::from_utf8(&digits[at..]).unwrap_or(""));
 }
