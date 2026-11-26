@@ -12,6 +12,27 @@ pub(crate) struct WidgetSurface {
 /// content sits on the wallpaper. Inheriting cards take the global surface fill and blur;
 /// others use their own options.
 pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> WidgetSurface {
+    widget_surface_from(widget, &surface_key(settings))
+}
+
+/// Resolves the settings-derived inputs once per sync. `surface_fill` reads several settings
+/// keys and `surface_blur_percent` another, so the per-slot chrome pass reuses this instead of
+/// repeating the lookups for every card.
+fn surface_key(settings: &SettingsSnapshot) -> SurfaceKey {
+    let blur = projection::surface_blur_percent(settings);
+    let fill = flamewm_ui_core::surface::surface_fill(settings);
+    SurfaceKey {
+        blur: (blur > 0).then_some(blur),
+        fill: UiColor {
+            r: (fill.rgb >> 16) as u8,
+            g: (fill.rgb >> 8) as u8,
+            b: fill.rgb as u8,
+            a: fill.alpha,
+        },
+    }
+}
+
+fn widget_surface_from(widget: &Widget, surface: &SurfaceKey) -> WidgetSurface {
     let radius = WIDGET_RADIUS;
     if !widget.has_surface() {
         return WidgetSurface {
@@ -25,18 +46,10 @@ pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> Wi
             radius,
         };
     }
-    let blur = projection::surface_blur_percent(settings);
-    let blur = (blur > 0).then_some(blur);
     if widget.inherits_surface() {
-        let fill = flamewm_ui_core::surface::surface_fill(settings);
         WidgetSurface {
-            fill: UiColor {
-                r: (fill.rgb >> 16) as u8,
-                g: (fill.rgb >> 8) as u8,
-                b: fill.rgb as u8,
-                a: fill.alpha,
-            },
-            blur,
+            fill: surface.fill,
+            blur: surface.blur,
             radius,
         }
     } else {
@@ -45,7 +58,7 @@ pub(crate) fn widget_surface(widget: &Widget, settings: &SettingsSnapshot) -> Wi
                 widget.color("background"),
                 percent_to_alpha(widget.value("backgroundOpacity")),
             ),
-            blur,
+            blur: surface.blur,
             radius,
         }
     }
@@ -63,14 +76,6 @@ pub(crate) fn assign_layers(document: &mut impl UiDocumentAccess) -> Result<(), 
     document.layer("widget-menu", UiLayer::Popover)?;
     document.layer("widget-gallery", UiLayer::Popover)?;
     document.layer("widget-config", UiLayer::Popover)
-}
-
-pub(crate) fn hide_panels(document: &mut impl UiDocumentAccess) -> Result<(), String> {
-    for id in ["widget-menu", "widget-gallery", "widget-config"] {
-        document.visible(id, false)?;
-        projection::clear_menu_backdrop(document, id)?;
-    }
-    Ok(())
 }
 
 pub(super) fn set_alignment(
@@ -100,6 +105,14 @@ pub(super) fn widget_placeholders(state: &DesktopState, time: WallTime) -> Place
     }
 }
 
+/// True for widget kinds whose drawn output reads the wall clock.
+fn uses_wall_time(widget: &Widget) -> bool {
+    matches!(
+        widget.kind,
+        WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom
+    )
+}
+
 pub(crate) fn sync_widgets(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -109,29 +122,58 @@ pub(crate) fn sync_widgets(
         return Ok(());
     }
     let time = local_wall_time();
-    let needs_time = {
-        let widgets = state.widgets.store.widgets();
-        // Wall time only reaches the document through time-showing widgets; without one, a
-        // second-by-second clock must not force a sync.
-        widgets.iter().any(|widget| {
-            matches!(
-                widget.kind,
-                WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom
-            )
-        })
-    };
+    // Wall time only reaches the document through time-showing widgets; without one, a
+    // second-by-second clock must not force a sync.
+    let needs_time = state.widgets.store.widgets().iter().any(uses_wall_time);
     // Compare the stored key field by field before formatting anything: an unchanged turn then
     // costs no settings/widget snapshot clone, no date/time formatting and no allocation.
     let time_key = needs_time.then_some(time);
-    if let Some(key) = state.widgets.sync_key.as_ref()
-        && sync_key_matches(key, state, state.widgets.store.widgets(), time_key)
-    {
-        return Ok(());
+    if let Some(key) = state.widgets.sync_key.as_ref() {
+        if sync_key_matches(key, state, state.widgets.store.widgets(), time_key) {
+            return Ok(());
+        }
+        // Only the wall clock differs. Every card's chrome and every non-time widget's content
+        // already match the document, so redraw just the time-reading slots and refresh the
+        // stored time instead of cloning the settings, widgets, weather and media snapshots.
+        // This is the steady state of a seconds clock: one second costs one clock slot, not a
+        // full-document rewrite of every widget.
+        if needs_time && sync_key_inputs_match(key, state, state.widgets.store.widgets()) {
+            let accent = projection_accent(state);
+            let placeholders = widget_placeholders_if_used(state, time);
+            for slot in 0..MAX_WIDGETS {
+                let Some(widget) = state.widgets.store.widgets().get(slot).cloned() else {
+                    continue;
+                };
+                if !uses_wall_time(&widget) {
+                    continue;
+                }
+                let id = format!("widget-{}", slot + 1);
+                let editing = editing_buffer(state, &widget);
+                sync_card_content(
+                    document,
+                    state,
+                    slot,
+                    &id,
+                    &widget,
+                    time,
+                    accent,
+                    placeholders.as_ref(),
+                    editing.as_deref(),
+                )?;
+            }
+            if let Some(key) = state.widgets.sync_key.as_mut() {
+                key.time = time_key;
+            }
+            return Ok(());
+        }
     }
-    let placeholders = widget_placeholders(state, time);
+    let placeholders = widget_placeholders_if_used(state, time);
+    let accent = projection_accent(state);
+    let surface = surface_key(&state.settings);
     let key = SyncKey {
         widgets: state.widgets.store.widgets().to_vec(),
-        settings: state.settings.clone(),
+        surface,
+        accent,
         weather: state.weather.clone(),
         media: state.widgets.media.clone(),
         editing: state
@@ -153,87 +195,145 @@ pub(crate) fn sync_widgets(
             state.widgets.faces[slot] = None;
             continue;
         };
-        document.position(&id, widget.rect.x as f32, widget.rect.y as f32)?;
-        document.size(&id, widget.rect.width as f32, widget.rect.height as f32)?;
-        let surface = widget_surface(&widget, &state.settings);
-        document.background(&id, surface.fill)?;
-        document.corner_radius(&id, surface.radius)?;
-        document.node_backdrop(&id, surface.blur)?;
-        for edge in WIDGET_EDGES {
-            document.visible(&format!("{id}-edge-{edge}"), !widget.locked)?;
-        }
-        let analog = is_analog(&widget);
-        document.visible(
-            &format!("{id}-clock"),
-            widget.kind == WidgetKind::Clock && !analog,
+        let editing = editing_buffer(state, &widget);
+        sync_card_chrome(document, &id, &widget, surface, editing.as_deref())?;
+        sync_card_content(
+            document,
+            state,
+            slot,
+            &id,
+            &widget,
+            time,
+            accent,
+            placeholders.as_ref(),
+            editing.as_deref(),
         )?;
-        document.visible(&format!("{id}-analog"), analog)?;
-        document.visible(
-            &format!("{id}-gauge"),
-            matches!(
-                widget.kind,
-                WidgetKind::Cpu | WidgetKind::Memory | WidgetKind::Ring
-            ),
-        )?;
-        document.visible(&format!("{id}-history"), widget.kind == WidgetKind::History)?;
-        document.visible(&format!("{id}-network"), widget.kind == WidgetKind::Network)?;
-        document.visible(&format!("{id}-media"), widget.kind == WidgetKind::Media)?;
-        document.visible(&format!("{id}-weather"), widget.kind == WidgetKind::Weather)?;
-        document.visible(
-            &format!("{id}-calendar"),
-            widget.kind == WidgetKind::Calendar,
-        )?;
-        let editing = state
-            .widgets
-            .editing
-            .as_ref()
-            .filter(|edit| edit.widget == widget.id)
-            .map(|edit| edit.buffer.clone());
-        document.visible(
-            &format!("{id}-custom"),
-            widget.kind == WidgetKind::Custom && editing.is_none(),
-        )?;
-        document.visible(&format!("{id}-editor"), editing.is_some())?;
-        let accent = projection_accent(state);
-        match widget.kind {
-            WidgetKind::Clock if analog => sync_analog(document, state, slot, &widget, time)?,
-            WidgetKind::Clock => sync_clock(document, &id, &widget, time, accent)?,
-            WidgetKind::Cpu | WidgetKind::Memory | WidgetKind::Ring => {
-                sync_gauge(document, state, slot, &widget)?;
-            }
-            WidgetKind::Media => sync_media(document, &id, &widget, &state.widgets.media, accent)?,
-            WidgetKind::Weather => sync_weather(document, &id, &widget, &state.weather, accent)?,
-            WidgetKind::Calendar => sync_calendar(document, &id, &widget, time, accent)?,
-            WidgetKind::History => sync_history(
-                document,
-                &mut state.widgets.graphs[slot],
-                &state.widgets.samples,
-                accent,
-                slot,
-                &widget,
-            )?,
-            WidgetKind::Network => sync_network(
-                document,
-                &mut state.widgets.graphs[slot],
-                &state.widgets.samples,
-                accent,
-                slot,
-                &widget,
-            )?,
-            WidgetKind::Custom => {
-                if let Some(buffer) = editing {
-                    document.text(
-                        &format!("{id}-editor"),
-                        projection::caret_text(&buffer, true),
-                    )?;
-                } else {
-                    sync_custom(document, &id, &widget, &placeholders)?;
-                }
-            }
-        }
         document.visible(&id, true)?;
     }
     state.widgets.sync_key = Some(key);
+    Ok(())
+}
+
+/// Placeholders are only read by custom widgets; formatting them for a clock tick otherwise
+/// allocates five strings per second for nothing.
+fn widget_placeholders_if_used(state: &DesktopState, time: WallTime) -> Option<Placeholders> {
+    state
+        .widgets
+        .store
+        .widgets()
+        .iter()
+        .any(|widget| widget.kind == WidgetKind::Custom)
+        .then(|| widget_placeholders(state, time))
+}
+
+/// Live template buffer of `widget`, when it is being edited.
+fn editing_buffer(state: &DesktopState, widget: &Widget) -> Option<String> {
+    state
+        .widgets
+        .editing
+        .as_ref()
+        .filter(|edit| edit.widget == widget.id)
+        .map(|edit| edit.buffer.clone())
+}
+
+/// Writes the card's geometry, surface and part visibility. Every input here is part of the
+/// sync key, so the time-only fast path may skip this whole block.
+fn sync_card_chrome(
+    document: &mut impl UiDocumentAccess,
+    id: &str,
+    widget: &Widget,
+    surface: SurfaceKey,
+    editing: Option<&str>,
+) -> Result<(), String> {
+    document.position(id, widget.rect.x as f32, widget.rect.y as f32)?;
+    document.size(id, widget.rect.width as f32, widget.rect.height as f32)?;
+    let surface = widget_surface_from(widget, &surface);
+    document.background(id, surface.fill)?;
+    document.corner_radius(id, surface.radius)?;
+    document.node_backdrop(id, surface.blur)?;
+    for edge in WIDGET_EDGES {
+        document.visible(&format!("{id}-edge-{edge}"), !widget.locked)?;
+    }
+    let analog = is_analog(widget);
+    document.visible(
+        &format!("{id}-clock"),
+        widget.kind == WidgetKind::Clock && !analog,
+    )?;
+    document.visible(&format!("{id}-analog"), analog)?;
+    document.visible(
+        &format!("{id}-gauge"),
+        matches!(
+            widget.kind,
+            WidgetKind::Cpu | WidgetKind::Memory | WidgetKind::Ring
+        ),
+    )?;
+    document.visible(&format!("{id}-history"), widget.kind == WidgetKind::History)?;
+    document.visible(&format!("{id}-network"), widget.kind == WidgetKind::Network)?;
+    document.visible(&format!("{id}-media"), widget.kind == WidgetKind::Media)?;
+    document.visible(&format!("{id}-weather"), widget.kind == WidgetKind::Weather)?;
+    document.visible(
+        &format!("{id}-calendar"),
+        widget.kind == WidgetKind::Calendar,
+    )?;
+    document.visible(
+        &format!("{id}-custom"),
+        widget.kind == WidgetKind::Custom && editing.is_none(),
+    )?;
+    document.visible(&format!("{id}-editor"), editing.is_some())?;
+    Ok(())
+}
+
+/// Writes the kind-specific content of `widget`. `accent` is resolved once per sync so the
+/// per-slot loop does not re-parse the settings accent colour for every card.
+fn sync_card_content(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    slot: usize,
+    id: &str,
+    widget: &Widget,
+    time: WallTime,
+    accent: Rgb,
+    placeholders: Option<&Placeholders>,
+    editing: Option<&str>,
+) -> Result<(), String> {
+    match widget.kind {
+        WidgetKind::Clock if is_analog(widget) => {
+            sync_analog(document, state, slot, widget, time, accent)?;
+        }
+        WidgetKind::Clock => sync_clock(document, id, widget, time, accent)?,
+        WidgetKind::Cpu | WidgetKind::Memory | WidgetKind::Ring => {
+            sync_gauge(document, state, slot, widget, accent)?;
+        }
+        WidgetKind::Media => sync_media(document, id, widget, &state.widgets.media, accent)?,
+        WidgetKind::Weather => sync_weather(document, id, widget, &state.weather, accent)?,
+        WidgetKind::Calendar => sync_calendar(document, id, widget, time, accent)?,
+        WidgetKind::History => sync_history(
+            document,
+            &mut state.widgets.graphs[slot],
+            &state.widgets.samples,
+            accent,
+            slot,
+            widget,
+        )?,
+        WidgetKind::Network => sync_network(
+            document,
+            &mut state.widgets.graphs[slot],
+            &state.widgets.samples,
+            accent,
+            slot,
+            widget,
+        )?,
+        WidgetKind::Custom => {
+            if let Some(buffer) = editing {
+                document.text(
+                    &format!("{id}-editor"),
+                    projection::caret_text(buffer, true),
+                )?;
+            } else if let Some(placeholders) = placeholders {
+                sync_custom(document, id, widget, placeholders)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -251,8 +351,14 @@ fn sync_key_matches(
     widgets: &[Widget],
     time: Option<WallTime>,
 ) -> bool {
+    key.time == time && sync_key_inputs_match(key, state, widgets)
+}
+
+/// `sync_key_matches` without the wall clock: true when the only changed input is time.
+fn sync_key_inputs_match(key: &SyncKey, state: &DesktopState, widgets: &[Widget]) -> bool {
     key.widgets.as_slice() == widgets
-        && key.settings == state.settings
+        && key.surface == surface_key(&state.settings)
+        && key.accent == projection_accent(state)
         && key.weather == state.weather
         && key.media == state.widgets.media
         && key
@@ -266,6 +372,5 @@ fn sync_key_matches(
                 .map(|edit| (edit.widget, edit.buffer.as_str()))
         && key.username == state.widgets.username
         && key.hostname == state.widgets.hostname
-        && key.time == time
         && WidgetState::key_is_current(&key.samples, &state.widgets.samples)
 }

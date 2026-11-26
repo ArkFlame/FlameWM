@@ -6,7 +6,13 @@ impl ExplorerApp {
     }
 
     pub(crate) fn is_bookmark(&self,index:usize)->bool {
-        self.places.get(index).is_some_and(|p|p.group==PlaceGroup::Pinned && !p.removable && p.path!=self.trash_base.join("files"))
+        self.places.get(index).is_some_and(|p|p.group==PlaceGroup::Pinned && !p.removable && !self.is_trash_files(&p.path))
+    }
+
+    /// True when `path` is the current Trash `files` folder. Compared by parent and file name so the
+    /// projection (which asks on every full pass) does not build a `trash_base.join("files")` PathBuf.
+    pub(crate) fn is_trash_files(&self,path:&Path)->bool {
+        path.parent()==Some(self.trash_base.as_path()) && path.file_name().is_some_and(|name|name.to_str()==Some("files"))
     }
 
     /// Edits the GTK bookmarks file atomically; the sidebar is rebuilt from the saved file.

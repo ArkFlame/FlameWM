@@ -3,6 +3,7 @@
 use super::overlay::{MENU, menu_width};
 use super::{App, Pane, View};
 use crate::screen::MouseMode;
+use crate::settings::Command;
 use crate::view::Span;
 use flamewm_ui_x11::UiActionEvent;
 use flamewm_ui_x11::UiActionPhase;
@@ -110,8 +111,11 @@ impl App {
             (&mut self.view, event.phase)
         {
             let command = settings.hover_theme(row.saturating_sub(1), self.grid_rows, &self.themes);
+            // A hover that lands on the row already previewed changes nothing; repainting for it would cost a whole
+            // frame per pointer move over the settings view.
+            let changed = !matches!(&command, Command::None);
             self.settings_command(command);
-            return true;
+            return changed;
         }
         // Closing an open menu changes the projection even when the click then falls through.
         let mut changed = false;
@@ -194,8 +198,10 @@ impl App {
         }
         if inside && event.phase == UiActionPhase::Press && event.button == 1 {
             // Clicking a pane gives it the keyboard and the cursor.
+            let was = self.focused_id();
             self.focus_pane(target);
-            changed = true;
+            // An unchanged focus needs no repaint of its own; the press path below decides the rest.
+            changed |= was != Some(target);
         }
         let shift = event.shift_down();
         let mouse = self

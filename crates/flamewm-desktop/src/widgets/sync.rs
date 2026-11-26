@@ -6,6 +6,7 @@ pub(super) fn sync_analog(
     slot: usize,
     widget: &Widget,
     time: WallTime,
+    accent: Rgb,
 ) -> Result<(), String> {
     let id = format!("widget-{}", slot + 1);
     let side = (widget.rect.width.min(widget.rect.height) as f32 - WIDGET_PADDING * 2.0)
@@ -18,7 +19,7 @@ pub(super) fn sync_analog(
     document.position(&format!("{id}-analog"), left, top)?;
     document.size(&format!("{id}-analog"), side, side)?;
     let hands = widget.color("textColor");
-    let accent = widget.color_or_accent("accentColor", projection_accent(state));
+    let accent = widget.color_or_accent("accentColor", accent);
     let key = FaceKey {
         size,
         second: u32::from(time.hour) * 3600 + u32::from(time.minute) * 60 + u32::from(time.second),
@@ -104,6 +105,7 @@ pub(super) fn sync_gauge(
     state: &mut DesktopState,
     slot: usize,
     widget: &Widget,
+    accent: Rgb,
 ) -> Result<(), String> {
     let id = format!("widget-{}", slot + 1);
     let samples = &state.widgets.samples;
@@ -182,7 +184,7 @@ pub(super) fn sync_gauge(
         size: ring_size as u32,
         thickness: widget.value("thickness") as u32,
         percent: percent.unwrap_or(0),
-        ring: widget.color_or_accent("ringColor", projection_accent(state)),
+        ring: widget.color_or_accent("ringColor", accent),
         track: widget.color("trackColor"),
     };
     if state.widgets.rings[slot] != Some(key) {

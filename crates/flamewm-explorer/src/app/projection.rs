@@ -317,7 +317,7 @@ impl ExplorerApp {
                 "placerename"|"placeremove"=>self.context_place.is_some_and(|i|self.is_bookmark(i)),
                 "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable && p.mounted())),
                 "open"|"newtab"|"properties"=>self.context_place.is_some(),
-                "emptytrash"=>self.context_place_path().is_some_and(|path|path==self.trash_base.join("files")),
+                "emptytrash"=>self.context_place.and_then(|i|self.places.get(i)).is_some_and(|place|self.is_trash_files(&place.path)),
                 _=>false,
             }
         } else {match item {
@@ -549,7 +549,7 @@ impl ExplorerApp {
         self.project_dialog(doc)?;
         let selected_path=self.selected();
         let many=self.model.tab().selected_paths.len()>1;
-        let in_trash=tab.path()==self.trash_base.join("files").as_path();
+        let in_trash=self.is_trash_files(tab.path());
         let searching=self.search_rows.is_some();
         let enabled=self.menu_enabled(selected_path.as_deref(),many,in_trash,searching);
         let mut shown:Vec<&str>=Vec::new();

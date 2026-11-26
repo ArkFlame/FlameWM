@@ -111,6 +111,9 @@ pub struct SettingsApplication<T: ControlTransport> {
     appearance_tab: AppearanceTab,
     /// Resolved cursor theme last loaded into this window's live cursor owners.
     applied_cursor_theme: Option<String>,
+    /// The `cursorTheme` value whose resolution produced `applied_cursor_theme`. While the
+    /// requested value matches it, the resolve probe (theme-directory stats) is skipped.
+    applied_cursor_request: Option<String>,
     /// Pointer origin for an output card; motion remains local, only release
     /// causes a native `RandR` request.
     monitor_drag: Option<(usize, f32, u64, OutputId)>,

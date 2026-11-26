@@ -55,17 +55,18 @@ fn compose_row(inputs: &[(Row, Rect)]) -> Row {
         .collect()
 }
 
-/// Replaces cells `[col, col + width)` of a row with `menu`, keeping the runs on either side.
-pub(super) fn overlay(row: Vec<Run>, col: usize, width: usize, menu: Run) -> Vec<Run> {
+/// Replaces cells `[col, col + width)` of a row with `menu`, keeping the runs on either side. Borrows the row, so the
+/// caller's runs are copied only into the result, not into a throwaway clone first.
+pub(super) fn overlay(row: &[Run], col: usize, width: usize, menu: Run) -> Vec<Run> {
     let end = col + width;
     let (mut out, mut right) = (Vec::new(), Vec::new());
     for run in row {
         let run_end = run.col + run.cells;
         if run.col < col {
-            out.push(clip(&run, 0, col.min(run_end) - run.col));
+            out.push(clip(run, 0, col.min(run_end) - run.col));
         }
         if run_end > end {
-            right.push(clip(&run, end.max(run.col) - run.col, run.cells));
+            right.push(clip(run, end.max(run.col) - run.col, run.cells));
         }
     }
     out.push(menu);

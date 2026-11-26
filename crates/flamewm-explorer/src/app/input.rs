@@ -246,9 +246,12 @@ impl ExplorerApp {
     #[allow(clippy::suspicious_else_formatting)]
     pub(crate) fn key_inner(&mut self,key:&UiKeyEvent) {
         if key.phase!=UiKeyPhase::Press {return;}
-        let name=key.key.to_lowercase();
+        // Key names are almost always already lowercase ("up", "return"): lowercasing into a fresh
+        // String on every press made typing in the path or search field allocate per keystroke.
+        let lower;
+        let name:&str=if key.key.chars().any(char::is_uppercase) {lower=key.key.to_lowercase();&lower} else {&key.key};
         if self.chooser_loading || self.chooser.is_some() {
-            match name.as_str() {
+            match name {
                 "escape"=>self.dismiss_chooser(),
                 "return"|"enter"=>self.launch_chooser_choice(false),
                 "up"|"down"=>if let Some(chooser)=self.chooser.as_mut() {
@@ -278,7 +281,7 @@ impl ExplorerApp {
                 return;
             }
             if ctrl && name=="a" {self.field.select_all();return;}
-            match name.as_str() {
+            match name {
                 "backspace"=>self.field.backspace(),
                 "delete"=>self.field.delete(),
                 "left"=>{let to=self.field.caret.saturating_sub(1);self.field.move_caret(to);},
@@ -294,7 +297,7 @@ impl ExplorerApp {
         // under a modal confirmation cannot move the selection behind it.
         if self.dialog.is_some() {
             let slots=self.dialog.as_ref().map_or([None;4],|dialog|Self::dialog_model(dialog).2);
-            match name.as_str() {
+            match name {
                 "escape"=>self.dialog_action("cancel"),
                 "tab"|"iso_left_tab"=>self.step_dialog_focus(slots,shift||name=="iso_left_tab"),
                 "return"|"enter"|"space"|" "=>if let Some(index)=dialog_focus_slot(&slots,self.dialog_focus) {self.dialog_action(DIALOG_SLOTS[index]);},
@@ -306,7 +309,7 @@ impl ExplorerApp {
             self.typeahead(text);
             return;
         }
-        match name.as_str() {
+        match name {
             "f5"=>self.scan(),
             "f2"=>self.action_menu("rename"),
             "delete" if shift || remote::is_remote(self.model.tab().path())=>self.confirm_delete(),

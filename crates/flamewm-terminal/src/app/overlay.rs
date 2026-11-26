@@ -80,12 +80,13 @@ impl App {
         };
         let fg = blend(self.palette.foreground, self.palette.background, 2, 5);
         let cells = text.chars().count();
-        *line = Row::from(overlay(
-            line.to_vec(),
+        let overlaid = Row::from(overlay(
+            &**line,
             start,
             cells,
             text_run(start, &text, fg, None, false),
         ));
+        *line = overlaid;
     }
 
     /// The banner goes once the shell output scrolls or reaches the rows the banner covers.
@@ -164,21 +165,31 @@ impl App {
             .total_lines()
             .saturating_sub(screen.rows() + pane.view_offset.min(screen.scrollback_len()));
         let palette = &self.palette;
-        for (index, found) in search.matches.iter().enumerate() {
-            if found.line < top || found.line >= top + rect.rows {
-                continue;
+        let end = top + rect.rows;
+        // Matches are in reading order, so only the visible line window is walked: a long scrollback full of hits
+        // does not cost a scan per frame.
+        let first = search.matches.partition_point(|found| found.line < top);
+        for (offset, found) in search.matches[first..].iter().enumerate() {
+            if found.line >= end {
+                break;
             }
+            let index = first + offset;
             let Some(row) = rows.get_mut(1 + banner + rect.y0 + (found.line - top)) else {
                 continue;
             };
             let Some(cells) = screen.line_abs(found.line) else {
                 continue;
             };
-            let chars = crate::search::line_chars(&cells);
-            let Some(text) = chars.get(found.col..found.col + found.len) else {
+            if found.col + found.len > cells.len() {
                 continue;
-            };
-            let text: String = text.iter().collect();
+            }
+            // One char per matched cell, the wide glyph's spacer cell skipped; the text is built once, straight
+            // into the run, instead of a throwaway char table per hit.
+            let text: String = cells[found.col..found.col + found.len]
+                .iter()
+                .filter(|cell| cell.attrs & crate::screen::attr::SPACER == 0)
+                .map(|cell| cell.ch)
+                .collect();
             let col = rect.x0 + found.col;
             let (fg, bg) = if index == search.current {
                 (palette.background, palette.cursor)
@@ -186,7 +197,8 @@ impl App {
                 (palette.foreground, palette.selection)
             };
             let run = text_run(col, &text, fg, Some(bg), false);
-            *row = Row::from(overlay(row.to_vec(), col, found.len, run));
+            let overlaid = Row::from(overlay(&**row, col, found.len, run));
+            *row = overlaid;
         }
         let position = if search.matches.is_empty() {
             String::from("0/0")
@@ -221,7 +233,8 @@ impl App {
                 Some(self.palette.selection),
                 false,
             );
-            *line = Row::from(overlay(line.to_vec(), col, width, run));
+            let overlaid = Row::from(overlay(&**line, col, width, run));
+            *line = overlaid;
         }
     }
 

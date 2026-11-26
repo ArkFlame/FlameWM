@@ -351,7 +351,6 @@ fn initial_settings() -> Option<SettingsSnapshot> {
     }
 }
 
-/// Packaged asset root for the default wallpaper: the installed share directory, else the source tree.
 #[cfg(test)]
 mod settings_apply_tests {
     use flamewm_api::settings::SettingValue;

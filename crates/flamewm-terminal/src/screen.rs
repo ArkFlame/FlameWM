@@ -241,6 +241,30 @@ impl Screen {
         }
     }
 
+    /// Writes absolute line `index` into `out`, which is cleared first; false when the index is out of range. A walk
+    /// over the scrollback reuses one buffer instead of allocating a decoded line per entry.
+    pub fn line_abs_into(&self, index: usize, out: &mut Line) -> bool {
+        let history = self.scrollback_len();
+        if index < history {
+            match self.scrollback.get(index) {
+                Some(line) => {
+                    line.cells_into(out);
+                    true
+                }
+                None => false,
+            }
+        } else {
+            match self.grid().get(index - history) {
+                Some(line) => {
+                    out.clear();
+                    out.extend_from_slice(line);
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
     /// Replies the host must write back to the child (cursor reports, device attributes).
     pub fn take_replies(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.replies)

@@ -49,19 +49,26 @@ impl X11App {
 
     /// Canonical surface shape shared by full presentation and slide clipping.
     /// A dock corner mask (or border ring) must never disappear while closing.
-    pub(super) fn base_shape_spans(
-        &self,
+    ///
+    /// An installed alpha silhouette is borrowed rather than copied: it can carry one span per
+    /// row and is refreshed on every changed frame.
+    pub(super) fn base_shape_spans<'a>(
+        &'a self,
         commands: &[PaintCommand],
         scale: f32,
         backdrop_radius: u32,
-    ) -> Vec<(u32, u32, u32)> {
+    ) -> std::borrow::Cow<'a, [(u32, u32, u32)]> {
         if let Some(spans) = &self.shape_override {
-            return spans.clone();
+            return std::borrow::Cow::Borrowed(spans.as_slice());
         }
         if self.dock_corner_radius > 0 {
-            crate::xshape::rounded_mask_spans(self.width, self.height, self.dock_corner_radius)
+            std::borrow::Cow::Owned(crate::xshape::rounded_mask_spans(
+                self.width,
+                self.height,
+                self.dock_corner_radius,
+            ))
         } else {
-            self.mask_spans(commands, scale, backdrop_radius)
+            std::borrow::Cow::Owned(self.mask_spans(commands, scale, backdrop_radius))
         }
     }
 
@@ -103,11 +110,11 @@ impl X11App {
             return;
         }
         // Identical spans leave the server-side bounding region unchanged; skip the XShape request.
-        if !shape_needs_apply(&self.shape_applied, self.window, &spans) {
+        if !shape_needs_apply(&self.shape_applied, self.window, spans.as_ref()) {
             self.static_shape_applied.set(static_key);
             return;
         }
-        if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
+        if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, spans.as_ref()) } {
             self.shape_applied.set(None);
             self.static_shape_applied.set(None);
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
@@ -135,7 +142,8 @@ impl X11App {
         let spans = self.base_shape_spans(&cached.commands, 1.0, backdrop_radius);
         // The clipped mask replaces the base mask, so the next base refresh must re-apply it.
         self.shape_applied.set(None);
-        if let Err(error) = unsafe { bridge.apply_clipped_mask(self.window, &spans, clip) } {
+        if let Err(error) = unsafe { bridge.apply_clipped_mask(self.window, spans.as_ref(), clip) }
+        {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
     }

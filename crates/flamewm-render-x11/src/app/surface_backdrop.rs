@@ -136,15 +136,11 @@ impl X11App {
         unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
     }
 
-    unsafe fn backdrop_argb_visual(&self) -> Result<*mut Visual, String> {
-        let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
-        let matched = unsafe {
-            XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo)
-        };
-        if matched == 0 || vinfo.visual.is_null() {
-            return Err("backdrop: no 32-bit TrueColor visual".to_string());
-        }
-        Ok(vinfo.visual)
+    /// The ARGB visual the app resolved once at startup. The server's visual set is immutable for
+    /// a display, so matching it again on every backdrop upload only costs a round trip.
+    fn backdrop_argb_visual(&self) -> Result<*mut Visual, String> {
+        self.argb_visual
+            .ok_or_else(|| "backdrop: no 32-bit TrueColor visual".to_string())
     }
 
     /// Frees the retained backdrop, if any. Surfaces without backdrop keep the transparent clear.

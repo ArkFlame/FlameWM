@@ -28,6 +28,9 @@ thread_local! {
     /// Backing store for [`PixelBackend::paint_batch`]'s default implementation. A backend that
     /// keeps its own buffers (like `SoftPixels`) never touches it.
     static BATCH_SCRATCH: RefCell<BatchScratch> = RefCell::new(BatchScratch::default());
+    /// Clip-sized buffer for in-place clipped fills, so they do not force the whole-frame scratch
+    /// copy that the blur and backdrop ops need.
+    static INPLACE_REGION: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Which pixel backend the `renderAcceleration` setting requests. `Cpu` is the default; `Gpu` is
@@ -444,6 +447,18 @@ pub(crate) fn paints_in_place(
     }
     ops.iter().all(|op| match *op {
         PixelOp::FillRoundedRect { .. } => true,
+        // A clipped fill only touches its clip rows, so it can run on the frame with a reusable
+        // region buffer. Empty clips are no-ops; a non-empty clip must lie inside the frame.
+        PixelOp::FillRoundedRectClipped {
+            clip: (x, y, w, h), ..
+        } => {
+            w == 0
+                || h == 0
+                || (x >= 0
+                    && y >= 0
+                    && i64::from(x) + i64::from(w) <= i64::from(width)
+                    && i64::from(y) + i64::from(h) <= i64::from(height))
+        }
         PixelOp::BlendMask {
             width,
             height,
@@ -604,7 +619,7 @@ pub trait PixelBackend {
 }
 
 /// Runs a batch that [`paints_in_place`] proved cannot fail directly on `pixels`, with no
-/// full-frame copy. Only fills and blends with valid sizes reach here.
+/// full-frame copy. Fills, clipped fills and blends that passed validation reach here.
 pub(crate) fn apply_ops_in_place<B: PixelBackend + ?Sized>(
     backend: &mut B,
     pixels: &mut [u8],
@@ -619,10 +634,37 @@ pub(crate) fn apply_ops_in_place<B: PixelBackend + ?Sized>(
             PixelOp::FillRoundedRect { outer, hole, color } => {
                 backend.fill_rounded_rect(pixels, width, height, outer, hole, color)?;
             }
+            PixelOp::FillRoundedRectClipped {
+                outer,
+                hole,
+                color,
+                clip,
+            } => {
+                // The clipped fill only reads and writes the clip rows, so it can run on the
+                // frame itself; the reusable region buffer keeps it allocation-free.
+                INPLACE_REGION.with(|cell| {
+                    let mut region = cell.borrow_mut();
+                    let result = fill_clipped_cpu(
+                        backend,
+                        &mut *region,
+                        pixels,
+                        width,
+                        height,
+                        outer,
+                        hole,
+                        color,
+                        clip,
+                    );
+                    if region.capacity() > SCRATCH_RETAIN_BYTES {
+                        *region = Vec::new();
+                    }
+                    result
+                })?;
+            }
             blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
                 composite_cpu(pixels, width, height, blend)?;
             }
-            _ => unreachable!("paints_in_place admits only fills and blends"),
+            _ => unreachable!("paints_in_place admits only fills, clipped fills and blends"),
         }
     }
     Ok(())

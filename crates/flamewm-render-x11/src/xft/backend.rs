@@ -84,6 +84,7 @@ impl XftBackend {
             colors: HashMap::new(),
             preferred_family,
             text_masks: TextMaskCache::default(),
+            measures: HashMap::new(),
             readbacks: 0,
         };
 
@@ -140,6 +141,8 @@ impl XftBackend {
         }
         self.preferred_family = family.to_string();
         self.text_masks.clear();
+        // Cached advances were measured with the previous family's face.
+        self.measures.clear();
     }
 
     pub unsafe fn draw_text(

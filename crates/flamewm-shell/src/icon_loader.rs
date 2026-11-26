@@ -3,6 +3,7 @@
 //! drains completed rasters per tick. No X calls happen in the worker.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
@@ -35,11 +36,10 @@ fn resolve_icon_raster(
     size: IconSize,
 ) -> Option<Rgb8Raster> {
     let accept = |raster: &Rgb8Raster| !is_brand_fallback(raster);
-    icon_name_candidates(name)
-        .iter()
+    candidate_names(name)
         .find_map(|candidate| {
             resolver
-                .prepare_name(candidate.as_str(), size)
+                .prepare_name(candidate, size)
                 .ok()
                 .filter(accept)
         })
@@ -62,20 +62,37 @@ fn resolve_icon_raster(
 /// `mini.xterm` yields `xterm`), lowercased. Empty and duplicate names drop.
 #[must_use]
 pub fn icon_name_candidates(name: &str) -> Vec<String> {
+    candidate_names(name).map(Cow::into_owned).collect()
+}
+
+/// Allocation-free candidate order shared by the resolver and the public `Vec` view. Only the
+/// lowercase forms that are actually reached allocate, so a resolve that hits the raw name (the
+/// common case) builds no throwaway `String`s and no candidate `Vec`.
+fn candidate_names(name: &str) -> impl Iterator<Item = Cow<'_, str>> {
     let raw = name.trim();
     let class_segment = raw.rsplit('.').next().unwrap_or(raw);
-    let mut out: Vec<String> = Vec::with_capacity(4);
+    let lowered_raw = lowercase_if_needed(raw);
+    let lowered_class = lowercase_if_needed(class_segment);
+    let mut candidates: [Option<Cow<'_, str>>; 4] = [None, None, None, None];
+    let mut len = 0_usize;
     for candidate in [
         Cow::Borrowed(raw),
-        lowercase_if_needed(raw),
+        lowered_raw,
         Cow::Borrowed(class_segment),
-        lowercase_if_needed(class_segment),
+        lowered_class,
     ] {
-        if !candidate.is_empty() && !out.iter().any(|seen| seen == candidate.as_ref()) {
-            out.push(candidate.into_owned());
+        if candidate.is_empty()
+            || candidates[..len]
+                .iter()
+                .flatten()
+                .any(|seen| seen.as_ref() == candidate.as_ref())
+        {
+            continue;
         }
+        candidates[len] = Some(candidate);
+        len += 1;
     }
-    out
+    candidates.into_iter().flatten()
 }
 
 /// ASCII-lowercases `s`, allocating only when it contains an uppercase byte.
@@ -137,12 +154,66 @@ pub enum WorkerMsg {
     Theme(String),
 }
 
+/// Pending icon keys grouped by target. A visible slot reprojects often and re-requests the same
+/// key, so the coalescing probe must not scan every in-flight icon for every request. Most targets
+/// hold one key, making the probe a single-entry comparison instead of an O(pending) name walk.
+#[derive(Default)]
+struct PendingSet {
+    by_target: HashMap<IconTarget, Vec<(String, u32, u32)>>,
+}
+
+impl PendingSet {
+    fn contains(&self, target: IconTarget, name: &str, width: u32, height: u32) -> bool {
+        self.by_target.get(&target).is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|(known, w, h)| *w == width && *h == height && known == name)
+        })
+    }
+
+    fn insert(&mut self, req: &IconRequest) {
+        self.by_target
+            .entry(req.target)
+            .or_default()
+            .push((req.name.clone(), req.width, req.height));
+    }
+
+    fn remove(&mut self, target: IconTarget, name: &str, width: u32, height: u32) {
+        let now_empty = if let Some(entries) = self.by_target.get_mut(&target) {
+            if let Some(index) = entries
+                .iter()
+                .position(|(known, w, h)| *w == width && *h == height && known == name)
+            {
+                entries.swap_remove(index);
+            }
+            entries.is_empty()
+        } else {
+            false
+        };
+        if now_empty {
+            self.by_target.remove(&target);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.by_target.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_target.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.by_target.values().map(Vec::len).sum()
+    }
+}
+
 pub struct IconLoader {
     req_tx: SyncSender<WorkerMsg>,
     res_rx: Receiver<IconResult>,
     wake_reader: UnixStream,
     generation: u64,
-    pending: std::collections::HashSet<(IconTarget, String, u32, u32)>,
+    pending: PendingSet,
     pub queue_full_drops: u64,
     pub stale_drops: u64,
     pub results_applied: u64,
@@ -227,7 +298,7 @@ impl IconLoader {
             res_rx,
             wake_reader,
             generation: 1,
-            pending: std::collections::HashSet::new(),
+            pending: PendingSet::default(),
             queue_full_drops: 0,
             stale_drops: 0,
             results_applied: 0,
@@ -282,16 +353,7 @@ impl IconLoader {
         self.high_enqueued += 1;
         // Probe the pending set by reference: a repeated request for a still-visible slot is
         // the common case (views reproject often) and must not allocate a throwaway key.
-        if self
-            .pending
-            .iter()
-            .any(|(known_target, known_name, known_w, known_h)| {
-                *known_target == target
-                    && *known_w == width
-                    && *known_h == height
-                    && known_name.as_str() == name
-            })
-        {
+        if self.pending.contains(target, name, width, height) {
             // The published `shell.icon.coalesced` metric counts these deduped repeats.
             self.coalesced += 1;
             return;
@@ -304,7 +366,7 @@ impl IconLoader {
             width,
             height,
         };
-        self.pending.insert(pending_key(&req));
+        self.pending.insert(&req);
         self.submit(req);
     }
 
@@ -317,13 +379,15 @@ impl IconLoader {
                     // Key stays pending so duplicate requests coalesce.
                     self.retry.push(returned);
                 } else {
-                    self.pending.remove(&pending_key(&returned));
+                    self.pending
+                        .remove(returned.target, &returned.name, returned.width, returned.height);
                 }
             }
             Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
                 // Worker is gone: clear the key so it is never stranded.
                 self.queue_full_drops += 1;
-                self.pending.remove(&pending_key(&returned));
+                self.pending
+                    .remove(returned.target, &returned.name, returned.width, returned.height);
             }
             Err(error) => eprintln!("shell: icon request not sent: {error}"),
         }
@@ -335,14 +399,16 @@ impl IconLoader {
         self.flush_theme();
         for req in std::mem::take(&mut self.retry) {
             if req.generation != self.generation {
-                self.pending.remove(&pending_key(&req));
+                self.pending
+                    .remove(req.target, &req.name, req.width, req.height);
                 continue;
             }
             match self.req_tx.try_send(WorkerMsg::Icon(req)) {
                 Ok(()) => {}
                 Err(TrySendError::Full(WorkerMsg::Icon(returned))) => self.retry.push(returned),
                 Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
-                    self.pending.remove(&pending_key(&returned));
+                    self.pending
+                        .remove(returned.target, &returned.name, returned.width, returned.height);
                 }
                 Err(error) => eprintln!("shell: icon retry not sent: {error}"),
             }
@@ -355,17 +421,10 @@ impl IconLoader {
         let mut out = Vec::new();
         self.wake_drain();
         self.flush_retries();
-        while let Ok(mut res) = self.res_rx.try_recv() {
-            // Move the result's name into the pending key instead of cloning it, then put it
-            // back for the caller: one allocation less per delivered raster.
-            let key = (
-                res.target,
-                std::mem::take(&mut res.name),
-                res.width,
-                res.height,
-            );
-            self.pending.remove(&key);
-            res.name = key.1;
+        while let Ok(res) = self.res_rx.try_recv() {
+            // The key borrows the result name: no clone, no move, no restore dance.
+            self.pending
+                .remove(res.target, &res.name, res.width, res.height);
             if res.generation != self.generation {
                 self.stale_drops += 1;
                 continue;
@@ -385,7 +444,8 @@ impl IconLoader {
 
     pub fn wake_drain(&self) {
         use std::io::Read;
-        let _ = self.wake_reader.set_nonblocking(true);
+        // The reader is set nonblocking once in `spawn`; re-arming it per tick was one fcntl
+        // syscall on every shell wake, including idle ticks with no icon traffic.
         let mut buf = [0u8; 64];
         loop {
             match (&self.wake_reader).read(&mut buf) {
@@ -407,10 +467,6 @@ impl IconLoader {
             IconTarget::DockSlot(_) => DependentSurface::Dock,
         }
     }
-}
-
-fn pending_key(req: &IconRequest) -> (IconTarget, String, u32, u32) {
-    (req.target, req.name.clone(), req.width, req.height)
 }
 
 /// True when a worker raster is brand artwork that a generic app miss
@@ -644,7 +700,7 @@ mod tests {
             res_rx,
             wake_reader,
             generation: 1,
-            pending: std::collections::HashSet::new(),
+            pending: PendingSet::default(),
             queue_full_drops: 0,
             stale_drops: 0,
             results_applied: 0,

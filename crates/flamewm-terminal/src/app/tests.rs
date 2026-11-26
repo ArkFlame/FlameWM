@@ -748,7 +748,7 @@ fn legacy_overlay_is_disabled_for_flamefetch_startup() {
 fn overlay_replaces_cells_and_keeps_the_runs_on_either_side() {
     let row = vec![text_run(0, "abcdef", 1, None, false)];
     let menu = text_run(2, "XY", 2, Some(3), false);
-    let out = overlay(row, 2, 2, menu);
+    let out = overlay(&row, 2, 2, menu);
     let texts: Vec<(usize, usize, &str)> = out
         .iter()
         .map(|run| (run.col, run.cells, run.text.as_str()))

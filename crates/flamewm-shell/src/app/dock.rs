@@ -134,8 +134,7 @@ impl ShellLoop {
         changed: flamewm_shell::runtime::ChangedDomains,
         force: bool,
     ) {
-        let settings: DockSettings = dock::dock_settings(self.settings_cache.as_ref());
-        if !settings.enabled {
+        if !dock::dock_enabled(self.settings_cache.as_ref()) {
             self.dock_entries.clear();
             self.dock_last = None;
             self.close_dock_menu(runtime);
@@ -156,6 +155,9 @@ impl ShellLoop {
             .dock_stage
             .autohide
             .is_none_or(|model| model.deadline(now).is_none());
+        // Peek the one flag the idle test needs; the full settings (which allocate the pinned
+        // app list) are built only for a real rebuild.
+        let auto_hide = dock::dock_auto_hide(self.settings_cache.as_ref());
         let idle = !force
             && self.dock_last.is_some()
             && !changed.windows
@@ -163,7 +165,7 @@ impl ShellLoop {
             && !changed.panels
             && self.dock_settings_key
                 == Some((self.settings_revision, self.settings_cache.is_some()))
-            && !settings.auto_hide
+            && !auto_hide
             && stage_settled
             && self.dock_drag.is_none()
             && self.dock_menu_slot.is_none()
@@ -171,6 +173,7 @@ impl ShellLoop {
         if idle {
             return;
         }
+        let settings: DockSettings = dock::dock_settings(self.settings_cache.as_ref());
         if self.dock_last.is_none() {
             // A rebuild reads the Trash folder once; later changes re-read it only on reveal.
             self.dock_trash_full =
@@ -831,9 +834,14 @@ impl ShellLoop {
                 .dock_last
                 .as_ref()
                 .and_then(|state| {
-                    let rects: Vec<(f32, f32, f32, f32)> =
-                        state.0.slots.iter().map(|r| (r.x, r.y, r.w, r.h)).collect();
-                    flamewm_shell_core::dock::hover_slot(x, y, &rects)
+                    // Same un-magnified rect containment as `dock::hover_slot`, scanned in place:
+                    // pointer motion is the bulk of the event stream, so it must not build a
+                    // rect `Vec` for every Hover event.
+                    state
+                        .0
+                        .slots
+                        .iter()
+                        .position(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
                 })
                 .filter(|_| event.action.inside && self.dock_menu_slot.is_none())
                 .filter(|index| *index < self.dock_entries.len())
@@ -873,7 +881,7 @@ impl ShellLoop {
             let snapshot = self.shell.snapshot();
             let windows = &snapshot.windows;
             // A launch (no running window yet) starts the optional hop; a focus click does not.
-            if !entry.running && dock::dock_settings(self.settings_cache.as_ref()).launch_bounce {
+            if !entry.running && dock::dock_launch_bounce(self.settings_cache.as_ref()) {
                 self.dock_bounce = Some((
                     slot.wrapping_sub(1),
                     flamewm_shell_core::dock::LaunchBounce::start(
@@ -893,7 +901,7 @@ impl ShellLoop {
     /// Subtle hover scale (`dock.hoverScale`): grows the hovered icon and returns the previous one
     /// to rest. Only two icon nodes are written, so the repaint stays inside the dock.
     fn set_dock_hover_scale(&mut self, runtime: &mut SurfaceRuntime, hovered: Option<usize>) {
-        if !dock::dock_settings(self.settings_cache.as_ref()).hover_scale {
+        if !dock::dock_hover_scale(self.settings_cache.as_ref()) {
             return;
         }
         let (Some((frame, ..)), Some(surface)) = (self.dock_last.as_ref(), self.dock_surface)

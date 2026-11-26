@@ -176,6 +176,21 @@ impl WeatherHost {
                 .is_some_and(|started| now.duration_since(started) >= WEATHER_REFRESH_INTERVAL)
     }
 
+    /// Instant the next refresh becomes due, for the shell wake slot. `None` while weather is
+    /// disabled or has no location (the tick then never fetches) and while a fetch is in flight:
+    /// its completion worker wakes the loop through the result socket.
+    #[must_use]
+    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        if !self.settings.enabled || self.settings.location.is_none() || self.inflight.is_some() {
+            return None;
+        }
+        if self.fetch_on_open {
+            return Some(now);
+        }
+        self.last_started
+            .map(|started| started + WEATHER_REFRESH_INTERVAL)
+    }
+
     /// Advances the scheduler: applies a finished fetch, then starts one if due.
     /// Returns true when the visible state changed.
     pub fn tick(

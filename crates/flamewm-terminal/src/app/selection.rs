@@ -41,20 +41,28 @@ pub(super) fn word_bounds(chars: &[char], col: usize) -> Option<(usize, usize)> 
 }
 
 impl App {
-    /// Text of a pane's selection, also kept on the pane for the in-process paste fallback.
-    fn copy_selection_in(&mut self, id: u64) -> String {
+    /// Text of a pane's selection, also kept on the pane for the in-process paste fallback. Returns whether the pane
+    /// has a selection to copy.
+    fn copy_selection_in(&mut self, id: u64) -> bool {
         let Some(pane) = self.pane_mut(id) else {
-            return String::new();
+            return false;
         };
         let Some(span) = pane.selection else {
-            return String::new();
+            return false;
         };
         let screen = &pane.session.screen;
-        let mut out = Vec::new();
+        // Built straight into the pane's buffer: one allocation for the whole selection, not one per line plus a
+        // joined copy handed back to the caller.
+        let mut out = String::new();
+        let mut first = true;
         for index in span.start.0..=span.end.0 {
             let Some(line) = screen.line_abs(index) else {
                 continue;
             };
+            if !first {
+                out.push('\n');
+            }
+            first = false;
             let from = if index == span.start.0 {
                 span.start.1
             } else {
@@ -65,18 +73,20 @@ impl App {
             } else {
                 line.len().saturating_sub(1)
             };
-            let mut text = String::new();
+            let line_start = out.len();
             #[allow(clippy::needless_range_loop)]
             for col in from..=to.min(line.len().saturating_sub(1)) {
                 let cell = &line[col];
                 if cell.attrs & crate::screen::attr::SPACER == 0 {
-                    text.push(cell.ch);
+                    out.push(cell.ch);
                 }
             }
-            out.push(text.trim_end().to_owned());
+            // Trim this line's trailing blanks only, so a later empty line still adds its own newline.
+            let trimmed = out[line_start..].trim_end().len();
+            out.truncate(line_start + trimmed);
         }
-        pane.selection_text = out.join("\n");
-        pane.selection_text.clone()
+        pane.selection_text = out;
+        true
     }
 
     /// Makes `span` the pane's selection, copies its text, and publishes it on PRIMARY for middle-click.
@@ -84,12 +94,17 @@ impl App {
         if let Some(pane) = self.pane_mut(id) {
             pane.selection = Some(span);
         }
-        let text = self.copy_selection_in(id);
+        if !self.copy_selection_in(id) {
+            return;
+        }
+        let Some(text) = self.pane(id).map(|pane| pane.selection_text.as_str()) else {
+            return;
+        };
         if text.is_empty() {
             return;
         }
         if let Some(clipboard) = &self.clipboard
-            && let Err(error) = clipboard.set_primary_text(&text)
+            && let Err(error) = clipboard.set_primary_text(text)
         {
             eprintln!("flamewm-terminal: primary selection: {error}");
         }
@@ -136,12 +151,17 @@ impl App {
     /// Ctrl+Shift+C: the selection goes to the system CLIPBOARD. Without an X connection it stays in-process.
     pub fn copy_to_clipboard(&mut self) {
         let Some(id) = self.focused_id() else { return };
-        let text = self.copy_selection_in(id);
+        if !self.copy_selection_in(id) {
+            return;
+        }
+        let Some(text) = self.pane(id).map(|pane| pane.selection_text.as_str()) else {
+            return;
+        };
         if text.is_empty() {
             return;
         }
         if let Some(clipboard) = &self.clipboard
-            && let Err(error) = clipboard.set_text(&text)
+            && let Err(error) = clipboard.set_text(text)
         {
             eprintln!("flamewm-terminal: clipboard: {error}");
         }

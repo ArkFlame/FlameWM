@@ -20,9 +20,9 @@ use flamewm_control_dbus::{ControlSignal, ControlSignalClient, initial_settings}
 use flamewm_ui_core::context_menu::menu_surface;
 use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::{
-    RuntimeImage, UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess,
-    UiKeyEvent, UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity,
-    decode_document, run_with_controller_events_role_and_two_readable_fds,
+    UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiKeyEvent,
+    UiKeyPhase, UiWakeDrain, UiWindowConfig, UiWindowRole, X11WindowIdentity, decode_document,
+    run_with_controller_events_role_and_two_readable_fds,
 };
 
 const UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-task-manager.rwr"));
@@ -121,6 +121,14 @@ struct Application {
     selected: Option<(u32, u64)>,
     hovered: Option<usize>,
     rows: Vec<(u32, u64)>,
+    /// Matching process indices in display order. Rebuilt only when the snapshot, the sort or the
+    /// query changes, so a repaint for hover, a click or a scroll never re-sorts the whole table.
+    hits: Vec<usize>,
+    hits_dirty: bool,
+    /// Two ping-pong raster buffers per graph card: `image_rgba8_shared` keeps the last raster
+    /// alive, so the next sample draws into the uniquely-owned alternate instead of a new `Vec`.
+    graph_rasters: [[Arc<Vec<u8>>; 2]; 3],
+    graph_phase: usize,
     context: bool,
     confirm: bool,
     viewport: usize,
@@ -145,6 +153,14 @@ impl Application {
             selected: None,
             hovered: None,
             rows: Vec::new(),
+            hits: Vec::new(),
+            hits_dirty: true,
+            graph_rasters: [
+                [Arc::default(), Arc::default()],
+                [Arc::default(), Arc::default()],
+                [Arc::default(), Arc::default()],
+            ],
+            graph_phase: 0,
             context: false,
             confirm: false,
             viewport: visible_rows(HEIGHT),
@@ -164,62 +180,46 @@ impl Application {
         self.histories.download.push(snapshot.net_rx as f32);
         self.histories.upload.push(snapshot.net_tx as f32);
         self.snapshot = snapshot;
+        self.hits_dirty = true;
         self.graphs_dirty = true;
         self.metrics_dirty = true;
     }
-    /// One process matches the search box: name, command or PID contains the query.
-    fn matches(&self, process: &model::Process, query: &str) -> bool {
-        query.is_empty()
-            || contains_folded(process.name.as_ref(), query)
-            || contains_folded(process.command.as_ref(), query)
-            || pid_contains(process.pid, query)
-    }
-    /// Matching processes without ordering: lets scrolling find its bound without a full sort.
-    fn matching_count(&self) -> usize {
+    /// Matching processes in display order, rebuilt only after the snapshot, sort or query changed.
+    fn ensure_hits(&mut self) {
+        if !self.hits_dirty {
+            return;
+        }
+        self.hits_dirty = false;
         let query = self.query.to_lowercase();
-        self.snapshot
-            .processes
-            .iter()
-            .filter(|process| self.matches(process, &query))
-            .count()
-    }
-    fn sorted(&self) -> Vec<usize> {
-        let query = self.query.to_lowercase();
-        let mut hits: Vec<usize> = self
-            .snapshot
-            .processes
-            .iter()
-            .enumerate()
-            .filter(|(_, process)| self.matches(process, &query))
-            .map(|(index, _)| index)
-            .collect();
-        // Name keys are lowercased once per process per sort, not twice per comparison.
-        let lower_names: Vec<String> = if self.sort == Sort::Name {
-            self.snapshot
-                .processes
-                .iter()
-                .map(|p| p.name.to_lowercase())
-                .collect()
+        let sort = self.sort;
+        let descending = self.descending;
+        let processes = &self.snapshot.processes;
+        // Name keys are lowercased once per process per rebuild, not twice per comparison.
+        let lower_names: Vec<String> = if sort == Sort::Name {
+            processes.iter().map(|p| p.name.to_lowercase()).collect()
         } else {
             Vec::new()
         };
-        hits.sort_unstable_by(|&ai, &bi| {
-            let a = &self.snapshot.processes[ai];
-            let b = &self.snapshot.processes[bi];
-            let order = match self.sort {
+        self.hits.clear();
+        self.hits.extend(
+            processes
+                .iter()
+                .enumerate()
+                .filter(|(_, process)| process_matches(process, &query))
+                .map(|(index, _)| index),
+        );
+        self.hits.sort_unstable_by(|&ai, &bi| {
+            let a = &processes[ai];
+            let b = &processes[bi];
+            let order = match sort {
                 Sort::Cpu => a.cpu.total_cmp(&b.cpu),
                 Sort::Memory => a.rss_kib.cmp(&b.rss_kib),
                 Sort::Pid => a.pid.cmp(&b.pid),
                 Sort::Name => lower_names[ai].cmp(&lower_names[bi]),
             };
-            let order = if self.descending {
-                order.reverse()
-            } else {
-                order
-            };
+            let order = if descending { order.reverse() } else { order };
             order.then_with(|| a.pid.cmp(&b.pid))
         });
-        hits
     }
     fn selected_process(&self) -> Option<&model::Process> {
         let (pid, start) = self.selected?;
@@ -370,71 +370,73 @@ impl Application {
         );
         doc.text_ref("head-mem-pct", &text)
     }
-    fn paint_graphs(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let histories = &self.histories;
-        let network_scale = histories
+    fn paint_graphs(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let network_scale = self
+            .histories
             .download
             .peak()
-            .max(histories.upload.peak())
+            .max(self.histories.upload.peak())
             .max(MIN_NETWORK_SCALE);
-        let graphs = [
-            (
-                "cpu-graph",
-                graph::render(
-                    &[graph::Series {
-                        history: &histories.cpu,
-                        rgb: CPU_RGB,
+        // Alternate the two raster buffers so the one the document still holds from the previous
+        // sample is never the one being overwritten: `Arc::make_mut` then reuses it in place.
+        self.graph_phase ^= 1;
+        let phase = self.graph_phase;
+        {
+            let histories = &self.histories;
+            let cpu = Arc::make_mut(&mut self.graph_rasters[0][phase]);
+            graph::render_into(
+                &[graph::Series {
+                    history: &histories.cpu,
+                    rgb: CPU_RGB,
+                    filled: true,
+                }],
+                100.0,
+                cpu,
+            );
+            let memory = Arc::make_mut(&mut self.graph_rasters[1][phase]);
+            graph::render_into(
+                &[graph::Series {
+                    history: &histories.memory,
+                    rgb: MEMORY_RGB,
+                    filled: true,
+                }],
+                100.0,
+                memory,
+            );
+            let net = Arc::make_mut(&mut self.graph_rasters[2][phase]);
+            graph::render_into(
+                &[
+                    graph::Series {
+                        history: &histories.download,
+                        rgb: DOWNLOAD_RGB,
                         filled: true,
-                    }],
-                    100.0,
-                ),
-            ),
-            (
-                "mem-graph",
-                graph::render(
-                    &[graph::Series {
-                        history: &histories.memory,
-                        rgb: MEMORY_RGB,
-                        filled: true,
-                    }],
-                    100.0,
-                ),
-            ),
-            (
-                "net-graph",
-                graph::render(
-                    &[
-                        graph::Series {
-                            history: &histories.download,
-                            rgb: DOWNLOAD_RGB,
-                            filled: true,
-                        },
-                        graph::Series {
-                            history: &histories.upload,
-                            rgb: UPLOAD_RGB,
-                            filled: false,
-                        },
-                    ],
-                    network_scale,
-                ),
-            ),
+                    },
+                    graph::Series {
+                        history: &histories.upload,
+                        rgb: UPLOAD_RGB,
+                        filled: false,
+                    },
+                ],
+                network_scale,
+                net,
+            );
+        }
+        let rasters = [
+            Arc::clone(&self.graph_rasters[0][phase]),
+            Arc::clone(&self.graph_rasters[1][phase]),
+            Arc::clone(&self.graph_rasters[2][phase]),
         ];
-        for (id, pixels) in graphs {
-            doc.image_rgba8(
-                id,
-                RuntimeImage {
-                    source: id.to_owned(),
-                    width: graph::WIDTH,
-                    height: graph::HEIGHT,
-                    pixels,
-                },
-            )?;
+        for (id, pixels) in ["cpu-graph", "mem-graph", "net-graph"]
+            .into_iter()
+            .zip(rasters)
+        {
+            doc.image_rgba8_shared(id, id.to_owned(), graph::WIDTH, graph::HEIGHT, pixels)?;
         }
         Ok(())
     }
     fn paint_table(&mut self, doc: &mut impl UiDocumentAccess, accent: u32) -> Result<(), String> {
-        let hits = self.sorted();
-        let max_first = hits.len().saturating_sub(self.viewport);
+        self.ensure_hits();
+        let max_first = self.hits.len().saturating_sub(self.viewport);
         self.first = self.first.min(max_first);
         // One id and one value buffer for the whole table: a visible row costs no `String`
         // allocation per cell, and `text_ref` skips unchanged cells inside the document.
@@ -470,12 +472,12 @@ impl Application {
         for slot in 0..ROWS {
             id.clear();
             let _ = write!(id, "row-{slot}");
-            let visible = slot < self.viewport && self.first + slot < hits.len();
+            let visible = slot < self.viewport && self.first + slot < self.hits.len();
             doc.visible(&id, visible)?;
             if !visible {
                 continue;
             }
-            let p = &self.snapshot.processes[hits[self.first + slot]];
+            let p = &self.snapshot.processes[self.hits[self.first + slot]];
             self.rows.push((p.pid, p.start));
             let indent = INDENTS[p.depth.min(8) as usize];
             cell_id(&mut id, slot, "name");
@@ -582,6 +584,7 @@ impl Application {
             self.sort = next;
             self.descending = matches!(next, Sort::Cpu | Sort::Memory);
         }
+        self.hits_dirty = true;
         self.first = 0;
     }
     fn action(
@@ -598,7 +601,8 @@ impl Application {
                 .and_then(|(_, dy)| dy.parse::<f32>().ok())
                 .unwrap_or(0.0);
             if dy != 0.0 && event.y >= LIST_TOP as f32 {
-                let max = self.matching_count().saturating_sub(self.viewport);
+                self.ensure_hits();
+                let max = self.hits.len().saturating_sub(self.viewport);
                 if dy > 0.0 {
                     self.first = (self.first + 3).min(max);
                 } else {
@@ -708,6 +712,7 @@ impl Application {
                 "escape" | "return" | "enter" => self.search_active = false,
                 "backspace" => {
                     self.query.pop();
+                    self.hits_dirty = true;
                     self.first = 0;
                 }
                 _ => {
@@ -717,6 +722,7 @@ impl Application {
                         if self.query.chars().count() > 128 {
                             self.query = self.query.chars().take(128).collect();
                         }
+                        self.hits_dirty = true;
                         self.first = 0;
                     }
                 }
@@ -726,6 +732,7 @@ impl Application {
                 "f3" | "/" => self.search_active = true,
                 "escape" => {
                     self.query.clear();
+                    self.hits_dirty = true;
                     self.context = false;
                 }
                 "f6" => self.choose_sort(match self.sort {

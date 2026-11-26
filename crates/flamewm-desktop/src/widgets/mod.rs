@@ -138,12 +138,22 @@ const HISTORY_LEN: usize = 60;
 /// shift one point per sample, so this cadence is also the desktop's idle repaint rate.
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(4);
 
+/// The parts of the settings snapshot that reach the inherited card surface: its fill and
+/// backdrop blur. Storing this in the sync key avoids deep-cloning the settings map every time
+/// a widget or sample changes; the accent is stored next to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SurfaceKey {
+    blur: Option<u8>,
+    fill: UiColor,
+}
+
 /// Every input `sync_widgets` reads. An equal key means the document already shows this state,
 /// so the sync skips all document writes.
 #[derive(Debug, Clone, PartialEq)]
 struct SyncKey {
     widgets: Vec<Widget>,
-    settings: SettingsSnapshot,
+    surface: SurfaceKey,
+    accent: Rgb,
     weather: WeatherFeedSnapshot,
     media: MediaSnapshot,
     editing: Option<(u32, String)>,

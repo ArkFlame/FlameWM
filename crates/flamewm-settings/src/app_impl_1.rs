@@ -20,6 +20,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             theme_status: None,
             appearance_tab: AppearanceTab::Theme,
             applied_cursor_theme: None,
+            applied_cursor_request: None,
             monitor_drag: None,
             pending_arrangement: None,
             canvas_drag: None,
@@ -235,6 +236,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 .apply_setting("animationSpeed", SettingValue::Integer(speed))
                 .map_err(control_error)?;
         }
+        if event.phase == UiActionPhase::Motion {
+            // Motion only moves the speed pill, fill and thumb; a full settle per pointer sample
+            // would rewrite every page for a value no other node shows.
+            self.error = None;
+            return self.sync_animation_speed(document);
+        }
         self.settle(document)
     }
 
@@ -261,6 +268,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.client
                 .apply_setting(slider.key, SettingValue::Percent(value))
                 .map_err(control_error)?;
+        }
+        if event.phase == UiActionPhase::Motion {
+            // Motion only redraws the three glass sliders and their material rows. The release
+            // still settles every page, matching the keyboard and stepper paths.
+            self.error = None;
+            return self.sync_glass_rows(document);
         }
         self.settle(document)
     }
@@ -384,9 +397,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             return self.settle(document);
         }
+        let mut captured_key = false;
         if event.phase == UiKeyPhase::Release && self.hotkey_armed {
             if let Some(binding) = bare_super_binding(event) {
                 self.finish_hotkey_capture(binding)?;
+                captured_key = true;
             } else if !is_modifier_key(&event.key) {
                 let binding = if event.modifiers.is_empty() {
                     event.key.clone()
@@ -394,9 +409,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     format!("{}+{}", event.modifiers.join("+"), event.key)
                 };
                 self.finish_hotkey_capture(&binding)?;
+                captured_key = true;
             }
         }
-        self.settle(document)
+        // Every branch above that touched state already projected it. A key no control consumed
+        // (modifier-only presses, text routed to a field, arrow keys on an unfocused slider) must
+        // not rebuild every page's nodes; only a committed recorder row needs the full settle.
+        if captured_key {
+            self.settle(document)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn poll_background(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -462,17 +485,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let Ok(requested) = self.text_setting("cursorTheme") else {
             return;
         };
+        // Resolution stats theme directories; once this exact request resolved and loaded, only a
+        // change of `cursorTheme` can make it stale. A failed load keeps both caches empty, so the
+        // next settle retries it.
+        if self.applied_cursor_theme.is_some()
+            && self.applied_cursor_request.as_deref() == Some(requested.as_str())
+        {
+            return;
+        }
         let search_path = std::env::var("XCURSOR_PATH").unwrap_or_default();
         let Some(theme) = flamewm_session_core::cursor_theme_reload(
             self.applied_cursor_theme.as_deref(),
             &requested,
             &search_path,
         ) else {
+            // `None` means the applied theme already equals the resolved request; remember the
+            // request so the next settle does not probe again.
+            self.applied_cursor_request = Some(requested);
             return;
         };
         let errors = flamewm_ui_x11::apply_cursor_theme(&theme);
         if errors.is_empty() {
             self.applied_cursor_theme = Some(theme);
+            self.applied_cursor_request = Some(requested);
         }
         for error in errors {
             eprintln!("settings: cursor theme reload failed: {error}");

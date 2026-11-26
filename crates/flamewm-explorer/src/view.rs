@@ -144,14 +144,7 @@ fn cmp_ignore_ascii_case(a: &str, b: &str) -> std::cmp::Ordering {
 /// Index of the first name, starting at `from` and wrapping, whose lowercase form starts with `prefix`.
 #[must_use]
 pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usize> {
-    let prefix = prefix.to_lowercase();
-    let len = names.len();
-    if prefix.is_empty() || len == 0 {
-        return None;
-    }
-    (0..len)
-        .map(|step| (from + step) % len)
-        .find(|&i| starts_with_lowercase(names[i], &prefix))
+    typeahead_match_iter(names.iter().copied(), names.len(), prefix, from)
 }
 
 /// Same wrap-and-match over the listing itself. Typeahead on the projection path has no filter
@@ -159,15 +152,38 @@ pub fn typeahead_match(names: &[&str], prefix: &str, from: usize) -> Option<usiz
 /// (an 800 KB allocation per typed character in a 100k-row folder).
 #[must_use]
 pub fn typeahead_match_entries(entries: &[Entry], prefix: &str, from: usize) -> Option<usize> {
+    typeahead_match_iter(
+        entries.iter().map(|entry| entry.name.as_str()),
+        entries.len(),
+        prefix,
+        from,
+    )
+}
+
+/// Wrap-and-match over any name iterator, so a filtered listing can be searched without first
+/// collecting its names. `len` is how many names `names` yields (a caller with a filter walks the
+/// same predicate twice instead of materialising a `Vec<&str>`); matching starts at `from` and wraps.
+#[must_use]
+pub fn typeahead_match_iter<'a, I>(names: I, len: usize, prefix: &str, from: usize) -> Option<usize>
+where
+    I: Iterator<Item = &'a str>,
+{
     let prefix = prefix.to_lowercase();
-    let len = entries.len();
     if prefix.is_empty() || len == 0 {
         return None;
     }
     let from = from.min(len);
-    (0..len)
-        .map(|step| (from + step) % len)
-        .find(|&i| starts_with_lowercase(&entries[i].name, &prefix))
+    // A match before `from` is only used when the wrapped scan finds nothing at or after it.
+    let mut wrap = None;
+    for (index, name) in names.enumerate() {
+        if starts_with_lowercase(name, &prefix) {
+            if index >= from {
+                return Some(index);
+            }
+            wrap.get_or_insert(index);
+        }
+    }
+    wrap
 }
 
 /// `name.to_lowercase().starts_with(prefix)` without allocating a lowercase copy of every name.

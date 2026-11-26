@@ -170,6 +170,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 document.text(id, format!("{value}%"))?;
             }
         }
+        self.sync_animation_speed(document)?;
+        Ok(())
+    }
+
+    /// Projects only the animation-speed value pill, fill and thumb. The speed drag calls this on
+    /// every pointer motion instead of settling every page for a value no other node shows.
+    pub(crate) fn sync_animation_speed(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
         if let Ok(speed) = self.integer_setting("animationSpeed") {
             document.text(
                 "animation-speed-value",

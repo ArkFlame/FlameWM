@@ -61,8 +61,10 @@ impl ControlServer {
                 release_lost_capture_owner(dispatcher, host, capture_owner, &name);
                 return MessageDisposition::Unhandled;
             }
+            // Compare the borrowed path in place: this runs for every bus message the WM
+            // connection receives, so formatting two `String`s per message was pure churn.
             if message.msg_type() != MessageType::MethodCall
-                || message.path().map(|path| path.to_string()) != Some(OBJECT_PATH.to_owned())
+                || !message.path().is_some_and(|path| path == OBJECT_PATH)
             {
                 return MessageDisposition::Unhandled;
             }
@@ -116,12 +118,11 @@ fn handle_call<E: EnginePorts>(
     let args = wire_args(message.get_items())?;
     let call = WireCall::new(interface, member, args).with_now_ms(now_ms);
     let request = decode_call(&call).map_err(to_flame_error)?;
-    let sender = message
-        .sender()
-        .map(|name| name.to_string())
-        .unwrap_or_default();
+    // The sender string is only meaningful for capture-lease authorization; formatting it for
+    // every read and mutation call allocated on the hot request path for nothing.
     let mut ended_lease = None;
     if let ControlRequest::EndHotkeyCapture { lease } = &request {
+        let sender = sender_name(message);
         capture_owner
             .borrow()
             .authorize_end(&sender, *lease)
@@ -138,11 +139,16 @@ fn handle_call<E: EnginePorts>(
         ),
         _ => None,
     };
-    let shortcut_request = request.clone();
+    // Only the request *kind* is needed after dispatch; cloning the whole request (settings
+    // transactions, shortcut maps, placements) copied every payload for a variant check.
+    let shortcut_mutation = publishes_shortcuts_changed(&request);
+    let publish_weather = matches!(&request, ControlRequest::PublishWeatherFeed { .. });
     let response = dispatcher.dispatch(host, request).map_err(to_flame_error)?;
     let published_changed = matches!(response, ControlResponse::Changed(true));
     if let ControlResponse::CaptureLease(lease) = &response {
-        capture_owner.borrow_mut().record_begin(&sender, *lease);
+        capture_owner
+            .borrow_mut()
+            .record_begin(&sender_name(message), *lease);
     }
     if let Some(lease) = ended_lease {
         capture_owner.borrow_mut().record_end(lease);
@@ -165,12 +171,10 @@ fn handle_call<E: EnginePorts>(
         }
         _ => Vec::new(),
     };
-    signals.extend(shortcut_change_signal(&shortcut_request, || {
-        host.shortcut_snapshot().revision
+    signals.extend(shortcut_mutation.then(|| ControlSignal::ShortcutsChanged {
+        revision: host.shortcut_snapshot().revision,
     }));
-    if let (ControlRequest::PublishWeatherFeed { .. }, true) =
-        (&shortcut_request, published_changed)
-    {
+    if publish_weather && published_changed {
         signals.push(ControlSignal::WeatherFeedChanged {
             snapshot: host.weather_feed_snapshot(),
         });
@@ -178,21 +182,24 @@ fn handle_call<E: EnginePorts>(
     Ok((output, signals))
 }
 
-/// The `ShortcutsChanged` signal a committed shortcut mutation publishes so open Settings clients
-/// refresh. `revision` is read only for mutations; reads and capture leases publish nothing.
-fn shortcut_change_signal(
-    request: &ControlRequest,
-    revision: impl FnOnce() -> u64,
-) -> Option<ControlSignal> {
-    match request {
+/// Whether a committed shortcut mutation publishes `ShortcutsChanged` so open Settings clients
+/// refresh. Reads and capture leases publish nothing.
+fn publishes_shortcuts_changed(request: &ControlRequest) -> bool {
+    matches!(
+        request,
         ControlRequest::SetShortcut { .. }
-        | ControlRequest::ClearShortcut { .. }
-        | ControlRequest::ResetShortcut { .. }
-        | ControlRequest::ApplyShortcuts { .. } => Some(ControlSignal::ShortcutsChanged {
-            revision: revision(),
-        }),
-        _ => None,
-    }
+            | ControlRequest::ClearShortcut { .. }
+            | ControlRequest::ResetShortcut { .. }
+            | ControlRequest::ApplyShortcuts { .. }
+    )
+}
+
+/// Unique bus name of the calling client, or an empty name when the message carries none.
+fn sender_name(message: &Message) -> String {
+    message
+        .sender()
+        .map(|name| name.to_string())
+        .unwrap_or_default()
 }
 
 /// Restores the grab set when the bus client that owns a hotkey capture lease disconnects.
@@ -259,8 +266,12 @@ const OWNER_CHANGED_RULE: &str = "type='signal',sender='org.freedesktop.DBus',in
 /// Returns the unique name when a `NameOwnerChanged` signal reports that name lost its owner.
 fn name_owner_lost(message: &Message) -> Option<String> {
     if message.msg_type() != MessageType::Signal
-        || message.interface().map(|i| i.to_string()).as_deref() != Some("org.freedesktop.DBus")
-        || message.member().map(|m| m.to_string()).as_deref() != Some("NameOwnerChanged")
+        || !message
+            .interface()
+            .is_some_and(|interface| interface == "org.freedesktop.DBus")
+        || !message
+            .member()
+            .is_some_and(|member| member == "NameOwnerChanged")
     {
         return None;
     }
@@ -396,7 +407,7 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     if message.msg_type() != MessageType::Signal {
         return None;
     }
-    if message.path().map(|path| path.to_string()) != Some(OBJECT_PATH.to_owned()) {
+    if !message.path().is_some_and(|path| path == OBJECT_PATH) {
         return None;
     }
     let interface = message.interface()?.to_string();
@@ -471,7 +482,6 @@ fn collect_string_array(values: Vec<WireValue>) -> Result<Vec<String>, FlameErro
 }
 
 fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
-    let signature = item.signature().to_string();
     match item {
         MessageItem::Variant(value) => from_item(*value),
         MessageItem::Bool(v) => Ok(WireValue::Bool(v)),
@@ -480,7 +490,9 @@ fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
         MessageItem::Int32(v) => Ok(WireValue::I32(v)),
         MessageItem::Int64(v) => Ok(WireValue::I64(v)),
         MessageItem::Str(v) => Ok(WireValue::String(v)),
-        MessageItem::Array(values) if signature == "ay" => {
+        // The element signature lives on the array itself; reading it there keeps the scalar
+        // arms (the common case in every snapshot) free of a formatted signature `String`.
+        MessageItem::Array(values) if *values.signature() == "ay" => {
             let bytes = values
                 .into_vec()
                 .into_iter()
@@ -492,7 +504,7 @@ fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
             Ok(WireValue::Bytes(bytes))
         }
         MessageItem::Array(values) => {
-            let string_array = signature == "as";
+            let string_array = *values.signature() == "as";
             let values = values
                 .into_vec()
                 .into_iter()
@@ -902,12 +914,9 @@ mod tests {
             },
         ];
         for request in &mutations {
-            let signal = shortcut_change_signal(request, || 9);
-            assert_eq!(
-                signal,
-                Some(ControlSignal::ShortcutsChanged { revision: 9 })
-            );
-            let wire = encode_signal(signal.as_ref().expect("signal"));
+            assert!(publishes_shortcuts_changed(request));
+            let signal = ControlSignal::ShortcutsChanged { revision: 9 };
+            let wire = encode_signal(&signal);
             assert_eq!(wire.interface, flamewm_control_core::IFACE_SHORTCUTS);
             assert_eq!(wire.member, "ShortcutsChanged");
         }
@@ -919,7 +928,7 @@ mod tests {
             },
         ];
         for request in &reads {
-            assert_eq!(shortcut_change_signal(request, || unreachable!()), None);
+            assert!(!publishes_shortcuts_changed(request));
         }
     }
 

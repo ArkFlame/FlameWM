@@ -75,27 +75,37 @@ impl History {
     pub(super) fn cells(&self) -> Cow<'_, Line> {
         match self {
             Self::Plain(line) => Cow::Borrowed(line),
+            _ => {
+                let mut out = Line::new();
+                self.cells_into(&mut out);
+                Cow::Owned(out)
+            }
+        }
+    }
+
+    /// Writes the line's cells into `out`, which is cleared first. A scan over the scrollback reuses one buffer
+    /// instead of allocating a decoded line per entry.
+    pub(super) fn cells_into(&self, out: &mut Line) {
+        out.clear();
+        match self {
+            Self::Plain(line) => out.extend_from_slice(line),
             Self::Uniform {
                 text,
                 fg,
                 bg,
                 attrs,
-            } => Cow::Owned(
-                text.chars()
-                    .map(|ch| Cell {
-                        ch,
-                        fg: *fg,
-                        bg: *bg,
-                        attrs: *attrs,
-                    })
-                    .collect(),
-            ),
+            } => out.extend(text.chars().map(|ch| Cell {
+                ch,
+                fg: *fg,
+                bg: *bg,
+                attrs: *attrs,
+            })),
             Self::Packed { text, runs } => {
                 let mut chars = text.chars();
-                let mut line = Vec::with_capacity(runs.iter().map(|run| run.len as usize).sum());
+                out.reserve(runs.iter().map(|run| run.len as usize).sum());
                 for run in runs {
                     for _ in 0..run.len {
-                        line.push(Cell {
+                        out.push(Cell {
                             ch: chars.next().unwrap_or(' '),
                             fg: run.fg,
                             bg: run.bg,
@@ -103,7 +113,6 @@ impl History {
                         });
                     }
                 }
-                Cow::Owned(line)
             }
         }
     }

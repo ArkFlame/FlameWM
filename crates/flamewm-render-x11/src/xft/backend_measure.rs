@@ -12,6 +12,15 @@ impl XftBackend {
         if text.is_empty() {
             return estimate;
         }
+        // Wrapping measures every growing prefix of a paragraph, so the same advances are asked
+        // for many times per layout. A hit skips the XftTextExtentsUtf8 server round trip.
+        let cacheable = text.len() <= MAX_MEASURE_TEXT_BYTES;
+        if cacheable {
+            let key = TextMaskRef::new(&self.preferred_family, text, size, weight, 0);
+            if let Some(width) = self.measures.get(&key as &dyn MaskKeyView).copied() {
+                return (width, estimate.1);
+            }
+        }
         let Ok(font) = (unsafe { self.font_for(size, weight) }) else {
             return estimate;
         };
@@ -32,7 +41,17 @@ impl XftBackend {
                 &mut info as *mut XGlyphInfo,
             )
         };
-        ((info.x_off as f32).max(0.0), estimate.1)
+        let width = (info.x_off as f32).max(0.0);
+        if cacheable {
+            if self.measures.len() >= MAX_MEASURE_ENTRIES {
+                self.measures.clear();
+            }
+            self.measures.insert(
+                TextMaskKey::new(&self.preferred_family, text, size, weight, 0),
+                width,
+            );
+        }
+        (width, estimate.1)
     }
 
     pub(super) unsafe fn font_for(

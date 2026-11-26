@@ -69,15 +69,16 @@ pub struct Series<'a> {
 }
 
 /// Draws `series` over a faint grid, each value scaled against `full_scale`, newest sample at
-/// the right edge.
-#[must_use]
-pub fn render(series: &[Series<'_>], full_scale: f32) -> Vec<u8> {
+/// the right edge. `pixels` is reused: clearing and resizing keeps its capacity, so a visible
+/// task manager redraws its three graphs every sample without allocating a fresh raster.
+pub fn render_into(series: &[Series<'_>], full_scale: f32, pixels: &mut Vec<u8>) {
     let (width, height) = (WIDTH as usize, HEIGHT as usize);
-    let mut pixels = vec![0_u8; width * height * 4];
+    pixels.clear();
+    pixels.resize(width * height * 4, 0);
     for quarter in 1..4 {
         let y = height * quarter / 4;
         for x in (0..width).step_by(2) {
-            blend(&mut pixels, x, y, GRID);
+            blend(pixels, x, y, GRID);
         }
     }
     let scale = if full_scale > 0.0 { full_scale } else { 1.0 };
@@ -106,17 +107,16 @@ pub fn render(series: &[Series<'_>], full_scale: f32) -> Vec<u8> {
             let y = y_of(value).round() as usize;
             if line.filled {
                 for fill_y in y..height {
-                    blend(&mut pixels, x, fill_y, [r, g, b, AREA_ALPHA]);
+                    blend(pixels, x, fill_y, [r, g, b, AREA_ALPHA]);
                 }
             }
             let (top, bottom) = previous_y.map_or((y, y), |last| (last.min(y), last.max(y)));
             for line_y in top..=(bottom + 1).min(height - 1) {
-                blend(&mut pixels, x, line_y, [r, g, b, 255]);
+                blend(pixels, x, line_y, [r, g, b, 255]);
             }
             previous_y = Some(y);
         }
     }
-    pixels
 }
 
 fn blend(pixels: &mut [u8], x: usize, y: usize, source: [u8; 4]) {
@@ -149,6 +149,13 @@ fn blend(pixels: &mut [u8], x: usize, y: usize, source: [u8; 4]) {
 mod tests {
     use super::*;
 
+    /// Test-only convenience: draws into a fresh raster through the reuse path.
+    fn raster(series: &[Series<'_>], full_scale: f32) -> Vec<u8> {
+        let mut pixels = Vec::new();
+        render_into(series, full_scale, &mut pixels);
+        pixels
+    }
+
     #[test]
     fn history_keeps_one_minute_and_rejects_bad_values() {
         let mut history = History::default();
@@ -167,7 +174,7 @@ mod tests {
         let mut history = History::default();
         history.push(100.0);
         history.push(100.0);
-        let pixels = render(
+        let pixels = raster(
             &[Series {
                 history: &history,
                 rgb: 0x0012_3456,
@@ -183,10 +190,32 @@ mod tests {
 
     #[test]
     fn empty_graph_is_only_the_grid() {
-        let pixels = render(&[], 0.0);
+        let pixels = raster(&[], 0.0);
         let grid_row = (HEIGHT as usize / 4) * WIDTH as usize * 4;
         assert_eq!(pixels[grid_row + 3], GRID[3]);
         assert!(pixels[..grid_row].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn render_into_reuses_the_caller_buffer_and_clears_it() {
+        let mut history = History::default();
+        history.push(100.0);
+        // A wrong-sized, dirty buffer is reset in place to the raster size and cleared.
+        let mut pixels = vec![7_u8; 10];
+        render_into(
+            &[Series {
+                history: &history,
+                rgb: 0x0012_3456,
+                filled: true,
+            }],
+            100.0,
+            &mut pixels,
+        );
+        assert_eq!(pixels.len(), (WIDTH * HEIGHT * 4) as usize);
+        assert_eq!(pixels[3], 0);
+        let capacity = pixels.capacity();
+        render_into(&[], 0.0, &mut pixels);
+        assert_eq!(pixels.capacity(), capacity, "capacity is kept across draws");
     }
 
     #[test]

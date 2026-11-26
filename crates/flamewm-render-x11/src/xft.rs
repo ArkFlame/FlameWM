@@ -10,7 +10,7 @@ use std::ptr;
 use flamewm_render_core::Color;
 
 use crate::ffi::dynamic_library::DynamicLibrary;
-use crate::text_mask_cache::{TextMaskCache, TextMaskKey, TextMaskRef};
+use crate::text_mask_cache::{MaskKeyView, TextMaskCache, TextMaskKey, TextMaskRef};
 use crate::xlib::{
     Colormap, Display, Drawable, Visual, XCloseDisplay, XCreateGC, XCreatePixmap, XDefaultColormap,
     XDefaultScreen, XDefaultVisual, XDestroyImage, XFillRectangle, XFreeGC, XGetImage, XImageHead,
@@ -176,9 +176,20 @@ pub struct XftBackend {
     colors: HashMap<Color, XftColor>,
     preferred_family: String,
     text_masks: TextMaskCache,
+    /// Widths already measured by `XftTextExtentsUtf8`, keyed by family, text, size and weight
+    /// (`pad` is always 0). Wrapping measures every growing prefix of a paragraph, so this map is
+    /// cleared wholesale once it reaches [`MAX_MEASURE_ENTRIES`] to bound its memory.
+    measures: HashMap<TextMaskKey, f32>,
     /// Synchronous `XGetImage` readbacks issued for text masks (one per batch).
     pub(crate) readbacks: u64,
 }
+
+/// Entries retained in the text advance cache before it is cleared.
+const MAX_MEASURE_ENTRIES: usize = 4096;
+
+/// Longest text kept as a measure key; a whole paragraph is measured once per layout anyway and
+/// would pin its bytes in a cache that only saves repeated prefix measurements.
+const MAX_MEASURE_TEXT_BYTES: usize = 256;
 
 mod backend;
 

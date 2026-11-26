@@ -122,6 +122,14 @@ pub(crate) struct ShellLoop {
     >,
     pub(crate) local_date: (i32, u8, u8),
     pub(crate) date_tracker: ClockDateTracker,
+    /// Instant the panel clock must next repaint, or `None` while the taskbar clock
+    /// item is hidden. Seconds mode arms every second, otherwise every minute.
+    pub(crate) clock_next_at: Option<Instant>,
+    /// Settings revision and cache presence the clock cadence was armed for.
+    pub(crate) clock_settings_key: Option<(u64, bool)>,
+    /// Epoch second of the last panel clock projection; one wall second is painted once even
+    /// when the reactor minute timer and the shell deadline land on the same second.
+    pub(crate) clock_projected_sec: Option<i64>,
     pub(crate) audio_tab: AudioTab,
     pub(crate) audio_settings: AudioSettings,
     cursor_theme: flamewm_shell::cursor_theme::CursorThemeSync,
@@ -263,6 +271,9 @@ impl ShellLoop {
             bluetooth_agent: None,
             local_date: projection::local_date(),
             date_tracker: ClockDateTracker::new(projection::local_date()),
+            clock_next_at: None,
+            clock_settings_key: None,
+            clock_projected_sec: None,
             audio_tab: AudioTab::default(),
             audio_settings: AudioSettings::default(),
             cursor_theme: flamewm_shell::cursor_theme::CursorThemeSync::default(),

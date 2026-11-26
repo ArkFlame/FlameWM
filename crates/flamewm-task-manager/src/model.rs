@@ -171,6 +171,18 @@ fn percent(now: Cpu, old: Cpu) -> f64 {
 /// `/proc/[pid]/stat`: the comm field may contain spaces and closing parentheses.
 /// Only the final closing parenthesis can delimit it.
 pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
+    parse_stat_with_name(pid, text, page_bytes, None)
+}
+
+/// Same as `parse_stat`, but reuses `cached_name` when the unchanged `comm` field still matches.
+/// A process keeps its name for its whole life, so the rotating `stat` read then bumps a refcount
+/// instead of building two fresh heap strings on every tick.
+fn parse_stat_with_name(
+    pid: u32,
+    text: &str,
+    page_bytes: u64,
+    cached_name: Option<&Arc<str>>,
+) -> Option<Process> {
     let first = text.find('(')?;
     let last = text.rfind(')')?;
     if first >= last {
@@ -210,10 +222,17 @@ pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
         return None;
     }
     // Field 24 (rss) is in pages: it replaces /proc/<pid>/status VmRSS, one read fewer per task.
+    let comm = text.get(first + 1..last)?;
+    // Sanitizing maps control bytes to spaces, so the raw comm can only be compared to the cached
+    // name when it has none; otherwise the sanitized fallback rebuilds it (rare).
+    let name = match cached_name {
+        Some(existing) if existing.as_ref() == comm => Arc::clone(existing),
+        _ => Arc::from(sanitize(comm, 64)),
+    };
     Some(Process {
         pid,
         ppid: ppid?,
-        name: sanitize(text.get(first + 1..last)?, 64).into(),
+        name,
         state: state?,
         priority: priority?,
         nice: nice?,
@@ -471,7 +490,11 @@ impl Sampler {
             return Some(last);
         }
         let text = read_proc(&mut self.scratch, proc_path(&mut self.path, pid, "stat"))?;
-        let mut task = parse_stat(pid, std::str::from_utf8(text).ok()?, self.page_bytes)?;
+        let text = std::str::from_utf8(text).ok()?;
+        // A live pid's `comm` rarely changes: reuse the cached name so the per-tick `stat` read
+        // does not rebuild two heap strings for every due task.
+        let cached_name = self.tasks.get(&pid).map(|cached| &cached.name);
+        let mut task = parse_stat_with_name(pid, text, self.page_bytes, cached_name)?;
         let cached = self.tasks.entry(pid).or_default();
         // Same PID and start time as the previous sample: the delta is meaningful. PID reuse
         // changes the start time, so a recycled PID never inherits the old CPU counter.
@@ -659,6 +682,18 @@ mod tests {
         // A task that vanished between the two reads keeps the legacy "unknown" defaults.
         assert_eq!(parse_uid(""), legacy_status("").0);
         assert_eq!(parse_uid(""), u32::MAX);
+    }
+    #[test]
+    fn unchanged_comm_reuses_the_cached_name_arc() {
+        let stat = "4242 (fire fox) S 1 4242 4242 0 -1 4194560 1 0 0 0 150 30 0 0 20 0 7 0 555 6291456 1030 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        let cached: Arc<str> = "fire fox".into();
+        let reused = parse_stat_with_name(4242, stat, 4096, Some(&cached)).expect("parse");
+        assert!(Arc::ptr_eq(&reused.name, &cached));
+        // A different cached name is ignored and the parsed comm still wins.
+        let stale: Arc<str> = "old name".into();
+        let renamed = parse_stat_with_name(4242, stat, 4096, Some(&stale)).expect("parse");
+        assert_eq!(&*renamed.name, "fire fox");
+        assert!(!Arc::ptr_eq(&renamed.name, &stale));
     }
     #[test]
     fn sampling_never_counts_process_reuse_as_cpu_usage() {

@@ -43,7 +43,8 @@ impl From<Readiness> for FdReadiness {
             readable: readiness.readable,
             writable: readiness.writable,
             error: readiness.error,
-            // calloop reports terminal/error readiness but does not distinguish HUP from ERR.
+            // calloop's epoll backend delivers a peer hangup as plain readability and never sets
+            // `error`; the mapping is kept so any backend that reports errors surfaces both flags.
             hangup: readiness.error,
         }
     }
@@ -470,8 +471,13 @@ impl Reactor {
     /// Dispatches pending events, waiting no longer than `timeout` for the next event.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> calloop::Result<()> {
         let requested = timeout;
+        // Only read the clock when an owner actually asked for a deadline; the common idle and
+        // event-driven turns then pay no `Instant::now()` before parking in epoll.
         let wake = self.earliest_wake();
-        let timeout = bounded_timeout(timeout, wake, Instant::now());
+        let timeout = match wake {
+            Some(at) => bounded_timeout(timeout, Some(at), Instant::now()),
+            None => timeout,
+        };
         if timer_trace_enabled() {
             let source = if timeout != requested {
                 "wake_deadline"

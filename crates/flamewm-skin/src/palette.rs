@@ -264,17 +264,33 @@ pub fn check_overlay_contrast(appearance: Appearance) -> Result<(), String> {
 }
 
 /// WCAG 2.x relative luminance of an opaque colour.
+///
+/// Contrast solves run on every titlebar, accent label, glass material and fixed shell tone, and
+/// each solve spends three `powf` calls here. The sRGB transfer curve only depends on one byte, so
+/// the 256 linear values are computed once and indexed instead. Composition shift: every WCAG
+/// luminance stops transcendental work and becomes three table loads.
 #[must_use]
 pub fn relative_luminance(color: Rgb) -> f64 {
-    let channel = |shift: u32| {
-        let c = f64::from((color.0 >> shift) & 0xff) / 255.0;
-        if c <= 0.039_28 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
+    let lut = srgb_to_linear();
+    let channel = |shift: u32| lut[((color.0 >> shift) & 0xff) as usize];
     0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+/// sRGB byte -> WCAG linear-light channel, exactly the per-channel formula the solve used inline.
+fn srgb_to_linear() -> &'static [f64; 256] {
+    static LUT: OnceLock<[f64; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut table = [0.0_f64; 256];
+        for (value, slot) in table.iter_mut().enumerate() {
+            let c = value as f64 / 255.0;
+            *slot = if c <= 0.039_28 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            };
+        }
+        table
+    })
 }
 
 /// WCAG 2.x contrast ratio between two opaque colours, in `1.0..=21.0`.
@@ -382,15 +398,15 @@ pub fn mean_backdrop(samples: &[Rgb]) -> Rgb {
     if samples.is_empty() {
         return Rgb(0);
     }
+    let (mut sum_r, mut sum_g, mut sum_b) = (0_u64, 0_u64, 0_u64);
+    for sample in samples {
+        sum_r += u64::from((sample.0 >> 16) & 0xff);
+        sum_g += u64::from((sample.0 >> 8) & 0xff);
+        sum_b += u64::from(sample.0 & 0xff);
+    }
     let count = samples.len() as u64;
-    let channel = |shift: u32| {
-        let sum: u64 = samples
-            .iter()
-            .map(|s| u64::from((s.0 >> shift) & 0xff))
-            .sum();
-        (((sum + count / 2) / count) as u32) << shift
-    };
-    Rgb(channel(16) | channel(8) | channel(0))
+    let channel = |sum: u64| ((sum + count / 2) / count) as u32;
+    Rgb((channel(sum_r) << 16) | (channel(sum_g) << 8) | channel(sum_b))
 }
 
 /// Colour a glass surface shows: `tint` at `alpha` (0..=255) over the backdrop sample.

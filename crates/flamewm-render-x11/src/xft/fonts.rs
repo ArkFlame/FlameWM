@@ -61,8 +61,9 @@ pub(super) fn normalize_weight(weight: u16) -> u16 {
 }
 
 /// Runs `f` with layout widths measured by `xft` (`XftTextExtentsUtf8` at the requested weight).
-/// With no Xft backend, layout falls back to the render-core model. Each call measures only the
-/// text layout asks for; nothing is cached across frames, so the cost scales with layout work.
+/// With no Xft backend, layout falls back to the render-core model. Advances are cached per text,
+/// size and weight in the backend, so repeated prefixes during wrapping and relayout do not issue
+/// a second server round trip.
 pub(crate) fn scoped_text_measure<R>(xft: Option<&mut XftBackend>, f: impl FnOnce() -> R) -> R {
     match xft {
         None => f(),

@@ -115,37 +115,56 @@ impl ShellLoop {
         if settled {
             self.zone_settle_at = None;
         }
-        let clock_fired = clock_due.swap(false, Ordering::Acquire)
-            | std::mem::take(&mut self.time_zone_changed)
-            | settled;
+        let now_instant = Instant::now();
+        let clock_key = (self.settings_revision, self.settings_cache.is_some());
+        let clock_settings_changed = self.clock_settings_key != Some(clock_key);
+        if clock_settings_changed {
+            self.clock_settings_key = Some(clock_key);
+            self.rearm_clock(now_instant);
+        }
+        // The reactor minute timer covers minute boundaries and suspend realignment; the
+        // shell deadline covers seconds mode and a hidden clock (it is `None` then).
+        let clock_boundary_due = self.clock_next_at.is_some_and(|at| now_instant >= at);
+        let clock_forced =
+            std::mem::take(&mut self.time_zone_changed) | settled | clock_settings_changed;
+        let clock_fired =
+            clock_due.swap(false, Ordering::Acquire) | clock_boundary_due | clock_forced;
         if clock_fired {
-            let now = Local::now();
-            let clock = self
-                .settings_cache
-                .as_ref()
-                .map(crate::entry::settings_projection::clock_display)
-                .unwrap_or_default();
-            for (handle, _) in self.surfaces.panel_outputs() {
-                runtime.with_document(handle, |document| {
-                    projection::project_clock_at(document, now, clock)
-                })?;
-                runtime.redraw(handle)?;
-            }
-            // Heap trim is gated to once per CLOCK_HEAP_TRIM_INTERVAL, not every clock tick.
-            let now_instant = std::time::Instant::now();
-            LAST_CLOCK_HEAP_TRIM.with(|last| {
-                if last
-                    .get()
-                    .is_none_or(|at| now_instant.duration_since(at) >= CLOCK_HEAP_TRIM_INTERVAL)
-                {
-                    last.set(Some(now_instant));
-                    flamewm_ui_x11::release_free_heap();
+            self.rearm_clock(now_instant);
+            // A hidden clock consumes the tick without formatting or repainting a panel.
+            if self.clock_next_at.is_some() {
+                let now = Local::now();
+                let epoch_sec = now.timestamp();
+                if clock_forced || self.clock_projected_sec != Some(epoch_sec) {
+                    self.clock_projected_sec = Some(epoch_sec);
+                    let clock = self
+                        .settings_cache
+                        .as_ref()
+                        .map(crate::entry::settings_projection::clock_display)
+                        .unwrap_or_default();
+                    for (handle, _) in self.surfaces.panel_outputs() {
+                        runtime.with_document(handle, |document| {
+                            projection::project_clock_at(document, now, clock)
+                        })?;
+                        runtime.redraw(handle)?;
+                    }
                 }
-            });
+                // Heap trim is gated to once per CLOCK_HEAP_TRIM_INTERVAL, so a seconds-mode
+                // clock does not release the free heap every second.
+                LAST_CLOCK_HEAP_TRIM.with(|last| {
+                    if last
+                        .get()
+                        .is_none_or(|at| now_instant.duration_since(at) >= CLOCK_HEAP_TRIM_INTERVAL)
+                    {
+                        last.set(Some(now_instant));
+                        flamewm_ui_x11::release_free_heap();
+                    }
+                });
 
-            let date = (now.year(), now.month() as u8, now.day() as u8);
-            if self.date_tracker.date_changed(date) {
-                self.local_date = date;
+                let date = (now.year(), now.month() as u8, now.day() as u8);
+                if self.date_tracker.date_changed(date) {
+                    self.local_date = date;
+                }
             }
         }
         // Steady state never polls: reconcile signal-flagged domains at most
@@ -174,10 +193,29 @@ impl ShellLoop {
         Ok(())
     }
 
-    /// Wires the reactor wake slot. OSD, weather and auto-location share it, so the tick publishes
-    /// the earliest of their deadlines in one place (a per-owner set would clobber the other).
+    /// Wires the reactor wake slot. OSD, weather, clock and auto-location share it, so the tick
+    /// publishes the earliest of their deadlines in one place (a per-owner set would clobber the
+    /// other).
     pub(crate) fn attach_wake(&mut self, wake: flamewm_reactor::WakeDeadline) {
         self.wake = Some(wake);
+    }
+
+    /// Re-arms the panel clock cadence from the current settings: every second when
+    /// `taskbarShowSeconds` is on, otherwise every minute. A hidden taskbar clock re-arms to
+    /// `None`, so it costs neither wakeups nor panel repaints.
+    pub(super) fn rearm_clock(&mut self, now: Instant) {
+        let display = self
+            .settings_cache
+            .as_ref()
+            .map(crate::entry::settings_projection::clock_display)
+            .unwrap_or_default();
+        let shown =
+            crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref()).clock;
+        // The epoch read inside the delay runs after `now` was captured, so arm one millisecond
+        // past the boundary: the tick then never paints the second/minute that is ending.
+        self.clock_next_at = shown.then(|| {
+            now + clock_boundary_delay(display.show_seconds) + std::time::Duration::from_millis(1)
+        });
     }
 
     pub(super) fn publish_wake(&self, now: std::time::Instant) {
@@ -187,6 +225,8 @@ impl ShellLoop {
             self.switcher.deadline(),
             self.zone_settle_at,
             self.task_progress_deadline,
+            self.clock_next_at,
+            self.weather.next_deadline(now),
             self.dock_stage
                 .autohide
                 .and_then(|model| model.deadline(now)),
@@ -278,8 +318,24 @@ impl ShellLoop {
     }
 }
 
+/// Delay to the next wall-clock second or minute boundary, measured from the current epoch
+/// time so repeated calls never drift. The reactor's wall-clock owner exposes the same
+/// alignment rule; the shell deadline reuses it because the reactor timer is minute-only.
+fn clock_boundary_delay(with_seconds: bool) -> std::time::Duration {
+    use flamewm_reactor::{SystemWallClock, WallClockSource};
+    let now_ms = SystemWallClock.now_epoch_ms();
+    std::time::Duration::from_millis(flamewm_reactor::wall_clock_delay_ms(now_ms, with_seconds))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clock_boundary_delay_never_exceeds_the_cadence() {
+        assert!(super::clock_boundary_delay(false) <= std::time::Duration::from_secs(60));
+        assert!(super::clock_boundary_delay(true) <= std::time::Duration::from_secs(1));
+        assert!(!super::clock_boundary_delay(true).is_zero());
+    }
+
     #[test]
     fn shared_wake_slot_takes_the_earliest_owner_deadline() {
         use std::time::{Duration, Instant};

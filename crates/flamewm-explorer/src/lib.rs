@@ -297,6 +297,12 @@ impl Tab {
         if self.search.is_empty() {return self.entries.get(index);}
         self.visible().nth(index)
     }
+    /// Typeahead over the filtered listing: index of the first visible row, starting at `from` and
+    /// wrapping, whose name starts with `prefix` case-insensitively. Walks the filter in place, so a
+    /// filtered folder no longer collects every visible name into a `Vec` per typed character.
+    #[must_use] pub fn typeahead_match(&self,prefix:&str,from:usize) -> Option<usize> {
+        crate::view::typeahead_match_iter(self.visible().map(|entry|entry.name.as_str()),self.filtered_count(),prefix,from)
+    }
     pub fn visible_index_of(&self, path:&Path) -> Option<usize> {
         if self.search.is_empty() {return self.entries.iter().position(|entry|entry.path==path);}
         self.visible().position(|entry| entry.path==path)

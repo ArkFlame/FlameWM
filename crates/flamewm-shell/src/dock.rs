@@ -37,6 +37,51 @@ pub struct DockSettings {
     pub reserve_space: bool,
 }
 
+/// Whether the dock is enabled, without parsing and allocating the full settings.
+#[must_use]
+pub fn dock_enabled(snapshot: Option<&SettingsSnapshot>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        matches!(
+            snapshot.values.get("dock.enabled"),
+            Some(SettingValue::Boolean(true))
+        )
+    })
+}
+
+/// `dock.autoHide`, without parsing and allocating the full settings. Every shell turn reads
+/// it before deciding whether the dock needs any work at all.
+#[must_use]
+pub fn dock_auto_hide(snapshot: Option<&SettingsSnapshot>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        matches!(
+            snapshot.values.get("dock.autoHide"),
+            Some(SettingValue::Boolean(true))
+        )
+    })
+}
+
+/// `dock.hoverScale`, without the allocating settings pass; hover transitions are hot.
+#[must_use]
+pub fn dock_hover_scale(snapshot: Option<&SettingsSnapshot>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        matches!(
+            snapshot.values.get("dock.hoverScale"),
+            Some(SettingValue::Boolean(true))
+        )
+    })
+}
+
+/// `dock.launchBounce`, without the allocating settings pass; every dock click reads it.
+#[must_use]
+pub fn dock_launch_bounce(snapshot: Option<&SettingsSnapshot>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        matches!(
+            snapshot.values.get("dock.launchBounce"),
+            Some(SettingValue::Boolean(true))
+        )
+    })
+}
+
 #[must_use]
 pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
     let Some(snapshot) = snapshot else {

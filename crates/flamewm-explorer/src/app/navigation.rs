@@ -101,11 +101,12 @@ impl ExplorerApp {
         let tab=self.model.tab();
         let from=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
         // No active filter: match names in place instead of collecting every name into a Vec.
+        // With a filter, walk the filter iterator itself: collecting every visible name used to
+        // allocate up to ~800 KB per typed character in a 100k-row folder.
         let matched=if tab.search.is_empty() {
             view::typeahead_match_entries(&tab.entries,&self.typed,from)
         } else {
-            let names=tab.visible().map(|e|e.name.as_str()).collect::<Vec<_>>();
-            view::typeahead_match(&names,&self.typed,from)
+            tab.typeahead_match(&self.typed,from)
         };
         if let Some(index)=matched {
             let Some(path)=tab.visible_nth(index).map(|entry|entry.path.clone()) else {return;};
@@ -196,7 +197,7 @@ impl ExplorerApp {
             return;
         }
         // Opening Trash creates the XDG layout (files/ and info/) when it is missing; it never errors on a fresh home.
-        if path==self.trash_base.join("files")
+        if self.is_trash_files(&path)
             && let Err(e)=fs::create_dir_all(&path).and_then(|()|fs::create_dir_all(self.trash_base.join("info"))) {
                 self.model.status=format!("Cannot create Trash: {e}");
                 return;

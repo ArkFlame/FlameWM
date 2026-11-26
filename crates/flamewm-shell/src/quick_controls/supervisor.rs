@@ -229,6 +229,12 @@ impl QuickControlSupervisor {
 
     fn drain_open_responses(&mut self) -> Result<(), SupervisorError> {
         use std::io::ErrorKind;
+        // Only an outstanding OPEN can produce a response. Read nothing while none is pending
+        // and no partial line is buffered: this runs on every shell turn, and an idle shell must
+        // not pay a helper-pipe read syscall per pointer event.
+        if self.awaiting.is_empty() && self.response_bytes.is_empty() {
+            return Ok(());
+        }
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };

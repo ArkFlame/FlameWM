@@ -382,11 +382,9 @@ impl X11App {
             // with depth 32 has no matching visual and XPutImage then dies
             // with BadMatch, so match a 32-bit TrueColor visual explicitly.
             let root = unsafe { XRootWindow(self.display, self.screen) };
-            let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
-            let matched = unsafe {
-                XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo)
-            };
-            if matched != 0 && !vinfo.visual.is_null() {
+            // The 32-bit TrueColor visual is resolved once at startup and never changes for
+            // this display; matching it per upload only costs a server round trip.
+            if let Some(visual) = self.argb_visual {
                 let (pixmap, pix_bytes) = match self.alloc_pixmap(root, width, height, 32) {
                     Ok(created) => created,
                     Err(error) => {
@@ -402,7 +400,7 @@ impl X11App {
                     ),
                 };
                 if let Err(error) =
-                    unsafe { self.upload_argb32_words(pixmap, vinfo.visual, &argb, width, height) }
+                    unsafe { self.upload_argb32_words(pixmap, visual, &argb, width, height) }
                 {
                     self.free_pixmap_tracked(pixmap, pix_bytes);
                     return Err(error);

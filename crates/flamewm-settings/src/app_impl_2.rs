@@ -687,10 +687,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
         let filtering = !self.nav_query.is_empty();
-        for (slug, label) in NAV_PAGES {
-            document.visible(&format!("nav-{slug}"), nav_matches(label, &self.nav_query))?;
-        }
         let selected_slug = NAV_PAGES[self.nav_index()].0;
+        // Both the accent fill and the contrast-picked ink come from one resolved accent, so a
+        // single pass formats each row id once for its visibility and its label colour.
+        let accent_text = match self.setting_value("accent") {
+            Some(SettingValue::Text(accent)) => Some(accent),
+            _ => None,
+        };
+        let accent_color = match accent_text {
+            Some(accent) => Some(solid_color(accent.as_str())?),
+            None => None,
+        };
+        let nav_ink = accent_color.map(flamewm_ui_x11::on_accent_color);
+        for (slug, label) in NAV_PAGES {
+            let id = format!("nav-{slug}");
+            document.visible(&id, nav_matches(label, &self.nav_query))?;
+            if let Some(ink) = nav_ink {
+                if slug == selected_slug && !filtering {
+                    document.foreground(&id, ink)?;
+                } else {
+                    document.foreground_clear(&id)?;
+                }
+            }
+        }
         document.visible("nav-selection", !filtering)?;
         document.visible("nav-empty", !nav_has_matches(&self.nav_query) && filtering)?;
         let search_text = match (self.nav_search_focused, self.nav_query.is_empty()) {
@@ -699,19 +718,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             (false, false) => self.nav_query.clone(),
         };
         document.text("nav-search-text", search_text)?;
-        if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
-            document.background("nav-selection", solid_color(accent)?)?;
+        if let (Some(accent), Some(color)) = (accent_text, accent_color) {
+            document.background("nav-selection", color)?;
             sync_accent_nodes(document, accent)?;
-            // The selected row sits on the solid accent: its label takes the contrast-picked ink.
-            let ink = flamewm_ui_x11::on_accent_color(solid_color(accent)?);
-            for (slug, _) in NAV_PAGES {
-                let id = format!("nav-{slug}");
-                if slug == selected_slug && !filtering {
-                    document.foreground(&id, ink)?;
-                } else {
-                    document.foreground_clear(&id)?;
-                }
-            }
             for name in ["black", "white", "red", "blue", "purple", "teal"] {
                 let palette = accent_for_swatch(name);
                 document.visible(
