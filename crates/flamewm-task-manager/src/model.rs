@@ -62,8 +62,6 @@ pub struct Sampler {
     pids: Vec<u32>,
     /// Reused pid→ppid map for `assign_depths`; cleared each sample, capacity kept.
     parents: HashMap<u32, u32>,
-    /// Reused text buffer for the five whole-file procfs reads of a sample.
-    text: String,
     /// Reused CPU ranking behind the hot set; cleared each sample, capacity kept.
     ranked: Vec<(f64, u32)>,
     tick: u64,

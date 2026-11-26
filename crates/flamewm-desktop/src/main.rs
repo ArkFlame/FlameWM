@@ -703,7 +703,8 @@ fn register_inotify(
             loop {
                 match source.read_events(&mut buffer) {
                     Ok(events) => {
-                        if events.count() == 0 {
+                        let mut events = events.peekable();
+                        if events.peek().is_none() {
                             break;
                         }
                         changed = true;
