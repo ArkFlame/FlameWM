@@ -130,26 +130,26 @@ pub(crate) unsafe fn upload_words_image(
     size: (u32, u32),
     what: &str,
 ) -> Result<(), String> {
-    unsafe { upload_words_image_at(display, pixmap, visual, depth, argb, size, (0, 0), what) }
+    unsafe { upload_words_image_at(display, pixmap, visual, depth, argb, (size, (0, 0)), what) }
 }
 
-/// [`upload_words_image`] into the pixmap region whose top-left is `at` in pixmap pixels.
+/// [`upload_words_image`] into the pixmap region whose top-left is `region.1` in pixmap pixels.
 ///
 /// A moved or grew backdrop patches only its exposed strips, so the image keeps its own extent and
 /// lands at the retained pixmap's offset instead of re-uploading the whole area.
 ///
 /// # Safety
-/// Same as [`upload_words_image`]; `at` plus `size` must lie inside the pixmap.
+/// Same as [`upload_words_image`]; the region must lie inside the pixmap.
 pub(crate) unsafe fn upload_words_image_at(
     display: *mut Display,
     pixmap: Pixmap,
     visual: *mut Visual,
     depth: u32,
     argb: &[u32],
-    size: (u32, u32),
-    at: (i32, i32),
+    region: ((u32, u32), (i32, i32)),
     what: &str,
 ) -> Result<(), String> {
+    let (size, at) = region;
     let (width, height) = size;
     if visual.is_null() {
         return Err(format!("{what}: ARGB32 visual is NULL"));
@@ -526,8 +526,7 @@ impl X11App {
                 visual,
                 32,
                 argb,
-                (width, height),
-                at,
+                ((width, height), at),
                 "ARGB32 patch",
             )
         }

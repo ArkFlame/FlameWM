@@ -22,7 +22,12 @@ impl ExplorerApp {
         // can change chrome, so it advances the projection revision and forces the next full pass.
         // Wheel over an open menu scrolls its rows, which is a chrome change.
         let rows_only=matches!(action,"scroll"|"explorer.scroll.track"|"explorer.scroll.thumb") && self.context.is_none();
-        if !rows_only {
+        // A hover, or a motion with no drag in progress, changes no state (the window paints no hover
+        // state), so it must not force the next glide frame back into a full projection.
+        let passive=e.phase==UiActionPhase::Hover
+            || (e.phase==UiActionPhase::Motion && self.row_drag.is_none() && self.rubber.is_none()
+                && self.col_drag.is_none() && self.scroll_drag.is_none());
+        if !rows_only && !passive {
             super::projection::note_state_change();
         }
         if let Some(divider)=action.strip_prefix("explorer.colgrip.") {

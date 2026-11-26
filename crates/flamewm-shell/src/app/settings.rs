@@ -100,12 +100,12 @@ impl ShellLoop {
         let online = self.shell.snapshot().system.network.availability
             == flamewm_api::system::ServiceAvailability::Available;
         let waker = self.result_wake.waker();
-        let Some(result) =
-            self.auto_lookup
-                .tick(std::time::Instant::now(), self.auto_location_enabled, online, || {
-                    flamewm_shell::weather_auto::spawn_ip_lookup(waker)
-                })
-        else {
+        let Some(result) = self.auto_lookup.tick(
+            std::time::Instant::now(),
+            self.auto_location_enabled,
+            online,
+            || flamewm_shell::weather_auto::spawn_ip_lookup(waker),
+        ) else {
             return;
         };
         match result {

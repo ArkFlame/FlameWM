@@ -16,9 +16,12 @@ use flamewm_render_core::lower::node_backdrop_clip;
 use super::X11App;
 use super::window_backdrop::{MirrorFill, MirrorKey};
 
+/// One patch upload: destination top-left, size, and the pixels.
+type MirrorPatch = ((i32, i32), (u32, u32), Vec<u32>);
+
 /// Upload work for the retained mirrored fill: only the strips a grow added, or the whole key area.
 enum MirrorPlan {
-    Patches(Vec<((i32, i32), (u32, u32), Vec<u32>)>),
+    Patches(Vec<MirrorPatch>),
     Full(Vec<u32>),
 }
 
@@ -162,7 +165,8 @@ impl X11App {
         if pixmap == 0 {
             return Err("backdrop: XCreatePixmap failed".to_string());
         }
-        if let Err(error) = unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) } {
+        if let Err(error) = unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }
+        {
             unsafe { crate::native::xresource::free_pixmap_raw(self.display, pixmap) };
             return Err(error);
         }
@@ -249,7 +253,9 @@ impl X11App {
                 Some((old, capacity, filled, _))
                     if old.origin == key.origin
                         && capacity.0 >= key.width
-                        && capacity.1 >= key.height =>
+                        && capacity.1 >= key.height
+                        && key.width >= filled.0
+                        && key.height >= filled.1 =>
                 {
                     let mut strips = Vec::new();
                     if key.width > filled.0 && filled.1 > 0 {
@@ -288,13 +294,13 @@ impl X11App {
         };
         let visual = self.backdrop_argb_visual()?;
         let (pixmap, capacity, filled) = match (retained, plan) {
-            (Some((_, capacity, filled, pixmap)), MirrorPlan::Patches(strips)) => {
+            (Some((_, capacity, _, pixmap)), MirrorPlan::Patches(strips)) => {
                 for (at, (w, h), words) in strips {
                     unsafe {
                         self.upload_argb32_words_at(pixmap, visual, &words, w, h, at)?;
                     }
                 }
-                (pixmap, capacity, (width.max(filled.0), height.max(filled.1)))
+                (pixmap, capacity, (width, height))
             }
             (retained, MirrorPlan::Full(words)) => {
                 let reuse = retained.filter(|(_, cap, _, _)| cap.0 >= width && cap.1 >= height);
@@ -339,7 +345,12 @@ impl X11App {
     /// # Safety
     ///
     /// `pixmap` must be a live depth-32 pixmap on this app's display.
-    unsafe fn blit_mirror(&mut self, pixmap: Pixmap, width: u32, height: u32) -> Result<(), String> {
+    unsafe fn blit_mirror(
+        &mut self,
+        pixmap: Pixmap,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
         match self.xrender.as_mut() {
             Some(xrender) => unsafe { xrender.blit_argb32_over(pixmap, 0, 0, width, height) },
             None => Ok(()),

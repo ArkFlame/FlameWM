@@ -251,9 +251,10 @@ impl OutlineOverlay {
                 (*(image.cast::<crate::xlib::XImageHead>())).data = ptr::null_mut();
                 XDestroyImage(image);
             }
-            match self.uploaded.get_mut(index) {
-                Some(slot) => *slot = (*x, *y, w, h, bytes),
-                None => self.uploaded.push((*x, *y, w, h, bytes)),
+            if index < self.uploaded.len() {
+                self.uploaded[index] = (*x, *y, w, h, bytes);
+            } else {
+                self.uploaded.push((*x, *y, w, h, bytes));
             }
         }
         self.uploaded.truncate(strips.len());

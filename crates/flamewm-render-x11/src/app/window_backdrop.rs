@@ -68,7 +68,8 @@ pub(crate) struct MirrorKey {
 /// `capacity` is the pixmap's pixel size and never shrinks, so a resize grows only the strips it
 /// added instead of reallocating and re-uploading the whole window per frame. `filled` is the
 /// top-left area already written for this origin; every pixel in it stays correct regardless of
-/// the key, because the mirror of a pixel depends on its own coordinates and the origin only.
+/// the key, because the mirror of a pixel depends on its own coordinates and the origin only. A
+/// shrink refills the key area and resets `filled`, so coverage is always one rectangle.
 #[derive(Debug)]
 pub(crate) struct MirrorFill {
     pub(crate) key: MirrorKey,
@@ -86,8 +87,8 @@ pub(crate) fn mirror_capacity(size: (u32, u32)) -> (u32, u32) {
 }
 
 /// Pixmap regions that a crop moved from `old_root` to `new_root` does not already hold, as
-/// `(x, y, width, height)` in window pixels. Empty when the rects do not overlap; `None` when the
-/// shift covers the whole window and a full upload is simpler.
+/// `(x, y, width, height)` in window pixels. `None` when the shift covers the whole window (or
+/// none of it), where a full upload is simpler.
 #[must_use]
 pub(crate) fn shift_patches(
     old_root: (i32, i32),
@@ -633,6 +634,40 @@ mod tests {
         let root = grey_canvas();
         assert_eq!(root.crop((0, 0), (2, 2)), [0, 1, 4, 5].map(grey).to_vec());
         assert_eq!(root.crop((1, 1), (2, 2)), [5, 6, 9, 10].map(grey).to_vec());
+    }
+
+    #[test]
+    fn a_move_patches_only_the_strips_the_shift_exposed() {
+        // Moved right and down: the new left column and top row are the only unknown pixels.
+        assert_eq!(
+            shift_patches((0, 0), (2, 3), (10, 8)),
+            Some(vec![(0, 0, 2, 8), (0, 0, 10, 3)])
+        );
+        // Moved left and up: the new right column and bottom row.
+        assert_eq!(
+            shift_patches((5, 5), (3, 2), (10, 8)),
+            Some(vec![(8, 0, 2, 8), (0, 5, 10, 3)])
+        );
+        // A whole-window jump or no move at all rebuilds.
+        assert_eq!(shift_patches((0, 0), (10, 0), (10, 8)), None);
+        assert_eq!(shift_patches((4, 4), (4, 4), (10, 8)), None);
+    }
+
+    #[test]
+    fn a_patched_strip_carries_the_moved_crop_pixels() {
+        let new = grey_canvas().crop((1, 0), (3, 2));
+        let (x, y, w, h) = shift_patches((0, 0), (1, 0), (3, 2)).expect("overlap")[0];
+        assert_eq!((x, y, w, h), (0, 0, 1, 2));
+        assert_eq!(crop_words(&new, 3, (x, y, w, h)), [new[0], new[3]]);
+        assert_eq!(crop_words(&new, 3, (2, 1, 1, 1)), [new[5]]);
+    }
+
+    #[test]
+    fn mirror_capacity_covers_the_window_it_was_chosen_for() {
+        for size in [(1, 1), (80, 40), (900, 700), (3840, 2160)] {
+            let capacity = mirror_capacity(size);
+            assert!(capacity.0 >= size.0 && capacity.1 >= size.1);
+        }
     }
 
     #[test]

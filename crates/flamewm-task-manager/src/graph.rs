@@ -278,7 +278,11 @@ mod tests {
     fn column_fill_stores_empty_pixels_and_blends_onto_existing_ones() {
         let mut pixels = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
         fill_below(&mut pixels, 3, 1, [10, 20, 30, 52]);
-        assert_eq!(pixel_at(&pixels, 3, 0), [0, 0, 0, 0], "fill starts at `top`");
+        assert_eq!(
+            pixel_at(&pixels, 3, 0),
+            [0, 0, 0, 0],
+            "fill starts at `top`"
+        );
         assert_eq!(pixel_at(&pixels, 3, 1), [10, 20, 30, 52]);
         assert_eq!(pixel_at(&pixels, 3, HEIGHT as usize - 1), [10, 20, 30, 52]);
         // A non-empty target (a grid dot) keeps the source-over path.
@@ -353,4 +357,3 @@ mod bench {
         println!("bench graph cards=3 per_sample_ms={per_sample_ms:.3}");
     }
 }
-

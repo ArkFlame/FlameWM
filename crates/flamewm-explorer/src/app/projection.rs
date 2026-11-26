@@ -9,7 +9,7 @@ thread_local! {
 pub(crate) fn note_state_change() {
     STATE_EPOCH.with(|epoch|epoch.set(epoch.get().wrapping_add(1)));
 }
-fn state_epoch()->u64 {STATE_EPOCH.with(std::cell::Cell::get)}
+fn state_epoch()->u64 {STATE_EPOCH.with(|epoch|epoch.get())}
 
 /// Identity of the last full chrome projection: the revision, the app it belongs to, and the theme
 /// colours the literal fills were written with. Equal means nothing outside the row pane changed.
@@ -584,7 +584,7 @@ impl ExplorerApp {
         // A closed menu's rows are invisible behind a hidden popup. Skipping the offer pass and its
         // `MENU_ITEMS` visibility writes keeps scrolling away from probing/formatting menu state; an
         // opening menu changes the revision, so this pass always runs before its rows are shown.
-        if self.context.is_some() {
+        if let Some((x,y))=self.context {
             let selected_path=self.selected();
             let many=self.model.tab().selected_paths.len()>1;
             let in_trash=self.is_trash_files(tab.path());
@@ -665,9 +665,11 @@ impl ExplorerApp {
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
         let today=today_cached();
-        // A scroll wheel repeats a full projection for the same window on every glide tick, and a drag
-        // re-projects the same rows on every motion. This key records everything the last full pass
-        // rendered; when nothing but the glide offset moved, only the row positions need repainting.
+        // A scroll wheel repeats a full projection for the same window on every glide tick. This key
+        // records everything the last full pass rendered; while the glide is running and nothing else
+        // moved, only the row positions need repainting. Outside a glide the pass stays complete, so a
+        // fresh document never inherits rows it did not write.
+        let animating=self.glide.is_animating(Instant::now());
         let total=self.window.0-SIDEBAR_WIDTH;
         let key=RowsKey{
             epoch:state_epoch(),origin,rows,first,day:today,window_w:self.window.0,
@@ -676,7 +678,7 @@ impl ExplorerApp {
             selected:self.theme.selected(),clear:self.theme.clear(),
             alternate:self.theme.row_alternate(),selection_fill:self.theme.selection_fill(),
         };
-        if self.glide.is_animating(Instant::now()) && ROWS_KEY.with(|cached|cached.get())==Some(key) {
+        if animating && ROWS_KEY.with(|cached|cached.get())==Some(key) {
             return self.project_rows_positions(doc);
         }
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
