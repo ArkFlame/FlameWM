@@ -827,6 +827,23 @@ mod tests {
         assert!(!Arc::ptr_eq(&renamed.name, &stale));
     }
     #[test]
+    fn byte_parser_keeps_a_non_utf8_comm_and_signed_nice() {
+        // `comm` with a raw 0x80 byte: the old whole-file `from_utf8` rejected the process.
+        let mut stat = b"4242 (odd\x80name) S 1 4242 4242 0 -1 4194560 1 0 0 0 150 30 0 0 20 0 7 0 555 6291456 1030 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0".to_vec();
+        stat.push(b'\n');
+        let task = parse_stat_bytes(4242, &stat, 4096, None).expect("parse");
+        assert_eq!(task.pid, 4242);
+        assert_eq!(task.ppid, 1);
+        assert!(task.name.contains("odd"));
+        // A negative nice value survives the byte scanner.
+        let text = "42 (a) R 1 42 42 0 -1 0 0 0 0 0 1 2 0 0 20 -5 1 0 100 0 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        let negative = parse_stat_bytes(42, text.as_bytes(), 4096, None).expect("parse");
+        assert_eq!(negative.nice, -5);
+        assert_eq!(negative.priority, 20);
+        // Truncated fields are rejected, not half-filled.
+        assert!(parse_stat_bytes(42, b"42 (a) R 1", 4096, None).is_none());
+    }
+    #[test]
     fn sampling_never_counts_process_reuse_as_cpu_usage() {
         let old = (31_u64, 100_u64);
         let new = (32_u64, 200_u64);
@@ -985,6 +1002,18 @@ mod sampling_schedule_tests {
                 "pid {pid} must be due exactly once per {SLOW_TICKS} ticks"
             );
         }
+    }
+
+    #[test]
+    fn pid_list_stays_sorted_and_unique_across_samples() {
+        let mut sampler = Sampler::default();
+        let _ = sampler.collect();
+        let _ = sampler.collect();
+        assert!(!sampler.pids.is_empty());
+        assert!(
+            sampler.pids.windows(2).all(|pair| pair[0] < pair[1]),
+            "the walk keeps one ascending, duplicate-free pid list"
+        );
     }
 
     #[test]
