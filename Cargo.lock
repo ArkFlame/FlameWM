@@ -1143,9 +1143,7 @@ name = "flamewm-task-manager"
 version = "0.1.7"
 dependencies = [
  "flamewm-api",
- "flamewm-control-core",
  "flamewm-control-dbus",
- "flamewm-dbus-reactor",
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-document",

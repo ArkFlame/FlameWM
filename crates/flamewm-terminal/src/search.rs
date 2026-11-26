@@ -3,7 +3,7 @@
 //! The matcher works on one `char` per cell, so a match column is a cell column. Wide-character
 //! spacer cells read as NUL and never match. Matches never overlap within a line.
 
-use crate::screen::{Cell, Screen, attr};
+use crate::screen::{Cell, Line, Screen, attr};
 
 /// One hit: absolute line index (scrollback first), starting cell column and length in cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +36,34 @@ fn fold(c: char, match_case: bool) -> char {
     }
 }
 
+/// The fold of one cell: a wide glyph's spacer cell reads as NUL and never matches.
+fn fold_cell(cell: &Cell, match_case: bool) -> char {
+    let ch = if cell.attrs & attr::SPACER != 0 {
+        '\0'
+    } else {
+        cell.ch
+    };
+    fold(ch, match_case)
+}
+
+/// Appends the non-overlapping matches of `needle` in one already-folded line, at `line_index`.
+fn scan(folded: &[char], needle: &[char], line_index: usize, matches: &mut Vec<Match>) {
+    let len = needle.len();
+    let mut col = 0;
+    while col + len <= folded.len() {
+        if folded[col..col + len] == needle[..] {
+            matches.push(Match {
+                line: line_index,
+                col,
+                len,
+            });
+            col += len;
+        } else {
+            col += 1;
+        }
+    }
+}
+
 /// Every non-overlapping occurrence of `query` in `lines`, in reading order. Case-insensitive unless `match_case`.
 /// An empty query matches nothing.
 #[must_use]
@@ -45,21 +73,12 @@ pub fn find_in(lines: &[Vec<char>], query: &str, match_case: bool) -> Vec<Match>
         return Vec::new();
     }
     let mut matches = Vec::new();
+    // One reused folded buffer: scanning many lines does not allocate a folded copy per line.
+    let mut folded: Vec<char> = Vec::new();
     for (line_index, line) in lines.iter().enumerate() {
-        let folded: Vec<char> = line.iter().map(|&c| fold(c, match_case)).collect();
-        let mut col = 0;
-        while col + needle.len() <= folded.len() {
-            if folded[col..col + needle.len()] == needle[..] {
-                matches.push(Match {
-                    line: line_index,
-                    col,
-                    len: needle.len(),
-                });
-                col += needle.len();
-            } else {
-                col += 1;
-            }
-        }
+        folded.clear();
+        folded.extend(line.iter().map(|&c| fold(c, match_case)));
+        scan(&folded, &needle, line_index, &mut matches);
     }
     matches
 }
@@ -67,11 +86,24 @@ pub fn find_in(lines: &[Vec<char>], query: &str, match_case: bool) -> Vec<Match>
 /// Searches every line of `screen`, scrollback included. The alt screen has no scrollback.
 #[must_use]
 pub fn find(screen: &Screen, query: &str, match_case: bool) -> Vec<Match> {
-    let lines: Vec<Vec<char>> = (0..screen.total_lines())
-        .filter_map(|index| screen.line_abs(index))
-        .map(|line| line_chars(&line))
-        .collect();
-    find_in(&lines, query, match_case)
+    let needle: Vec<char> = query.chars().map(|c| fold(c, match_case)).collect();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    // One decoded cell line and one folded char buffer for the whole scrollback: a query recompute walks the lines
+    // without allocating a text table or a decoded line per entry.
+    let mut line: Line = Vec::new();
+    let mut folded: Vec<char> = Vec::new();
+    let mut matches = Vec::new();
+    for index in 0..screen.total_lines() {
+        if !screen.line_abs_into(index, &mut line) {
+            continue;
+        }
+        folded.clear();
+        folded.extend(line.iter().map(|cell| fold_cell(cell, match_case)));
+        scan(&folded, &needle, index, &mut matches);
+    }
+    matches
 }
 
 /// Find bar state of one pane. `current` indexes `matches` and is kept in range by `step`.

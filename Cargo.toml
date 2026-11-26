@@ -18,6 +18,12 @@ inotify = { version = "=0.11.4", default-features = false }
 rustix = { version = "=1.1.4", default-features = false, features = ["fs", "process", "std", "time"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
 x11rb = { version = "=0.14.0", default-features = false, features = ["randr", "shape", "xkb"] }
+# Shared so the API types, the WM, and the Wayland/Screenshot clients cannot drift apart.
+serde = { version = "=1.0.229", default-features = false, features = ["std"] }
+signal-hook = { version = "=0.4.5", default-features = false }
+wayland-client = "0.31"
+wayland-protocols = "0.32"
+wayland-protocols-wlr = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -71,6 +77,33 @@ opt-level = "s"
 opt-level = "s"
 
 [profile.release.package.flamewm-shell]
+opt-level = "s"
+
+# The remaining resident app binaries are the same kind of idle-footprint surface: their own
+# code is UI and event plumbing, not a per-frame hot loop (paint/decode stay in the opt-level 3
+# -x11, -ui-core, -render-core and -image-core crates), so size-optimise them too.
+[profile.release.package.flamewm-apps]
+opt-level = "s"
+
+[profile.release.package.flamewm-archiver-app]
+opt-level = "s"
+
+[profile.release.package.flamewm-assistant]
+opt-level = "s"
+
+[profile.release.package.flamewm-explorer]
+opt-level = "s"
+
+[profile.release.package.flamewm-finder]
+opt-level = "s"
+
+[profile.release.package.flamewm-imageviewer]
+opt-level = "s"
+
+[profile.release.package.flamewm-lock]
+opt-level = "s"
+
+[profile.release.package.flamewm-settings]
 opt-level = "s"
 
 [profile.release.build-override]

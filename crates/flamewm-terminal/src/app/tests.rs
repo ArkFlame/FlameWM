@@ -81,6 +81,7 @@ fn test_app() -> App {
         ui: crate::ui::UiCache::default(),
         pane_runs: HashMap::new(),
         grid_composed: Vec::new(),
+        grid_inputs: Vec::new(),
         menu: None,
         rename: None,
         history: History::open(None, &[]),

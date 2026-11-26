@@ -10,9 +10,7 @@ description = "FlameWM native image viewer: fit, zoom, pan and browse images in 
 
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
-flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
-flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }

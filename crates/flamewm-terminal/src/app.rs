@@ -144,6 +144,8 @@ pub struct App {
     pane_runs: HashMap<u64, RunCache>,
     /// Grid rows as last composed from the pane rows, reused while those pane rows are unchanged.
     grid_composed: Vec<GridRow>,
+    /// Per-row pane inputs used while composing a frame, kept so a frame allocates no list per row.
+    grid_inputs: Vec<Vec<(crate::view::Row, Rect)>>,
     /// Startup banner shown above the first tab until its output scrolls.
     banner: bool,
     /// Window size in logical px, as last reported by the window. Grid and PTY size follow it.
@@ -195,6 +197,7 @@ impl App {
             ui: crate::ui::UiCache::default(),
             pane_runs: HashMap::new(),
             grid_composed: Vec::new(),
+            grid_inputs: Vec::new(),
             menu: None,
             rename: None,
             history: History::open_default(),

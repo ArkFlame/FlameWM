@@ -142,7 +142,18 @@ impl App {
     fn grid_frame(&mut self, banner: usize) -> Vec<Row> {
         let rows = self.grid_rows.saturating_sub(banner);
         let (cursor_shape, grid_rect) = (self.cursor_shape(), self.grid_rect());
-        let mut inputs: Vec<Vec<(Row, Rect)>> = vec![Vec::new(); rows];
+        // Per-row input lists live across frames: after the first frame their slow growth is paid once, so an idle,
+        // scrolling or flooding repaint allocates nothing for the lists themselves.
+        let mut inputs = std::mem::take(&mut self.grid_inputs);
+        if inputs.len() > rows {
+            inputs.truncate(rows);
+        }
+        while inputs.len() < rows {
+            inputs.push(Vec::new());
+        }
+        for row_inputs in &mut inputs {
+            row_inputs.clear();
+        }
         let mut cache = std::mem::take(&mut self.pane_runs);
         if let Some(tab) = self.tabs.get_mut(self.active) {
             let focused = tab.focused;
@@ -172,19 +183,30 @@ impl App {
             }
         }
         self.pane_runs = cache;
-        let mut previous = std::mem::take(&mut self.grid_composed).into_iter();
-        let composed: Vec<GridRow> = inputs
-            .into_iter()
-            .map(|row_inputs| match previous.next() {
-                Some(old) if same_inputs(&old.inputs, &row_inputs) => old,
-                _ => GridRow {
-                    row: compose_row(&row_inputs),
-                    inputs: row_inputs,
-                },
-            })
-            .collect();
+        // The composed rows are updated in place, so the old allocations serve the new frame. A row whose inputs are
+        // the same allocation at the same rectangle keeps its composed row untouched.
+        let mut composed = std::mem::take(&mut self.grid_composed);
+        if composed.len() > rows {
+            composed.truncate(rows);
+        }
+        while composed.len() < rows {
+            composed.push(GridRow {
+                inputs: Vec::new(),
+                row: Row::from(Vec::new()),
+            });
+        }
+        for (entry, row_inputs) in composed.iter_mut().zip(inputs.iter_mut()) {
+            if !same_inputs(&entry.inputs, row_inputs) {
+                entry.row = compose_row(row_inputs);
+                // Keep the freshly built list in the entry and the old one as next frame's scratch: both keep their
+                // capacity, so neither is reallocated.
+                std::mem::swap(&mut entry.inputs, row_inputs);
+                row_inputs.clear();
+            }
+        }
         let grid = composed.iter().map(|entry| entry.row.clone()).collect();
         self.grid_composed = composed;
+        self.grid_inputs = inputs;
         grid
     }
 }

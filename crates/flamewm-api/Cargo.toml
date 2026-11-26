@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-serde = { version = "=1.0.229", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 toml = { version = "=0.8.23" }

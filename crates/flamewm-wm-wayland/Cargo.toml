@@ -31,7 +31,7 @@ flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 # zwlr-screencopy server side: smithay 0.7 has no screencopy, the wlr protocol bindings do.
-wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+wayland-protocols-wlr = { workspace = true, features = ["server"] }
 flamewm-skin = { path = "../flamewm-skin" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 # The window outline policy (`windowOutlineColor`, `windowOutlineOpacity`, `outlines`) is owned by
@@ -78,10 +78,10 @@ drm = [
 ]
 
 [dev-dependencies]
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+wayland-client.workspace = true
+wayland-protocols = { workspace = true, features = ["client", "unstable", "staging"] }
 # wlr-layer-shell client bindings for examples/layer_client.rs (same crate as the server side above).
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { workspace = true, features = ["client"] }
 
 # The workspace forbids unsafe code; this crate denies it so the drm module (feature `drm`) can allow it
 # for smithay's EGL initialisation. A module-level allow cannot override `forbid`.

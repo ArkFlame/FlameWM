@@ -33,7 +33,7 @@ optional = true
 # The Wayland presenter is a plain client of ext-session-lock-v1, so these are not gated by
 # `x11`: they are what replaces it.
 [dependencies.wayland-client]
-version = "0.31"
+workspace = true
 optional = true
 
 # Key decoding for the Wayland presenter: a client compiles the keymap the seat sends.
@@ -42,7 +42,7 @@ version = "0.8"
 optional = true
 
 [dependencies.wayland-protocols]
-version = "0.32"
+workspace = true
 features = ["client", "staging"]
 optional = true
 
