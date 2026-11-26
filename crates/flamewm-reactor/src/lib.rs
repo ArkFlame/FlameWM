@@ -111,6 +111,23 @@ impl AsRawFd for BorrowedRawFd {
     }
 }
 
+/// Deadline of the next repetition on a fixed cadence anchored at `anchor`.
+///
+/// Re-arming with `Instant::now() + delay` folds the callback latency into every period, so the
+/// cadence slowly drifts, and after a suspend the overdue periods fire back to back. Anchoring to
+/// the first deadline keeps the cadence steady and skips straight past missed periods, turning a
+/// catch-up burst into one wakeup.
+#[must_use]
+fn next_repeat_deadline(anchor: Instant, delay: Duration, now: Instant) -> Instant {
+    let period = delay.as_nanos().max(1);
+    let elapsed = now.saturating_duration_since(anchor).as_nanos();
+    let wait = (elapsed / period + 1)
+        .saturating_mul(period)
+        .saturating_sub(elapsed);
+    let wait = Duration::from_nanos(u64::try_from(wait).unwrap_or(u64::MAX));
+    now.checked_add(wait).unwrap_or(now)
+}
+
 impl Reactor {
     /// Creates an empty reactor.
     pub fn new() -> calloop::Result<Self> {
@@ -249,6 +266,7 @@ impl Reactor {
                 site.line()
             ));
         }
+        let anchor = Instant::now();
         self.event_loop
             .handle()
             .insert_source(Timer::from_duration(delay), move |_, _, _| {
@@ -260,11 +278,13 @@ impl Reactor {
                     ));
                 }
                 callback();
-                if repeat {
-                    TimeoutAction::ToDuration(delay)
-                } else {
-                    TimeoutAction::Drop
+                if !repeat {
+                    return TimeoutAction::Drop;
                 }
+                if delay.is_zero() {
+                    return TimeoutAction::ToDuration(delay);
+                }
+                TimeoutAction::ToInstant(next_repeat_deadline(anchor, delay, Instant::now()))
             })
             .map_err(Into::into)
     }
@@ -554,6 +574,29 @@ mod wake_tests {
         assert_eq!(handle.get(), Some(at));
         clone.set(None);
         assert_eq!(handle.get(), None);
+    }
+
+    #[test]
+    fn repeat_deadline_keeps_cadence_and_skips_missed_periods() {
+        let anchor = Instant::now();
+        let step = Duration::from_millis(100);
+        // A callback that lands 30 ms late stays on the original grid.
+        let late = anchor + Duration::from_millis(130);
+        assert_eq!(
+            next_repeat_deadline(anchor, step, late),
+            anchor + Duration::from_millis(200)
+        );
+        // An on-time callback advances exactly one period.
+        assert_eq!(
+            next_repeat_deadline(anchor, step, anchor + step),
+            anchor + Duration::from_millis(200)
+        );
+        // A long suspend jumps to the next boundary instead of replaying missed periods.
+        let resumed = anchor + Duration::from_secs(1_050);
+        assert_eq!(
+            next_repeat_deadline(anchor, step, resumed),
+            anchor + Duration::from_millis(1_100)
+        );
     }
 }
 

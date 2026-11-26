@@ -43,16 +43,30 @@ impl ChildPipe {
 
     /// Writes `line` plus a newline to the child's stdin.
     ///
+    /// Typical (short) lines are staged into a stack buffer so the line and its newline leave in a
+    /// single write instead of two. The pipe is unbuffered, so no flush is needed.
+    ///
     /// # Errors
     /// Returns `BrokenPipe` after [`close_stdin`](Self::close_stdin), or the write error.
     pub fn write_line(&mut self, line: &str) -> io::Result<()> {
+        // Longer lines fall back to two writes rather than copying a large payload.
+        const STACK_LINE_MAX: usize = 512;
+
         let stdin = self
             .stdin
             .as_mut()
             .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdin closed"))?;
-        stdin.write_all(line.as_bytes())?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()
+        let bytes = line.as_bytes();
+        if bytes.len() < STACK_LINE_MAX {
+            let mut buf = [0u8; STACK_LINE_MAX];
+            let len = bytes.len();
+            buf[..len].copy_from_slice(bytes);
+            buf[len] = b'\n';
+            stdin.write_all(&buf[..=len])
+        } else {
+            stdin.write_all(bytes)?;
+            stdin.write_all(b"\n")
+        }
     }
 
     /// Closes the child's stdin, signalling end of input.

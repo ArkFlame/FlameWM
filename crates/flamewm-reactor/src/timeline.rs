@@ -33,8 +33,13 @@ pub enum Easing {
 impl Easing {
     fn apply(self, t: f32) -> f32 {
         match self {
-            Self::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
-            Self::EaseInCubic => t.powi(3),
+            // Explicit products instead of `powi(3)`: same curve, no libm call per sampled
+            // transition per frame.
+            Self::EaseOutCubic => {
+                let inv = 1.0 - t;
+                1.0 - inv * inv * inv
+            }
+            Self::EaseInCubic => t * t * t,
             Self::Smoothstep => t * t * (3.0 - 2.0 * t),
             Self::Linear => t,
         }
