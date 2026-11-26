@@ -1280,6 +1280,7 @@ dependencies = [
  "flamewm-image-core",
  "flamewm-integrations-linux",
  "flamewm-platform",
+ "flamewm-profiler",
  "flamewm-reactor",
  "flamewm-render-core",
  "flamewm-session-core",
