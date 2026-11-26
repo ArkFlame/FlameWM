@@ -23,6 +23,9 @@ const POLL_MOVING: Duration = Duration::from_millis(50);
 /// Pointer query cadence once the pointer has been still for [`MOTION_WINDOW`].
 const POLL_STILL: Duration = Duration::from_millis(250);
 const MOTION_WINDOW: Duration = Duration::from_secs(1);
+/// Pending-dot frame period from `ui/shell/launch-feedback.html`.
+const INDICATOR_FRAME_MILLIS: u128 = 120;
+const INDICATOR_FRAME: Duration = Duration::from_millis(120);
 const BASE_ICON: i32 = 16;
 const BASE_OFFSET: i32 = 13;
 /// The four pending-launch dots from `ui/shell/launch-feedback.html`, in 16px CSS units:
@@ -75,6 +78,37 @@ fn poll_interval(since_motion: Duration) -> Duration {
     } else {
         POLL_STILL
     }
+}
+
+/// Single badge deadline: the earliest of the launch expiry, the pointer poll and the
+/// pending-dot frame. `None` means nothing is in flight, so the reactor parks with no
+/// badge wakeup at all. Overlapping launches never add a timer — each candidate is one
+/// instant and the smallest wins, so several pending launches share this one wakeup.
+#[must_use]
+fn next_tick(
+    expiry: Option<Instant>,
+    poll: Option<Instant>,
+    animation: Option<Instant>,
+) -> Option<Instant> {
+    expiry.into_iter().chain(poll).chain(animation).min()
+}
+
+/// Absolute pointer-poll deadline. Returning `last_poll + interval` instead of
+/// `now + interval` keeps unrelated shell ticks from postponing the query.
+#[must_use]
+fn poll_deadline(last_poll: Option<Instant>, interval: Duration) -> Option<Instant> {
+    last_poll.map(|at| at + interval)
+}
+
+/// Deadline of the next pending-dot frame; `None` when the dots are not animating.
+#[must_use]
+fn indicator_deadline(started: Instant, now: Instant, animations: bool) -> Option<Instant> {
+    animations.then(|| {
+        let elapsed = now.saturating_duration_since(started).as_millis();
+        let frames = elapsed / INDICATOR_FRAME_MILLIS + 1;
+        let millis = u64::try_from(frames * INDICATOR_FRAME_MILLIS).unwrap_or(u64::MAX);
+        started + Duration::from_millis(millis)
+    })
 }
 
 impl LaunchFeedback {
@@ -178,10 +212,13 @@ impl LaunchFeedback {
         let previous = self.sequences.counters;
         self.sequences.expire(now);
         self.report_transition(previous);
+        // One expiry for every launch still running (silent ones included). `None` when
+        // the last launch ended, which disarms the badge timer completely.
+        let expiry = self.sequences.next_deadline();
         if self.sequences.visible().is_none() {
             self.hide(runtime)?;
             // A SILENT launch still needs its expiry deadline, without pointer polling.
-            return Ok(self.sequences.next_deadline());
+            return Ok(expiry);
         }
         let since_motion = self
             .last_motion
@@ -216,17 +253,21 @@ impl LaunchFeedback {
                 updated_launch_key(&s.id, &s.icon, side, self.requested.as_ref()).is_none()
             });
             if same_launch {
-                return Ok(self.sequences.next_deadline());
+                return Ok(expiry);
             }
             self.concealed = false;
         }
         // Bounded active-only pointer query; XFixes cursor notifications do not report motion.
         if !should_poll && self.requested.is_some() && self.painted.is_some() {
-            return Ok(Some(now + interval));
+            return Ok(next_tick(
+                expiry,
+                poll_deadline(self.last_poll, interval),
+                None,
+            ));
         }
         let Some((px, py)) = self.observer.pointer_position() else {
             self.hide(runtime)?;
-            return Ok(self.sequences.next_deadline());
+            return Ok(expiry);
         };
         let moved = self.last_pointer != Some((px, py));
         if moved || self.last_motion.is_none() {
@@ -248,7 +289,7 @@ impl LaunchFeedback {
         });
         let Some((started, replacement)) = visible else {
             self.hide(runtime)?;
-            return Ok(self.sequences.next_deadline());
+            return Ok(expiry);
         };
         if let Some(key) = replacement {
             self.requested = Some(key);
@@ -333,7 +374,7 @@ impl LaunchFeedback {
                 self.painted = self.requested.clone();
                 self.concealed = true;
                 self.hide(runtime)?;
-                return Ok(self.sequences.next_deadline());
+                return Ok(expiry);
             };
             runtime.set_surface_shape_mask(surface, Some(shape))?;
             runtime.with_document(surface, |doc| {
@@ -356,7 +397,8 @@ impl LaunchFeedback {
         });
         if self.painted.is_none() {
             let frame = if animate_indicator {
-                ((now.saturating_duration_since(started).as_millis() / 120) % 4) as usize
+                ((now.saturating_duration_since(started).as_millis() / INDICATOR_FRAME_MILLIS) % 4)
+                    as usize
             } else {
                 0
             };
@@ -408,11 +450,19 @@ impl LaunchFeedback {
             )?;
             runtime.redraw(surface)?;
         }
-        if self.painted != self.requested || should_poll {
-            self.last_poll = Some(now);
-            return Ok(Some(now + interval));
-        }
-        Ok(self.sequences.next_deadline())
+        // We always queried the pointer above, so the poll cadence restarts here.
+        // One wakeup covers everything still in flight: the launch expiry, the pointer
+        // poll (only while a visible launch needs it) and the next pending-dot frame.
+        let animation = self
+            .painted
+            .is_none()
+            .then(|| indicator_deadline(started, now, animate_indicator))
+            .flatten();
+        Ok(next_tick(
+            expiry,
+            poll_deadline(self.last_poll, interval),
+            animation,
+        ))
     }
 
     fn surface(&mut self, runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError> {
@@ -743,5 +793,56 @@ mod tests {
         );
         assert_eq!(poll_interval(MOTION_WINDOW), POLL_STILL);
         assert_eq!(poll_interval(Duration::from_secs(14)), POLL_STILL);
+    }
+
+    #[test]
+    fn idle_badge_arms_no_timer() {
+        // No launch in flight: expiry, poll and animation are all absent, so the reactor
+        // parks instead of waking for a badge that has nothing to show.
+        assert_eq!(next_tick(None, None, None), None);
+        assert_eq!(poll_deadline(None, POLL_MOVING), None);
+    }
+
+    #[test]
+    fn overlapping_launches_share_one_earliest_deadline() {
+        let t0 = Instant::now();
+        let expiry = t0 + Duration::from_secs(15);
+        let poll = t0 + Duration::from_millis(250);
+        let animation = t0 + Duration::from_millis(120);
+        assert_eq!(
+            next_tick(Some(expiry), Some(poll), Some(animation)),
+            Some(animation)
+        );
+        assert_eq!(next_tick(Some(expiry), Some(poll), None), Some(poll));
+        assert_eq!(next_tick(Some(expiry), None, None), Some(expiry));
+        assert_eq!(
+            next_tick(None, None, Some(animation)),
+            Some(animation),
+            "a pending frame still wakes even before the expiry is known"
+        );
+    }
+
+    #[test]
+    fn poll_deadline_is_absolute_and_not_pushed_by_unrelated_ticks() {
+        let t0 = Instant::now();
+        let due = poll_deadline(Some(t0), POLL_STILL);
+        assert_eq!(due, Some(t0 + POLL_STILL));
+        // Recomputing from the same last_poll keeps the original instant.
+        assert_eq!(poll_deadline(Some(t0), POLL_STILL), due);
+    }
+
+    #[test]
+    fn indicator_frames_land_on_their_own_deadline() {
+        let t0 = Instant::now();
+        assert_eq!(indicator_deadline(t0, t0, true), Some(t0 + INDICATOR_FRAME));
+        assert_eq!(
+            indicator_deadline(t0, t0 + Duration::from_millis(119), true),
+            Some(t0 + INDICATOR_FRAME)
+        );
+        assert_eq!(
+            indicator_deadline(t0, t0 + Duration::from_millis(120), true),
+            Some(t0 + INDICATOR_FRAME * 2)
+        );
+        assert_eq!(indicator_deadline(t0, t0, false), None);
     }
 }

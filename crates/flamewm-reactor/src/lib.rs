@@ -55,21 +55,39 @@ pub struct Reactor {
     event_loop: EventLoop<'static, ()>,
     wake: WakeDeadline,
     owned_wakes: Vec<WakeDeadline>,
+    /// Shared dirty flag for every deadline slot this reactor handed out. A slot sets it on
+    /// write, so dispatch recomputes the earliest deadline only when a slot actually changed.
+    wake_dirty: Rc<Cell<bool>>,
+    /// Cached earliest deadline over all slots; outer `None` means "recompute on next read".
+    cached_wake: Option<Option<Instant>>,
 }
 
 /// Shared wake deadline: dispatch never sleeps past it. Owners set it from their tick without
 /// reactor access. `None` leaves dispatch bounded only by its own timeout (zero idle wakeups).
 #[derive(Clone, Debug, Default)]
-pub struct WakeDeadline(Rc<Cell<Option<Instant>>>);
+pub struct WakeDeadline {
+    at: Rc<Cell<Option<Instant>>>,
+    /// Marked on every write; the reactor clears it after recomputing the earliest deadline.
+    dirty: Rc<Cell<bool>>,
+}
 
 impl WakeDeadline {
+    /// A fresh unset slot that reports its writes through `dirty`.
+    fn with_dirty(dirty: Rc<Cell<bool>>) -> Self {
+        Self {
+            at: Rc::new(Cell::new(None)),
+            dirty,
+        }
+    }
+
     pub fn set(&self, at: Option<Instant>) {
-        self.0.set(at);
+        self.at.set(at);
+        self.dirty.set(true);
     }
 
     #[must_use]
     pub fn get(&self) -> Option<Instant> {
-        self.0.get()
+        self.at.get()
     }
 }
 
@@ -132,26 +150,38 @@ fn next_repeat_deadline(anchor: Instant, delay: Duration, now: Instant) -> Insta
 impl Reactor {
     /// Creates an empty reactor.
     pub fn new() -> calloop::Result<Self> {
+        let wake_dirty = Rc::new(Cell::new(false));
         Ok(Self {
             event_loop: EventLoop::try_new()?,
-            wake: WakeDeadline::default(),
+            wake: WakeDeadline::with_dirty(Rc::clone(&wake_dirty)),
             owned_wakes: Vec::new(),
+            wake_dirty,
+            cached_wake: None,
         })
     }
 
     #[must_use]
     pub fn owned_wake_deadline(&mut self) -> WakeDeadline {
-        let wake = WakeDeadline::default();
+        let wake = WakeDeadline::with_dirty(Rc::clone(&self.wake_dirty));
         self.owned_wakes.push(wake.clone());
+        // A new slot starts unset, but invalidating here keeps the invariant local to creation.
+        self.cached_wake = None;
         wake
     }
 
-    fn earliest_wake(&self) -> Option<Instant> {
-        earliest_deadline(
-            std::iter::once(&self.wake)
-                .chain(&self.owned_wakes)
-                .map(WakeDeadline::get),
-        )
+    /// Earliest deadline across all slots, recomputed only after a slot write dirties the cache.
+    /// Absolute deadlines stay valid until changed, so a clean cache never needs a clock read.
+    fn earliest_wake(&mut self) -> Option<Instant> {
+        if self.wake_dirty.get() || self.cached_wake.is_none() {
+            self.wake_dirty.set(false);
+            let earliest = earliest_deadline(
+                std::iter::once(&self.wake)
+                    .chain(&self.owned_wakes)
+                    .map(WakeDeadline::get),
+            );
+            self.cached_wake = Some(earliest);
+        }
+        self.cached_wake.flatten()
     }
 
     /// Handle to the shared wake deadline consumed by [`Reactor::dispatch`].
@@ -580,6 +610,24 @@ mod wake_tests {
         assert_eq!(handle.get(), Some(at));
         clone.set(None);
         assert_eq!(handle.get(), None);
+    }
+
+    #[test]
+    fn wake_cache_recomputes_only_when_a_slot_changes() {
+        let mut reactor = Reactor::new().expect("reactor");
+        let shared = reactor.wake_deadline();
+        let owned = reactor.owned_wake_deadline();
+        let now = Instant::now();
+        // No slot set yet: dispatch would park with an infinite timeout.
+        assert_eq!(reactor.earliest_wake(), None);
+        shared.set(Some(now + Duration::from_secs(5)));
+        assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(5)));
+        // A clean cache returns the same deadline without touching the slots again.
+        assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(5)));
+        owned.set(Some(now + Duration::from_secs(1)));
+        assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(1)));
+        owned.set(None);
+        assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(5)));
     }
 
     #[test]
