@@ -82,9 +82,12 @@ pub fn run_quick_control_host(packaged_root: std::path::PathBuf) -> Result<(), H
                 let _ = signal_client.on_ready(|signal| {
                     if let ControlSignal::SystemSnapshotChanged { snapshot } = signal {
                         let mut state = signal_state.borrow_mut();
-                        if apply_system_snapshot(&mut state.snapshot, snapshot)
-                            && state.surfaces.open.is_some()
-                        {
+                        // Compare before the cache overwrite: only an open popup that reads a
+                        // changed domain needs a reprojection and redraw.
+                        let reproject = state.surfaces.open.is_some_and(|kind| {
+                            system_reprojection_needed(kind, &state.snapshot.system, &snapshot)
+                        });
+                        if apply_system_snapshot(&mut state.snapshot, snapshot) && reproject {
                             state.system_reprojection_pending = true;
                         }
                     }
