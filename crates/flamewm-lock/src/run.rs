@@ -30,6 +30,7 @@ use crate::preview::PreviewInput;
 use crate::ribbons::{FRAME_INTERVAL, RibbonFrames};
 use crate::screensaver::{Phase, Screensaver};
 use crate::secret::PasswordBuffer;
+use crate::wake::Waker;
 
 mod change;
 mod control_watch;
