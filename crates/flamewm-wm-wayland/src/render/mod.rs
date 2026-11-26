@@ -310,8 +310,15 @@ pub fn output_lock_elements(
 }
 
 pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
-    let scale = state.output_scale();
     let mut out: Vec<Elem> = Vec::new();
+    build_elements_into(state, renderer, &mut out);
+    out
+}
+
+/// [`build_elements`] appending into `out`, so a frame builder keeps one element buffer instead of
+/// allocating a second Vec and copying every element into it on each painted frame.
+pub fn build_elements_into(state: &State, renderer: &mut GlowRenderer, out: &mut Vec<Elem>) {
+    let scale = state.output_scale();
     let mut decorations = state.decorations.borrow_mut();
     decorations.retain(|window| state.model.get(window).is_some());
     // Topmost: the snap preview is drawn over every window while a move grab targets a snap.
@@ -324,9 +331,8 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
         &mut decorations,
         crate::scene::front_to_back(state),
         false,
-        &mut out,
+        out,
     );
-    out
 }
 
 /// Elements for `items` in front-to-back order. `capture` builds the scene under a Dock backdrop:
@@ -509,7 +515,9 @@ fn scene_elements_into(
                 ));
             }
             SceneItem::Managed(id) => {
-                let Some(managed) = state.model.get(id).cloned() else {
+                // Borrow, never clone: this runs once per visible window on every painted frame, and
+                // `Managed` carries a dozen rects and modes. Nothing below mutates the window model.
+                let Some(managed) = state.model.get(id) else {
                     continue;
                 };
                 let Some(surface) = state.window_wl_surface(id) else {
@@ -529,10 +537,10 @@ fn scene_elements_into(
                     renderer,
                     id,
                     frame,
-                    outline_radius(&managed),
+                    outline_radius(managed),
                     scale,
                 ));
-                let radii = client_corner_radii(&managed, managed.titlebars)
+                let radii = client_corner_radii(managed, managed.titlebars)
                     .map(|radius| physical_radius(radius, scale));
                 let program = if radii.iter().any(|radius| *radius > 0) {
                     decorations.clip_program(renderer)
@@ -696,7 +704,7 @@ fn render_into(
                     state.output_scale(),
                 )
             };
-            elements.extend(build_elements(state, backend.renderer()));
+            build_elements_into(state, backend.renderer(), &mut elements);
             elements
         }
     };
