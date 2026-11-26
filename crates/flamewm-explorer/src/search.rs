@@ -652,15 +652,18 @@ mod tests {
         }
         let wakes = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&wakes);
-        let mut worker =
-            SearchWorker::spawn(move || {
-                counter.fetch_add(1, Ordering::Relaxed);
-            })
-            .unwrap();
+        let mut worker = SearchWorker::spawn(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
         let id = worker.start(root.clone(), "report".into(), false).unwrap();
-        // Let the walk publish every batch without any poll: the pending flag stays set, so only the
-        // first batch wakes the UI. The events themselves all wait in the channel.
-        thread::sleep(Duration::from_millis(200));
+        // The walk publishes many batches with no poll in between: the pending flag sticks after the
+        // first batch, so the remaining batches queue their events silently.
+        let first = Instant::now() + Duration::from_secs(10);
+        while wakes.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < first, "search worker never woke the UI");
+            thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(wakes.load(Ordering::Relaxed), 1, "batches must coalesce");
 
         let deadline = Instant::now() + Duration::from_secs(10);

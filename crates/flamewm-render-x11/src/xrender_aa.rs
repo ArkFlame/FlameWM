@@ -327,7 +327,16 @@ unsafe fn paint_span(
             unsafe { fill_box(backend, left, py, visible, visible_height, run_color)? };
         } else {
             // SAFETY: validated inputs above.
-            unsafe { fill_box(backend, x + start as i32, py, len, visible_height, run_color)? };
+            unsafe {
+                fill_box(
+                    backend,
+                    x + start as i32,
+                    py,
+                    len,
+                    visible_height,
+                    run_color,
+                )?
+            };
         }
     }
     Ok(())

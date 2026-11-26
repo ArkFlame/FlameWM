@@ -286,7 +286,9 @@ impl RunCache {
             // the index, which renumbers the selection, so that case rebuilds.
             if shift > 0
                 && shift < rows
-                && self.top.is_some_and(|old| old.checked_add(shift) == Some(top))
+                && self
+                    .top
+                    .is_some_and(|old| old.checked_add(shift) == Some(top))
             {
                 self.rows.rotate_left(shift);
                 stale[rows - shift..].fill(true);

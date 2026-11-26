@@ -179,6 +179,11 @@ fn run() -> Result<(), String> {
     let event_app = Rc::clone(&app);
     let wake_app = Rc::clone(&app);
     let fd = reader.as_raw_fd();
+    // Output keeps parsing while the window is fully obscured, but nothing it changes can be seen, so the frame is
+    // projected once when the window is uncovered instead of on every burst.
+    let visible = Rc::new(std::cell::Cell::new(true));
+    let event_visible = Rc::clone(&visible);
+    let wake_visible = Rc::clone(&visible);
     let pending_snapshot = Rc::new(RefCell::new(None::<SettingsSnapshot>));
     let wake_snapshot = Rc::clone(&pending_snapshot);
     let notifications = ControlSignalClient::connect_session().ok().map(|signals| {
@@ -252,7 +257,12 @@ fn run() -> Result<(), String> {
                     true
                 }
                 UiControllerEvent::Drag(_) => false,
-                UiControllerEvent::Visibility { .. } => false,
+                UiControllerEvent::Visibility { obscured } => {
+                    let shown = !*obscured;
+                    let was = event_visible.replace(shown);
+                    // Uncovering needs one frame for all the output that arrived while hidden.
+                    shown && !was
+                }
             };
             if changed {
                 app.project(document)
@@ -280,6 +290,9 @@ fn run() -> Result<(), String> {
             }
             let _wake = flamewm_profiler::start("terminal.wake");
             wake::drain_and_commit(&mut app, &events, settings_changed, |app| {
+                if !wake_visible.get() {
+                    return Ok(());
+                }
                 let _project = flamewm_profiler::start("terminal.project");
                 app.project(document)
             })

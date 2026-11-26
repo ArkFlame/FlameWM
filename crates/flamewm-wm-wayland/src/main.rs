@@ -17,6 +17,13 @@
 //!   with the thread's span shares (Wayland dispatch, control/D-Bus, input, render, timers,
 //!   `XWayland`), then the profiler report. Off by default; no timer, no clock read.
 //!
+//! There is no headless render backend, by design of the stack: smithay 0.7 ships only the winit,
+//! x11 and drm/udev backends, its `EGLDisplay` is built from a native display handle, and this
+//! crate's render path is `GlowRenderer`-typed throughout, so every frame presents through a winit
+//! window. An active-use sample without a host session therefore runs that window on a private
+//! Xvfb (`scripts/compose-scenario --xvfb`), where the swap is a local copy instead of a host round
+//! trip. Offscreen rendering exists only as the one-shot readback below (`FLAMEWM_WAYLAND_DUMP`).
+//!
 //! Two non-compositing entry points exist for packaging and diagnostics:
 //! - `--capabilities`: machine-readable build facts on stdout, exit 0. Touches no bus, no `/dev`
 //!   and nothing on `PATH`, so the packaging gate can run it before installing dependencies.

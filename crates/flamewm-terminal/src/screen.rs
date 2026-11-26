@@ -421,6 +421,12 @@ impl Screen {
         };
         for _ in 0..moved {
             grid[top..=bottom].rotate_left(1);
+            if capture {
+                // The damage bitmap follows the content: a row written before the scroll must be rebuilt where it
+                // moved to, and the row the scroll blanked is new.
+                self.dirty_rows[top..=bottom].rotate_left(1);
+                self.dirty_rows[bottom] = true;
+            }
             let row = &mut grid[bottom];
             let packed = capture.then(|| History::pack(&row[..history_len(row)]));
             row.fill(blank);
