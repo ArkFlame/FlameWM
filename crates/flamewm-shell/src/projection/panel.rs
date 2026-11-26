@@ -378,25 +378,28 @@ fn project_pager_layout(
         scaled(pager_width(columns)),
         taskbar_scale::node_height(taskbar_scale::factor()),
     )?;
+    // One reused buffer for every column and cell id: the layout pass runs on each panel
+    // projection and no longer allocates a `String` per node.
+    let mut id = String::with_capacity(24);
     for column in 0..PAGER_COLUMNS {
-        let column_id = format!("workspace-column-{}", column + 1);
+        id.clear();
+        let _ = write!(id, "workspace-column-{}", column + 1);
         if column < columns {
-            document.position(&column_id, scaled(cell_left(column)), 0.0)?;
+            document.position(&id, scaled(cell_left(column)), 0.0)?;
             document.size(
-                &column_id,
+                &id,
                 scaled(PAGER_CELL_WIDTH),
                 scaled(2.0 * PAGER_CELL_HEIGHT + PAGER_CELL_GAP),
             )?;
-            document.visible(&column_id, true)?;
+            document.visible(&id, true)?;
         } else {
-            document.visible(&column_id, false)?;
+            document.visible(&id, false)?;
         }
     }
     for cell in 1..=PAGER_CELLS {
-        document.visible(
-            &format!("workspace-{cell}"),
-            cells.iter().any(|(occupied, _)| *occupied == cell),
-        )?;
+        id.clear();
+        let _ = write!(id, "workspace-{cell}");
+        document.visible(&id, cells.iter().any(|(occupied, _)| *occupied == cell))?;
     }
     Ok(())
 }
@@ -432,8 +435,10 @@ pub(crate) fn project_pager(
 ) -> Result<(), String> {
     let cells = pager_cells(snapshot);
     project_pager_layout(document, snapshot, &cells)?;
+    let mut cell_id = String::with_capacity(16);
     for (cell, workspace) in cells {
-        let cell_id = format!("workspace-{cell}");
+        cell_id.clear();
+        let _ = write!(cell_id, "workspace-{cell}");
         document.size(
             &cell_id,
             scaled(PAGER_CELL_WIDTH),
@@ -742,8 +747,13 @@ pub fn project_panel(
     let capacity = task_slot_capacity_for_view(&view);
     let (rendered, overflow) = task_slot_split(states.len(), view.items.activities, capacity);
     let states = &states[..rendered];
-    let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
-        (String::new(), String::new(), String::new(), String::new());
+    let (mut slot_id, mut icon_id, mut label_id, mut line_id, mut progress_id) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
     for index in 0..TASK_SLOT_COUNT {
         let n = index + 1;
         slot_id.clear();
@@ -754,9 +764,11 @@ pub fn project_panel(
         let _ = write!(label_id, "task-slot-{n}-label");
         line_id.clear();
         let _ = write!(line_id, "task-slot-{n}-line");
+        progress_id.clear();
+        let _ = write!(progress_id, "task-slot-{n}-progress");
         project_task_progress(
             document,
-            index,
+            &progress_id,
             states.get(index).map(|state| &state.id),
             view.task_progress,
         )?;
@@ -992,20 +1004,21 @@ pub(crate) fn project_task_line(
 /// Projects a determinate background fill behind one task slot, clearing stale fills when
 /// identity disappears or no provider reports progress. The fill covers the slot's full height
 /// and grows left to right with the reported percent; CSS paints it behind the icon and label.
+/// `fill_id` is `task-slot-<n>-progress`, built by the caller in its reused id buffer so a task
+/// slot pass allocates no id per slot.
 pub(crate) fn project_task_progress(
     document: &mut impl UiDocumentAccess,
-    index: usize,
+    fill_id: &str,
     task_id: Option<&flamewm_api::TaskEntryId>,
     progress: &[flamewm_api::panels::TaskProgressEntry],
 ) -> Result<(), String> {
-    let fill_id = format!("task-slot-{}-progress", index + 1);
     let percent = task_id
         .and_then(|id| progress.iter().find(|entry| &entry.task_id == id))
         .map(|entry| entry.progress.percent());
-    document.visible(&fill_id, percent.is_some())?;
-    document.position(&fill_id, 0.0, 0.0)?;
+    document.visible(fill_id, percent.is_some())?;
+    document.position(fill_id, 0.0, 0.0)?;
     document.size(
-        &fill_id,
+        fill_id,
         percent.map_or(0.0, |percent| {
             scaled(TASK_SLOT_WIDTH) * f32::from(percent) / 100.0
         }),

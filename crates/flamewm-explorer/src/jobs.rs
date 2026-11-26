@@ -1,9 +1,10 @@
 //! File-operation job owner: cancellable crash-safe copy, no-replace publish,
 //! verified cross-device moves, conflict policy and the undo journal.
 //! All filesystem I/O runs on the worker thread; the UI only sends requests.
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -14,7 +15,13 @@ use rustix::io::Errno;
 
 use crate::{destination_for, duplicate_destination, validate_transfer_destination, BatchReport};
 
-const CHUNK: usize = 256 * 1024;
+const CHUNK_FALLBACK: usize = 256 * 1024;
+/// A rotating disk only reaches its throughput with large sequential requests.
+const CHUNK_ROTATIONAL: usize = 1024 * 1024;
+/// Flash is already past the syscall-overhead knee here.
+const CHUNK_SOLID: usize = 256 * 1024;
+/// Unknown or virtual device: never read more than the copy asks for.
+const CHUNK_UNKNOWN: usize = 128 * 1024;
 /// Guards against huge or deeply nested trees while counting on the worker.
 pub const MAX_COUNT_ITEMS: u64 = 1_000_000;
 pub const MAX_COUNT_DEPTH: usize = 128;

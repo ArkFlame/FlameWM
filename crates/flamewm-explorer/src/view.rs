@@ -1,6 +1,5 @@
 //! Pure view logic for the explorer: view modes, column sorting, type-ahead, status text.
 //! No UI or filesystem writes here; callers pass in already-listed entries.
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -200,36 +199,74 @@ pub fn items_text(total: usize, selected: usize) -> String {
     }
 }
 
-/// Last statvfs sample: the path it describes, when it was taken, and its result.
-type SpaceSample = (PathBuf, Instant, Option<(u64, u64)>);
-/// Projections run on every wake, so statvfs is re-read at most once per TTL for the same path.
-const SPACE_TTL: Duration = Duration::from_secs(2);
-thread_local! {
-    static SPACE: RefCell<Option<SpaceSample>> = const { RefCell::new(None) };
-}
-
-/// Free and total bytes of the filesystem holding `path`, cached for `SPACE_TTL`.
-/// Free counts only space open to unprivileged users.
+/// Free and total bytes of the filesystem holding `path`. A worker-only blocking `statvfs`:
+/// `statvfs` can stall for seconds on a stale network mount, so the UI thread never calls it (it
+/// uses `SpaceCache` instead).
 #[must_use]
 pub fn fs_space(path: &Path) -> Option<(u64, u64)> {
-    SPACE.with(|slot| cached_space(&mut slot.borrow_mut(), path, Instant::now(), statvfs_space))
+    statvfs_space(path)
 }
 
-fn cached_space(
-    slot: &mut Option<SpaceSample>,
-    path: &Path,
-    now: Instant,
-    read: impl FnOnce(&Path) -> Option<(u64, u64)>,
-) -> Option<(u64, u64)> {
-    if let Some((cached, taken, value)) = slot.as_ref()
-        && cached.as_path() == path
-        && now.duration_since(*taken) < SPACE_TTL
-    {
-        return *value;
+/// A sample is reused for this long before a worker refreshes it.
+pub const SPACE_TTL: Duration = Duration::from_secs(2);
+
+/// UI-side free-space cache. It never reads the filesystem: `get` returns the last worker sample
+/// and `request` names the path a worker should sample next, so a projection on a slow mount cannot
+/// block. Free counts only space open to unprivileged users.
+#[derive(Default)]
+pub struct SpaceCache {
+    /// Last sample: the path it describes, when it was taken, and its result.
+    sample: Option<(PathBuf, Instant, Option<(u64, u64)>)>,
+    /// The path a worker is sampling, with the instant of the request: a lost result self-heals
+    /// after `SPACE_TTL` instead of blocking refreshes forever.
+    pending: Option<(PathBuf, Instant)>,
+}
+
+impl SpaceCache {
+    /// Free/total bytes for `path` from the last sample, or `None` when the sample is for another
+    /// path (or failed). A sample older than `SPACE_TTL` is still returned so the bar never blanks
+    /// while its refresh is in flight.
+    #[must_use]
+    pub fn get(&self, path: &Path) -> Option<(u64, u64)> {
+        self.sample
+            .as_ref()
+            .filter(|(cached, _, _)| cached.as_path() == path)
+            .and_then(|(_, _, value)| *value)
     }
-    let value = read(path);
-    *slot = Some((path.to_path_buf(), now, value));
-    value
+
+    /// The path to sample on a worker when the sample is missing, stale or for another path and no
+    /// fresh request is already in flight. Marks the request.
+    pub fn request(&mut self, path: &Path, now: Instant) -> Option<PathBuf> {
+        let fresh = self.sample.as_ref().is_some_and(|(cached, taken, _)| {
+            cached.as_path() == path && now.saturating_duration_since(*taken) < SPACE_TTL
+        });
+        if fresh {
+            return None;
+        }
+        if let Some((pending, asked)) = self.pending.as_ref()
+            && pending.as_path() == path
+            && now.saturating_duration_since(*asked) < SPACE_TTL
+        {
+            return None;
+        }
+        self.pending = Some((path.to_path_buf(), now));
+        Some(path.to_path_buf())
+    }
+
+    /// Stores a worker's sample and clears the matching in-flight marker.
+    pub fn store(&mut self, path: PathBuf, value: Option<(u64, u64)>, now: Instant) {
+        if self.pending.as_ref().is_some_and(|(asked, _)| asked == &path) {
+            self.pending = None;
+        }
+        self.sample = Some((path, now, value));
+    }
+
+    /// Drops a failed request's in-flight marker so the next projection retries immediately.
+    pub fn release(&mut self, path: &Path) {
+        if self.pending.as_ref().is_some_and(|(asked, _)| asked.as_path() == path) {
+            self.pending = None;
+        }
+    }
 }
 
 fn statvfs_space(path: &Path) -> Option<(u64, u64)> {
@@ -243,28 +280,49 @@ fn statvfs_space(path: &Path) -> Option<(u64, u64)> {
 #[cfg(test)]
 mod space_cache_tests {
     use super::*;
-    use std::cell::Cell;
 
     #[test]
-    fn statvfs_runs_once_per_ttl_and_per_path() {
-        let calls = Cell::new(0);
-        let read = |_: &Path| {
-            calls.set(calls.get() + 1);
-            Some((1, 2))
-        };
+    fn cache_serves_one_sample_per_path_and_requests_a_refresh_after_the_ttl() {
         let start = Instant::now();
-        let mut slot = None;
         let a = Path::new("/a");
-        assert_eq!(cached_space(&mut slot, a, start, read), Some((1, 2)));
+        let mut cache = SpaceCache::default();
+        // Empty cache: nothing to show, and one request for the visible path.
+        assert_eq!(cache.get(a), None);
+        assert_eq!(cache.request(a, start), Some(a.to_path_buf()));
+        // A request is already in flight, so a second frame asks nothing.
+        assert_eq!(cache.request(a, start + Duration::from_millis(500)), None);
+        // The worker result fills the cache and clears the in-flight marker.
+        cache.store(a.to_path_buf(), Some((1, 2)), start + Duration::from_millis(600));
+        assert_eq!(cache.get(a), Some((1, 2)));
+        assert_eq!(cache.get(Path::new("/b")), None);
+        // A fresh sample needs no request until the TTL expires.
         assert_eq!(
-            cached_space(&mut slot, a, start + Duration::from_millis(500), read),
-            Some((1, 2))
+            cache.request(a, start + Duration::from_millis(700)),
+            None
         );
-        assert_eq!(calls.get(), 1);
-        cached_space(&mut slot, a, start + SPACE_TTL, read);
-        assert_eq!(calls.get(), 2);
-        cached_space(&mut slot, Path::new("/b"), start + SPACE_TTL, read);
-        assert_eq!(calls.get(), 3);
+        assert_eq!(cache.request(a, start + SPACE_TTL), Some(a.to_path_buf()));
+    }
+
+    #[test]
+    fn a_lost_request_self_heals_after_the_ttl() {
+        let start = Instant::now();
+        let a = Path::new("/a");
+        let mut cache = SpaceCache::default();
+        assert_eq!(cache.request(a, start), Some(a.to_path_buf()));
+        assert_eq!(cache.request(a, start + SPACE_TTL), Some(a.to_path_buf()));
+        cache.release(a);
+        assert_eq!(cache.request(a, start + SPACE_TTL), Some(a.to_path_buf()));
+    }
+
+    #[test]
+    fn a_stale_value_stays_visible_while_its_refresh_is_requested() {
+        let start = Instant::now();
+        let a = Path::new("/a");
+        let mut cache = SpaceCache::default();
+        cache.store(a.to_path_buf(), Some((3, 4)), start);
+        assert_eq!(cache.get(a), Some((3, 4)));
+        assert_eq!(cache.request(a, start + SPACE_TTL), Some(a.to_path_buf()));
+        assert_eq!(cache.get(a), Some((3, 4)));
     }
 }
 

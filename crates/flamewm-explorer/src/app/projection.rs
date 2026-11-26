@@ -560,8 +560,9 @@ impl ExplorerApp {
         doc.text_ref("status-message",status)?;
         let count=cached_count(tab.entries.len(),tab.selected_paths.len());
         doc.text_ref("status-count",count.as_str())?;
-        // Free space and usage come from statvfs; the bar fills by the share of the filesystem in use.
-        let space=view::fs_space(tab.path());
+        // Free space and usage come from an off-thread statvfs sample (see `space_for`); the bar
+        // fills by the share of the filesystem in use. Nothing here touches the filesystem.
+        let space=self.space_for(tab.path());
         let free=cached_free(space.map(|(free,_)|free));
         doc.text_ref("status-free",free.as_str())?;
         let used=space.map_or(0.0,|(free,total)|if total>0 {1.0-free as f32/total as f32} else {0.0});

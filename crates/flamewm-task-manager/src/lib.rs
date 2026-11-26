@@ -1107,7 +1107,9 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
 }
 
 pub fn run() -> Result<(), String> {
-    let theme = initial_settings();
+    // Settings are not needed for the first frame: paint the defaults at once and swap in the live
+    // snapshot (and its window backdrop) from the wake socket when the worker answers.
+    let theme = SettingsSnapshot::new(0);
     let backdrop = window_backdrop(&theme);
     let mut document = decode_document(UI)?.with_window_backdrop(backdrop);
     let (action_tx, action_rx) = mpsc::sync_channel::<ProcessRequest>(8);
@@ -1117,6 +1119,16 @@ pub fn run() -> Result<(), String> {
     let (mut reader, mut writer) = UnixStream::pair().map_err(|e| e.to_string())?;
     reader.set_nonblocking(true).map_err(|e| e.to_string())?;
     writer.set_nonblocking(true).map_err(|e| e.to_string())?;
+    // The control-bus settings round trip runs on a worker: the window paints its default theme
+    // first and the live snapshot is applied from the same wake socket as the samples.
+    let (settings_tx, settings_rx) = mpsc::sync_channel::<SettingsSnapshot>(1);
+    let mut settings_wake = writer.try_clone().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let snapshot = initial_settings();
+        if settings_tx.try_send(snapshot).is_ok() {
+            let _ = settings_wake.write(&[1]);
+        }
+    });
     let (sender, receiver) = mpsc::sync_channel::<model::Snapshot>(1);
     let running = Arc::new(AtomicBool::new(true));
     let active = Arc::clone(&running);
@@ -1246,6 +1258,12 @@ pub fn run() -> Result<(), String> {
         move |doc| {
             let mut app = wake_window.borrow_mut();
             let mut changed = false;
+            if let Ok(snapshot) = settings_rx.try_recv() {
+                doc.request_window_backdrop(Some(window_backdrop(&snapshot)));
+                app.theme = snapshot;
+                app.theme_dirty = true;
+                changed = true;
+            }
             if let Some(theme) = incoming.borrow_mut().take() {
                 app.theme = theme;
                 app.theme_dirty = true;

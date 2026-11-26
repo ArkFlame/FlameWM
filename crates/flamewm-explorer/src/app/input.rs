@@ -507,6 +507,8 @@ impl ExplorerApp {
             WorkerResult::Devices(devices)=>{
                 if self.unmounted!=devices {self.unmounted=devices;self.reload_places_async();}
             },
+            // Free space sampled on a worker: the projection only reads the cache.
+            WorkerResult::Space{path,value}=>self.space.borrow_mut().store(path,value,Instant::now()),
             WorkerResult::DeviceDone(outcome)=>{
                 let message=outcome.unwrap_or_else(|error|error);
                 self.model.status.clone_from(&message);

@@ -8,6 +8,9 @@ pub struct IconThemeIndex {
     pub inherits: Vec<String>,
     pub directories: Vec<String>,
     pub dirs: HashMap<String, IconDir>,
+    /// `IconDir` in `directories` order (`None` = declared without a section).
+    /// Lookups address a dir by its rank, so no string hash is paid per file.
+    pub dir_entries: Vec<Option<IconDir>>,
 }
 
 impl IconThemeIndex {
@@ -42,6 +45,11 @@ impl IconThemeIndex {
             .iter()
             .filter_map(|dir| Some((dir.clone(), parse_dir(sections.get(dir.as_str())?))))
             .collect();
+        // Same data addressable by rank: lookup never hashes a dir name.
+        let dir_entries: Vec<Option<IconDir>> = directories
+            .iter()
+            .map(|dir| sections.get(dir.as_str()).map(parse_dir))
+            .collect();
         // ScaledDirectories entries share the same section format.
         for dir in header
             .get("ScaledDirectories")
@@ -66,6 +74,7 @@ impl IconThemeIndex {
             inherits,
             directories,
             dirs,
+            dir_entries,
         }
     }
 

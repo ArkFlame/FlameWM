@@ -201,8 +201,12 @@ enum WorkerResult {
     Properties(Result<properties::Properties,String>),
     /// Unmounted filesystems from lsblk.
     Devices(Vec<bookmarks::BlockDevice>),
+    /// Free/total bytes of the filesystem behind `path`, sampled on a worker; `None` when statvfs failed.
+    Space{path:PathBuf,value:Option<(u64,u64)>},
     /// A block device or mount-table change arrived from the kernel; the sidebar reloads.
     DevicesChanged,
+    /// Free/total bytes of one filesystem, sampled on a worker so no projection blocks on statvfs.
+    Space{path:PathBuf,value:Option<(u64,u64)>},
     /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
     DeviceDone(Result<String,String>),
     /// Paste decision from the system clipboard read; `None` means nothing to paste.
@@ -316,6 +320,12 @@ struct ExplorerApp {
     places_gen:u64,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
     unmounted:Vec<bookmarks::BlockDevice>,
+    /// UI-side free-space sample for the status strip. The projection only reads it; `statvfs`
+    /// runs on a background lane, so a stale network mount can never stall a frame.
+    space:RefCell<view::SpaceCache>,
+    /// Last free-space sample per visible path; the UI only reads it and asks a worker to refresh it,
+    /// so `statvfs` on a slow network mount never runs on the UI thread.
+    space:RefCell<view::SpaceCache>,
     /// Wake channel for background threads (watcher, search, size). Set once in `run`.
     events:Option<(Sender<WorkerResult>,UnixStream)>,
     /// Cut sources the explorer already moved; the system clipboard still lists them, so they are not pasted twice.
@@ -391,12 +401,18 @@ fn run()->Result<(),String>{
     let search=SearchWorker::spawn(move||{if search_tx.send(WorkerResult::SearchTick).is_ok() {let _=(&search_wake).write_all(&[1]);}}).map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
     // The session-bus settings round trip (up to its full timeout when the control service is
-    // slow) runs beside the template decode and the prefs read below, so it never adds to
-    // first-paint time; only the result is joined before the window is built.
-    let settings_fetch=std::thread::spawn(initial_settings);
+    // slow) runs on a worker and is applied from the wake socket, so it never adds to
+    // first-paint time; the first frame uses the default theme and no backdrop.
+    let (settings_tx,settings_rx)=mpsc::sync_channel::<SettingsSnapshot>(1);
+    let settings_wake=writer.try_clone().map_err(|e|e.to_string())?;
+    std::thread::Builder::new().name("flamewm-explorer-settings".into())
+        .spawn(move||{
+            let Some(snapshot)=initial_settings() else {return;};
+            if settings_tx.try_send(snapshot).is_ok() {let _=(&settings_wake).write_all(&[1]);}
+        })
+        .map_err(|e|e.to_string())?;
     let (window_w,window_h,window_y)=window_frame(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
-    let backdrop:Option<flamewm_ui_x11::backdrop::WindowBackdrop>;
     {
         let mut app=app.borrow_mut();
         app.window=(window_w as f32,window_h as f32);
@@ -408,17 +424,12 @@ fn run()->Result<(),String>{
     app.borrow_mut().scan();
     let mut doc=decode_document(UI)?.with_file_drop_target();
     let saved=prefs::load(&prefs::config_dir());
-    let settings=settings_fetch.join().ok().flatten();
     {
         let mut app=app.borrow_mut();
-        app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);
-        backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&flamewm_api::paths::workspace_packaged_root()));
         app.model.hidden=saved.show_hidden;
         app.show_type=saved.show_type;
         app.widths=Widths{modified:saved.col_modified as f32,size:saved.col_size as f32,kind:saved.col_kind as f32}.clamped();
     }
-    // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
-    if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
     app.borrow().project(&mut doc)?;
     // Present-but-unmounted devices arrive from lsblk on a worker, and the udev watch follows;
     // both start after the first paint so device enumeration never delays the window.
@@ -500,7 +511,21 @@ fn run()->Result<(),String>{
         },
         move |document|{
             let mut app=wake_app.borrow_mut();
-            let snapshot_changed=match wake_snapshots.borrow_mut().take(){Some(snapshot)=>{app.theme=ExplorerTheme::from_snapshot(&snapshot);true},None=>false};
+            let root=flamewm_api::paths::workspace_packaged_root();
+            // The startup answer arrives after the first frame; a live signal reuses this path.
+            let mut snapshot_changed=match settings_rx.try_recv(){
+                Ok(snapshot)=>{
+                    app.theme=ExplorerTheme::from_snapshot(&snapshot);
+                    document.request_window_backdrop(Some(theme::window_backdrop(&snapshot,&root)));
+                    true
+                },
+                Err(_)=>false,
+            };
+            if let Some(snapshot)=wake_snapshots.borrow_mut().take(){
+                app.theme=ExplorerTheme::from_snapshot(&snapshot);
+                document.request_window_backdrop(Some(theme::window_backdrop(&snapshot,&root)));
+                snapshot_changed=true;
+            }
             // Every X wake (a pure window move included) lands here. Project only when something this
             // closure owns changed: a worker message, a settings snapshot, the list origin, or a running glide.
             let mut changed=snapshot_changed;
