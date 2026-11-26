@@ -37,7 +37,7 @@ case "${1:-status}" in
   check)
     log=$(mktemp -p "${TMPDIR:-/tmp}" perf-check.XXXXXX); trap 'rm -f "$log"' EXIT
     rc=0; cargo check --workspace --all-targets --message-format=short >"$log" 2>&1 || rc=$?
-    rg 'error(\[|:)' "$log" | cut -c1-230 | head -40; echo "exit=$rc"; exit "$rc" ;;
+    { rg 'error(\[|:)' "$log" || true; } | cut -c1-230 | head -40; echo "exit=$rc"; exit "$rc" ;;
   built) date +%s > docs/perf-loop/LASTBUILD ;;
   *) echo "usage: $0 status|wait [s]|sync msg|check|built" >&2; exit 2 ;;
 esac

@@ -201,10 +201,10 @@ impl WatcherState {
         let interface = message.interface();
         let member = message.member();
         match (interface.as_deref(), member.as_deref()) {
-            (WATCHER_INTERFACE, "RegisterStatusNotifierItem") => self.register_item(pump, message),
-            (WATCHER_INTERFACE, "RegisterStatusNotifierHost") => self.register_host(pump, message),
-            (PROPERTIES_INTERFACE, "Get") => get_property(&self.registry, message),
-            (PROPERTIES_INTERFACE, "GetAll") => get_all(&self.registry, message),
+            (Some(WATCHER_INTERFACE), Some("RegisterStatusNotifierItem")) => self.register_item(pump, message),
+            (Some(WATCHER_INTERFACE), Some("RegisterStatusNotifierHost")) => self.register_host(pump, message),
+            (Some(PROPERTIES_INTERFACE), Some("Get")) => get_property(&self.registry, message),
+            (Some(PROPERTIES_INTERFACE), Some("GetAll")) => get_all(&self.registry, message),
             _ => MessageDisposition::Unhandled,
         }
     }

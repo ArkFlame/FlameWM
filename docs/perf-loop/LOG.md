@@ -5,3 +5,5 @@
 ## Build 2: cargo check --workspace --all-targets green after 2 fixes (archiver progress.rs scratch buffer lifetime, desktop rubber.rs test types). u01-u40 landed. Root disk at ~100% (other projects /tmp/opencode 58G); pool paused disk_low.
 
 ## Build 3: cargo check --workspace --all-targets green after 2 fixes (task-manager duplicate Sampler.text field, desktop inotify events.count() then reuse -> peekable). u01-u50 landed, u51-u57 in flight.
+
+## Build 4: cargo check --workspace --all-targets green after 3 fixes (tray watcher match Some(), terminal run_id_into import, terminal test frame_rows) + scripts/perf-loop check fix. Python/ctx_execute banned (.agents/NO-ADHOC-SCRIPTS.md); perf tests scoped to 1 s composition (.agents/skills/scoped-perf-tests). u63-u67, u56, u61, u62 still in flight.

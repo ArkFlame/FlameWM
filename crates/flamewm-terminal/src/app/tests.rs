@@ -52,6 +52,7 @@ fn test_app() -> App {
     let (_peer, wake) = UnixStream::pair().expect("socket pair");
     let mut app = App {
         tabs: Vec::new(),
+        frame_rows: Vec::new(),
         active: 0,
         next_id: 1,
         cols: 80,
