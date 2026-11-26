@@ -229,10 +229,13 @@ fn runs_for_line(
 }
 
 /// Grid runs of one pane, kept between frames. Only rows the screen marked dirty are rebuilt, plus the rows the
-/// cursor or selection moved through. A changed palette, view offset, cursor shape or grid size rebuilds every row.
+/// cursor or selection moved through. A changed palette, view offset, cursor shape, alternate-screen state or grid
+/// size rebuilds every row.
 #[derive(Default)]
 pub struct RunCache {
-    key: Option<(Palette, usize, CursorShape)>,
+    /// Palette, view offset, cursor shape and alternate-screen state the rows were baked for. An alternate-screen
+    /// switch remaps every line to another grid, so it must not reuse rows even when the visible index did not move.
+    key: Option<(Palette, usize, CursorShape, bool)>,
     cursor: Option<(usize, usize)>,
     selection: Option<Span>,
     rows: Vec<Row>,
@@ -267,14 +270,20 @@ impl RunCache {
         let rows = screen.rows();
         let top = top_line(screen, options);
         let cursor = cursor_drawn(screen, options).then(|| screen.cursor());
-        let key_matches = self.key.as_ref().is_some_and(|(kept, offset, shape)| {
-            kept == palette && *offset == options.view_offset && *shape == options.cursor_shape
+        let key_matches = self.key.as_ref().is_some_and(|(kept, offset, shape, alt)| {
+            kept == palette
+                && *offset == options.view_offset
+                && *shape == options.cursor_shape
+                && *alt == screen.alt_active()
         });
         // A view offset change alone keeps every line's content: the rows are baked by absolute line index, so only
         // the rows the window slid past must be rebuilt. A capped scrollback that dropped lines renumbers those
         // indices, so that case still rebuilds.
-        let offset_only = self.key.as_ref().is_some_and(|(kept, offset, shape)| {
-            kept == palette && *shape == options.cursor_shape && *offset != options.view_offset
+        let offset_only = self.key.as_ref().is_some_and(|(kept, offset, shape, alt)| {
+            kept == palette
+                && *shape == options.cursor_shape
+                && *alt == screen.alt_active()
+                && *offset != options.view_offset
         });
         let drops = screen.scrollback_drops();
         // Reuse the scratch rows across frames: an update marks rows, it does not allocate the bitmap.
@@ -382,7 +391,12 @@ impl RunCache {
             self.rows = vec![Row::from(Vec::new()); rows];
         }
         if !key_matches {
-            self.key = Some((palette.clone(), options.view_offset, options.cursor_shape));
+            self.key = Some((
+                palette.clone(),
+                options.view_offset,
+                options.cursor_shape,
+                screen.alt_active(),
+            ));
         }
         self.rebuilt = stale.iter().filter(|slot| **slot).count();
         // One decoded-line buffer for the whole update: a scrollback view no longer allocates a `Line` per rebuilt
