@@ -1,11 +1,56 @@
 //! Background worker loops for the explorer: thumbnails, directory scans and file jobs.
 //! Pure move out of main.rs; each loop talks to the UI through the shared wake socket.
 use super::*;
+use std::sync::{Mutex,OnceLock,PoisonError};
 
 /// Longest a decoded thumbnail waits before its result is announced while more jobs are queued. A
 /// fast burst (icons, small SVGs) used to wake the UI and run a full projection per decode; now at
 /// most one projection per interval runs, and the last job of a burst always wakes immediately.
 const THUMB_WAKE_INTERVAL:Duration=Duration::from_millis(40);
+
+/// A fixed set of reused threads that run queued one-shot jobs, so a user action costs a channel
+/// send instead of a thread spawn. Each worker holds the queue only while it waits for its next job.
+pub(crate) struct JobPool { jobs:Sender<Box<dyn FnOnce()+Send+'static>> }
+
+impl JobPool {
+    /// Starts `threads` workers named `name-<index>`. A thread that cannot start only shrinks the pool.
+    pub(crate) fn start(name:&str,threads:usize)->Self {
+        let (jobs,queue)=mpsc::channel::<Box<dyn FnOnce()+Send+'static>>();
+        let queue=Arc::new(Mutex::new(queue));
+        for index in 0..threads.max(1) {
+            let queue=Arc::clone(&queue);
+            let spawned=std::thread::Builder::new()
+                .name(format!("{name}-{index}"))
+                .spawn(move||{
+                    loop {
+                        let next={queue.lock().unwrap_or_else(PoisonError::into_inner).recv()};
+                        match next {Ok(job)=>job(),Err(_)=>return}
+                    }
+                });
+            if spawned.is_err() {break;}
+        }
+        Self{jobs}
+    }
+
+    /// Queues `job`. When every worker is gone the job runs on its own thread, so no work is dropped.
+    pub(crate) fn submit(&self,job:impl FnOnce()+Send+'static) {
+        if let Err(mpsc::SendError(job))=self.jobs.send(Box::new(job)) {std::thread::spawn(job);}
+    }
+}
+
+/// Short background jobs (sidebar rebuilds, device actions, the coalesced resize flush) share two
+/// reused lanes: one slow udisks call or a stale network mount must not delay the resize flush behind it.
+pub(crate) fn aux_pool()->&'static JobPool {
+    static POOL:OnceLock<JobPool>=OnceLock::new();
+    POOL.get_or_init(||JobPool::start("flamewm-explorer-aux",2))
+}
+
+/// Remote listings and downloads stream until done, so they own two reused lanes: one can keep copying
+/// while another lists a folder, and a finished job leaves nothing to spawn next time.
+pub(crate) fn remote_pool()->&'static JobPool {
+    static POOL:OnceLock<JobPool>=OnceLock::new();
+    POOL.get_or_init(||JobPool::start("flamewm-explorer-remote",2))
+}
 
 /// Decodes queued image keys one at a time, oldest first; the UI reads results from the cache, never waits on this thread.
 pub(crate) fn thumb_worker(queue:Arc<thumbs::ThumbQueue>, result:Sender<WorkerResult>, mut wake:UnixStream) {

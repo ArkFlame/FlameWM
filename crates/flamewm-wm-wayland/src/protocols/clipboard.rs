@@ -58,9 +58,7 @@ pub fn preview(text: &str) -> String {
     if line.chars().count() <= PREVIEW_CHARS {
         return line.to_owned();
     }
-    let mut cut: String = line.chars().take(PREVIEW_CHARS - 1).collect();
-    cut.push('\u{2026}');
-    cut
+    flamewm_api::format::truncate_chars(line, PREVIEW_CHARS - 1)
 }
 
 /// Newest-first history of distinct text entries on CLIPBOARD. Each entry has a stable id.

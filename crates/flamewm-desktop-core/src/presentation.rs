@@ -76,9 +76,7 @@ pub fn desktop_label_lines(text: &str, width_px: f32, font_size: f32) -> [String
         if char_len(s) <= capacity {
             s.to_owned()
         } else {
-            let mut out = take_chars(s, capacity.saturating_sub(1));
-            out.push('…');
-            out
+            flamewm_api::format::truncate_chars(s, capacity.saturating_sub(1))
         }
     };
 

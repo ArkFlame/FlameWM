@@ -281,10 +281,7 @@ impl LaunchFeedback {
             })?;
             runtime.redraw(surface)?;
             if self.loader.is_none() {
-                self.loader = IconLoader::spawn(
-                    self.loader_root.clone(),
-                    self.icon_theme.clone(),
-                );
+                self.loader = IconLoader::spawn(self.loader_root.clone(), self.icon_theme.clone());
             }
             if let (Some(loader), Some((_, icon, _))) = (&mut self.loader, &self.requested) {
                 loader.request(IconTarget::TaskSlot(0), icon, side, side);

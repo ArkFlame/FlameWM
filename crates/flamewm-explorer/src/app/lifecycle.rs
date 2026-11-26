@@ -31,11 +31,13 @@ impl ExplorerApp {
         self.spawn_background(move||WorkerResult::Places{generation,list:build_places(&home,&unmounted,&trash_base)});
     }
 
-    /// Runs `job` on its own thread and wakes the UI with its result. Used for lsblk and udisks2, which can block.
+    /// Runs `job` on the shared background lanes and wakes the UI with its result. Used for lsblk,
+    /// udisks2 and sidebar rebuilds, which can block: the thread is reused, so a request no longer
+    /// pays for a spawn (and a resize burst no longer creates one thread per deferred flush).
     pub(crate) fn spawn_background(&self,job:impl FnOnce()->WorkerResult+Send+'static) {
         let Some((tx,wake))=self.events.as_ref() else {return};
         let (tx,Ok(mut wake))=(tx.clone(),wake.try_clone()) else {return};
-        std::thread::spawn(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
+        aux_pool().submit(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
     }
 
     /// Lists unmounted devices on a worker. Remounting remembered drives is the session's job, not the explorer's.

@@ -248,11 +248,11 @@ impl LauncherState {
         for slot in 0..LAUNCHER_ROWS {
             let row = slot + 1;
             row_id.clear();
-            write!(row_id, "launcher-row-{row}").expect("write to String is infallible");
+            let _ = write!(row_id, "launcher-row-{row}");
             label_id.clear();
-            write!(label_id, "launcher-row-{row}-label").expect("write to String is infallible");
+            let _ = write!(label_id, "launcher-row-{row}-label");
             icon_id.clear();
-            write!(icon_id, "launcher-row-{row}-icon").expect("write to String is infallible");
+            let _ = write!(icon_id, "launcher-row-{row}-icon");
             let index = window.start + slot;
             let selected = index < window.end && index == self.selected();
             document.attribute(&row_id, "role", "option")?;

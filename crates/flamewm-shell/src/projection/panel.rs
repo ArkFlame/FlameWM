@@ -747,13 +747,13 @@ pub fn project_panel(
     for index in 0..TASK_SLOT_COUNT {
         let n = index + 1;
         slot_id.clear();
-        write!(slot_id, "task-slot-{n}").expect("write to String is infallible");
+        let _ = write!(slot_id, "task-slot-{n}");
         icon_id.clear();
-        write!(icon_id, "task-slot-{n}-icon").expect("write to String is infallible");
+        let _ = write!(icon_id, "task-slot-{n}-icon");
         label_id.clear();
-        write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
+        let _ = write!(label_id, "task-slot-{n}-label");
         line_id.clear();
-        write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
+        let _ = write!(line_id, "task-slot-{n}-line");
         project_task_progress(
             document,
             index,

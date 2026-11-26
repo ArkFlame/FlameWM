@@ -18,8 +18,10 @@ fn fit_media_title(title: &str) -> String {
     if title.chars().count() <= MEDIA_TITLE_MAX_CHARS {
         return title.to_owned();
     }
-    let kept: String = title.chars().take(MEDIA_TITLE_MAX_CHARS - 1).collect();
-    format!("{}…", kept.trim_end())
+    format!(
+        "{}…",
+        flamewm_api::format::char_prefix(title, MEDIA_TITLE_MAX_CHARS - 1).trim_end()
+    )
 }
 
 pub fn project_media(

@@ -438,22 +438,9 @@ pub fn key_action(payload: &str, focus: Option<usize>, view: &CenterView) -> Opt
     }
 }
 
-/// First [`MAX_TEXT_CHARS`] characters, plus an ellipsis when the text continues. The cut is a
-/// byte index, so a long string is copied once instead of being collected char by char.
+/// First [`MAX_TEXT_CHARS`] characters, plus an ellipsis when the text continues.
 fn clip(value: &str) -> String {
-    // A byte length within the character budget cannot exceed it, so short text skips the
-    // character walk that every summary and body would otherwise pay on each projection.
-    if value.len() <= MAX_TEXT_CHARS {
-        return value.to_owned();
-    }
-    match value.char_indices().nth(MAX_TEXT_CHARS) {
-        None => value.to_owned(),
-        Some((cut, _)) => {
-            let mut text = value[..cut].to_owned();
-            text.push('…');
-            text
-        }
-    }
+    flamewm_api::format::truncate_chars(value, MAX_TEXT_CHARS)
 }
 
 #[cfg(test)]

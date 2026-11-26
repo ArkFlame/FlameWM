@@ -162,7 +162,7 @@ impl ExplorerApp {
             self.model.status="Remote listing needs the event loop".into();
             return;
         };
-        std::thread::spawn(move||forward_listing(generation,path,url,events,tx,wake));
+        remote_pool().submit(move||forward_listing(generation,path,url,events,tx,wake));
     }
 
     pub(crate) fn save_remote_recent(&mut self) {
@@ -185,7 +185,7 @@ impl ExplorerApp {
             }
         let transfer=self.remote.download(&url,&local,&RemoteCancel::new());
         self.model.status=format!("Downloading {}…",url.file_name());
-        std::thread::spawn(move||forward_download(local,transfer,tx,wake));
+        remote_pool().submit(move||forward_download(local,transfer,tx,wake));
     }
 
     pub(crate) fn navigate(&mut self,path:PathBuf) {

@@ -53,8 +53,11 @@ impl X11App {
             let _draw_guard = flamewm_profiler::start("render.draw");
             unsafe { self.prefetch_text_shadow_masks(count, document, scale) };
             for index in 0..count {
+                let Some(command) = self.retained_command(index) else {
+                    continue;
+                };
                 // SAFETY: index is below the cached count; `paint` does not replace the cache.
-                let command = unsafe { &*self.retained_command(index) };
+                let command = unsafe { &*command };
                 // SAFETY: redraw is entered only with the app's initialized X11 resources.
                 unsafe { self.paint(command, document, scale)? };
             }
@@ -65,16 +68,12 @@ impl X11App {
     }
 
     /// Pointer to retained command `index`, so painting can borrow `self` mutably. Valid
-    /// while the paint cache is not replaced, which `paint` never does.
-    pub(super) fn retained_command(&self, index: usize) -> *const PaintCommand {
-        let base = self
-            .cached_paint
-            .as_ref()
-            .expect("paint cached above")
-            .commands
-            .as_ptr();
+    /// while the paint cache is not replaced, which `paint` never does. `None` when no
+    /// paint cache is installed; callers skip the command instead of aborting the frame.
+    pub(super) fn retained_command(&self, index: usize) -> Option<*const PaintCommand> {
+        let base = self.cached_paint.as_ref()?.commands.as_ptr();
         // SAFETY: callers pass `index` below the cached command count.
-        unsafe { base.add(index) }
+        Some(unsafe { base.add(index) })
     }
 
     /// Full relayout and repaint for a window size change or Expose. A retained scene can

@@ -310,10 +310,15 @@ pub(super) fn load_canvas(file: &std::path::Path, root: (u32, u32)) -> Option<Bl
     if bytes.len() < header || &bytes[..CANVAS_CACHE_MAGIC.len()] != CANVAS_CACHE_MAGIC {
         return None;
     }
-    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
+    let word = |at: usize| -> Option<u32> {
+        bytes
+            .get(at..at + 4)
+            .and_then(|slice| slice.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
     let size = (
-        word(CANVAS_CACHE_MAGIC.len()),
-        word(CANVAS_CACHE_MAGIC.len() + 4),
+        word(CANVAS_CACHE_MAGIC.len())?,
+        word(CANVAS_CACHE_MAGIC.len() + 4)?,
     );
     if size != root {
         return None;

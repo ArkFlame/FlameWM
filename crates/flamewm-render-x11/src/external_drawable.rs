@@ -88,7 +88,10 @@ fn external_content_hash(rgba8: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325 ^ rgba8.len() as u64;
     let mut chunks = rgba8.chunks_exact(8);
     for chunk in &mut chunks {
-        let word = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+        let Ok(bytes) = <[u8; 8]>::try_from(chunk) else {
+            continue;
+        };
+        let word = u64::from_le_bytes(bytes);
         hash = (hash ^ word).wrapping_mul(PRIME);
     }
     for &byte in chunks.remainder() {

@@ -439,7 +439,7 @@ pub fn fill_sidebar_rows(rows:&mut Vec<SidebarRow>, places:&[Place]) {
         }
     }
 }
-pub fn home_dir() -> PathBuf {std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
+pub fn home_dir() -> PathBuf {flamewm_api::paths::home_dir().filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
 /// XDG config root (`XDG_CONFIG_HOME`, else `~/.config`).
 fn config_base(home:&Path) -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME").map_or_else(||home.join(".config"), PathBuf::from)

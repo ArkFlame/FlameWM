@@ -507,7 +507,7 @@ fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Confli
     } else if fs::symlink_metadata(&dest).is_ok() {
         match conflict {
             Conflict::KeepBoth => dest = destination_for(source, directory),
-            Conflict::Duplicate => unreachable!("handled above"),
+            Conflict::Duplicate => dest = duplicate_destination(source, directory),
             Conflict::Skip => return Ok(Step::Skipped),
             Conflict::Replace => replace = true,
             Conflict::Cancel => { cancel.cancel(); return Err(cancelled()); }

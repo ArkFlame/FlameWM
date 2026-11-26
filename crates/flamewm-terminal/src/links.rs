@@ -5,7 +5,9 @@
 //! bracket is kept only when the link has its matching opener.
 
 use std::io;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Sender};
+use std::sync::OnceLock;
 
 const SCHEMES: [&str; 3] = ["https://", "http://", "file://"];
 
@@ -106,7 +108,7 @@ pub fn is_openable(url: &str) -> bool {
 }
 
 /// Opens `url` with `xdg-open`, detached. The URL is one argument, never passed through a shell, and the
-/// child is reaped on a helper thread.
+/// child is reaped on the shared reaper instead of a thread per click.
 pub fn open(url: &str) -> io::Result<()> {
     if !is_openable(url) {
         return Err(io::Error::new(
@@ -114,16 +116,52 @@ pub fn open(url: &str) -> io::Result<()> {
             "not an openable link",
         ));
     }
-    let mut child = Command::new("xdg-open")
+    let child = Command::new("xdg-open")
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+    reap(child);
+    Ok(())
+}
+
+/// Hands a detached child to the one reaper thread, so launching a link costs a channel send instead of
+/// a thread spawn. Without a reaper (thread creation failed) the child still gets its own waiter.
+fn reap(child: Child) {
+    match reaper() {
+        Some(children) => {
+            if let Err(mpsc::SendError(child)) = children.send(child) {
+                wait_on_own_thread(child);
+            }
+        }
+        None => wait_on_own_thread(child),
+    }
+}
+
+fn wait_on_own_thread(mut child: Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    Ok(())
+}
+
+/// The shared reaper, created on the first opened link; `None` when its thread cannot start.
+fn reaper() -> Option<&'static Sender<Child>> {
+    static REAPER: OnceLock<Option<Sender<Child>>> = OnceLock::new();
+    REAPER
+        .get_or_init(|| {
+            let (children, queue) = mpsc::channel::<Child>();
+            std::thread::Builder::new()
+                .name("flamewm-terminal-reap".into())
+                .spawn(move || {
+                    for mut child in queue {
+                        let _ = child.wait();
+                    }
+                })
+                .ok()
+                .map(|_| children)
+        })
+        .as_ref()
 }
 
 #[cfg(test)]

@@ -343,8 +343,5 @@ impl App {
 
 /// The user's home directory, when it exists.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_dir())
+    flamewm_api::paths::home_dir().filter(|dir| dir.is_dir())
 }

@@ -226,8 +226,10 @@ impl ExternalDecorationRenderer {
         if let Some(target) = self.target.as_mut() {
             return unsafe { target.retarget(drawable, w, h) };
         }
-        let session_ptr =
-            self.session.as_mut().expect("live session").as_mut() as *mut ExternalDrawableSession;
+        let Some(session) = self.session.as_mut() else {
+            return Err("external decoration has no live session".to_string());
+        };
+        let session_ptr = session.as_mut() as *mut ExternalDrawableSession;
         let target = unsafe { ExternalDrawableTarget::new(session_ptr, drawable, w, h) }?;
         self.target = Some(target);
         Ok(())

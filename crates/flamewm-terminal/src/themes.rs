@@ -181,15 +181,18 @@ impl Palette {
     }
 }
 
-/// The built-in themes, in picker order.
+/// The built-in themes, in picker order. A malformed table row is skipped
+/// rather than panicking the terminal at startup.
 #[must_use]
 pub fn builtin_themes() -> Vec<Theme> {
     BUILTIN
         .iter()
-        .map(|(name, list)| Theme {
-            name: (*name).to_owned(),
-            palette: Palette::from_hex_list(list).expect("built-in theme table is well formed"),
-            builtin: true,
+        .filter_map(|(name, list)| {
+            Palette::from_hex_list(list).map(|palette| Theme {
+                name: (*name).to_owned(),
+                palette,
+                builtin: true,
+            })
         })
         .collect()
 }

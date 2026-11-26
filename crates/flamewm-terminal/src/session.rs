@@ -1,10 +1,15 @@
-//! One tab: a PTY process, its VT parser and its screen. A reader thread per PTY forwards output to the UI loop and
-//! wakes it through a socket pair, the same pattern flamewm-explorer uses for its workers.
+//! One tab: a PTY process, its VT parser and its screen. One reader thread per PTY forwards output to the UI loop and
+//! wakes it through a socket pair, the same pattern flamewm-explorer uses for its workers. That same thread also owns
+//! the frame pacing, so a tab is one thread and one wake source instead of a reader plus a pacer.
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
 
 use crate::parser::Parser;
 use crate::pty::{Launch, PtyProcess, PtySize};
@@ -43,11 +48,10 @@ impl Session {
             .map_err(|error| format!("start {}: {error}", launch.program))?;
         let reader = pty.take_reader().ok_or("pty reader missing")?;
         let notice_wake = wake.try_clone().map_err(|error| error.to_string())?;
-        let pacer = spawn_pacer(wake)?;
         let (recycle, recycled) = mpsc::channel::<Vec<u8>>();
         std::thread::Builder::new()
             .name(format!("flamewm-terminal-read-{id}"))
-            .spawn(move || read_loop(id, reader, events, pacer, notice_wake, recycled))
+            .spawn(move || read_loop(id, reader, events, wake, notice_wake, recycled))
             .map_err(|error| error.to_string())?;
         let modes = pty.line_modes();
         Ok(Self {
@@ -146,38 +150,15 @@ const BATCH_BYTES: usize = 32 * 1024;
 /// a flood batch would otherwise pay an ioctl per 32 KiB just to read flags a running program is not changing.
 const PROMPT_SAMPLE_BYTES: usize = 4096;
 
-/// Owns the wake socket and turns "output queued" signals into at most one wake per `FRAME`. A signal after idle
-/// wakes at once, so a keystroke echo is not delayed; a signal inside the window sleeps to its end, then one wake
-/// covers everything queued meanwhile, so trailing output is never stranded.
-fn spawn_pacer(mut wake: UnixStream) -> Result<Sender<()>, String> {
-    let (signal, queued) = mpsc::channel::<()>();
-    std::thread::Builder::new()
-        .name("flamewm-terminal-pace".into())
-        .spawn(move || {
-            let mut last_wake: Option<Instant> = None;
-            while queued.recv().is_ok() {
-                if let Some(at) =
-                    last_wake.and_then(|at| (at + FRAME).checked_duration_since(Instant::now()))
-                {
-                    std::thread::sleep(at);
-                }
-                // Everything the reader queued before this point is covered by the wake below.
-                while queued.try_recv().is_ok() {}
-                if wake.write_all(&[1]).is_err() {
-                    return;
-                }
-                last_wake = Some(Instant::now());
-            }
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(signal)
-}
-
+/// Reads the PTY and forwards batches to the UI loop, writing the wake byte at most once per `FRAME`.
+/// The same thread does both jobs: when output is owed a wake, its `poll` timeout is the frame boundary,
+/// so a tab keeps one parked thread instead of a reader plus a pacer and pays no second thread wake per
+/// batch. A batch after an idle frame wakes at once, so a keystroke echo is never delayed.
 fn read_loop(
     id: u64,
     mut reader: File,
     events: Sender<SessionEvent>,
-    pacer: Sender<()>,
+    mut wake: UnixStream,
     notice_wake: UnixStream,
     recycled: Receiver<Vec<u8>>,
 ) {
@@ -188,7 +169,39 @@ fn read_loop(
     };
     let mut buffer = vec![0_u8; 16 * 1024];
     let mut batch = Vec::new();
+    // Set while the UI is owed a wake; cleared when the byte is written.
+    let mut unsent = false;
+    let mut last_wake: Option<Instant> = None;
     loop {
+        // The wake covers every batch queued before this pass, exactly as the pacer drained its queue.
+        if unsent && last_wake.is_none_or(|at| Instant::now() >= at + FRAME) {
+            if wake.write_all(&[1]).is_err() {
+                return;
+            }
+            last_wake = Some(Instant::now());
+            unsent = false;
+        }
+        let timeout = if unsent {
+            last_wake.and_then(|at| (at + FRAME).checked_duration_since(Instant::now()))
+        } else {
+            // Nothing owed: block in `poll`, so an idle tab costs no wakeups.
+            None
+        };
+        let timespec = timeout.map(|wait| Timespec {
+            tv_sec: wait.as_secs() as _,
+            tv_nsec: wait.subsec_nanos() as _,
+        });
+        let ready = {
+            let mut fds = [PollFd::new(reader.as_fd(), PollFlags::IN)];
+            poll(&mut fds, timespec.as_ref())
+        };
+        match ready {
+            // Frame boundary reached: the next pass writes the wake byte.
+            Ok(0) => continue,
+            Ok(_) => {}
+            Err(Errno::INTR) => continue,
+            Err(_) => return,
+        }
         match reader.read(&mut buffer) {
             Ok(0) => return,
             Ok(count) => {
@@ -215,9 +228,7 @@ fn read_loop(
                 if events.send(SessionEvent::Output { id, bytes }).is_err() {
                     return;
                 }
-                if pacer.send(()).is_err() {
-                    return;
-                }
+                unsent = true;
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             // EIO is how Linux ends a PTY once the child's session is gone; any other error also ends the tab.

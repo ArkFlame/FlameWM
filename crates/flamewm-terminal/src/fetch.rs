@@ -392,17 +392,8 @@ fn get_module(name: &str, memory: (u64, u64, u64, u64)) -> Option<(String, Strin
     (!result.is_empty()).then(|| (name.to_uppercase(), result))
 }
 fn truecolor(s: &str) -> Option<String> {
-    let hex = s.trim().strip_prefix('#')?;
-    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    let n = u32::from_str_radix(hex, 16).ok()?;
-    Some(format!(
-        "\x1b[38;2;{};{};{}m",
-        (n >> 16) & 255,
-        (n >> 8) & 255,
-        n & 255
-    ))
+    let (r, g, b) = flamewm_api::color::parse_hex_rgb(s.trim())?;
+    Some(format!("\x1b[38;2;{r};{g};{b}m"))
 }
 fn terminal_dimensions() -> (usize, usize) {
     if let Ok(size) = rustix::termios::tcgetwinsize(io::stdout().as_fd())

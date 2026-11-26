@@ -274,7 +274,10 @@ pub fn theme_from_toml(text: &str) -> Result<Theme, String> {
             },
         )
         .ok_or("theme file has no name")?;
-    let mut palette = builtin_themes()[0].palette.clone();
+    let mut palette = builtin_themes()
+        .first()
+        .map(|theme| theme.palette.clone())
+        .ok_or("built-in theme table is empty")?;
     for entry in entries.iter().filter(|entry| entry.section == "colors") {
         let Value::Text(hex) = &entry.value else {
             return Err(format!("colour `{}` must be a hex string", entry.key));

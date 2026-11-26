@@ -1064,7 +1064,8 @@ fn execute() -> Result<(), String> {
     // Canonical IconService wake FD: registered before the run loop so
     // worker completions wake the reactor; the tick drains them. A failed
     // loader keeps running without icons instead of aborting the session.
-    if let Some(icon_fd) = state.borrow_mut().icon_wake_fd() {
+    let icon_fd = state.borrow_mut().icon_wake_fd();
+    if let Some(icon_fd) = icon_fd {
         let icon_state = Rc::clone(&state);
         reactor
             .register_raw_fd_with_action(icon_fd, calloop::Interest::READ, move |_, _| {

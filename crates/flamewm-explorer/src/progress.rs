@@ -113,11 +113,7 @@ impl Snapshot {
 /// Short display name for a path (never the full path: it can be long).
 fn name_of(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy();
-    let mut text: String = name.chars().take(MAX_LABEL_CHARS).collect();
-    if name.chars().count() > MAX_LABEL_CHARS {
-        text.push('…');
-    }
-    Some(text)
+    Some(flamewm_api::format::truncate_chars(&name, MAX_LABEL_CHARS))
 }
 
 /// Worker-side accumulator. Counters only grow; `emit` is the throttle gate and
