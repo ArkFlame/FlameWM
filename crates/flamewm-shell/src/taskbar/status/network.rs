@@ -96,9 +96,18 @@ pub fn project_visible_rows(
 
 #[must_use]
 pub fn project(snapshot: &SystemSnapshot) -> NetworkView {
-    let mut view = flamewm_shell_core::StatusViews::from_snapshot(snapshot).network;
-    // Availability matrix: Unknown visible but disabled, Available visible
-    // and enabled, Unavailable hidden. Intent/popover stay Available-only.
+    apply(
+        flamewm_shell_core::StatusViews::from_snapshot(snapshot).network,
+        snapshot,
+    )
+}
+
+/// Applies the network availability matrix to a base view already derived from
+/// the same snapshot. Availability matrix: Unknown visible but disabled,
+/// Available visible and enabled, Unavailable hidden. Intent/popover stay
+/// Available-only.
+#[must_use]
+pub fn apply(mut view: NetworkView, snapshot: &SystemSnapshot) -> NetworkView {
     view.visible = snapshot.network.availability != ServiceAvailability::Unavailable;
     view.enabled = snapshot.network.availability == ServiceAvailability::Available;
     view

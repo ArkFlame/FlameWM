@@ -198,12 +198,22 @@ pub fn fit_dimensions(width: u32, height: u32, edge: u32) -> (u32, u32) {
 #[must_use]
 pub fn fit_canvas(source: &RgbaImage) -> Vec<u8> {
     let (width, height) = fit_dimensions(source.width, source.height, THUMB_SIZE);
-    let scaled = if (width, height) == (source.width, source.height) {
-        None
-    } else {
-        scale_rgba(source, width, height, ScaleFilter::Area)
+    if (width, height) == (source.width, source.height) {
+        return centre_on_canvas(source);
+    }
+    let Some(scaled) = scale_rgba(source, width, height, ScaleFilter::Area) else {
+        return centre_on_canvas(source);
     };
-    let image = scaled.as_ref().unwrap_or(source);
+    // A square source (the common photo) fits exactly: the scaled buffer already is the cached
+    // canvas, so it is moved instead of allocating a second one and copying row by row.
+    if (scaled.width, scaled.height) == (THUMB_SIZE, THUMB_SIZE) {
+        return scaled.pixels;
+    }
+    centre_on_canvas(&scaled)
+}
+
+/// Centres `image` in a transparent `THUMB_SIZE` square; `image` must already fit.
+fn centre_on_canvas(image: &RgbaImage) -> Vec<u8> {
     let edge = THUMB_SIZE as usize;
     let mut canvas = vec![0u8; edge * edge * 4];
     let (left, top) = (
@@ -392,6 +402,7 @@ pub fn render_thumbnail(key: &ThumbKey) -> Option<Vec<u8>> {
 /// Worker decode that gives up when `wanted` turns false. The check runs after the header probe, before
 /// the rest of the file is read and before the decode, so a row scrolled away costs one prefix read
 /// instead of a whole-file read plus a full-resolution decode.
+#[must_use]
 pub fn render_thumbnail_while(key: &ThumbKey, wanted: &mut impl FnMut() -> bool) -> ThumbRender {
     let Some(format) = thumb_format(&key.path) else {
         return ThumbRender::None;
@@ -524,23 +535,31 @@ impl ThumbQueue {
         }
     }
 
-    /// Keeps the queued jobs `keep` accepts and returns the rest, in queue order.
+    /// Keeps the queued jobs `keep` accepts and returns the rest, in queue order. A decode already in
+    /// flight whose row left the view is returned too, so the caller drops its pending mark and the
+    /// row can be requested again when it scrolls back.
     pub fn retain(&self, mut keep: impl FnMut(&ThumbKey) -> bool) -> Vec<ThumbKey> {
         // The in-flight decode is cancelled when the new pass no longer shows its row; the worker
         // notices at its next `wants` check and skips the remaining read or decode.
-        let mut in_flight = self
-            .in_flight
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if in_flight.as_ref().is_some_and(|key| !keep(key)) {
-            *in_flight = None;
-        }
-        drop(in_flight);
+        let cancelled = {
+            let mut in_flight = self
+                .in_flight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match in_flight.as_ref() {
+                Some(key) if !keep(key) => {
+                    let key = key.clone();
+                    *in_flight = None;
+                    Some(key)
+                }
+                _ => None,
+            }
+        };
         let mut jobs = self
             .jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut dropped = Vec::new();
+        let mut dropped: Vec<ThumbKey> = cancelled.into_iter().collect();
         jobs.retain(|key| {
             let kept = keep(key);
             if !kept {

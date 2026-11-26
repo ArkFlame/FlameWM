@@ -283,7 +283,7 @@ pub(crate) fn tray_any_visible(
     system: &flamewm_api::system::SystemSnapshot,
     items: TaskbarItems,
 ) -> bool {
-    let status = crate::taskbar::status::project(system).views;
+    let status = crate::taskbar::status::views(system);
     let media = status.media.visible
         && matches!(
             system.media.playback,
@@ -1049,7 +1049,7 @@ pub(crate) fn project_status_tray(
         document.visible("tray-usage", fits)?;
         project_tray_button(document, "tray-usage", fits)?;
     }
-    let status = crate::taskbar::status::project(system).views;
+    let status = crate::taskbar::status::views(system);
     let media = status.media.visible
         && matches!(
             system.media.playback,
@@ -1089,6 +1089,22 @@ pub(crate) fn project_status_tray(
     Ok(())
 }
 
+/// Tray battery glyph node ids in `BATTERY_GLYPHS` order: `(plain, charging)`.
+/// Static so a tray projection writes visibility without formatting an id per
+/// candidate on every system snapshot change.
+const BATTERY_TRAY_GLYPH_IDS: [(&str, &str); 10] = [
+    ("tray-battery-caution", "tray-battery-caution-charging"),
+    ("tray-battery-020", "tray-battery-020-charging"),
+    ("tray-battery-030", "tray-battery-030-charging"),
+    ("tray-battery-040", "tray-battery-040-charging"),
+    ("tray-battery-050", "tray-battery-050-charging"),
+    ("tray-battery-060", "tray-battery-060-charging"),
+    ("tray-battery-070", "tray-battery-070-charging"),
+    ("tray-battery-080", "tray-battery-080-charging"),
+    ("tray-battery-090", "tray-battery-090-charging"),
+    ("tray-battery-100", "tray-battery-100-charging"),
+];
+
 /// Tray battery: visibility and glyph come from the pure `battery` rules. Exactly
 /// one glyph node is shown; the charging variant only while Charging.
 pub fn project_battery_tray(
@@ -1103,27 +1119,14 @@ pub fn project_battery_tray(
     let tray = tray_visible(power, items.battery, items.battery_only_when_relevant);
     document.visible("tray-battery", tray)?;
     project_tray_button(document, "tray-battery", tray)?;
-    project_glyph_nodes(document, "tray-battery-", glyph, charging)
-}
-
-/// Shows only `glyph` under `prefix`, using the charging variant while charging.
-fn project_glyph_nodes(
-    document: &mut impl UiDocumentAccess,
-    prefix: &str,
-    glyph: crate::taskbar::status::battery::BatteryGlyph,
-    charging: bool,
-) -> Result<(), String> {
-    use crate::taskbar::status::battery::BATTERY_GLYPHS;
-    for candidate in BATTERY_GLYPHS {
-        let shown = candidate == glyph;
-        document.visible(
-            &format!("{prefix}{}", candidate.id_suffix()),
-            shown && !charging,
-        )?;
-        document.visible(
-            &format!("{prefix}{}-charging", candidate.id_suffix()),
-            shown && charging,
-        )?;
+    for (candidate, (plain_id, charging_id)) in
+        crate::taskbar::status::battery::BATTERY_GLYPHS
+            .iter()
+            .zip(BATTERY_TRAY_GLYPH_IDS)
+    {
+        let shown = *candidate == glyph;
+        document.visible(plain_id, shown && !charging)?;
+        document.visible(charging_id, shown && charging)?;
     }
     Ok(())
 }
@@ -1151,6 +1154,30 @@ pub fn project_battery_menu(
         BATTERY_PROGRESS_HEIGHT,
     )?;
     project_glyph_nodes(document, "battery-icon-", glyph, charging)
+}
+
+/// Shows only `glyph` under `prefix`, using the charging variant while charging.
+/// The popup path may run per system change while open; the tray path uses
+/// static ids instead so an idle tray writes no formatted id.
+fn project_glyph_nodes(
+    document: &mut impl UiDocumentAccess,
+    prefix: &str,
+    glyph: crate::taskbar::status::battery::BatteryGlyph,
+    charging: bool,
+) -> Result<(), String> {
+    use crate::taskbar::status::battery::BATTERY_GLYPHS;
+    for candidate in BATTERY_GLYPHS {
+        let shown = candidate == glyph;
+        document.visible(
+            &format!("{prefix}{}", candidate.id_suffix()),
+            shown && !charging,
+        )?;
+        document.visible(
+            &format!("{prefix}{}-charging", candidate.id_suffix()),
+            shown && charging,
+        )?;
+    }
+    Ok(())
 }
 
 /// Height of the battery menu progress fill (matches ui/shell/battery.html).

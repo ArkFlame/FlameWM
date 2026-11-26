@@ -5,7 +5,16 @@ use super::super::intent::StatusIntent;
 
 #[must_use]
 pub fn project(snapshot: &SystemSnapshot) -> MediaView {
-    let mut view = flamewm_shell_core::StatusViews::from_snapshot(snapshot).media;
+    apply(
+        flamewm_shell_core::StatusViews::from_snapshot(snapshot).media,
+        snapshot,
+    )
+}
+
+/// Applies the media visibility rule to a base view already derived from the
+/// same snapshot (one `StatusViews` pass for a whole tray projection).
+#[must_use]
+pub fn apply(mut view: MediaView, snapshot: &SystemSnapshot) -> MediaView {
     view.visible = snapshot.media.availability == ServiceAvailability::Available
         && matches!(
             snapshot.media.playback,

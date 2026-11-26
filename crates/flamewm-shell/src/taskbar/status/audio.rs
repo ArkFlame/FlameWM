@@ -75,7 +75,17 @@ pub fn audio_available(snapshot: &SystemSnapshot) -> bool {
 
 #[must_use]
 pub fn project(snapshot: &SystemSnapshot) -> AudioView {
-    let mut view = flamewm_shell_core::StatusViews::from_snapshot(snapshot).audio;
+    apply(
+        flamewm_shell_core::StatusViews::from_snapshot(snapshot).audio,
+        snapshot,
+    )
+}
+
+/// Applies the audio visibility rule to a base view already derived from the
+/// same snapshot, so a caller that needs all three status views computes
+/// `StatusViews::from_snapshot` once instead of once per widget.
+#[must_use]
+pub fn apply(mut view: AudioView, snapshot: &SystemSnapshot) -> AudioView {
     view.visible = audio_available(snapshot);
     view
 }
