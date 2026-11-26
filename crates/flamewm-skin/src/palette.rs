@@ -1,5 +1,8 @@
 //! Exact colors from `examples/flamewm-v8/flamewm.css`, line 1 and component rules.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u32);
 
@@ -284,8 +287,37 @@ pub fn contrast_ratio(a: Rgb, b: Rgb) -> f64 {
 
 /// Label ink for text drawn on an accent fill: white or the Light text ink, whichever has the higher
 /// WCAG contrast against `accent`. Dark text wins on light accents such as the shipped `#3DAEE9`.
+///
+/// The WCAG solve runs `powf` per contrast. Accent-fill labels repaint every frame from a handful of
+/// distinct accents, so a small cache keyed by the accent removes the solve from the per-frame path.
 #[must_use]
 pub fn on_accent(accent: Rgb) -> Rgb {
+    let cache = on_accent_cache();
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(hit) = cache.get(&accent) {
+            return *hit;
+        }
+    }
+    let resolved = on_accent_uncached(accent);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= INK_CACHE_CAP {
+        cache.clear();
+    }
+    cache.insert(accent, resolved);
+    resolved
+}
+
+fn on_accent_cache() -> &'static Mutex<HashMap<Rgb, Rgb>> {
+    static CACHE: OnceLock<Mutex<HashMap<Rgb, Rgb>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn on_accent_uncached(accent: Rgb) -> Rgb {
     const WHITE: Rgb = Rgb(0x00ff_ffff);
     if contrast_ratio(accent, WHITE) >= contrast_ratio(accent, LIGHT_TEXT) {
         WHITE
@@ -296,8 +328,37 @@ pub fn on_accent(accent: Rgb) -> Rgb {
 
 /// Text palette for ink drawn on a neutral `surface`: Dark or Light, whichever has the higher WCAG
 /// contrast. Dark glass keeps the shipped Dark palette; light glass gets the Light text and panel.
+///
+/// Chrome and decorations ask this per frame for the same titlebar material, so the solved palette
+/// is cached by surface RGB rather than re-running both contrast ratios for every window.
 #[must_use]
 pub fn ink_palette_on(surface: Rgb) -> Palette {
+    let cache = ink_palette_cache();
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(hit) = cache.get(&surface) {
+            return *hit;
+        }
+    }
+    let resolved = ink_palette_on_uncached(surface);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= INK_CACHE_CAP {
+        cache.clear();
+    }
+    cache.insert(surface, resolved);
+    resolved
+}
+
+fn ink_palette_cache() -> &'static Mutex<HashMap<Rgb, Palette>> {
+    static CACHE: OnceLock<Mutex<HashMap<Rgb, Palette>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn ink_palette_on_uncached(surface: Rgb) -> Palette {
     if contrast_ratio(surface, Palette::RWR_0_0_9.text)
         >= contrast_ratio(surface, Palette::LIGHT.text)
     {
@@ -306,6 +367,10 @@ pub fn ink_palette_on(surface: Rgb) -> Palette {
         Palette::LIGHT
     }
 }
+
+/// Cap for the accent-ink and surface-ink caches. A live desktop holds a handful of distinct accents
+/// and titlebar materials, so a full cache is reset rather than grown.
+const INK_CACHE_CAP: usize = 16;
 
 /// WCAG AA contrast for body text.
 pub const BODY_MIN_CONTRAST: f64 = 4.5;

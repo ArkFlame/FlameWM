@@ -51,7 +51,7 @@ pub(super) fn project_slots(
                 kind,
                 label: label.to_owned(),
                 point,
-                icon: icon.map(|icon| icon.into_owned()),
+                icon: icon.map(std::borrow::Cow::into_owned),
                 scale,
                 generation,
             };

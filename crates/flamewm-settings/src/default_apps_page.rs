@@ -62,10 +62,29 @@ fn label_for(handlers: &[InstalledHandler], id: Option<&str>) -> String {
     }
 }
 
-/// Current default label for `slot`, or the empty state when the slot is unused.
-pub fn current_label(slot: usize) -> Result<String, String> {
-    let settings = ApplicationSettings::from_environment().map_err(|e| e.to_string())?;
-    current_label_with(&settings, slot)
+/// Current default label for every [`GROUPS`] row, resolved in one pass.
+///
+/// The page projects all rows on each refresh, so the environment, the installed handlers and
+/// the `mimeapps.list` defaults are read once for the whole page instead of once per row.
+/// A failed read leaves every row at "Unavailable" without failing the rest of the paint.
+pub fn labels() -> Vec<String> {
+    let unavailable = || vec!["Unavailable".to_owned(); GROUPS.len()];
+    let Ok(settings) = ApplicationSettings::from_environment() else {
+        return unavailable();
+    };
+    let Ok(index) = settings.handler_index() else {
+        return unavailable();
+    };
+    let primaries: Vec<&str> = GROUPS.iter().map(|group| group.mimes[0]).collect();
+    let defaults = settings.default_map(&primaries).unwrap_or_default();
+    GROUPS
+        .iter()
+        .map(|group| {
+            let primary = group.mimes[0];
+            let handlers: &[InstalledHandler] = index.get(primary).map_or(&[], Vec::as_slice);
+            label_for(handlers, defaults.get(primary).map(String::as_str))
+        })
+        .collect()
 }
 
 fn current_label_with(settings: &ApplicationSettings, slot: usize) -> Result<String, String> {

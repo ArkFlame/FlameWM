@@ -88,14 +88,25 @@ impl DirWatch {
                         break;
                     }
                     if inotify_ready {
-                        match inotify.read_events(&mut buffer) {
-                            Ok(events) => {
-                                if events.into_iter().next().is_some() {
-                                    pending.get_or_insert_with(Instant::now);
+                        // Drain the whole kernel queue per wakeup instead of one 4 KiB buffer:
+                        // a burst larger than the buffer used to return to `poll` for each chunk,
+                        // rebuilding the poll set and re-reading the clock every time.
+                        let mut had_events = false;
+                        loop {
+                            match inotify.read_events(&mut buffer) {
+                                Ok(events) => {
+                                    if events.into_iter().next().is_some() {
+                                        had_events = true;
+                                    } else {
+                                        break;
+                                    }
                                 }
+                                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                                Err(_) => return,
                             }
-                            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                            Err(_) => break,
+                        }
+                        if had_events {
+                            pending.get_or_insert_with(Instant::now);
                         }
                     }
                     if should_fire(pending, Instant::now()) {

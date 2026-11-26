@@ -422,7 +422,7 @@ pub(crate) fn handle_item(
                 let (output, cell) = projected_cells(state)[index].clone();
                 let origin = grid_for_output(state, &output).cell_to_pixel(cell);
                 let icon_override =
-                    launcher_icon(state, item.kind, &item.path).map(|icon| icon.into_owned());
+                    launcher_icon(state, item.kind, &item.path).map(std::borrow::Cow::into_owned);
                 state.drag_ghost = Some(DragGhost {
                     output,
                     source_ids: drag.originals.iter().map(|item| item.id.clone()).collect(),

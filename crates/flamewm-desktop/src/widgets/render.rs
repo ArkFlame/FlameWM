@@ -122,16 +122,17 @@ pub(crate) fn sync_widgets(
                 WidgetKind::Clock | WidgetKind::Calendar | WidgetKind::Custom
             )
         });
-        let unchanged = state.widgets.sync_key.as_ref().is_some_and(|key| {
-            sync_key_matches(
+        let unchanged = match state.widgets.sync_key.as_ref() {
+            Some(key) => sync_key_matches(
                 key,
                 state,
                 widgets,
                 &placeholders,
                 needs_time.then_some(time),
                 needs_time,
-            )
-        });
+            ),
+            None => false,
+        };
         if unchanged {
             return Ok(());
         }

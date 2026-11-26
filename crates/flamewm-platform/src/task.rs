@@ -1,4 +1,12 @@
 use flamewm_api::{DesktopAppId, TaskEntryId, WindowRef};
+use std::sync::OnceLock;
+
+/// Debug tracing flag, resolved once; the reconcile path must not scan the
+/// environment per window.
+fn debug_tasks() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_DEBUG_TASKS").is_some())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskEntryKind {
@@ -95,7 +103,16 @@ impl TaskStrip {
     /// a generation bump (focus, restore) refreshes the stored reference in place, and
     /// existing entries never move. Closed ids are removed; new ids are appended in list order.
     pub fn reconcile_live(&mut self, live: &[(DesktopAppId, WindowRef)]) -> bool {
-        let before = self.clone();
+        // Compatibility path for owned app ids; hot callers use the borrowed form.
+        let borrowed: Vec<(&DesktopAppId, WindowRef)> =
+            live.iter().map(|(app, window)| (app, *window)).collect();
+        self.reconcile_live_borrowed(&borrowed)
+    }
+
+    /// Borrowed-app variant: no per-window `DesktopAppId` clone on the steady path.
+    pub fn reconcile_live_borrowed(&mut self, live: &[(&DesktopAppId, WindowRef)]) -> bool {
+        let mut changed = false;
+        let debug = debug_tasks();
         let stale: Vec<WindowRef> = self
             .entries
             .iter()
@@ -103,13 +120,13 @@ impl TaskStrip {
             .filter(|window| !live.iter().any(|(_, current)| current.id == window.id))
             .collect();
         for window in stale {
-            if std::env::var_os("FLAMEWM_DEBUG_TASKS").is_some() {
+            if debug {
                 eprintln!(
                     "flamewm-task: remove window={} gen={} (absent from live list)",
                     window.id, window.generation
                 );
             }
-            self.remove_window(window);
+            changed |= self.remove_window(window);
         }
         for entry in &mut self.entries {
             let Some(window) = entry.represented_window() else {
@@ -120,28 +137,39 @@ impl TaskStrip {
                 continue;
             };
             match &mut entry.kind {
-                TaskEntryKind::Pinned { window: Some(slot) } => *slot = *current,
-                TaskEntryKind::Window { window: slot } => *slot = *current,
+                TaskEntryKind::Pinned { window: Some(slot) }
+                | TaskEntryKind::Window { window: slot } => {
+                    if *slot != *current {
+                        *slot = *current;
+                        changed = true;
+                    }
+                }
                 TaskEntryKind::Pinned { window: None } => {}
             }
         }
-        for (app, window) in live {
-            self.add_window(app.clone(), *window);
+        for &(app, window) in live {
+            changed |= self.add_window_borrowed(app, window);
         }
-        *self != before
+        changed
     }
 
     pub fn add_window(&mut self, app: DesktopAppId, window: WindowRef) -> bool {
+        self.add_window_borrowed(&app, window)
+    }
+
+    /// Add a live window, borrowing the app id and cloning it only when the
+    /// entry is new (the common reconcile case already has an entry).
+    pub fn add_window_borrowed(&mut self, app: &DesktopAppId, window: WindowRef) -> bool {
         if self.window_index(window).is_some() {
             return false;
         }
         if let Some(slot) = self.entries.iter_mut().find(|entry| {
-            entry.app == app && matches!(entry.kind, TaskEntryKind::Pinned { window: None })
+            entry.app == *app && matches!(entry.kind, TaskEntryKind::Pinned { window: None })
         }) {
             slot.set_pinned_window(window);
             return true;
         }
-        self.entries.push(TaskEntry::window(app, window));
+        self.entries.push(TaskEntry::window(app.clone(), window));
         true
     }
 

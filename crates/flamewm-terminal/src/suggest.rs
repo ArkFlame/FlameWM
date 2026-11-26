@@ -2,6 +2,7 @@
 //! a trie keeps, for each prefix, the best full command in its subtree (most uses, ties to the most recent), so a
 //! lookup walks the prefix only. Other windows' new lines are read from the file's offset when the user types, at
 //! most once a second. The typed line is tracked from the keys the child receives (`LineInput`).
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -65,6 +66,8 @@ struct Node {
     children: Vec<(char, usize)>,
     /// Best command strictly below this prefix (a command equal to the prefix is not a suggestion for it).
     best: Option<(Rank, usize)>,
+    /// Id of the command that ends exactly at this prefix, so an exact lookup needs no side map.
+    exact: Option<usize>,
 }
 
 struct Command {
@@ -72,11 +75,11 @@ struct Command {
     rank: Rank,
 }
 
-/// Prefix trie over commands. Each node caches the best strict extension, so suggestions cost O(prefix length).
+/// Prefix trie over commands. Each node caches the best strict extension and the command ending there, so both
+/// suggestions and use counts cost O(prefix length) with no second index of copied command strings.
 pub struct Trie {
     nodes: Vec<Node>,
     commands: Vec<Command>,
-    ids: HashMap<String, usize>,
 }
 
 impl Default for Trie {
@@ -84,7 +87,6 @@ impl Default for Trie {
         Self {
             nodes: vec![Node::default()],
             commands: Vec::new(),
-            ids: HashMap::new(),
         }
     }
 }
@@ -92,30 +94,9 @@ impl Default for Trie {
 impl Trie {
     /// Adds `uses` to `text` and marks it as used at sequence `seq` (later than every earlier use).
     pub fn add(&mut self, text: &str, uses: u64, seq: u64) {
-        let id = if let Some(&id) = self.ids.get(text) {
-            let command = &mut self.commands[id];
-            command.rank = Rank {
-                count: command.rank.count + uses,
-                seq,
-            };
-            id
-        } else {
-            let id = self.commands.len();
-            self.commands.push(Command {
-                text: text.to_owned(),
-                rank: Rank { count: uses, seq },
-            });
-            self.ids.insert(text.to_owned(), id);
-            id
-        };
-        let rank = self.commands[id].rank;
+        // First walk: find or create the node the command ends on, then update or insert its rank.
         let mut node = 0;
         for c in text.chars() {
-            // Only ranks grow, so this command replaces the cached best unless another command still outranks it.
-            let slot = &mut self.nodes[node].best;
-            if slot.is_none_or(|(best, best_id)| best_id == id || rank > best) {
-                *slot = Some((rank, id));
-            }
             node = if let Some(next) = self.child(node, c) {
                 next
             } else {
@@ -124,6 +105,36 @@ impl Trie {
                 self.nodes[node].children.push((c, next));
                 next
             };
+        }
+        let id = match self.nodes[node].exact {
+            Some(id) => {
+                let command = &mut self.commands[id];
+                command.rank = Rank {
+                    count: command.rank.count + uses,
+                    seq,
+                };
+                id
+            }
+            None => {
+                let id = self.commands.len();
+                self.commands.push(Command {
+                    text: text.to_owned(),
+                    rank: Rank { count: uses, seq },
+                });
+                self.nodes[node].exact = Some(id);
+                id
+            }
+        };
+        // Second walk: only ranks grow, so this command replaces the cached best of each prefix unless another
+        // command still outranks it.
+        let rank = self.commands[id].rank;
+        let mut node = 0;
+        for c in text.chars() {
+            let slot = &mut self.nodes[node].best;
+            if slot.is_none_or(|(best, best_id)| best_id == id || rank > best) {
+                *slot = Some((rank, id));
+            }
+            node = self.child(node, c).unwrap_or(node);
         }
         if self.commands.len() > 2 * MAX_COMMANDS {
             self.prune();
@@ -166,7 +177,13 @@ impl Trie {
 
     #[must_use]
     pub fn uses(&self, text: &str) -> Option<u64> {
-        self.ids.get(text).map(|&id| self.commands[id].rank.count)
+        let mut node = 0;
+        for c in text.chars() {
+            node = self.child(node, c)?;
+        }
+        self.nodes[node]
+            .exact
+            .map(|id| self.commands[id].rank.count)
     }
 }
 
@@ -190,8 +207,15 @@ pub fn admissible(command: &str) -> bool {
 /// assignment (`export TOKEN=x`, `KEY=x cmd`), a secret-named long option, `-p<pass>`, `-u user:pass`, or `sudo -S`.
 #[must_use]
 pub fn secret_bearing(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    if SECRET_MARKERS.iter().any(|marker| lower.contains(marker)) || url_with_credentials(&lower) {
+    // Most commands are already lowercase; only pay for a lowered copy when one is actually needed.
+    let lowered;
+    let lower = if command.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        lowered = command.to_ascii_lowercase();
+        &lowered
+    } else {
+        command
+    };
+    if SECRET_MARKERS.iter().any(|marker| lower.contains(marker)) || url_with_credentials(lower) {
         return true;
     }
     let has_sudo = lower.split_whitespace().any(|word| word == "sudo");
@@ -252,7 +276,10 @@ fn escape_into(out: &mut String, text: &str) {
     }
 }
 
-fn unescape(text: &str) -> String {
+fn unescape(text: &str) -> Cow<'_, str> {
+    if !text.contains('\\') {
+        return Cow::Borrowed(text);
+    }
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
@@ -268,7 +295,7 @@ fn unescape(text: &str) -> String {
             None => out.push('\\'),
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Folds store lines (`count<TAB>escaped command`) into one line per command, counts summed and ordered by last
@@ -286,9 +313,12 @@ fn compact_lines(text: &str) -> String {
         if uses == 0 || !admissible(&command) {
             continue;
         }
-        let entry = totals.entry(command).or_insert((0, index));
-        entry.0 += uses;
-        entry.1 = index;
+        if let Some(entry) = totals.get_mut(command.as_ref()) {
+            entry.0 += uses;
+            entry.1 = index;
+        } else {
+            totals.insert(command.into_owned(), (uses, index));
+        }
     }
     let mut ordered: Vec<(usize, u64, String)> = totals
         .into_iter()
@@ -363,9 +393,10 @@ fn atomic_write(path: &Path, body: &str) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// Appends one store line under an exclusive lock. If a compaction replaced the file while waiting for the lock,
-/// the write retries on the new file.
-fn append(path: &Path, line: &str) -> io::Result<()> {
+/// Appends one store line under an exclusive lock and returns the store size after the write, so the caller needs
+/// no second look at the path. If a compaction replaced the file while waiting for the lock, the write retries on
+/// the new file.
+fn append(path: &Path, line: &str) -> io::Result<u64> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -377,7 +408,8 @@ fn append(path: &Path, line: &str) -> io::Result<()> {
             _ => false,
         };
         if same_file {
-            return file.write_all(line.as_bytes());
+            file.write_all(line.as_bytes())?;
+            return Ok(file.metadata()?.len());
         }
     }
     Err(io::Error::other("terminal history file kept changing"))
@@ -395,7 +427,9 @@ fn compact(path: &Path) -> io::Result<()> {
 /// Rewrites the store without lines that the filter now rejects (entries stored before a rule existed, or by
 /// another program). Nothing is rewritten when every line passes.
 fn purge_filtered(path: &Path) -> io::Result<()> {
-    let text = String::from_utf8_lossy(&fs::read(path)?).into_owned();
+    // Borrow the lossy decode: a valid store is not copied again just to be scanned.
+    let bytes = fs::read(path)?;
+    let text = String::from_utf8_lossy(&bytes);
     let stored_secret = text.lines().any(|line| {
         line.split_once('\t').is_some_and(|(count, escaped)| {
             count.parse::<u64>().is_ok_and(|uses| uses > 0) && !admissible(&unescape(escaped))
@@ -432,6 +466,8 @@ pub struct History {
     head: Vec<u8>,
     seq: u64,
     checked: Option<Instant>,
+    /// Reused tail buffer: a per-second refresh must not allocate.
+    read_buf: Vec<u8>,
     /// Store size above which `record` compacts. Compaction folds duplicates only, so a store of mostly distinct
     /// commands stays large; the trigger then moves to twice its size instead of rewriting it on every record.
     compact_at: u64,
@@ -462,6 +498,7 @@ impl History {
             head: Vec::new(),
             seq: 0,
             checked: None,
+            read_buf: Vec::new(),
             compact_at: COMPACT_BYTES,
         };
         let _ = history.sync();
@@ -517,18 +554,22 @@ impl History {
             return Ok(());
         }
         file.seek(SeekFrom::Start(self.offset))?;
-        let mut bytes = Vec::new();
+        let mut bytes = std::mem::take(&mut self.read_buf);
         file.read_to_end(&mut bytes)?;
         if self.head.is_empty() {
             self.head = bytes[..bytes.len().min(HEAD_BYTES)].to_vec();
         }
         let Some(end) = bytes.iter().rposition(|&b| b == b'\n') else {
+            bytes.clear();
+            self.read_buf = bytes;
             return Ok(());
         };
         for line in bytes[..end].split(|&b| b == b'\n') {
             self.apply(&String::from_utf8_lossy(line));
         }
         self.offset += end as u64 + 1;
+        bytes.clear();
+        self.read_buf = bytes;
         Ok(())
     }
 
@@ -559,9 +600,6 @@ impl History {
 
     /// Counts one use of `command` in the store and in this window. Filtered commands are not stored.
     pub fn record(&mut self, command: &str) -> io::Result<()> {
-        let Some(path) = self.path.clone() else {
-            return Ok(());
-        };
         if !admissible(command) {
             return Ok(());
         }
@@ -569,12 +607,18 @@ impl History {
         line.push_str("1\t");
         escape_into(&mut line, command);
         line.push('\n');
-        append(&path, &line)?;
+        // The borrow of the path ends with the append, so the sync below can take the store mutably.
+        let size = match self.path.as_deref() {
+            Some(path) => append(path, &line)?,
+            None => return Ok(()),
+        };
         self.sync()?;
-        if fs::metadata(&path).is_ok_and(|meta| meta.len() > self.compact_at) {
-            compact(&path)?;
-            let after = fs::metadata(&path).map_or(COMPACT_BYTES, |meta| meta.len());
-            self.compact_at = (after * 2).max(COMPACT_BYTES);
+        if size > self.compact_at {
+            if let Some(path) = self.path.as_deref() {
+                compact(path)?;
+                let after = fs::metadata(path).map_or(COMPACT_BYTES, |meta| meta.len());
+                self.compact_at = (after * 2).max(COMPACT_BYTES);
+            }
             self.sync()?;
         }
         Ok(())
@@ -591,7 +635,9 @@ impl History {
 /// until the next line starts.
 #[derive(Debug)]
 pub struct LineInput {
-    chars: Vec<char>,
+    /// One buffer for the whole line, so reading it costs no allocation and each key edits it in place.
+    text: String,
+    /// Byte offset into `text`, always on a character boundary.
     cursor: usize,
     known: bool,
 }
@@ -599,7 +645,7 @@ pub struct LineInput {
 impl Default for LineInput {
     fn default() -> Self {
         Self {
-            chars: Vec::new(),
+            text: String::new(),
             cursor: 0,
             known: true,
         }
@@ -612,22 +658,20 @@ fn printable(text: &str) -> bool {
 
 impl LineInput {
     #[must_use]
-    pub fn text(&self) -> String {
-        self.chars.iter().collect()
+    pub fn text(&self) -> &str {
+        &self.text
     }
 
     /// True when a suggestion may be drawn: the line is exact and the cursor sits at its end.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.known && !self.chars.is_empty() && self.cursor == self.chars.len()
+        self.known && !self.text.is_empty() && self.cursor == self.text.len()
     }
 
     /// Text inserted by the terminal itself (an accepted suggestion) or by a paste.
     pub fn insert_str(&mut self, text: &str) {
-        // Splice the whole insertion at once: inserting char by char is quadratic on a large paste.
-        let inserted = text.chars().count();
-        self.chars.splice(self.cursor..self.cursor, text.chars());
-        self.cursor += inserted;
+        self.text.insert_str(self.cursor, text);
+        self.cursor += text.len();
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -647,15 +691,15 @@ impl LineInput {
         if mods.ctrl {
             match name {
                 "a" => self.cursor = 0,
-                "e" => self.cursor = self.chars.len(),
-                "b" => self.cursor = self.cursor.saturating_sub(1),
-                "f" => self.cursor = (self.cursor + 1).min(self.chars.len()),
+                "e" => self.cursor = self.text.len(),
+                "b" => self.left(),
+                "f" => self.right(),
                 "h" => self.backspace(),
                 "u" => {
-                    self.chars.drain(..self.cursor);
+                    self.text.drain(..self.cursor);
                     self.cursor = 0;
                 }
-                "k" => self.chars.truncate(self.cursor),
+                "k" => self.text.truncate(self.cursor),
                 "c" => self.clear(),
                 "l" => {}
                 _ => self.unknown(),
@@ -664,22 +708,22 @@ impl LineInput {
         }
         match name {
             "return" | "enter" | "kp_enter" => {
-                let submitted = (self.known && !self.chars.is_empty()).then(|| self.text());
+                let submitted = (self.known && !self.text.is_empty()).then(|| self.text.clone());
                 self.clear();
                 return submitted;
             }
             "backspace" => self.backspace(),
             "delete" => {
-                if self.cursor < self.chars.len() {
-                    self.chars.remove(self.cursor);
+                if self.cursor < self.text.len() {
+                    self.text.remove(self.cursor);
                 } else {
                     self.unknown();
                 }
             }
-            "left" => self.cursor = self.cursor.saturating_sub(1),
-            "right" => self.cursor = (self.cursor + 1).min(self.chars.len()),
+            "left" => self.left(),
+            "right" => self.right(),
             "home" => self.cursor = 0,
-            "end" => self.cursor = self.chars.len(),
+            "end" => self.cursor = self.text.len(),
             _ => match text.filter(|t| printable(t)) {
                 Some(text) => self.insert_str(text),
                 None => self.unknown(),
@@ -688,10 +732,26 @@ impl LineInput {
         None
     }
 
+    /// Moves the cursor one character left, staying on a character boundary.
+    fn left(&mut self) {
+        self.cursor = self.text[..self.cursor]
+            .chars()
+            .next_back()
+            .map_or(self.cursor, |c| self.cursor - c.len_utf8());
+    }
+
+    /// Moves the cursor one character right, staying on a character boundary.
+    fn right(&mut self) {
+        self.cursor = self.text[self.cursor..]
+            .chars()
+            .next()
+            .map_or(self.cursor, |c| self.cursor + c.len_utf8());
+    }
+
     fn backspace(&mut self) {
         if self.cursor > 0 {
-            self.cursor -= 1;
-            self.chars.remove(self.cursor);
+            self.left();
+            self.text.remove(self.cursor);
         } else {
             self.unknown();
         }
@@ -702,7 +762,7 @@ impl LineInput {
     }
 
     fn clear(&mut self) {
-        self.chars.clear();
+        self.text.clear();
         self.cursor = 0;
         self.known = true;
     }

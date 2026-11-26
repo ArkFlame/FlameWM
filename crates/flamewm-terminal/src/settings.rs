@@ -61,7 +61,15 @@ impl Tab {
 /// Background opacity choices, 100 down to 5 in steps of 5.
 #[must_use]
 pub fn opacity_options() -> Vec<u8> {
-    (1..=20).rev().map(|step| step * 5).collect()
+    (0..OPACITY_COUNT).map(opacity_at).collect()
+}
+
+/// How many opacity steps the picker offers.
+const OPACITY_COUNT: usize = 20;
+
+/// Percent shown at list index `index`: 100 first, 5 last. Computed, so listing the tab allocates nothing.
+fn opacity_at(index: usize) -> u8 {
+    100 - index.min(OPACITY_COUNT - 1) as u8 * 5
 }
 
 /// Monospace font families from fontconfig. The generic `monospace` alias always comes first. Discovered once per
@@ -170,9 +178,8 @@ impl SettingsView {
             .position(|font| *font == config.font_family)
             .unwrap_or(0);
         view.fonts = fonts;
-        view.opacity_selected = opacity_options()
-            .iter()
-            .position(|&percent| percent == config.background_opacity)
+        view.opacity_selected = (0..OPACITY_COUNT)
+            .position(|index| opacity_at(index) == config.background_opacity)
             .unwrap_or(0);
         view
     }
@@ -237,8 +244,9 @@ impl SettingsView {
             return Command::None;
         }
         let name = event.key.to_ascii_lowercase();
-        let selected = themes.get(self.selected).cloned();
-        match self.mode.clone() {
+        // Take the mode instead of cloning it: every arm either restores it or sets the next one, so a keystroke
+        // in the picker copies no buffers.
+        match std::mem::replace(&mut self.mode, Mode::Browse) {
             Mode::Rename(buffer) => match name.as_str() {
                 "escape" => {
                     self.mode = Mode::Browse;
@@ -246,9 +254,9 @@ impl SettingsView {
                 }
                 "return" | "enter" => {
                     self.mode = Mode::Browse;
-                    match selected {
+                    match themes.get(self.selected) {
                         Some(theme) if !buffer.trim().is_empty() => Command::Rename {
-                            old: theme.name,
+                            old: theme.name.clone(),
                             new: buffer.trim().to_owned(),
                         },
                         _ => Command::None,
@@ -267,6 +275,8 @@ impl SettingsView {
                         .filter(|t| !t.chars().any(char::is_control))
                     {
                         self.mode = Mode::Rename(format!("{buffer}{text}"));
+                    } else {
+                        self.mode = Mode::Rename(buffer);
                     }
                     Command::None
                 }
@@ -317,17 +327,11 @@ impl SettingsView {
                     Command::None
                 }
             },
-            Mode::Browse => self.browse_key(&name, event, themes, selected),
+            Mode::Browse => self.browse_key(&name, event, themes),
         }
     }
 
-    fn browse_key(
-        &mut self,
-        name: &str,
-        event: &UiKeyEvent,
-        themes: &[Theme],
-        selected: Option<Theme>,
-    ) -> Command {
+    fn browse_key(&mut self, name: &str, event: &UiKeyEvent, themes: &[Theme]) -> Command {
         if self.edit.is_some() {
             let count = self.edit.as_ref().map_or(0, |t| t.palette.slots().len());
             match name {
@@ -350,7 +354,7 @@ impl SettingsView {
             "minus" | "-" => return Command::FontSize(-1),
             _ => {
                 return match self.tab {
-                    Tab::Theme => self.theme_key(name, event, themes, selected),
+                    Tab::Theme => self.theme_key(name, event, themes),
                     Tab::Font => self.font_key(name),
                     Tab::Size => match name {
                         "up" => Command::FontSize(1),

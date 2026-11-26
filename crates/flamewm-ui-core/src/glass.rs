@@ -264,41 +264,71 @@ fn scrim_for(appearance: Appearance) -> Option<(u32, u16)> {
     Some((scrim.0, alpha_to_permille(text.max(muted))))
 }
 
+/// The exact inputs the ink solve reads. Caching on this key (instead of the whole [`Appearance`])
+/// shares one solve between every caller that only differs in taskbar or blur fields, for example
+/// material resolution and the text-token projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct InkKey {
+    light: bool,
+    tint_rgb: u32,
+    glass_opacity_percent: u8,
+    backdrop_rgb: Option<u32>,
+}
+
+impl InkKey {
+    const fn from_appearance(appearance: Appearance) -> Self {
+        Self {
+            light: appearance.light,
+            tint_rgb: appearance.tint_rgb,
+            glass_opacity_percent: appearance.glass_opacity_percent,
+            backdrop_rgb: appearance.backdrop_rgb,
+        }
+    }
+}
+
 /// Ink palette for the glass over the published backdrop; `None` without one.
 ///
 /// The WCAG solve inside `glass_ink` (luminance `powf` plus two scrim binary searches) is the
-/// expensive part, and every projection rebuilds the same [`Appearance`] per frame. The result is
-/// pure in `Appearance`, so a small cache cannot go stale.
+/// expensive part, and every projection rebuilds the same [`InkKey`] per frame. The result is pure
+/// in that key, so a small cache cannot go stale.
 fn ink_for(appearance: Appearance) -> Option<Palette> {
+    ink_for_key(InkKey::from_appearance(appearance))
+}
+
+fn ink_for_key(key: InkKey) -> Option<Palette> {
     let cache = ink_cache();
     {
         let cache = cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(hit) = cache.get(&appearance) {
+        if let Some(hit) = cache.get(&key) {
             return *hit;
         }
     }
-    let resolved = ink_for_uncached(appearance);
+    let resolved = ink_for_uncached(key);
     let mut cache = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if cache.len() >= INK_CACHE_CAP {
         cache.clear();
     }
-    cache.insert(appearance, resolved);
+    cache.insert(key, resolved);
     resolved
 }
 
-fn ink_cache() -> &'static Mutex<HashMap<Appearance, Option<Palette>>> {
-    static CACHE: OnceLock<Mutex<HashMap<Appearance, Option<Palette>>>> = OnceLock::new();
+fn ink_cache() -> &'static Mutex<HashMap<InkKey, Option<Palette>>> {
+    static CACHE: OnceLock<Mutex<HashMap<InkKey, Option<Palette>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn ink_for_uncached(appearance: Appearance) -> Option<Palette> {
-    let backdrop = Rgb(appearance.backdrop_rgb?);
-    let tint = Rgb(glass_tint_rgb(appearance));
-    let alpha = permille_to_alpha(u16::from(appearance.glass_opacity_percent) * 10);
+fn ink_for_uncached(key: InkKey) -> Option<Palette> {
+    let backdrop = Rgb(key.backdrop_rgb?);
+    let tint = Rgb(if key.light {
+        LIGHT_SURFACE.0
+    } else {
+        key.tint_rgb
+    });
+    let alpha = permille_to_alpha(u16::from(key.glass_opacity_percent) * 10);
     Some(glass_ink(tint, alpha, backdrop, BODY_MIN_CONTRAST).palette)
 }
 
@@ -561,26 +591,12 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         (None, None) => defaults.glass_blur_px,
     }
     .min(54);
-    // The Surfaces slider writes surfaceOpacity only, so while the glass group is not custom the
-    // surface key is the live value and the glass mirror is stale. A custom glass group owns its key.
-    let glass_opacity_percent = if flag("glassCustom", false) {
-        percent("glassOpacityPercent").or_else(|| percent("surfaceOpacity"))
-    } else {
-        percent("surfaceOpacity").or_else(|| percent("glassOpacityPercent"))
-    }
-    .unwrap_or(defaults.glass_opacity_percent)
-    .min(100);
+    let glass_opacity_percent = glass_opacity_from_settings(snapshot);
     let custom_tint = match snapshot.values.get("taskbarCustomTint") {
         Some(SettingValue::Text(value)) => flamewm_api::color::parse_hex_u32(value),
         _ => None,
     };
-    // Same rule as `surface_fill`: the stored colour applies only with the Surfaces custom switch on.
-    let tint_rgb = match snapshot.values.get("surfaceColor") {
-        Some(SettingValue::Text(value)) if is_group_custom(snapshot, "surface") => {
-            flamewm_api::color::parse_hex_u32(value).unwrap_or(defaults.tint_rgb)
-        }
-        _ => defaults.tint_rgb,
-    };
+    let tint_rgb = tint_rgb_from_settings(snapshot);
     Appearance {
         // highContrast (WCAG 1.4.11, KDE High Contrast, Windows contrast themes) also makes every
         // material opaque with no blur, the same flat look as reduceTransparency.
@@ -596,6 +612,38 @@ pub fn appearance_from_settings(snapshot: &SettingsSnapshot) -> Appearance {
         taskbar_custom_tint: custom_tint.unwrap_or(defaults.taskbar_custom_tint),
         light: appearance_is_light(snapshot),
         backdrop_rgb: wallpaper_mean_rgb(snapshot),
+    }
+}
+
+/// The Surfaces slider writes surfaceOpacity only, so while the glass group is not custom the
+/// surface key is the live value and the glass mirror is stale. A custom glass group owns its key.
+fn glass_opacity_from_settings(snapshot: &SettingsSnapshot) -> u8 {
+    let percent = |key: &str| match snapshot.values.get(key) {
+        Some(SettingValue::Percent(value)) => Some(*value),
+        _ => None,
+    };
+    let custom = matches!(
+        snapshot.values.get("glassCustom"),
+        Some(SettingValue::Boolean(true))
+    );
+    let value = if custom {
+        percent("glassOpacityPercent").or_else(|| percent("surfaceOpacity"))
+    } else {
+        percent("surfaceOpacity").or_else(|| percent("glassOpacityPercent"))
+    };
+    value
+        .unwrap_or(Appearance::default().glass_opacity_percent)
+        .min(100)
+}
+
+/// Regular-glass tint from `surfaceColor`; the stored colour applies only with the Surfaces custom
+/// switch on, the same rule as `surface_fill`.
+fn tint_rgb_from_settings(snapshot: &SettingsSnapshot) -> u32 {
+    match snapshot.values.get("surfaceColor") {
+        Some(SettingValue::Text(value)) if is_group_custom(snapshot, "surface") => {
+            flamewm_api::color::parse_hex_u32(value).unwrap_or(DEFAULT_SURFACE_RGB)
+        }
+        _ => DEFAULT_SURFACE_RGB,
     }
 }
 
@@ -638,16 +686,30 @@ pub fn high_contrast_from_settings(snapshot: &SettingsSnapshot) -> bool {
 /// `--text`, `--muted`, `--panel`, `--surface` or `--sidebar` at runtime.
 #[must_use]
 pub fn palette_from_settings(snapshot: &SettingsSnapshot) -> Palette {
-    let appearance = appearance_from_settings(snapshot);
+    // Text-token projection needs only the ink inputs: appearance mode, high contrast, the
+    // reduce-transparency flag, the glass tint/opacity and the backdrop. Reading those directly
+    // skips the taskbar mode, taskbar tint/opacity and blur parsing that full material resolution
+    // does, and the shared ink cache then hits the same entry as `resolve`.
+    let light = appearance_is_light(snapshot);
     if high_contrast_from_settings(snapshot) {
-        return Palette::high_contrast(appearance.light);
+        return Palette::high_contrast(light);
     }
-    if !appearance.reduce_transparency
-        && let Some(palette) = ink_for(appearance)
-    {
-        return palette;
+    let reduce_transparency = matches!(
+        snapshot.values.get("reduceTransparency"),
+        Some(SettingValue::Boolean(true))
+    );
+    if !reduce_transparency {
+        let key = InkKey {
+            light,
+            tint_rgb: tint_rgb_from_settings(snapshot),
+            glass_opacity_percent: glass_opacity_from_settings(snapshot),
+            backdrop_rgb: wallpaper_mean_rgb(snapshot),
+        };
+        if let Some(palette) = ink_for_key(key) {
+            return palette;
+        }
     }
-    if appearance.light {
+    if light {
         Palette::LIGHT
     } else {
         Palette::RWR_0_0_9

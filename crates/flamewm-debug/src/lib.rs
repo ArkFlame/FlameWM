@@ -77,6 +77,8 @@ struct State {
     last_emit: HashMap<&'static str, Instant>,
     /// Whether the CAP marker was already written for this file.
     capped: bool,
+    /// Bytes already written to `file`, tracked so each line avoids a `stat`.
+    len: u64,
 }
 
 impl State {
@@ -85,6 +87,7 @@ impl State {
             file: None,
             last_emit: HashMap::new(),
             capped: false,
+            len: 0,
         }
     }
 }
@@ -94,8 +97,11 @@ fn state() -> &'static Mutex<State> {
     STATE.get_or_init(|| Mutex::new(State::new()))
 }
 
+/// Resolved once: the environment cannot change the logging gate mid-process,
+/// and `emit` is called from hot paths.
 fn enabled() -> bool {
-    enabled_for(std::env::var_os("FLAMEWM_DEBUG"))
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| enabled_for(std::env::var_os("FLAMEWM_DEBUG")))
 }
 
 fn debug_dir_for(raw: Option<std::ffi::OsString>) -> PathBuf {
@@ -146,15 +152,20 @@ pub fn init_process_in(dir: &std::path::Path, process_name: &str, is_enabled: bo
     let dir = debug_dir_for(Some(dir.as_os_str().to_os_string()));
     let _ = fs::create_dir_all(&dir);
     let file = file_for_process(process_name).map(|name| dir.join(name));
+    let len = file
+        .as_deref()
+        .and_then(|path| fs::metadata(path).ok())
+        .map_or(0, |meta| meta.len());
     if let Ok(mut guard) = state().lock() {
         guard.file.clone_from(&file);
         guard.capped = false;
+        guard.len = len;
     }
     let (true, Some(path)) = (is_enabled, file) else {
         return;
     };
     if let Ok(mut guard) = state().lock() {
-        write_line(&path, &session_header(process_name), &mut guard.capped);
+        write_line(&path, &session_header(process_name), &mut guard);
     }
 }
 
@@ -166,14 +177,14 @@ fn append_line(path: &std::path::Path, text: &str) {
     }
 }
 
-fn write_line(path: &std::path::Path, line: &str, capped: &mut bool) {
-    if *capped {
+fn write_line(path: &std::path::Path, line: &str, state: &mut State) {
+    if state.capped {
         return;
     }
-    let current_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let current_len = state.len;
     if current_len >= MAX_FILE_BYTES {
         append_line(path, CAP_MARKER);
-        *capped = true;
+        state.capped = true;
         return;
     }
     // Truncate the single line if it alone would overflow the cap.
@@ -189,9 +200,10 @@ fn write_line(path: &std::path::Path, line: &str, capped: &mut bool) {
         text = &owned;
     }
     append_line(path, text);
-    if current_len + line.len() as u64 + 1 >= MAX_FILE_BYTES {
+    state.len = current_len + text.len() as u64 + 1;
+    if state.len >= MAX_FILE_BYTES {
         append_line(path, CAP_MARKER);
-        *capped = true;
+        state.capped = true;
     }
 }
 
@@ -224,7 +236,7 @@ pub fn emit(id: DebugEventId, cooldown: Duration, message: impl FnOnce() -> Stri
         return;
     };
     guard.last_emit.insert(id.0, now);
-    write_line(&path, &format!("{} {}", id.0, text), &mut guard.capped);
+    write_line(&path, &format!("{} {}", id.0, text), guard);
 }
 
 #[cfg(test)]

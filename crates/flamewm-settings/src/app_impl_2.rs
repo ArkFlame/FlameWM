@@ -741,8 +741,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
         ] {
             document.visible(&format!("page-{name}"), self.client.ui().page == page)?;
         }
-        self.sync_startup(document)?;
-        self.sync_defaults(document)?;
+        // Both pages read live XDG state from disk on every line, so they sync only while their
+        // page is the visible one. Switching pages runs a refresh, so a page is always current
+        // when it is shown and never costs file reads while another page is up.
+        match self.client.ui().page {
+            SettingsPage::Startup => self.sync_startup(document)?,
+            SettingsPage::Defaults => self.sync_defaults(document)?,
+            _ => {}
+        }
         for slot in 0..OUTPUT_PAGE_SLOTS {
             let id = format!("display-output-{slot}");
             let Some(output) = self.output_page_slot(slot) else {

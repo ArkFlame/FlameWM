@@ -4,19 +4,29 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::span as registry;
-use crate::{now_cpu_ns, now_mono_ns};
+use crate::{enabled, now_cpu_ns, now_mono_ns};
 
 /// RAII span guard returned by [`start`]. The span is recorded when it is dropped.
+///
+/// When `FLAMEWM_PROFILE` is off the guard is inert: construction and drop cost
+/// one branch plus no clock reads, label lookups or thread-local access.
 pub struct SpanGuard {
     idx: usize,
     start_wall: u64,
     start_cpu: u64,
     on_stack: bool,
+    active: bool,
 }
 
 impl SpanGuard {
     pub(crate) fn begin(label: &'static str) -> Self {
-        let idx = registry::slot_for(label);
+        if !enabled() {
+            return Self::inert();
+        }
+        Self::begin_at(registry::slot_for(label))
+    }
+
+    pub(crate) fn begin_at(idx: usize) -> Self {
         let start_cpu = now_cpu_ns();
         let start_wall = now_mono_ns();
         let on_stack = registry::push(idx, start_wall, start_cpu);
@@ -25,12 +35,26 @@ impl SpanGuard {
             start_wall,
             start_cpu,
             on_stack,
+            active: true,
+        }
+    }
+
+    const fn inert() -> Self {
+        Self {
+            idx: 0,
+            start_wall: 0,
+            start_cpu: 0,
+            on_stack: false,
+            active: false,
         }
     }
 }
 
 impl Drop for SpanGuard {
     fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
         let end_wall = now_mono_ns();
         let end_cpu = now_cpu_ns();
         let wall_inclusive = end_wall.saturating_sub(self.start_wall);
@@ -67,19 +91,31 @@ pub fn start(label: &'static str) -> SpanGuard {
 }
 
 /// Reusable static-label timing point.
+///
+/// The registry slot is resolved once at construction, so each [`start`] skips
+/// the static-label scan and its per-slot locks.
 pub struct ProfilePoint {
-    label: &'static str,
+    idx: usize,
 }
 
 impl ProfilePoint {
     /// Create a point bound to a static label.
     pub fn new(label: &'static str) -> Self {
-        Self { label }
+        Self {
+            idx: if enabled() {
+                registry::slot_for(label)
+            } else {
+                0
+            },
+        }
     }
 
     /// Start one timed occurrence.
     pub fn start(&self) -> SpanGuard {
-        SpanGuard::begin(self.label)
+        if !enabled() {
+            return SpanGuard::inert();
+        }
+        SpanGuard::begin_at(self.idx)
     }
 }
 

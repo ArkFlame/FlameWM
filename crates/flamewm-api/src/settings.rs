@@ -93,16 +93,27 @@ pub fn accent_rgb(snapshot: &SettingsSnapshot) -> u32 {
     let Some(SettingValue::Text(value)) = snapshot.values.get("accent") else {
         return DEFAULT_ACCENT_RGB;
     };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "red" => return 0x00ef_4048,
-        "blue" => return 0x003d_aee9,
-        "purple" => return 0x009b_59b6,
-        "teal" => return 0x001a_bc9c,
-        "green" => return 0x0027_ae60,
-        "amber" => return 0x00f3_9c12,
-        _ => {}
+    // No allocation: compare named values case-insensitively on the trimmed slice.
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("red") {
+        return 0x00ef_4048;
     }
-    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if value.eq_ignore_ascii_case("blue") {
+        return 0x003d_aee9;
+    }
+    if value.eq_ignore_ascii_case("purple") {
+        return 0x009b_59b6;
+    }
+    if value.eq_ignore_ascii_case("teal") {
+        return 0x001a_bc9c;
+    }
+    if value.eq_ignore_ascii_case("green") {
+        return 0x0027_ae60;
+    }
+    if value.eq_ignore_ascii_case("amber") {
+        return 0x00f3_9c12;
+    }
+    let hex = value.strip_prefix('#').unwrap_or(value);
     if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         u32::from_str_radix(hex, 16).unwrap_or(DEFAULT_ACCENT_RGB)
     } else {

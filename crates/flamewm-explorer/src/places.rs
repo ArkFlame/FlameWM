@@ -26,14 +26,27 @@ pub struct MountedDevice {
 /// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
 #[must_use]
 pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
-    let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in text.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(sep) = fields.iter().position(|f| *f == "-") else {
-            continue;
-        };
-        let (Some(mount), Some(source)) = (fields.get(4), fields.get(sep + 2)) else {
+        // One pass over the fields instead of collecting a `Vec<&str>` per line: mountinfo can
+        // hold hundreds of lines and this runs on every places refresh.
+        let mut mount = None;
+        let mut source = None;
+        let mut separator = None;
+        for (index, field) in line.split_whitespace().enumerate() {
+            if index == 4 {
+                mount = Some(field);
+            }
+            if field == "-" {
+                separator = Some(index);
+            } else if let Some(at) = separator {
+                if index == at + 2 {
+                    source = Some(field);
+                    break;
+                }
+            }
+        }
+        let (Some(mount), Some(source)) = (mount, source) else {
             continue;
         };
         let mount = unescape_mount(mount);
@@ -49,13 +62,17 @@ pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
         else {
             continue;
         };
-        if seen.insert(mount.clone()) {
-            out.push(MountedDevice {
-                source: (*source).to_owned(),
-                mount_point: PathBuf::from(&mount),
-                block_name: block_name.to_owned(),
-            });
+        if out
+            .iter()
+            .any(|device| device.mount_point.as_path() == Path::new(&mount))
+        {
+            continue;
         }
+        out.push(MountedDevice {
+            source: (*source).to_owned(),
+            mount_point: PathBuf::from(&mount),
+            block_name: block_name.to_owned(),
+        });
     }
     out
 }
@@ -84,26 +101,42 @@ pub const GVFS_FSTYPE: &str = "fuse.gvfsd-fuse";
 /// Field layout: id parent maj:min root `mount_point` opts [optional...] - fstype source superopts.
 #[must_use]
 pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
-    let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in text.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(sep) = fields.iter().position(|f| *f == "-") else {
+        // Same single-pass field scan as `parse_mountinfo`: no per-line field vector.
+        let mut mount = None;
+        let mut fstype = None;
+        let mut separator = None;
+        for (index, field) in line.split_whitespace().enumerate() {
+            if index == 4 {
+                mount = Some(field);
+            }
+            if field == "-" {
+                separator = Some(index);
+            } else if let Some(at) = separator {
+                if index == at + 1 {
+                    fstype = Some(field);
+                    break;
+                }
+            }
+        }
+        let (Some(mount), Some(fstype)) = (mount, fstype) else {
             continue;
         };
-        let (Some(mount), Some(fstype)) = (fields.get(4), fields.get(sep + 1)) else {
-            continue;
-        };
-        if !NETWORK_FSTYPES.contains(fstype) {
+        if !NETWORK_FSTYPES.contains(&fstype) {
             continue;
         }
         let mount_point = PathBuf::from(unescape_mount(mount));
-        if seen.insert(mount_point.clone()) {
-            out.push(NetworkMount {
-                mount_point,
-                fstype: (*fstype).to_owned(),
-            });
+        if out
+            .iter()
+            .any(|mount| mount.mount_point.as_path() == mount_point.as_path())
+        {
+            continue;
         }
+        out.push(NetworkMount {
+            mount_point,
+            fstype: (*fstype).to_owned(),
+        });
     }
     out
 }
@@ -494,10 +527,11 @@ fn part_flags_bits(flags: &str) -> Option<u64> {
 /// True for a partition that is firmware, recovery, swap or a container member by partition-table
 /// identity: type GUID, MBR type byte, boot attribute or a reserved-type label.
 fn is_system_partition(node: &Json) -> bool {
-    let part_type = node_text(node, "parttype").to_ascii_lowercase();
-    if !part_type.is_empty()
-        && (SYSTEM_PART_TYPES.contains(&part_type.as_str())
-            || SYSTEM_PART_TYPES_MBR.contains(&part_type.as_str()))
+    let part_type = node_text(node, "parttype");
+    if SYSTEM_PART_TYPES
+        .iter()
+        .chain(SYSTEM_PART_TYPES_MBR.iter())
+        .any(|known| part_type.eq_ignore_ascii_case(*known))
     {
         return true;
     }
@@ -506,8 +540,9 @@ fn is_system_partition(node: &Json) -> bool {
     {
         return true;
     }
-    let label = node_text(node, "label").to_ascii_lowercase();
-    SYSTEM_PART_LABELS.contains(&label.as_str())
+    SYSTEM_PART_LABELS
+        .iter()
+        .any(|label| node_text(node, "label").eq_ignore_ascii_case(*label))
 }
 
 /// Block devices that are not one ejectable filesystem: device-mapper, MD RAID, network block

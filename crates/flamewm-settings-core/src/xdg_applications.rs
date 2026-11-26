@@ -181,6 +181,15 @@ impl ApplicationSettings {
         if !mime.contains('/') || mime.contains(['\n', '\r', ';']) {
             return Err(invalid("invalid MIME type"));
         }
+        Ok(self.handler_index()?.remove(mime).unwrap_or_default())
+    }
+
+    /// Visible handlers of every declared MIME type, in one directory pass.
+    ///
+    /// Each bucket is in ID order with the same masking rules as [`Self::installed_handlers`],
+    /// so a page that needs several MIME types reads every desktop entry once instead of once
+    /// per type. Callers that need a single type should keep using `installed_handlers`.
+    pub fn handler_index(&self) -> io::Result<BTreeMap<String, Vec<InstalledHandler>>> {
         let mut found: BTreeMap<String, Option<InstalledHandler>> = BTreeMap::new();
         for root in &self.data_dirs {
             let files = match fs::read_dir(root.join("applications")) {
@@ -211,7 +220,7 @@ impl ApplicationSettings {
                         .filter(|m| !m.is_empty())
                         .map(str::to_owned)
                         .collect();
-                    mimes.iter().any(|m| m == mime).then(|| InstalledHandler {
+                    (!mimes.is_empty()).then(|| InstalledHandler {
                         name: value(&text, "Desktop Entry", "Name")
                             .filter(|n| !n.is_empty())
                             .unwrap_or(&id)
@@ -223,7 +232,13 @@ impl ApplicationSettings {
                 found.insert(id, handler);
             }
         }
-        Ok(found.into_values().flatten().collect())
+        let mut index: BTreeMap<String, Vec<InstalledHandler>> = BTreeMap::new();
+        for handler in found.into_values().flatten() {
+            for mime in &handler.mimes {
+                index.entry(mime.clone()).or_default().push(handler.clone());
+            }
+        }
+        Ok(index)
     }
 
     /// Resolve the first configured default, respecting desktop-specific XDG files.
@@ -235,13 +250,7 @@ impl ApplicationSettings {
             .cloned()
             .chain(self.data_dirs.iter().map(|p| p.join("applications")))
         {
-            for name in self
-                .desktops
-                .iter()
-                .filter(|d| valid_desktop_name(d))
-                .map(|d| format!("{d}-mimeapps.list"))
-                .chain(std::iter::once("mimeapps.list".to_owned()))
-            {
+            for name in self.mimeapps_names() {
                 match fs::read_to_string(root.join(name)) {
                     Ok(text) => {
                         if let Some(id) = value(&text, "Default Applications", mime)
@@ -256,6 +265,55 @@ impl ApplicationSettings {
             }
         }
         Ok(None)
+    }
+
+    /// First configured default for each of `mimes`, reading each `mimeapps.list` once.
+    ///
+    /// Precedence matches [`Self::default_application`]: the first file (root then desktop-specific
+    /// name) that names a MIME type wins. Missing types are absent from the result.
+    pub fn default_map(&self, mimes: &[&str]) -> io::Result<BTreeMap<String, String>> {
+        for mime in mimes {
+            validate_key(mime)?;
+        }
+        let mut found: BTreeMap<String, String> = BTreeMap::new();
+        for root in self
+            .config_dirs
+            .iter()
+            .cloned()
+            .chain(self.data_dirs.iter().map(|p| p.join("applications")))
+        {
+            for name in self.mimeapps_names() {
+                match fs::read_to_string(root.join(name)) {
+                    Ok(text) => {
+                        for mime in mimes {
+                            if found.contains_key(*mime) {
+                                continue;
+                            }
+                            if let Some(id) = value(&text, "Default Applications", mime)
+                                .and_then(|v| v.split(';').find(|s| !s.is_empty()))
+                            {
+                                found.insert((*mime).to_owned(), id.to_owned());
+                            }
+                        }
+                        if found.len() == mimes.len() {
+                            return Ok(found);
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    /// Desktop-specific `mimeapps.list` names first, then the generic file.
+    fn mimeapps_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.desktops
+            .iter()
+            .filter(|d| valid_desktop_name(d))
+            .map(|d| format!("{d}-mimeapps.list"))
+            .chain(std::iter::once("mimeapps.list".to_owned()))
     }
 
     /// Persist a user-level default without disturbing unrelated associations.

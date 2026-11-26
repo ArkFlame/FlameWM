@@ -15,6 +15,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use flamewm_ui_x11::{safe_file_name, valid_bus_name, valid_object_path};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
+use rustix::process::{Pid, PidfdFlags, pidfd_open};
 
 use crate::jobs::{CancellationToken, TransferSink};
 
@@ -23,6 +26,9 @@ pub const ARK_METHOD: &str = "extractSelectedFilesTo";
 /// Hard limit for one extraction call.
 pub const EXTRACT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_MESSAGE_CHARS: usize = 512;
+/// Longest a cancellable wait sleeps before re-checking the token. The child's pidfd wakes the
+/// wait immediately on exit, so this only bounds cancel latency and costs at most 20 wakeups/s.
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtractError {
@@ -71,8 +77,16 @@ pub fn validate_request(service: &str, path: &str, dest: &Path) -> Result<(), Ex
 
 /// `GVariant` string literal for `text` (single-quoted, backslash and quote escaped).
 fn gvariant_string(text: &str) -> String {
-    let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
-    format!("'{escaped}'")
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('\'');
+    for ch in text.chars() {
+        if ch == '\\' || ch == '\'' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('\'');
+    out
 }
 
 /// Arguments for `gdbus call` invoking `extractSelectedFilesTo(dest)`.
@@ -95,6 +109,12 @@ pub fn gdbus_args(service: &str, path: &str, dest: &Path) -> Result<Vec<String>,
 /// Runs `program args`, kills it after `timeout` or when `cancel` is set, and
 /// returns `(success, stderr-or-stdout)`. A cancelled child is reaped before
 /// returning, so no process outlives the job.
+///
+/// The wait is event-driven: a pidfd for the child is polled, so an extraction
+/// that takes seconds no longer wakes the helper thread every 10 ms, and a child
+/// that exits is reaped as soon as the kernel reports it instead of on the next
+/// poll tick. `CANCEL_POLL` bounds how long a cancel waits; kernels without
+/// pidfd fall back to the old timed poll.
 pub fn run_with_timeout(
     program: &str,
     args: &[String],
@@ -108,6 +128,8 @@ pub fn run_with_timeout(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| ExtractError::Spawn(error.to_string()))?;
+    let pid = Pid::from_raw(child.id() as i32);
+    let mut pidfd = pid.and_then(|pid| pidfd_open(pid, PidfdFlags::empty()).ok());
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -132,7 +154,26 @@ pub fn run_with_timeout(
                 let _ = child.wait();
                 return Err(ExtractError::Cancelled);
             }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                if let Some(fd) = pidfd.as_ref() {
+                    let wait = deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(CANCEL_POLL);
+                    let wait = Timespec {
+                        tv_sec: wait.as_secs() as _,
+                        tv_nsec: wait.subsec_nanos() as _,
+                    };
+                    let mut fds = [PollFd::new(fd, PollFlags::IN)];
+                    match poll(&mut fds, Some(&wait)) {
+                        Ok(_) => {}
+                        Err(Errno::INTR) => {}
+                        // No pidfd poll support: fall back to the timed loop.
+                        Err(_) => pidfd = None,
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();

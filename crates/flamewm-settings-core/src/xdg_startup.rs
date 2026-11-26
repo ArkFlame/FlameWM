@@ -40,27 +40,32 @@ fn catalog_error(error: flamewm_api::FlameError) -> io::Error {
 impl ApplicationSettings {
     /// Installed, visible applications with no autostart entry, sorted by name then ID.
     pub fn startup_candidates(&self) -> io::Result<Vec<StartupCandidate>> {
-        let existing: Vec<String> = self.startup_entries()?.into_iter().map(|e| e.id).collect();
+        let existing: std::collections::BTreeSet<String> = self
+            .startup_entries()?
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
         let catalog = self.installed_applications().map_err(catalog_error)?;
-        let mut candidates: Vec<StartupCandidate> = catalog
+        let mut candidates: Vec<(String, StartupCandidate)> = catalog
             .entries()
             .iter()
             .filter(|entry| {
-                !entry.application.name.is_empty()
-                    && !existing.iter().any(|id| id == entry.id.as_str())
+                !entry.application.name.is_empty() && !existing.contains(entry.id.as_str())
             })
-            .map(|entry| StartupCandidate {
-                id: entry.id.as_str().to_owned(),
-                name: entry.application.name.clone(),
+            .map(|entry| {
+                let candidate = StartupCandidate {
+                    id: entry.id.as_str().to_owned(),
+                    name: entry.application.name.clone(),
+                };
+                (candidate.name.to_lowercase(), candidate)
             })
             .collect();
-        candidates.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        Ok(candidates)
+        // The sort key is folded once per candidate instead of twice per comparison.
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        Ok(candidates
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .collect())
     }
 
     /// Copies an installed application's desktop entry into the user autostart folder.

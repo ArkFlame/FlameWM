@@ -21,15 +21,8 @@ fn current_with(settings: &ApplicationSettings) -> Result<String, String> {
 }
 
 pub fn current() -> String {
-    if let Ok(output) = std::process::Command::new("xdg-mime")
-        .args(["query", "default", MIME])
-        .output()
-    {
-        let selected = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() && !selected.trim().is_empty() {
-            return label(Some(selected.trim()));
-        }
-    }
+    // Resolved through the shared facade: the same `mimeapps.list` precedence the rest of the
+    // desktop uses, without spawning `xdg-mime` on every Settings refresh.
     ApplicationSettings::from_environment()
         .map_err(|e| e.to_string())
         .and_then(|settings| current_with(&settings))

@@ -185,7 +185,8 @@ mod tests {
 
     use super::*;
 
-    /// A flood of PTY output reaches the UI at frame cadence, not once per 16 KB read, and no byte is lost.
+    /// A flood of PTY output reaches the UI as batched events at frame cadence, not once per read, and no byte is
+    /// lost.
     #[test]
     fn a_flood_of_output_wakes_the_ui_at_frame_cadence_and_loses_no_bytes() {
         const FLOOD: usize = 4 * 1024 * 1024;
@@ -226,7 +227,7 @@ mod tests {
             }
         }
         assert_eq!(bytes, FLOOD, "every output byte is forwarded");
-        assert!(chunks >= 16, "the flood arrives in many reads ({chunks})");
+        assert!(chunks >= 16, "the flood arrives in many events ({chunks})");
         let frames = elapsed.as_millis() as usize / FRAME.as_millis() as usize;
         assert!(
             wakes <= frames + 3,

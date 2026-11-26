@@ -139,6 +139,9 @@ pub(crate) fn record(
 /// Bounded: reuses the fixed slot registry, no allocation, no heap label
 /// keys. CPU components are recorded as zero.
 pub fn record_elapsed(label: &'static str, elapsed: std::time::Duration) {
+    if !crate::enabled() {
+        return;
+    }
     let ns = elapsed.as_nanos().min(u64::MAX as u128) as u64;
     let idx = slot_for(label);
     record(idx, ns, ns, 0, 0);

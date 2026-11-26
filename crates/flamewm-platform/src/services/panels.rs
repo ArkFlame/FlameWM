@@ -200,9 +200,9 @@ impl PanelService {
     pub fn reconcile_windows(&mut self, windows: &[WindowSnapshot]) -> bool {
         let live = windows
             .iter()
-            .map(|window| (window.app_id.clone(), window.reference))
+            .map(|window| (&window.app_id, window.reference))
             .collect::<Vec<_>>();
-        let changed = self.tasks.reconcile_live(&live);
+        let changed = self.tasks.reconcile_live_borrowed(&live);
         if changed {
             self.bump_revision();
         }

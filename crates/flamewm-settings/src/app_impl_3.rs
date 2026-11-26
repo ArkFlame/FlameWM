@@ -48,9 +48,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Projects the current default handler name for each Default Applications row.
     pub(crate) fn sync_defaults(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        for slot in 0..crate::default_apps_page::GROUPS.len() {
-            let value = crate::default_apps_page::current_label(slot)
-                .unwrap_or_else(|_| "Unavailable".to_owned());
+        let labels = crate::default_apps_page::labels();
+        for (slot, value) in labels.into_iter().enumerate() {
             document.text(&format!("defaults-value-{slot}"), value)?;
         }
         Ok(())
