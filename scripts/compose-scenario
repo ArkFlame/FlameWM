@@ -147,8 +147,11 @@ for _ in {1..100}; do
 done
 # Warm-up: map the window and land its first frame outside the measured ticks.
 pause 1.0
-# Two full one-second ticks with continuous PTY output in flight.
-pause 2.2
+# Sampled window: several one-second ticks with continuous PTY output in flight. The nested
+# compositor renders XWayland damage in sporadic bursts (it only presents when the host sends frame
+# callbacks), so one second can easily miss the busy tick; a longer window lets the busiest tick be
+# selected. Each tick is still a one-second sample.
+pause 5.2
 
 kill -TERM "$client_pid" 2>/dev/null || true
 client_pid=''
