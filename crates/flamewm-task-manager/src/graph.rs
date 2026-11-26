@@ -40,10 +40,15 @@ impl History {
         }
     }
 
-    /// Logical order, oldest sample first.
+    /// Logical order, oldest sample first. Two slice walks instead of a modulo per element:
+    /// `copy_in_order` and `peak` run for every drawn series on every sample.
     fn in_order(&self) -> impl Iterator<Item = f32> + '_ {
         let start = (self.head + SAMPLES - self.len) % SAMPLES;
-        (0..self.len).map(move |index| self.values[(start + index) % SAMPLES])
+        self.values[start..]
+            .iter()
+            .chain(self.values[..start].iter())
+            .copied()
+            .take(self.len)
     }
 
     /// Copies the history in logical order into `out`; returns the number of written entries.
@@ -106,16 +111,41 @@ pub fn render_into(series: &[Series<'_>], full_scale: f32, pixels: &mut Vec<u8>)
             let value = values[index] + (values[next] - values[index]) * blend_factor;
             let y = y_of(value).round() as usize;
             if line.filled {
-                for fill_y in y..height {
-                    blend(&mut pixels[..], x, fill_y, [r, g, b, AREA_ALPHA]);
-                }
+                fill_below(pixels, x, y, [r, g, b, AREA_ALPHA]);
             }
             let (top, bottom) = previous_y.map_or((y, y), |last| (last.min(y), last.max(y)));
             for line_y in top..=(bottom + 1).min(height - 1) {
-                blend(&mut pixels[..], x, line_y, [r, g, b, 255]);
+                store(pixels, x, line_y, [r, g, b, 255]);
             }
             previous_y = Some(y);
         }
+    }
+}
+
+/// Writes one opaque pixel. The line pass is always opaque, so it needs no blend: the old path
+/// went through the source-over fast path for every line pixel of every column.
+fn store(pixels: &mut [u8], x: usize, y: usize, source: [u8; 4]) {
+    let index = (y * WIDTH as usize + x) * 4;
+    if let Some(target) = pixels.get_mut(index..index + 4) {
+        target.copy_from_slice(&source);
+    }
+}
+
+/// Fills one column from `top` down with the translucent area colour. The raster is cleared
+/// before the series are drawn, so only the grid dots are non-empty here: the common pixel is a
+/// plain 4-byte store, not a full source-over with floats. The area is the widest per-sample
+/// drawing primitive (~half the raster per filled card), so this is the one that matters.
+fn fill_below(pixels: &mut [u8], x: usize, top: usize, source: [u8; 4]) {
+    let stride = WIDTH as usize * 4;
+    let mut index = top * stride + x * 4;
+    while index + 4 <= pixels.len() {
+        let target = &mut pixels[index..index + 4];
+        if target[3] == 0 {
+            target.copy_from_slice(&source);
+        } else {
+            blend_pixel(target, source);
+        }
+        index += stride;
     }
 }
 
@@ -124,6 +154,11 @@ fn blend(pixels: &mut [u8], x: usize, y: usize, source: [u8; 4]) {
     let Some(target) = pixels.get_mut(index..index + 4) else {
         return;
     };
+    blend_pixel(target, source);
+}
+
+/// Source-over of one pixel into `target`.
+fn blend_pixel(target: &mut [u8], source: [u8; 4]) {
     // An opaque line and an empty pixel both resolve to the source exactly; skipping the
     // floating-point source-over for them removes most of the per-sample graph math.
     if source[3] == 255 || (source[3] != 0 && target[3] == 0) {

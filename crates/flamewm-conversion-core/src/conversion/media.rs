@@ -183,14 +183,15 @@ pub(super) fn codecs_available(format: &str, arguments: &[&str]) -> bool {
     let Some(encoders) = ffmpeg_encoders() else {
         return false;
     };
-    let mut needed: Vec<&str> = arguments
+    if !arguments
         .windows(2)
         .filter(|pair| pair[0] == "-c:a" || pair[0] == "-c:v")
         .map(|pair| pair[1])
         .filter(|name| *name != "copy")
-        .collect();
-    if matches!(format, "gif" | "png") {
-        needed.push(format);
+        .all(|name| encoders.contains(name))
+    {
+        return false;
     }
-    needed.iter().all(|name| encoders.contains(*name))
+    // `copy` names no encoder; only these muxers need their own encoder probe.
+    !matches!(format, "gif" | "png") || encoders.contains(format)
 }

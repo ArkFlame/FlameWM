@@ -85,9 +85,15 @@ fn parse_mode(s: &str) -> Option<(Kind, u32)> {
 
 fn build(mode_str: &str, size: u64, mtime: i64, name_raw: &str) -> Option<Entry> {
     let (kind, mode) = parse_mode(mode_str)?;
-    let (name, link_target) = match (kind, name_raw.split_once(" -> ")) {
-        (Kind::Symlink, Some((n, t))) => (n, Some(t.to_string())),
-        _ => (name_raw, None),
+    // Only symlinks carry a ` -> target` suffix; scanning every file name for it costs time on
+    // large listings for nothing.
+    let (name, link_target) = if kind == Kind::Symlink {
+        match name_raw.split_once(" -> ") {
+            Some((n, t)) => (n, Some(t.to_string())),
+            None => (name_raw, None),
+        }
+    } else {
+        (name_raw, None)
     };
     if name.is_empty() || name == "." || name == ".." {
         return None;
@@ -153,18 +159,6 @@ fn civil_to_epoch(year: i64, month: i64, day: i64, hour: i64, minute: i64) -> i6
     days * 86_400 + hour * 3600 + minute * 60
 }
 
-/// Parse a whole listing, skipping `total` headers and unparseable lines.
-#[must_use]
-pub fn parse_listing(output: &str, longname_year: Option<i64>) -> Vec<Entry> {
-    output
-        .lines()
-        .filter(|l| !l.starts_with("total "))
-        .filter_map(|l| match longname_year {
-            Some(y) => parse_longname(l, y),
-            None => parse_ls_numeric(l),
-        })
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {
@@ -230,14 +224,6 @@ mod tests {
         .unwrap();
         assert_eq!(old.kind, Kind::Dir);
         assert_eq!(old.mtime, civil_to_epoch(2019, 3, 3, 0, 0));
-    }
-
-    #[test]
-    fn listing_skips_total_and_dots() {
-        let out = "total 8\n. stuff\n-rw-r--r-- 1 0 0 1 1 a\ngarbage\n";
-        let v = parse_listing(out, None);
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].name, "a");
     }
 
     #[test]

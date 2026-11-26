@@ -15,7 +15,7 @@ use zstd::stream::write::Encoder as ZstdEncoder;
 
 use crate::error::{ArchiveError, Result};
 use crate::format::Format;
-use crate::progress::{Reporter, Tracked, copy_tracked};
+use crate::progress::{COPY_BUFFER, Reporter, Tracked, copy_tracked};
 
 pub enum Writer {
     /// Zip with an optional AES-256 password applied to every file entry.
@@ -203,8 +203,12 @@ fn tar_file(
 ) -> Result<()> {
     let mut header = tar_header(tar::EntryType::Regular, size, mode & 0o777);
     let tracked = Tracked::new(data, rep);
-    tar.append_data(&mut header, name, tracked)
-        .map_err(|err| rep.fail(err))?;
+    // `tar` copies through a small internal chunk. A buffered reader in front of the tracked
+    // source turns that into `COPY_BUFFER` prefetches, cutting the read syscalls per entry.
+    let mut buffered = io::BufReader::with_capacity(COPY_BUFFER, tracked);
+    let appended = tar.append_data(&mut header, name, &mut buffered);
+    drop(buffered);
+    appended.map_err(|err| rep.fail(err))?;
     Ok(())
 }
 

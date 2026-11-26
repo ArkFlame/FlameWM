@@ -45,33 +45,38 @@ impl Drop for ConversionSlot {
 /// Resolve an executable without a shell. An existing, non-executable file
 /// named `magick` must not shadow a working `convert` installation.
 fn available_converter() -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    for program in ["magick", "convert"] {
-        for directory in std::env::split_paths(&paths) {
-            let candidate = directory.join(program);
-            if candidate
-                .metadata()
-                .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111 != 0))
-            {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    available_program("magick").or_else(|| available_program("convert"))
+}
+
+/// Programs resolved once per process. Menu construction asks for every
+/// provider on each open (`ffmpeg` several times through `offered_tools`), and
+/// each miss used to re-read `PATH` and `stat` every directory on the UI side.
+/// Caching keeps one filesystem sweep for the life of the process.
+fn program_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 fn available_program(program: &str) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&paths) {
-        let candidate = directory.join(program);
-        if candidate
-            .metadata()
-            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        {
-            return Some(candidate);
-        }
+    let mut cache = program_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(cached) = cache.get(program) {
+        return cached.clone();
     }
-    None
+    let found = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|directory| directory.join(program))
+            .find(|candidate| {
+                candidate.metadata().is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            })
+    });
+    cache.insert(program.to_owned(), found.clone());
+    found
 }
 
 fn wait_for_converter(command: Command) -> Result<ExitStatus, String> {

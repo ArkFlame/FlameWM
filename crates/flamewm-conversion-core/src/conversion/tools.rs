@@ -169,10 +169,10 @@ pub fn offered_tools(path: &Path) -> Vec<Tool> {
             Tool::VideoFrame,
         ]);
     }
+    let has_ffmpeg = available_program("ffmpeg").is_some();
     tools.retain(|tool| {
         tool.provider() != "ffmpeg"
-            || (available_program("ffmpeg").is_some()
-                && codecs_available(tool.output().unwrap_or(""), tool.arguments()))
+            || (has_ffmpeg && codecs_available(tool.output().unwrap_or(""), tool.arguments()))
     });
     if available_program("zip").is_some() {
         tools.push(Tool::Zip);

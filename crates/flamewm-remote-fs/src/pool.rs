@@ -78,14 +78,21 @@ impl<C: Connector> Pool<C> {
             .slots
             .lock()
             .map_err(|_| Error::Io("pool poisoned".into()))?;
-        let slot = slots.entry(key.clone()).or_insert(Slot {
-            verified: now,
-            used: now,
-        });
-        slot.used = now;
-        if verified {
-            slot.verified = now;
+        // Hot path: the slot exists, so update it in place and never clone the key strings.
+        if let Some(slot) = slots.get_mut(key) {
+            slot.used = now;
+            if verified {
+                slot.verified = now;
+            }
+            return Ok(());
         }
+        slots.insert(
+            key.clone(),
+            Slot {
+                verified: now,
+                used: now,
+            },
+        );
         Ok(())
     }
 

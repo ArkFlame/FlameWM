@@ -24,20 +24,24 @@ const TOOL_NAMES: [&str; 2] = ["7zz", "7z"];
 const POLL: Duration = Duration::from_millis(25);
 
 /// Finds the first 7z binary on `PATH`. A missing tool is a clear error, never a silent fallback.
+/// The probe runs once per process: listing, extraction and creation all reuse the result.
 fn find_tool() -> Result<PathBuf> {
-    for name in TOOL_NAMES {
-        let probe = Command::new(name)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if probe.is_ok() {
-            return Ok(PathBuf::from(name));
-        }
-    }
-    Err(ArchiveError::Unsupported(
-        "7z archives need 7zz or 7z on PATH".to_owned(),
-    ))
+    static TOOL: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    TOOL.get_or_init(|| {
+        TOOL_NAMES.iter().find_map(|name| {
+            Command::new(name)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .ok()
+                .map(|_| PathBuf::from(*name))
+        })
+    })
+    .clone()
+    .ok_or_else(|| {
+        ArchiveError::Unsupported("7z archives need 7zz or 7z on PATH".to_owned())
+    })
 }
 
 /// Runs the tool to completion, polling `cancel`. Returns stdout; a non-zero exit is an error.

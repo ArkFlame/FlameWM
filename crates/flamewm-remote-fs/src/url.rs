@@ -61,13 +61,18 @@ impl Url {
         let (scheme, rest) = input
             .split_once("://")
             .ok_or_else(|| invalid("missing scheme"))?;
-        let protocol = match scheme.to_ascii_lowercase().as_str() {
-            "sftp" => Protocol::Sftp,
-            "fish" => Protocol::Fish,
-            "ssh" => Protocol::Ssh,
-            "smb" => Protocol::Smb,
-            "ftp" => Protocol::Ftp,
-            _ => return Err(invalid("unknown scheme")),
+        let protocol = if scheme.eq_ignore_ascii_case("sftp") {
+            Protocol::Sftp
+        } else if scheme.eq_ignore_ascii_case("fish") {
+            Protocol::Fish
+        } else if scheme.eq_ignore_ascii_case("ssh") {
+            Protocol::Ssh
+        } else if scheme.eq_ignore_ascii_case("smb") {
+            Protocol::Smb
+        } else if scheme.eq_ignore_ascii_case("ftp") {
+            Protocol::Ftp
+        } else {
+            return Err(invalid("unknown scheme"));
         };
         let (authority, raw_path) = match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),

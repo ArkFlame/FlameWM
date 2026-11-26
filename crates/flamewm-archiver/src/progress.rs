@@ -167,8 +167,9 @@ impl Read for Tracked<'_, '_> {
 }
 
 /// Copy buffer. Eight times the `io::copy` default, so a large entry needs one eighth of the
-/// read/write syscall pairs.
-const COPY_BUFFER: usize = 64 * 1024;
+/// read/write syscall pairs. Shared with the tar writer's read buffer so creation prefetches the
+/// same amount instead of tar's small internal chunk.
+pub(crate) const COPY_BUFFER: usize = 64 * 1024;
 
 thread_local! {
     /// Reused copy buffer. An archive of many small files used to allocate and zero a 64 KiB
@@ -202,9 +203,6 @@ fn copy_chunks(
     rep: &mut Reporter<'_>,
     buffer: &mut Vec<u8>,
 ) -> Result<u64> {
-    if buffer.len() < COPY_BUFFER {
-        buffer.resize(COPY_BUFFER, 0);
-    }
     let mut total = 0_u64;
     loop {
         // Cancel between chunks, like the `Tracked` reader does for tar entries.

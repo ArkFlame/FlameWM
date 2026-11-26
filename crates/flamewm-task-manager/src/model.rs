@@ -570,10 +570,9 @@ impl Sampler {
                 proc_path(&mut self.path, pid, "status"),
                 STATUS_PREFIX,
             );
-            cached.uid = status
+            let uid = status
                 .and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .map_or(u32::MAX, parse_uid);
-            let uid = cached.uid;
             cached.user = self
                 .user_cache
                 .as_ref()

@@ -113,6 +113,16 @@ struct Application {
     theme_dirty: bool,
     /// Metrics text and core meters change only with a new sample or a resize.
     metrics_dirty: bool,
+    /// Text last emitted into each core meter lane. A lane whose rendered percent did not change
+    /// skips its document calls and its colour math on the next sample.
+    core_text: [[u8; 4]; CORES],
+    /// Forces the next metrics paint to emit every lane (first paint, resize: the track width).
+    core_marks_dirty: bool,
+    /// Core count whose lane visibility and static labels were last emitted.
+    lanes_shown: usize,
+    /// Row slots currently marked visible in the document. Hides are emitted only for the slots
+    /// that left the window, so the always-empty tail of the table costs nothing per paint.
+    painted_rows: usize,
     sort: Sort,
     descending: bool,
     search_active: bool,
@@ -145,6 +155,10 @@ impl Application {
             theme,
             theme_dirty: true,
             metrics_dirty: true,
+            core_text: [[0_u8; 4]; CORES],
+            core_marks_dirty: true,
+            lanes_shown: usize::MAX,
+            painted_rows: 0,
             sort: Sort::Cpu,
             descending: true,
             search_active: false,
@@ -267,28 +281,44 @@ impl Application {
         }
         doc.foreground("menu-end-text", UiColor::from_rgb(DANGER_RGB, 255))
     }
-    fn paint_metrics(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
+    fn paint_metrics(&mut self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let snapshot = &self.snapshot;
         let count = snapshot.cores.len();
         let columns = count.div_ceil(CORES_PER_COLUMN).clamp(1, CORE_COLUMNS);
         let track = core_track_width(self.window.0, columns);
+        let force = std::mem::take(&mut self.core_marks_dirty);
         // Two buffers reused for every element id and text cell: the metrics card updates on each
         // sample, and `text_ref` then skips unchanged cells instead of allocating ~80 strings.
         let mut id = String::with_capacity(24);
         let mut text = String::with_capacity(64);
-        for column in 0..CORE_COLUMNS {
-            id.clear();
-            let _ = write!(id, "core-col-{column}");
-            doc.visible(&id, column == 0 || column * CORES_PER_COLUMN < count)?;
-        }
-        for i in 0..CORES {
-            let visible = i < count;
-            id.clear();
-            let _ = write!(id, "core-{i}");
-            doc.visible(&id, visible)?;
-            if !visible {
-                continue;
+        // Lane visibility and the static `0`..`31`/`31+` labels depend only on the core count, so
+        // they are emitted when it changes instead of on every 1 s sample.
+        if force || self.lanes_shown != count {
+            self.lanes_shown = count;
+            for column in 0..CORE_COLUMNS {
+                id.clear();
+                let _ = write!(id, "core-col-{column}");
+                doc.visible(&id, column == 0 || column * CORES_PER_COLUMN < count)?;
             }
+            for i in 0..CORES {
+                id.clear();
+                let _ = write!(id, "core-{i}");
+                doc.visible(&id, i < count)?;
+            }
+            for i in 0..count.min(CORES) {
+                id.clear();
+                let _ = write!(id, "core-label-{i}");
+                text.clear();
+                if i == CORES - 1 && count > CORES {
+                    let _ = write!(text, "{i}+");
+                } else {
+                    let _ = write!(text, "{i}");
+                }
+                doc.text_ref(&id, &text)?;
+            }
+        }
+        let lanes = count.min(CORES);
+        for i in 0..lanes {
             let overflow = i == CORES - 1 && count > CORES;
             let value = if overflow {
                 snapshot.cores[i..].iter().sum::<f64>() / (count - i) as f64
@@ -296,19 +326,19 @@ impl Application {
                 snapshot.cores[i]
             }
             .clamp(0.0, 100.0);
-            id.clear();
-            let _ = write!(id, "core-label-{i}");
-            text.clear();
-            if overflow {
-                let _ = write!(text, "{i}+");
-            } else {
-                let _ = write!(text, "{i}");
-            }
-            doc.text_ref(&id, &text)?;
-            id.clear();
-            let _ = write!(id, "core-pct-{i}");
+            // The lane renders an integer percent; when that rendered text is unchanged the
+            // meter keeps its previous text, fill width and colour, so an idle core costs no
+            // document call and no colour interpolation at all.
             text.clear();
             let _ = write!(text, "{value:.0}%");
+            let mut slot = [0_u8; 4];
+            slot[..text.len()].copy_from_slice(text.as_bytes());
+            if !force && self.core_text[i] == slot {
+                continue;
+            }
+            self.core_text[i] = slot;
+            id.clear();
+            let _ = write!(id, "core-pct-{i}");
             doc.text_ref(&id, &text)?;
             id.clear();
             let _ = write!(id, "cpu-fill-{i}");
@@ -469,20 +499,34 @@ impl Application {
         }
         self.rows.clear();
         let total = self.snapshot.mem_total.max(1);
-        for slot in 0..ROWS {
-            id.clear();
-            let _ = write!(id, "row-{slot}");
-            let visible = slot < self.viewport && self.first + slot < self.hits.len();
-            doc.visible(&id, visible)?;
-            if !visible {
-                continue;
+        // Row slots that can be visible with the current first row. Their visibility flags are
+        // emitted only when this count moves: restating all 40 slots (25 of them always empty at
+        // the default window size) cost 40 document calls on every sample, repaint and scroll.
+        let shown = self
+            .viewport
+            .min(self.hits.len().saturating_sub(self.first))
+            .min(ROWS);
+        if shown != self.painted_rows {
+            for slot in self.painted_rows..shown {
+                id.clear();
+                let _ = write!(id, "row-{slot}");
+                doc.visible(&id, true)?;
             }
+            for slot in shown..self.painted_rows {
+                id.clear();
+                let _ = write!(id, "row-{slot}");
+                doc.visible(&id, false)?;
+            }
+            self.painted_rows = shown;
+        }
+        for slot in 0..shown {
             let p = &self.snapshot.processes[self.hits[self.first + slot]];
             self.rows.push((p.pid, p.start));
             let indent = INDENTS[p.depth.min(8) as usize];
             cell_id(&mut id, slot, "name");
             value.clear();
-            let _ = write!(value, "{indent}{}", display_name(p));
+            value.push_str(indent);
+            value.push_str(display_name(p));
             doc.text_ref(&id, &value)?;
             cell_id(&mut id, slot, "dot");
             doc.background(&id, UiColor::from_rgb(state_color(p.state), 255))?;
@@ -1113,6 +1157,8 @@ pub fn run() -> Result<(), String> {
                     app.viewport = visible_rows(*height);
                     app.window = (*width as f32, *height as f32);
                     app.metrics_dirty = true;
+                    // The core meter track width follows the window, so every lane re-emits.
+                    app.core_marks_dirty = true;
                     app.paint(doc)
                 }
                 UiControllerEvent::Drag(_) => Ok(()),

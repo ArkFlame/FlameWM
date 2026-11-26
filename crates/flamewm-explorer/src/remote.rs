@@ -114,15 +114,23 @@ pub fn copy_items(
     // parses per source, each allocating its host and path).
     let directory_url = url_of(directory);
     let mut source_urls = Vec::with_capacity(sources.len());
+    // Remote kind from the planning stat, so a download never stats the same URL twice.
+    let mut remote_kinds: Vec<Option<Kind>> = Vec::with_capacity(sources.len());
     let mut total = 0_u64;
     for source in sources {
         let url = url_of(source);
-        total += match &url {
-            Some(url) => fs.stat(url).map_or(0, |entry| entry.size),
-            None => {
-                fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 })
-            }
+        let (bytes, kind) = match &url {
+            Some(url) => match fs.stat(url) {
+                Ok(entry) => (entry.size, Some(entry.kind)),
+                Err(_) => (0, None),
+            },
+            None => (
+                fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 }),
+                None,
+            ),
         };
+        total += bytes;
+        remote_kinds.push(kind);
         source_urls.push(url);
     }
     events(CopyEvent::Total(total));
@@ -137,6 +145,7 @@ pub fn copy_items(
             fs,
             source,
             source_url,
+            remote_kinds[index],
             directory,
             directory_url.as_ref(),
             cancel,
@@ -185,6 +194,7 @@ fn copy_one(
     fs: &impl RemoteOps,
     source: &Path,
     source_url: Option<&Url>,
+    remote_kind: Option<Kind>,
     directory: &Path,
     directory_url: Option<&Url>,
     cancel: &CancellationToken,
@@ -213,7 +223,11 @@ fn copy_one(
             )?)
         }
         (Some(from), None) => {
-            if fs.stat(from)?.kind == Kind::Dir {
+            let is_dir = match remote_kind {
+                Some(kind) => kind == Kind::Dir,
+                None => fs.stat(from)?.kind == Kind::Dir,
+            };
+            if is_dir {
                 return Err(CopyError::Refused(
                     "folders cannot be copied from remote folders yet",
                 ));
@@ -544,7 +558,11 @@ pub fn url_of(path: &Path) -> Option<Url> {
 
 #[must_use]
 pub fn is_remote(path: &Path) -> bool {
-    url_of(path).is_some()
+    // Scheme-only check: no URL parse, so callers can guard every local filesystem call without
+    // allocating. A path that merely looks remote is treated as remote (never touched locally).
+    path.to_str()
+        .and_then(|text| text.split_once("://"))
+        .is_some_and(|(scheme, _)| is_remote_scheme(scheme))
 }
 
 /// Tab/entry path form of a URL. Never pass the result to local filesystem calls.

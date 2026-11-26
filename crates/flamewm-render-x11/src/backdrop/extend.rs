@@ -70,16 +70,33 @@ pub fn mirror_extend_argb(
     dst: (u32, u32),
     origin: (i64, i64),
 ) -> Vec<u32> {
+    mirror_extend_argb_rect(src, src_w, src_h, origin, (0, 0, dst.0, dst.1))
+}
+
+/// [`mirror_extend_argb`] for one destination sub-rect `(x, y, w, h)`.
+///
+/// Every destination pixel maps to a source pixel from its own coordinates and `origin` alone, so a
+/// sub-rect holds exactly the pixels the full call would place there. An interactive resize fills
+/// only the strips it grew instead of rebuilding the whole window-sized canvas.
+#[must_use]
+pub fn mirror_extend_argb_rect(
+    src: &[u32],
+    src_w: u32,
+    src_h: u32,
+    origin: (i64, i64),
+    rect: (u32, u32, u32, u32),
+) -> Vec<u32> {
     let (sw, sh) = (i64::from(src_w), i64::from(src_h));
-    let mut out = vec![0u32; dst.0 as usize * dst.1 as usize];
-    if sw == 0 || sh == 0 || src.len() < (sw * sh) as usize {
+    let (x0, y0, w, h) = rect;
+    let mut out = vec![0u32; w as usize * h as usize];
+    if sw == 0 || sh == 0 || w == 0 || h == 0 || src.len() < (sw * sh) as usize {
         return out;
     }
-    for (j, row) in out.chunks_exact_mut(dst.0 as usize).enumerate() {
-        let sy = mirror_index(j as i64, origin.1, sh);
+    for (j, row) in out.chunks_exact_mut(w as usize).enumerate() {
+        let sy = mirror_index(y0 as i64 + j as i64, origin.1, sh);
         let src_row = &src[sy * sw as usize..(sy + 1) * sw as usize];
         for (i, px) in row.iter_mut().enumerate() {
-            *px = src_row[mirror_index(i as i64, origin.0, sw)];
+            *px = src_row[mirror_index(x0 as i64 + i as i64, origin.0, sw)];
         }
     }
     out

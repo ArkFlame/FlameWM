@@ -224,12 +224,8 @@ impl RemoteFs {
         let url = url.clone();
         self.submit(move |sh| {
             check_mutable(&url)?;
-            mutate(
-                sh,
-                &url,
-                &shell::mkdir(&url.remote_path()),
-                &url.remote_path(),
-            )
+            let path = url.remote_path();
+            mutate(sh, &url, &shell::mkdir(&path), &path)
         })
     }
 
@@ -238,12 +234,8 @@ impl RemoteFs {
         let url = url.clone();
         self.submit(move |sh| {
             check_mutable(&url)?;
-            mutate(
-                sh,
-                &url,
-                &shell::remove(&url.remote_path(), recursive),
-                &url.remote_path(),
-            )
+            let path = url.remote_path();
+            mutate(sh, &url, &shell::remove(&path, recursive), &path)
         })
     }
 
@@ -253,14 +245,20 @@ impl RemoteFs {
         self.submit(move |sh| {
             check_mutable(&from)?;
             check_mutable(&to)?;
-            if from.conn_key() != to.conn_key() || from.protocol != to.protocol {
+            if from.user != to.user
+                || from.host != to.host
+                || from.port_or_default() != to.port_or_default()
+                || from.protocol != to.protocol
+            {
                 return Err(Error::UnsupportedProtocol("cross-host rename"));
             }
+            let from_path = from.remote_path();
+            let to_path = to.remote_path();
             mutate(
                 sh,
                 &from,
-                &shell::rename(&from.remote_path(), &to.remote_path()),
-                &from.remote_path(),
+                &shell::rename(&from_path, &to_path),
+                &from_path,
             )?;
             invalidate_both(sh, &to);
             Ok(())
@@ -289,11 +287,16 @@ impl RemoteFs {
         let (tx, rx) = channel();
         let (local, url, cancel) = (local.to_path_buf(), url.clone(), cancel.clone());
         let _ = self.tx.send(Box::new(move |sh: &Shared| {
+            // Only a completed upload changes the destination listing; a failed or cancelled one
+            // leaves it untouched, so skip the cache invalidation (whose generation bump would
+            // also discard unrelated in-flight listings).
             let event = match upload_job(sh, &local, &url, &cancel, &tx) {
-                Ok(bytes) => TransferEvent::Done { bytes },
+                Ok(bytes) => {
+                    invalidate_both(sh, &url);
+                    TransferEvent::Done { bytes }
+                }
                 Err(e) => TransferEvent::Failed(e),
             };
-            invalidate_both(sh, &url);
             let _ = tx.send(event);
         }));
         rx

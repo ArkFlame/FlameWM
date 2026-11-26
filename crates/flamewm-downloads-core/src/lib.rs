@@ -83,10 +83,11 @@ const PACKAGES: &[&str] = &[
     "pkg",
 ];
 
-/// Lowercase final extension of a plain file name, or `None` without a usable stem.
-fn extension(name: &str) -> Option<String> {
+/// Final extension of a plain file name, or `None` without a usable stem. Borrowed so the
+/// per-inotify-event candidate check allocates nothing.
+fn extension(name: &str) -> Option<&str> {
     let (stem, extension) = name.rsplit_once('.')?;
-    (!stem.is_empty()).then(|| extension.to_ascii_lowercase())
+    (!stem.is_empty()).then_some(extension)
 }
 
 /// True for names the organizer may ever act on: not hidden, not a browser/editor temp or lock
@@ -101,7 +102,12 @@ pub fn is_candidate_name(name: &str) -> bool {
     {
         return false;
     }
-    !extension(name).is_some_and(|ext| PARTIAL_SUFFIXES.contains(&ext.as_str()))
+    match extension(name) {
+        Some(ext) => !PARTIAL_SUFFIXES
+            .iter()
+            .any(|partial| ext.eq_ignore_ascii_case(partial)),
+        None => true,
+    }
 }
 
 /// Category for a finished download name, or `None` when it stays in Downloads.
@@ -111,7 +117,6 @@ pub fn classify(name: &str) -> Option<Category> {
         return None;
     }
     let extension = extension(name)?;
-    let extension = extension.as_str();
     [
         (DOCUMENTS, Category::Documents),
         (TEXT, Category::Text),
@@ -120,8 +125,21 @@ pub fn classify(name: &str) -> Option<Category> {
         (PACKAGES, Category::Packages),
     ]
     .into_iter()
-    .find(|(list, _)| list.contains(&extension))
+    .find(|(list, _)| {
+        list.iter()
+            .any(|known| known.eq_ignore_ascii_case(extension))
+    })
     .map(|(_, category)| category)
+}
+
+/// Numbered sibling name: `a (2).pdf`, or `LICENSE (2)` when there is no extension.
+fn candidate_name(name: &str, index: u32) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => {
+            format!("{stem} ({index}).{extension}")
+        }
+        _ => format!("{name} ({index})"),
+    }
 }
 
 /// First name that `exists` reports free, keeping the extension: `a.pdf`, `a (1).pdf`, ...
@@ -130,15 +148,8 @@ pub fn unique_name(name: &str, exists: impl Fn(&str) -> bool) -> String {
     if !exists(name) {
         return name.to_owned();
     }
-    let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
-        _ => (name, None),
-    };
     for index in 1..u32::MAX {
-        let candidate = match extension {
-            Some(extension) => format!("{stem} ({index}).{extension}"),
-            None => format!("{name} ({index})"),
-        };
+        let candidate = candidate_name(name, index);
         if !exists(&candidate) {
             return candidate;
         }
@@ -303,10 +314,15 @@ pub fn move_into_category(dir: &Path, name: &str, category: Category) -> io::Res
         Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&folder)?,
         Err(error) => return Err(error),
     }
-    for _ in 0..MAX_NAME_ATTEMPTS {
-        let target_name = unique_name(name, |candidate| {
-            fs::symlink_metadata(folder.join(candidate)).is_ok()
-        });
+    // Try the plain name first, then numbered siblings. The rename itself reports a clash, so a
+    // burst of same-named downloads costs one syscall per candidate instead of a `stat` per
+    // candidate plus a re-scan from ` (1)` after every collision.
+    for attempt in 0..MAX_NAME_ATTEMPTS {
+        let target_name = if attempt == 0 {
+            name.to_owned()
+        } else {
+            candidate_name(name, attempt)
+        };
         let target = folder.join(&target_name);
         let outcome = match rename_no_replace(&source, &target) {
             Err(RenameFailure::CrossDevice) => {

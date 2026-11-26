@@ -31,10 +31,10 @@ pub struct UiCache {
     surface_stroke: Option<UiColor>,
     /// Per pooled slot: the last attributes written (indexed `row * pool.runs + slot`).
     slots: Vec<SlotState>,
-    /// Per pooled slot: its node id, formatted once when the pool changes instead of per write.
-    ids: Vec<String>,
     /// The row handed to rows past the frame's end, kept so a frame allocates no empty row.
     empty: Row,
+    /// Reused no-break-space text buffer for one run, so a projected row allocates no string per run.
+    text: String,
 }
 
 /// Fits a row into the pool: when a row has more runs than slots, the tail merges into the last slot. Those cells
@@ -123,7 +123,12 @@ impl UiCache {
         if self.rows.len() != pool.rows {
             self.rows = vec![None; pool.rows];
         }
-        let empty = Row::from(Vec::new());
+        // A new pool means new nodes, whose written attributes are unknown.
+        let slots = pool.rows * pool.runs;
+        if self.slots.len() != slots {
+            self.slots = vec![SlotState::default(); slots];
+        }
+        let empty = self.empty.clone();
         for row in 0..pool.rows {
             self.project_row(doc, pool, cell, row, frame.get(row).unwrap_or(&empty))?;
         }
@@ -153,8 +158,7 @@ impl UiCache {
         let previous = previous.as_deref().map(|prev| fit(prev, pool.runs));
         // One id buffer per row: a row formats an id per slot, not an allocation per slot.
         let mut id = String::new();
-        // Reused text buffer: the no-break-space form of a run, filled per slot without allocating.
-        let mut text = String::new();
+        let base = row * pool.runs;
         for slot in 0..pool.runs {
             if previous
                 .as_ref()
@@ -164,8 +168,20 @@ impl UiCache {
             }
             run_id_into(&mut id, row, slot);
             match fitted.get(slot) {
-                Some(run) => Self::write_run(doc, cell, &id, run, row, &mut text)?,
-                None => doc.visible(&id, false)?,
+                Some(run) => Self::write_run(
+                    doc,
+                    cell,
+                    &id,
+                    run,
+                    row,
+                    &mut self.text,
+                    &mut self.slots[base + slot],
+                )?,
+                None => {
+                    doc.visible(&id, false)?;
+                    // Forget the written attributes, so showing this node again sets all of them.
+                    self.slots[base + slot] = SlotState::default();
+                }
             }
         }
         self.rows[row] = Some(runs.clone());
@@ -179,6 +195,7 @@ impl UiCache {
         run: &Run,
         row: usize,
         text: &mut String,
+        state: &mut SlotState,
     ) -> Result<(), String> {
         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
         text.clear();
@@ -203,15 +220,52 @@ impl UiCache {
                 cell_h,
             ),
         };
-        doc.position(id, x, y)?;
-        doc.size(id, w, h)?;
-        doc.foreground(id, UiColor::from_rgb(run.fg, 255))?;
-        match run.bg {
-            Some(bg) => doc.background(id, UiColor::from_rgb(bg, 255))?,
-            None => doc.background_clear(id)?,
+        let weight = if run.bold { 700 } else { 400 };
+        // A node that was never written (or was hidden) needs every property.
+        if !state.visible {
+            doc.position(id, x, y)?;
+            doc.size(id, w, h)?;
+            doc.foreground(id, UiColor::from_rgb(run.fg, 255))?;
+            match run.bg {
+                Some(bg) => doc.background(id, UiColor::from_rgb(bg, 255))?,
+                None => doc.background_clear(id)?,
+            }
+            doc.font_weight(id, weight)?;
+            *state = SlotState {
+                visible: true,
+                pos: (x, y),
+                size: (w, h),
+                fg: run.fg,
+                bg: run.bg,
+                bold: run.bold,
+            };
+            return doc.visible(id, true);
         }
-        doc.font_weight(id, if run.bold { 700 } else { 400 })?;
-        doc.visible(id, true)
+        // A counter ticking or a log line scrolling keeps the box and style, so only the text above is written.
+        if state.pos != (x, y) {
+            doc.position(id, x, y)?;
+            state.pos = (x, y);
+        }
+        if state.size != (w, h) {
+            doc.size(id, w, h)?;
+            state.size = (w, h);
+        }
+        if state.fg != run.fg {
+            doc.foreground(id, UiColor::from_rgb(run.fg, 255))?;
+            state.fg = run.fg;
+        }
+        if state.bg != run.bg {
+            match run.bg {
+                Some(bg) => doc.background(id, UiColor::from_rgb(bg, 255))?,
+                None => doc.background_clear(id)?,
+            }
+            state.bg = run.bg;
+        }
+        if state.bold != run.bold {
+            doc.font_weight(id, weight)?;
+            state.bold = run.bold;
+        }
+        Ok(())
     }
 }
 
