@@ -277,8 +277,11 @@ impl Service {
     }
 
     /// Called after every loop dispatch: emits `WindowsSnapshotChanged` when the windows moved.
+    ///
+    /// The caller (`main`'s post-dispatch hook) owns the `wmwayland.dispatch.control` span; do not
+    /// start a second one here, which double-counted every turn and made control look like the
+    /// largest subsystem in the composition dump.
     pub fn after_dispatch(&self, state: &mut State) {
-        let _span = crate::profile::control();
         // Pointer motion repaints without touching the mirror: rebuilding it on every loop turn
         // was per-motion work on the input path. Every path that changes the mirror also requests a
         // redraw (`State::request_full_redraw` sets `mirror_dirty`), so this gate cannot miss a change.

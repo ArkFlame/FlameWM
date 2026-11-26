@@ -788,9 +788,9 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // the first flip completes.
     stage_line(Stage::Ready, StageStatus::Ok, "backend_init");
     let result = event_loop.run(None, &mut state, |state| {
-        let _flush = profile::wayland_flush();
+        let flush_span = profile::wayland_flush();
         let _ = state.display.flush_clients();
-        drop(_flush);
+        drop(flush_span);
         if let Some(service) = state.control.clone() {
             service.after_dispatch(state);
         }

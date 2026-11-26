@@ -316,18 +316,22 @@ pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
     decorations.retain(|window| state.model.get(window).is_some());
     // Topmost: the snap preview is drawn over every window while a move grab targets a snap.
     out.extend(state.snap_preview.elements(renderer, scale));
-    out.extend(scene_elements(
+    // Append straight into `out`: a per-frame intermediate `Vec` here cost one allocation plus a
+    // full element copy on every painted frame in both backends.
+    scene_elements_into(
         state,
         renderer,
         &mut decorations,
         crate::scene::front_to_back(state),
         false,
-    ));
+        &mut out,
+    );
     out
 }
 
 /// Elements for `items` in front-to-back order. `capture` builds the scene under a Dock backdrop:
 /// it produces no backdrop elements, so a translucent surface never captures another one.
+/// Owned result for callers that cannot append into an existing buffer.
 fn scene_elements(
     state: &State,
     renderer: &mut GlowRenderer,
@@ -335,10 +339,23 @@ fn scene_elements(
     items: impl IntoIterator<Item = crate::scene::SceneItem>,
     capture: bool,
 ) -> Vec<Elem> {
+    let mut out: Vec<Elem> = Vec::new();
+    scene_elements_into(state, renderer, decorations, items, capture, &mut out);
+    out
+}
+
+/// [`scene_elements`] appending into `out`, so a frame builder reuses its element buffer.
+fn scene_elements_into(
+    state: &State,
+    renderer: &mut GlowRenderer,
+    decorations: &mut Decorations,
+    items: impl IntoIterator<Item = crate::scene::SceneItem>,
+    capture: bool,
+    out: &mut Vec<Elem>,
+) {
     use crate::scene::SceneItem;
 
     let scale = state.output_scale();
-    let mut out: Vec<Elem> = Vec::new();
     let hovered_button = state.model.hit(state.pointer.x, state.pointer.y);
     for item in items {
         match item {
@@ -501,7 +518,6 @@ fn scene_elements(
             Kind::Unspecified,
         )));
     }
-    out
 }
 
 fn layer_elements(
@@ -523,6 +539,19 @@ fn layer_elements(
 
 pub fn render_frame(state: &mut State) {
     let _span = crate::profile::render();
+    // A host-drawn pointer means the window paints the cursor itself, so a pointer-motion request
+    // only sets the redraw flag (`request_cursor_paint`), never the scene flag. Painting then
+    // rebuilt the whole element list, re-checked both backdrop captures and submitted a
+    // byte-identical frame. Consume the scene flag and skip that paint: every path that changes
+    // pixels calls `request_paint`/`request_redraw` and sets it again. A dump arms its own scene
+    // flag through `request_redraw`, and the lock screen never takes this path.
+    if !state.take_scene_dirty()
+        && state.dump.is_none()
+        && !state.session_locked
+        && State::host_draws_pointer_status(&state.cursor_status)
+    {
+        return;
+    }
     let Some(mut backend) = state.backend.take() else {
         return;
     };

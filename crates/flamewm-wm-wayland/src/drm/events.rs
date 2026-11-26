@@ -6,6 +6,7 @@ use super::*;
 /// finds it borrowed means a paint is already running on this thread, and the request is left in
 /// `state`'s dirty flag so that in-flight pass or the next vblank picks it up.
 pub(super) fn render_all(state: &mut State, drm: &Rc<RefCell<Drm>>) {
+    let _span = crate::profile::render();
     let Ok(mut d) = drm.try_borrow_mut() else {
         return;
     };
