@@ -132,10 +132,11 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
 /// Unique app ids of the windows listed in the task surfaces, in window order.
 #[must_use]
 pub fn running_apps(windows: &[WindowSnapshot]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut apps: Vec<String> = Vec::new();
     for window in windows.iter().filter(|window| !window.skip_taskbar) {
         let id = window.app_id.as_str();
-        if !id.is_empty() && !apps.iter().any(|known| known == id) {
+        if !id.is_empty() && seen.insert(id) {
             apps.push(id.to_owned());
         }
     }
@@ -488,42 +489,60 @@ fn highlight_css(bar: Rect) -> (f32, f32, f32, f32) {
     }
 }
 
+/// Stable document node ids for the fixed dock slot count, built once. A
+/// projection then borrows `&'static str` instead of allocating three
+/// `format!` strings per slot (72 heap allocations per redraw).
+struct DockNodeIds {
+    slot: [String; MAX_SLOTS],
+    icon: [String; MAX_SLOTS],
+    dot: [String; MAX_SLOTS],
+}
+
+fn dock_node_ids() -> &'static DockNodeIds {
+    static IDS: std::sync::OnceLock<DockNodeIds> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| DockNodeIds {
+        slot: std::array::from_fn(|i| format!("dock-slot-{}", i + 1)),
+        icon: std::array::from_fn(|i| format!("dock-slot-{}-icon", i + 1)),
+        dot: std::array::from_fn(|i| format!("dock-slot-{}-dot", i + 1)),
+    })
+}
+
 /// Writes one frame into `dock.html`. Hover labels are separate popups (`sync_dock_label`).
 pub fn project_dock(
     document: &mut impl UiDocumentAccess,
     frame: &DockFrame,
     squared: bool,
 ) -> Result<(), String> {
+    let ids = dock_node_ids();
     for i in 0..MAX_SLOTS {
-        let n = i + 1;
-        let slot_id = format!("dock-slot-{n}");
-        let icon_id = format!("dock-slot-{n}-icon");
-        let dot_id = format!("dock-slot-{n}-dot");
+        let slot_id = ids.slot[i].as_str();
+        let icon_id = ids.icon[i].as_str();
+        let dot_id = ids.dot[i].as_str();
         let Some(slot) = frame.slots.get(i).copied() else {
-            for id in [&slot_id, &icon_id, &dot_id] {
+            for id in [slot_id, icon_id, dot_id] {
                 document.visible(id, false)?;
             }
             continue;
         };
         let (x, y, w, h) = rect_to_css(slot);
-        document.visible(&slot_id, true)?;
-        document.position(&slot_id, x, y)?;
-        document.size(&slot_id, w, h)?;
+        document.visible(slot_id, true)?;
+        document.position(slot_id, x, y)?;
+        document.size(slot_id, w, h)?;
         // Icon and dot are children of the slot button, so their
         // positions are slot-local.
         let local = |r: Rect| (r.x - slot.x, r.y - slot.y, r.w, r.h);
         let (ix, iy, iw, ih) = local(frame.icons[i]);
-        document.visible(&icon_id, true)?;
-        document.position(&icon_id, ix, iy)?;
-        document.size(&icon_id, iw, ih)?;
+        document.visible(icon_id, true)?;
+        document.position(icon_id, ix, iy)?;
+        document.size(icon_id, iw, ih)?;
         match frame.dots[i] {
             Some(dot) => {
                 let (dx, dy, dw, dh) = local(dot);
-                document.visible(&dot_id, true)?;
-                document.position(&dot_id, dx, dy)?;
-                document.size(&dot_id, dw, dh)?;
+                document.visible(dot_id, true)?;
+                document.position(dot_id, dx, dy)?;
+                document.size(dot_id, dw, dh)?;
             }
-            None => document.visible(&dot_id, false)?,
+            None => document.visible(dot_id, false)?,
         }
     }
     let (bx, by, bw, bh) = rect_to_css(frame.bar);

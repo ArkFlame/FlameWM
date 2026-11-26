@@ -482,10 +482,12 @@ impl NotificationHost {
         let Some(name) = notification.icon_name.as_deref() else {
             return self.set_icon(runtime, None);
         };
-        let root = self.icon_root.clone();
-        let loader = self
-            .icons
-            .get_or_insert_with(|| IconLoader::spawn(root, String::new()));
+        if self.icons.is_none() {
+            self.icons = Some(IconLoader::spawn(self.icon_root.clone(), String::new()));
+        }
+        let Some(loader) = self.icons.as_mut() else {
+            return self.set_icon(runtime, None);
+        };
         loader.request(
             IconTarget::TaskSlot(0),
             name,
@@ -509,7 +511,7 @@ impl NotificationHost {
         let wanted = self
             .visible
             .as_ref()
-            .and_then(|notification| notification.icon_name.clone());
+            .and_then(|notification| notification.icon_name.as_deref());
         let Some(loader) = self.icons.as_mut() else {
             self.icon_wait = false;
             return Ok(());
@@ -517,7 +519,7 @@ impl NotificationHost {
         let mut arrived = None;
         for result in loader.drain_ready() {
             let matches = result.target == IconTarget::TaskSlot(0)
-                && Some(&result.name) == wanted.as_ref()
+                && wanted == Some(result.name.as_str())
                 && result.width == notifications::NOTIFICATION_ICON_EDGE
                 && result.height == notifications::NOTIFICATION_ICON_EDGE;
             if matches {
@@ -1059,11 +1061,16 @@ fn execute() -> Result<(), String> {
                 } else {
                     None
                 };
-                tick_state.borrow_mut().set_output_pointer(pointer);
-                tick_state.borrow_mut().tick(runtime, &clock_due)?;
-                tick_state.borrow_mut().sync_polkit(runtime)?;
-                tick_state.borrow_mut().sync_bluetooth(runtime)?;
-                tick_state.borrow_mut().tick_tray(runtime);
+                {
+                    // One RefCell borrow across the whole shell turn instead of
+                    // re-borrowing the loop state for every step.
+                    let mut state = tick_state.borrow_mut();
+                    state.set_output_pointer(pointer);
+                    state.tick(runtime, &clock_due)?;
+                    state.sync_polkit(runtime)?;
+                    state.sync_bluetooth(runtime)?;
+                    state.tick_tray(runtime);
+                }
                 if let Some(host) = notifications.as_ref() {
                     if let Err(error) = host.borrow_mut().tick(runtime, Some(&shared_wake)) {
                         eprintln!("flamewm-shell: notification UI update failed: {error}");
