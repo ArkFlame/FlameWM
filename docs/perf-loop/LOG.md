@@ -11,3 +11,5 @@
 ## Build 5: cargo check --workspace --all-targets green, 0 fixes. u56,u61-u67 landed; stale-pool reaped and restarted with abort_requeue.
 
 ## Build 6: cargo check --workspace --all-targets green after 1 fix (terminal session.rs PollFd::new takes &fd). u68-u78 landed or in flight.
+
+## Release build + nested smoke after build 6: release build 0 errors (3 dead-code warnings), `scripts/flamewm-nested-smoke` PASS (10 s, no early exit). First real run of u01-u78 changes on the compositor; no composition profile taken yet.
