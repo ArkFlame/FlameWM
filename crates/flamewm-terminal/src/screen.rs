@@ -762,12 +762,11 @@ impl Perform for Screen {
                 let mut changed = false;
                 for offset in 0..take {
                     let cell = &line[col + offset];
-                    if *cell
-                        != Cell {
-                            ch: char::from(rest[offset]),
-                            ..template
-                        }
-                    {
+                    let expected = Cell {
+                        ch: char::from(rest[offset]),
+                        ..template
+                    };
+                    if *cell != expected {
                         changed = true;
                         break;
                     }
