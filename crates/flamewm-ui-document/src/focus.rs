@@ -62,11 +62,7 @@ pub fn next_focusable_where(
                 // Bounded wrap instead of a `% count` division per candidate; `index` is always
                 // below `count`, so the two forms are equal.
                 index = if reverse {
-                    if index == 0 {
-                        count - 1
-                    } else {
-                        index - 1
-                    }
+                    if index == 0 { count - 1 } else { index - 1 }
                 } else if index + 1 == count {
                     0
                 } else {
