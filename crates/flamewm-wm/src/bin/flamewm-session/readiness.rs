@@ -1,7 +1,15 @@
 use super::*;
 use std::path::Path;
+// `rustix/event` arrives through the workspace's feature unification (flamewm-integrations-linux
+// enables it); polling the X11 socket and the wakeup pipe is what replaces the former sleep-poll.
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+use x11rb::protocol::xproto::{AtomEnum, ChangeWindowAttributesAux, ConnectionExt, EventMask};
+use x11rb::rust_connection::RustConnection;
+
+/// Shortest readiness wait slice: a zero remainder still blocks once in `poll` before re-checking.
+const MINIMUM_WAIT: Duration = Duration::from_millis(1);
 
 /// Read end of the self-pipe written by the signal handlers for SIGCHLD and stop signals.
 pub(super) static WAKEUP: OnceLock<UnixStream> = OnceLock::new();
@@ -43,6 +51,95 @@ pub(super) fn wait_for_wakeup(timeout: Option<Duration>) -> Result<(), String> {
         }
         Err(error) => Err(format!("wait for supervisor wakeup: {error}")),
     }
+}
+
+/// Event source for window-manager readiness: one persistent X11 connection whose root window is
+/// selected for property changes, so the socket becomes readable exactly when
+/// `_NET_SUPPORTING_WM_CHECK` can change. Replaces the former 100 ms sleep-poll of that property.
+pub(super) struct ReadinessWatch {
+    connection: RustConnection,
+    screen_num: usize,
+}
+
+impl ReadinessWatch {
+    fn open() -> Option<Self> {
+        let (connection, screen_num) = x11rb::connect(None).ok()?;
+        let root = connection.setup().roots.get(screen_num)?.root;
+        connection
+            .change_window_attributes(
+                root,
+                &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+            )
+            .ok()?;
+        connection.flush().ok()?;
+        Some(Self {
+            connection,
+            screen_num,
+        })
+    }
+
+    fn connection(&self) -> &RustConnection {
+        &self.connection
+    }
+
+    fn ewmh_ready(&self) -> Result<bool, String> {
+        ewmh_ready_on(&self.connection, self.screen_num)
+    }
+
+    /// Drops queued property events: the loop re-reads the property itself after every wakeup.
+    fn drain_events(&self) {
+        while matches!(self.connection.poll_for_event(), Ok(Some(_))) {}
+    }
+}
+
+/// Block length for one readiness wait: bounded by the remaining readiness budget and by the
+/// supervisor's missed-wakeup bound, so a dropped signal-hook byte costs one cheap re-check.
+pub(super) fn readiness_wait_timeout(remaining: Duration) -> Duration {
+    remaining.clamp(MINIMUM_WAIT, SUPERVISOR_SAFETY_TIMEOUT)
+}
+
+/// Blocks until readiness can change (root-window property event), a child exits or a stop signal
+/// arrives, or `timeout` elapses. Returns `false` when the X11 watch socket is gone and must reopen.
+pub(super) fn wait_for_ready_event(
+    watch: Option<&ReadinessWatch>,
+    timeout: Duration,
+) -> Result<bool, String> {
+    let reader = WAKEUP
+        .get()
+        .ok_or_else(|| "supervisor wakeup pipe is not registered".to_owned())?;
+    if let Some(watch) = watch {
+        watch.drain_events();
+    }
+    let mut fds = Vec::with_capacity(2);
+    if let Some(watch) = watch {
+        fds.push(PollFd::new(watch.connection().stream(), PollFlags::IN));
+    }
+    fds.push(PollFd::new(reader, PollFlags::IN));
+    let timeout = Timespec {
+        tv_sec: timeout.as_secs() as _,
+        tv_nsec: timeout.subsec_nanos().into(),
+    };
+    loop {
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(_) => break,
+            Err(Errno::INTR) => {}
+            Err(error) => return Err(format!("wait for readiness event: {error}")),
+        }
+    }
+    let wakeup = fds.last().is_some_and(|fd| {
+        fd.revents()
+            .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR)
+    });
+    let x11_gone = watch.is_some()
+        && fds.first().is_some_and(|fd| {
+            fd.revents()
+                .intersects(PollFlags::HUP | PollFlags::ERR | PollFlags::NVAL)
+        });
+    if wakeup {
+        // Drain the signal bytes so the next poll blocks again; a closed pipe stays an error.
+        wait_for_wakeup(Some(MINIMUM_WAIT))?;
+    }
+    Ok(!x11_gone)
 }
 
 pub(super) fn check_stop(stop_requested: &AtomicBool) -> Result<(), String> {
@@ -97,7 +194,8 @@ pub(super) fn wait_ready(
     let deadline = Instant::now() + READY_TIMEOUT;
     let mut last_error = String::from("readiness not yet available");
     let mut ewmh_seen = false;
-    while Instant::now() < deadline {
+    let mut watch = ReadinessWatch::open();
+    loop {
         if Instant::now() >= deadline {
             break;
         }
@@ -112,12 +210,16 @@ pub(super) fn wait_ready(
                 wm.plan.program.display()
             ));
         }
-        if Instant::now() >= deadline {
-            break;
+        if watch.is_none() {
+            watch = ReadinessWatch::open();
         }
-        let ewmh = ewmh_ready();
-        if Instant::now() >= deadline {
-            break;
+        let ewmh = match watch.as_ref() {
+            Some(watch) => watch.ewmh_ready(),
+            None => ewmh_ready(),
+        };
+        if ewmh.is_err() {
+            // A broken watch connection is reopened on the next pass instead of spinning on it.
+            watch = None;
         }
         match ewmh {
             Ok(true) => {
@@ -142,14 +244,25 @@ pub(super) fn wait_ready(
                     }
                     Err(error) => last_error = format!("session control bootstrap: {error}"),
                 }
-                if Instant::now() >= deadline {
-                    break;
-                }
             }
             Ok(false) => "EWMH supporting-WM check is not valid".clone_into(&mut last_error),
             Err(error) => last_error = format!("EWMH readiness: {error}"),
         }
-        thread::sleep(TICK.min(deadline.saturating_duration_since(Instant::now())));
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        if !wait_for_ready_event(
+            watch.as_ref(),
+            if ewmh_seen {
+                // The control socket has no event source: keep the short retry once the WM is up.
+                readiness_wait_timeout(remaining).min(Duration::from_millis(100))
+            } else {
+                readiness_wait_timeout(remaining)
+            },
+        )? {
+            watch = None;
+        }
     }
     readiness_timeout(
         ewmh_seen,
@@ -226,6 +339,10 @@ pub(super) fn control_ready(timeout: Duration) -> Result<bool, String> {
 
 pub(super) fn ewmh_ready() -> Result<bool, String> {
     let (connection, screen_num) = x11rb::connect(None).map_err(|error| error.to_string())?;
+    ewmh_ready_on(&connection, screen_num)
+}
+
+fn ewmh_ready_on(connection: &RustConnection, screen_num: usize) -> Result<bool, String> {
     let root = connection
         .setup()
         .roots
@@ -270,8 +387,25 @@ pub(super) fn supporting_wm_check_is_valid(
 
 #[cfg(test)]
 mod tests {
-    use super::readiness_timeout;
+    use super::{readiness_timeout, readiness_wait_timeout};
     use std::path::Path;
+    use std::time::Duration;
+
+    #[test]
+    fn readiness_wait_is_deadline_and_fallback_bounded() {
+        assert_eq!(
+            readiness_wait_timeout(Duration::from_secs(30)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            readiness_wait_timeout(Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            readiness_wait_timeout(Duration::ZERO),
+            Duration::from_millis(1)
+        );
+    }
 
     #[test]
     fn readiness_timeout_is_fatal_only_before_ewmh_is_ready() {

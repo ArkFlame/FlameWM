@@ -12,7 +12,9 @@ pub const NOTICE_TEXT: &str = "FlameWM organizes your downloads automatically in
 /// A file that stopped changing for this long is moved even without a close/rename signal.
 pub const STABLE_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// Poll cadence while a candidate file is still settling.
+/// Poll cadence while a candidate file is still settling. A consumer arms this only while it
+/// tracks a candidate name; once nothing is tracked the settle timer is cleared, so an idle
+/// organizer holds no timer and costs no wakeup.
 pub const POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Upper bound of moves per scheduling tick so a burst cannot starve the UI loop.

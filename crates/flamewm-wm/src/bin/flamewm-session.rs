@@ -53,8 +53,6 @@ const SHUTDOWN_SIGNAL: &str = "session shutdown signal received";
 
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
-const TICK: Duration = Duration::from_millis(100);
-
 const STARTUP_GRACE: Duration = Duration::from_millis(500);
 
 const KDE_SESSION_IDENTITY: [&str; 3] =
