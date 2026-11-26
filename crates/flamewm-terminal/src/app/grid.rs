@@ -41,6 +41,14 @@ fn same_inputs(old: &[(Row, Rect)], new: &[(Row, Rect)]) -> bool {
 }
 
 fn compose_row(inputs: &[(Row, Rect)]) -> Row {
+    // The common frame has one pane starting at column 0: when every run already fits, the row is the pane's row, so
+    // hand out the shared allocation instead of cloning each run's text into a new one.
+    if let [(line, rect)] = inputs
+        && rect.x0 == 0
+        && line.iter().all(|run| run.col + run.cells <= rect.cols)
+    {
+        return line.clone();
+    }
     inputs
         .iter()
         .flat_map(|(line, rect)| place_runs(line, *rect))

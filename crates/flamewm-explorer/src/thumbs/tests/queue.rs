@@ -60,6 +60,27 @@ fn in_flight_decode_keeps_its_pending_mark_until_complete() {
 }
 
 #[test]
+fn pass_start_keeps_queued_jobs_that_stay_visible() {
+    let queue = ThumbQueue::default();
+    let mut cache = Thumbnails::default();
+    for index in 0..4 {
+        let key = key_at(index);
+        assert!(cache.begin(&key));
+        queue.push(key);
+    }
+    // Pass 2 still shows rows 2 and 3: those jobs stay queued and keep their pending mark, so the
+    // pass neither clones their keys again nor requests them twice.
+    let kept = [PathBuf::from("img-002.png"), PathBuf::from("img-003.png")];
+    assert_eq!(
+        cache.start_pass_keeping(&queue, |key| kept.contains(&key.path)),
+        2
+    );
+    assert!(!cache.begin(&key_at(2)), "a kept job stays pending");
+    assert_eq!(queue.pop().path, kept[0]);
+    assert_eq!(queue.pop().path, kept[1]);
+}
+
+#[test]
 fn retain_keeps_matching_jobs_in_order() {
     let queue = ThumbQueue::default();
     for index in 0..6 {

@@ -2,12 +2,23 @@
 //! Pure move out of main.rs; each loop talks to the UI through the shared wake socket.
 use super::*;
 
+/// Longest a decoded thumbnail waits before its result is announced while more jobs are queued. A
+/// fast burst (icons, small SVGs) used to wake the UI and run a full projection per decode; now at
+/// most one projection per interval runs, and the last job of a burst always wakes immediately.
+const THUMB_WAKE_INTERVAL:Duration=Duration::from_millis(40);
+
 /// Decodes queued image keys one at a time, oldest first; the UI reads results from the cache, never waits on this thread.
 pub(crate) fn thumb_worker(queue:Arc<thumbs::ThumbQueue>, result:Sender<WorkerResult>, mut wake:UnixStream) {
+    let mut last_wake:Option<Instant>=None;
     loop {
         let key=queue.pop();
         let pixels=thumbs::render_thumbnail(&key);
-        send_wake(&mut wake,&result,WorkerResult::Thumbnail{key,pixels});
+        let sent=result.send(WorkerResult::Thumbnail{key,pixels}).is_ok();
+        let due=last_wake.is_none_or(|at|at.elapsed()>=THUMB_WAKE_INTERVAL);
+        if sent && (queue.is_empty() || due) {
+            let _=wake.write_all(&[1]);
+            last_wake=Some(Instant::now());
+        }
     }
 }
 pub(crate) fn send_wake(wake:&mut UnixStream, result:&Sender<WorkerResult>, message:WorkerResult) {

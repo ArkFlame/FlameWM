@@ -159,15 +159,34 @@ pub(super) fn parse_color_value(
         .ok_or_else(|| format!("unsupported color '{value}'"))
 }
 
+/// Case-insensitive ASCII prefix strip. Slice boundaries stay ASCII-aligned because a matching
+/// prefix is ASCII, so non-ASCII input never splits a character.
+fn strip_prefix_ignore_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = value.get(..prefix.len())?;
+    if !head.eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    Some(&value[prefix.len()..])
+}
+
 pub fn parse_color_literal(input: &str) -> Option<Color> {
-    let value = input.trim().to_ascii_lowercase();
-    match value.as_str() {
-        "transparent" => return Some(Color::TRANSPARENT),
-        "black" => return Some(Color::BLACK),
-        "white" => return Some(Color::WHITE),
-        "red" => return Some(Color::rgb(255, 0, 0)),
-        "gray" | "grey" => return Some(Color::rgb(128, 128, 128)),
-        _ => {}
+    // Compare case-insensitively in place: colour literals are parsed per declaration per element
+    // and per state pass, so the old `to_ascii_lowercase()` copy dominated this function.
+    let value = input.trim();
+    if value.eq_ignore_ascii_case("transparent") {
+        return Some(Color::TRANSPARENT);
+    }
+    if value.eq_ignore_ascii_case("black") {
+        return Some(Color::BLACK);
+    }
+    if value.eq_ignore_ascii_case("white") {
+        return Some(Color::WHITE);
+    }
+    if value.eq_ignore_ascii_case("red") {
+        return Some(Color::rgb(255, 0, 0));
+    }
+    if value.eq_ignore_ascii_case("gray") || value.eq_ignore_ascii_case("grey") {
+        return Some(Color::rgb(128, 128, 128));
     }
     if let Some(hex) = value.strip_prefix('#') {
         // #rgb[a] digits each expand to one byte; #rrggbb[aa] reads two per channel.
@@ -187,8 +206,7 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
             a,
         });
     }
-    if let Some(inner) = value
-        .strip_prefix("rgb(")
+    if let Some(inner) = strip_prefix_ignore_ascii_case(value, "rgb(")
         .and_then(|rest| rest.strip_suffix(')'))
     {
         let values: Vec<u8> = inner
@@ -199,8 +217,7 @@ pub fn parse_color_literal(input: &str) -> Option<Color> {
             return Some(Color::rgb(values[0], values[1], values[2]));
         }
     }
-    if let Some(inner) = value
-        .strip_prefix("rgba(")
+    if let Some(inner) = strip_prefix_ignore_ascii_case(value, "rgba(")
         .and_then(|rest| rest.strip_suffix(')'))
     {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();

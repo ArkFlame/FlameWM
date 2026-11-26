@@ -4,7 +4,7 @@ use crate::entry::settings_values::{accent_color, percent_alpha, setting_percent
 /// One model item's rubber target, frozen at gesture start. `slot` is the visual node id
 /// (`desktop-item-{index}`), formatted once here instead of on every toggle.
 pub(super) struct RubberItem {
-    slot: String,
+    slot: &'static str,
     id: String,
     rect: Rect,
 }
@@ -21,7 +21,7 @@ pub(super) fn rubber_snapshot(state: &DesktopState) -> Vec<RubberItem> {
             let grid = grid_for_output(state, output);
             let point = grid.cell_to_pixel(*cell);
             RubberItem {
-                slot: format!("desktop-item-{index}"),
+                slot: projection::item_slot_id(index),
                 id: item.id.clone(),
                 rect: Rect::new(point.x, point.y, grid.cell_width, grid.cell_height),
             }
@@ -162,8 +162,8 @@ pub(super) fn sync_selection_visuals(
         if !first_pass && selected == was_selected && !(selected && style_changed) {
             continue;
         }
-        let slot = format!("desktop-item-{index}");
-        sync_item_selection(document, &slot, selected, fill_alpha, accent)?;
+        let slot = projection::item_slot_id(index);
+        sync_item_selection(document, slot, selected, fill_alpha, accent)?;
     }
     let selected_now = state.selection.selected().clone();
     state.selection_visuals = Some(SelectionVisuals {
@@ -217,7 +217,7 @@ mod rubber_tests {
     fn grid_items() -> Vec<RubberItem> {
         (0..100)
             .map(|i| RubberItem {
-                slot: format!("desktop-item-{i}"),
+                slot: projection::item_slot_id(i),
                 id: format!("item-{i:03}"),
                 rect: Rect::new((i % 10) * 20, (i / 10) * 20, 16, 16),
             })

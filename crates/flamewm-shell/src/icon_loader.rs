@@ -280,11 +280,22 @@ impl IconLoader {
     /// dependent surfaces.
     pub fn request(&mut self, target: IconTarget, name: &str, width: u32, height: u32) {
         self.high_enqueued += 1;
-        let key = (target, name.to_owned(), width, height);
-        if self.pending.contains(&key) {
+        // Probe the pending set by reference: a repeated request for a still-visible slot is
+        // the common case (views reproject often) and must not allocate a throwaway key.
+        if self
+            .pending
+            .iter()
+            .any(|(known_target, known_name, known_w, known_h)| {
+                *known_target == target
+                    && *known_w == width
+                    && *known_h == height
+                    && known_name.as_str() == name
+            })
+        {
+            // The published `shell.icon.coalesced` metric counts these deduped repeats.
+            self.coalesced += 1;
             return;
         }
-        self.pending.insert(key);
         flamewm_integrations_linux::icon_service::note_icon_request();
         let req = IconRequest {
             target,
@@ -293,6 +304,7 @@ impl IconLoader {
             width,
             height,
         };
+        self.pending.insert(pending_key(&req));
         self.submit(req);
     }
 
@@ -343,9 +355,17 @@ impl IconLoader {
         let mut out = Vec::new();
         self.wake_drain();
         self.flush_retries();
-        while let Ok(res) = self.res_rx.try_recv() {
-            self.pending
-                .remove(&(res.target, res.name.clone(), res.width, res.height));
+        while let Ok(mut res) = self.res_rx.try_recv() {
+            // Move the result's name into the pending key instead of cloning it, then put it
+            // back for the caller: one allocation less per delivered raster.
+            let key = (
+                res.target,
+                std::mem::take(&mut res.name),
+                res.width,
+                res.height,
+            );
+            self.pending.remove(&key);
+            res.name = key.1;
             if res.generation != self.generation {
                 self.stale_drops += 1;
                 continue;

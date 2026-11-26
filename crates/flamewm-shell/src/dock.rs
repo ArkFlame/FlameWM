@@ -132,11 +132,12 @@ pub fn dock_settings(snapshot: Option<&SettingsSnapshot>) -> DockSettings {
 /// Unique app ids of the windows listed in the task surfaces, in window order.
 #[must_use]
 pub fn running_apps(windows: &[WindowSnapshot]) -> Vec<String> {
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut apps: Vec<String> = Vec::new();
+    let mut apps: Vec<String> = Vec::with_capacity(windows.len().min(MAX_SLOTS));
     for window in windows.iter().filter(|window| !window.skip_taskbar) {
         let id = window.app_id.as_str();
-        if !id.is_empty() && seen.insert(id) {
+        // A taskbar lists at most a couple of dozen apps, so a linear scan over the result
+        // beats allocating and hashing a `HashSet` on every layout pass.
+        if !id.is_empty() && !apps.iter().any(|known| known.as_str() == id) {
             apps.push(id.to_owned());
         }
     }

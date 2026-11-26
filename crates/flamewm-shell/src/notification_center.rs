@@ -211,36 +211,99 @@ pub fn hide_inactive_actions(view: &mut CenterView, is_active: impl Fn(u32) -> b
     }
 }
 
-/// One template write. Ids are the slot ids in `notification-center.html`.
+/// One template write. Ids are the fixed slot ids in `notification-center.html`, so they are
+/// borrowed from [`center_ids`] instead of allocated per projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     Text {
-        id: String,
+        id: &'static str,
         value: String,
     },
     Visible {
-        id: String,
+        id: &'static str,
         shown: bool,
     },
     /// A progress track: hidden without a value, else its fill width and `aria-valuenow`.
     Meter {
-        id: String,
+        id: &'static str,
         value: Option<u8>,
     },
 }
 
-fn text(id: impl Into<String>, value: impl Into<String>) -> Node {
+fn text(id: &'static str, value: impl Into<String>) -> Node {
     Node::Text {
-        id: id.into(),
+        id,
         value: value.into(),
     }
 }
 
-fn visible(id: impl Into<String>, shown: bool) -> Node {
-    Node::Visible {
-        id: id.into(),
-        shown,
-    }
+fn visible(id: &'static str, shown: bool) -> Node {
+    Node::Visible { id, shown }
+}
+
+/// Ids of one group row and its children.
+struct GroupIds {
+    root: String,
+    app: String,
+    count: String,
+    mute: String,
+    more: String,
+}
+
+/// Ids of one item row and its children.
+struct ItemIds {
+    root: String,
+    urgent_critical: String,
+    urgent_low: String,
+    progress: String,
+    focus: String,
+    summary: String,
+    body: String,
+    actions: String,
+    action: [String; MAX_ITEM_ACTION_SLOTS],
+}
+
+/// Stable node ids for the fixed centre slots, built once: a projection borrows them instead
+/// of formatting one `String` per node (about two hundred allocations per reprojection).
+struct CenterIds {
+    dnd_state: &'static str,
+    empty: &'static str,
+    groups: [GroupIds; MAX_GROUP_SLOTS],
+    items: [[ItemIds; MAX_ITEM_SLOTS]; MAX_GROUP_SLOTS],
+}
+
+fn center_ids() -> &'static CenterIds {
+    static IDS: std::sync::OnceLock<CenterIds> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| CenterIds {
+        dnd_state: "nc-dnd-state",
+        empty: "nc-empty",
+        groups: std::array::from_fn(|group| {
+            let g = format!("nc-group-{}", group + 1);
+            GroupIds {
+                app: format!("{g}-app"),
+                count: format!("{g}-count"),
+                mute: format!("{g}-mute"),
+                more: format!("{g}-more"),
+                root: g,
+            }
+        }),
+        items: std::array::from_fn(|group| {
+            std::array::from_fn(|item| {
+                let i = format!("nc-item-{}-{}", group + 1, item + 1);
+                ItemIds {
+                    root: i.clone(),
+                    urgent_critical: format!("{i}-urgent-critical"),
+                    urgent_low: format!("{i}-urgent-low"),
+                    progress: format!("{i}-progress"),
+                    focus: format!("{i}-focus"),
+                    summary: format!("{i}-summary"),
+                    body: format!("{i}-body"),
+                    actions: format!("{i}-actions"),
+                    action: std::array::from_fn(|action| format!("{i}-action-{}", action + 1)),
+                }
+            })
+        }),
+    })
 }
 
 /// Every template write needed to show `view`, with no focused row.
@@ -253,69 +316,66 @@ pub fn nodes(view: &CenterView) -> Vec<Node> {
 /// [`item_at`]). Unused slots are hidden.
 #[must_use]
 pub fn nodes_with_focus(view: &CenterView, focus: Option<usize>) -> Vec<Node> {
-    let mut out = vec![
-        text("nc-dnd-state", if view.dnd { "On" } else { "Off" }),
-        visible("nc-empty", view.groups.is_empty()),
-    ];
+    let ids = center_ids();
+    let mut out = Vec::with_capacity(2 + MAX_GROUP_SLOTS * (4 + MAX_ITEM_SLOTS * 12 + 2));
+    out.push(text(ids.dnd_state, if view.dnd { "On" } else { "Off" }));
+    out.push(visible(ids.empty, view.groups.is_empty()));
     // Tab-order index of the first row of the current group.
     let mut base = 0;
-    for group_slot in 1..=MAX_GROUP_SLOTS {
-        let group = view.groups.get(group_slot - 1);
-        let g = format!("nc-group-{group_slot}");
-        out.push(visible(&g, group.is_some()));
+    for (group_slot, group_ids) in ids.groups.iter().enumerate() {
+        let group = view.groups.get(group_slot);
+        out.push(visible(group_ids.root.as_str(), group.is_some()));
         let Some(group) = group else {
-            for item_slot in 1..=MAX_ITEM_SLOTS {
-                out.push(visible(format!("nc-item-{group_slot}-{item_slot}"), false));
+            for item_ids in &ids.items[group_slot] {
+                out.push(visible(item_ids.root.as_str(), false));
             }
-            out.push(visible(format!("{g}-more"), false));
+            out.push(visible(group_ids.more.as_str(), false));
             continue;
         };
-        out.push(text(format!("{g}-app"), clip(&group.app_name)));
-        out.push(text(format!("{g}-count"), group.count.to_string()));
+        out.push(text(group_ids.app.as_str(), clip(&group.app_name)));
+        out.push(text(group_ids.count.as_str(), group.count.to_string()));
         out.push(text(
-            format!("{g}-mute"),
+            group_ids.mute.as_str(),
             if group.muted { "Unmute" } else { "Mute" },
         ));
-        for item_slot in 1..=MAX_ITEM_SLOTS {
-            let item = group.items.get(item_slot - 1);
-            let i = format!("nc-item-{group_slot}-{item_slot}");
-            out.push(visible(&i, item.is_some()));
+        for (item_slot, item_ids) in ids.items[group_slot].iter().enumerate() {
+            let item = group.items.get(item_slot);
+            out.push(visible(item_ids.root.as_str(), item.is_some()));
             out.push(visible(
-                format!("{i}-urgent-critical"),
+                item_ids.urgent_critical.as_str(),
                 item.is_some_and(|item| item.urgency == NotificationUrgency::Critical),
             ));
             out.push(visible(
-                format!("{i}-urgent-low"),
+                item_ids.urgent_low.as_str(),
                 item.is_some_and(|item| item.urgency == NotificationUrgency::Low),
             ));
             out.push(Node::Meter {
-                id: format!("{i}-progress"),
+                id: item_ids.progress.as_str(),
                 value: item.and_then(|item| item.progress),
             });
             out.push(visible(
-                format!("{i}-focus"),
+                item_ids.focus.as_str(),
                 item.is_some() && focus == Some(base + item_slot - 1),
             ));
             if let Some(item) = item {
-                out.push(text(format!("{i}-summary"), item.summary.clone()));
-                out.push(text(format!("{i}-body"), item.body.clone()));
+                out.push(text(item_ids.summary.as_str(), item.summary.clone()));
+                out.push(text(item_ids.body.as_str(), item.body.clone()));
             }
             // The row wrapper is toggled as a whole: a leaf button hidden under a visible row
             // is not repainted by the document, so the wrapper carries the transition.
             let has_actions = item.is_some_and(|item| !item.actions.is_empty());
-            out.push(visible(format!("{i}-actions"), has_actions));
-            for action_slot in 1..=MAX_ITEM_ACTION_SLOTS {
-                let action = item.and_then(|item| item.actions.get(action_slot - 1));
-                let id = format!("{i}-action-{action_slot}");
-                out.push(visible(&id, action.is_some()));
+            out.push(visible(item_ids.actions.as_str(), has_actions));
+            for (action_slot, action_id) in item_ids.action.iter().enumerate() {
+                let action = item.and_then(|item| item.actions.get(action_slot));
+                out.push(visible(action_id.as_str(), action.is_some()));
                 if let Some(action) = action {
-                    out.push(text(&id, clip(&action.label)));
+                    out.push(text(action_id.as_str(), clip(&action.label)));
                 }
             }
         }
         let hidden = group.count.saturating_sub(group.items.len());
-        out.push(visible(format!("{g}-more"), hidden > 0));
-        out.push(text(format!("{g}-more"), format!("+{hidden} more")));
+        out.push(visible(group_ids.more.as_str(), hidden > 0));
+        out.push(text(group_ids.more.as_str(), format!("+{hidden} more")));
         base += group.items.len();
     }
     out
@@ -367,13 +427,16 @@ pub fn key_action(payload: &str, focus: Option<usize>, view: &CenterView) -> Opt
     }
 }
 
+/// First [`MAX_TEXT_CHARS`] characters, plus an ellipsis when the text continues. The cut is a
+/// byte index, so a long string is copied once instead of being collected char by char.
 fn clip(value: &str) -> String {
-    let mut chars = value.chars();
-    let text: String = chars.by_ref().take(MAX_TEXT_CHARS).collect();
-    if chars.next().is_some() {
-        format!("{text}…")
-    } else {
-        text
+    match value.char_indices().nth(MAX_TEXT_CHARS) {
+        None => value.to_owned(),
+        Some((cut, _)) => {
+            let mut text = value[..cut].to_owned();
+            text.push('…');
+            text
+        }
     }
 }
 
@@ -582,7 +645,7 @@ mod tests {
     fn every_projected_id_exists_in_template() {
         let mut history = NotificationHistory::new(10);
         record(&mut history, "chat", "hi");
-        let mut ids: Vec<String> = nodes(&view(&history))
+        let mut ids: Vec<&str> = nodes(&view(&history))
             .into_iter()
             .map(|node| match node {
                 Node::Text { id, .. } | Node::Visible { id, .. } | Node::Meter { id, .. } => id,
@@ -757,11 +820,11 @@ mod keyboard_tests {
         assert!(nodes.contains(&visible("nc-item-1-1-urgent-critical", false)));
         assert!(nodes.contains(&visible("nc-item-2-1-urgent-low", true)));
         assert!(nodes.contains(&Node::Meter {
-            id: "nc-item-1-2-progress".to_owned(),
+            id: "nc-item-1-2-progress",
             value: Some(40),
         }));
         assert!(nodes.contains(&Node::Meter {
-            id: "nc-item-1-1-progress".to_owned(),
+            id: "nc-item-1-1-progress",
             value: None,
         }));
         assert!(nodes.contains(&visible("nc-item-1-2-focus", true)));

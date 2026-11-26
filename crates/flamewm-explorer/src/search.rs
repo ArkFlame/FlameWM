@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// Walker threads per search job.
 const MAX_THREADS: usize = 4;
@@ -16,7 +16,6 @@ const BATCH: usize = 64;
 
 pub const MAX_HITS: usize = 2_000;
 pub const MAX_VISITS: usize = 200_000;
-pub const DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_QUERY_CHARS: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,26 +283,6 @@ pub fn search_tree(
     }
 }
 
-/// Pure debounce: a request is due once `DEBOUNCE` has elapsed since the last keystroke.
-#[derive(Debug, Default)]
-pub struct Debounce {
-    last: Option<std::time::Instant>,
-}
-
-impl Debounce {
-    pub fn touch(&mut self, now: std::time::Instant) {
-        self.last = Some(now);
-    }
-    #[must_use]
-    pub fn due(&self, now: std::time::Instant) -> bool {
-        self.last
-            .is_some_and(|last| now.duration_since(last) >= DEBOUNCE)
-    }
-    pub fn clear(&mut self) {
-        self.last = None;
-    }
-}
-
 struct SearchJob {
     id: u64,
     root: PathBuf,
@@ -427,7 +406,7 @@ impl SearchWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     fn tree(tag: &str) -> PathBuf {
         let root =
@@ -536,18 +515,6 @@ mod tests {
         assert!(outcome.cancelled);
         assert!(outcome.hits.is_empty());
         let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn debounce_waits_for_quiet_period() {
-        let mut debounce = Debounce::default();
-        let t0 = Instant::now();
-        assert!(!debounce.due(t0));
-        debounce.touch(t0);
-        assert!(!debounce.due(t0 + Duration::from_millis(100)));
-        assert!(debounce.due(t0 + DEBOUNCE));
-        debounce.clear();
-        assert!(!debounce.due(t0 + DEBOUNCE));
     }
 
     #[test]

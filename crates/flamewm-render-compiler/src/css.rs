@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::html::{HtmlNodeKind, ParsedHtml};
 
 mod selector;
@@ -112,24 +114,33 @@ fn emit_rule_block(
             Item::Block { prelude, body } => nested.push((prelude, body)),
         }
     }
+    let mut variants = Vec::new();
     for selector_text in selectors {
-        for (matched, specificity_text) in expand_pseudo(selector_text)? {
-            let mut selector = parse_selector(&matched)?;
-            if specificity_text != matched {
-                let fallback = if specificity_text.is_empty() {
-                    "*"
-                } else {
-                    &specificity_text
-                };
-                selector.specificity = parse_selector(fallback)?.specificity;
-            }
-            rules.push(Rule {
-                selector,
-                declarations: declarations.clone(),
-                order: *order,
-            });
-            *order = order.wrapping_add(1);
+        variants.extend(expand_pseudo(selector_text)?);
+    }
+    let variant_count = variants.len();
+    for (variant, (matched, specificity_text)) in variants.into_iter().enumerate() {
+        let mut selector = parse_selector(&matched)?;
+        if specificity_text != matched {
+            let fallback = if specificity_text.is_empty() {
+                "*"
+            } else {
+                &specificity_text
+            };
+            selector.specificity = parse_selector(fallback)?.specificity;
         }
+        // Only the last variant can move the parsed declarations; earlier ones still need a copy.
+        let declarations = if variant + 1 == variant_count {
+            std::mem::take(&mut declarations)
+        } else {
+            declarations.clone()
+        };
+        rules.push(Rule {
+            selector,
+            declarations,
+            order: *order,
+        });
+        *order = order.wrapping_add(1);
     }
     for (prelude, inner) in nested {
         let child = resolve_selectors(prelude, Some(selectors))?;
@@ -267,7 +278,11 @@ pub fn parse_declarations(input: &str) -> Result<Vec<Declaration>, String> {
     Ok(result)
 }
 
-pub(crate) fn strip_comments(input: &str) -> Result<String, String> {
+pub(crate) fn strip_comments(input: &str) -> Result<Cow<'_, str>, String> {
+    // Comment-free sheets are the common case, so borrow the source instead of copying it.
+    if !input.contains("/*") {
+        return Ok(Cow::Borrowed(input));
+    }
     let mut output = String::with_capacity(input.len());
     let mut cursor = 0usize;
     while let Some(start_rel) = input[cursor..].find("/*") {
@@ -280,10 +295,12 @@ pub(crate) fn strip_comments(input: &str) -> Result<String, String> {
         cursor = end;
     }
     output.push_str(&input[cursor..]);
-    Ok(output)
+    Ok(Cow::Owned(output))
 }
 
-fn split_top_level(input: &str, delimiter: char) -> Result<Vec<String>, String> {
+/// Splits on `delimiter` outside quotes and parentheses, borrowing each chunk: a declaration list
+/// yields slices of `input` instead of one `String` per declaration.
+fn split_top_level(input: &str, delimiter: char) -> Result<Vec<&str>, String> {
     let mut result = Vec::new();
     let mut start = 0usize;
     let mut quote: Option<char> = None;
@@ -301,7 +318,7 @@ fn split_top_level(input: &str, delimiter: char) -> Result<Vec<String>, String> 
                 }
             }
             None if ch == delimiter && paren_depth == 0 => {
-                result.push(input[start..index].to_string());
+                result.push(&input[start..index]);
                 start = index + ch.len_utf8();
             }
             None => {}
@@ -310,7 +327,7 @@ fn split_top_level(input: &str, delimiter: char) -> Result<Vec<String>, String> 
     if quote.is_some() || paren_depth != 0 {
         return Err("CSS has an unterminated quote or parenthesis".to_string());
     }
-    result.push(input[start..].to_string());
+    result.push(&input[start..]);
     Ok(result)
 }
 

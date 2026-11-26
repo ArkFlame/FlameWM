@@ -267,9 +267,13 @@ fn commit(shared: &Shared, batch: Batch) -> bool {
 pub fn run(shared: Shared, roots: Vec<PathBuf>, mut on_change: impl FnMut()) -> io::Result<()> {
     let fd = inotify::init(CreateFlags::CLOEXEC)?;
     let mut watcher = Watcher::default();
-    let entries = shared.read().entries.clone();
-    watcher.watch_all(&fd, &roots, &entries);
-    drop(entries);
+    // Register watches straight from the shared index instead of cloning up to `MAX_ENTRIES`
+    // entries (and their two strings each) only to read the directory paths: this runs once, and
+    // the worker thread is the only writer after the initial walk.
+    {
+        let index = shared.read();
+        watcher.watch_all(&fd, &roots, &index.entries);
+    }
     let mut buffer = [MaybeUninit::<u8>::uninit(); BUFFER_BYTES];
     let mut reader = inotify::Reader::new(&fd, &mut buffer);
     loop {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +52,9 @@ pub fn parse_html(input: &str) -> Result<ParsedHtml, String> {
                 .map(|offset| cursor + offset)
                 .unwrap_or(bytes.len());
             let raw = &input[cursor..next];
-            let text = collapse_whitespace(&decode_entities(raw));
+            // `decoded` stays alive for the borrow `text` may take from it.
+            let decoded = decode_entities(raw);
+            let text = collapse_whitespace(&decoded);
             if !text.is_empty() {
                 let parent = *stack
                     .last()
@@ -65,7 +68,7 @@ pub fn parse_html(input: &str) -> Result<ParsedHtml, String> {
                         attrs: BTreeMap::new(),
                         parent: Some(parent),
                         children: Vec::new(),
-                        text,
+                        text: text.into_owned(),
                     },
                 );
             }
@@ -174,13 +177,21 @@ fn find_first_tag(nodes: &[HtmlNode], tag: &str) -> Option<usize> {
 }
 
 fn collect_style_text(nodes: &[HtmlNode]) -> String {
-    nodes
-        .iter()
-        .filter(|node| node.kind == HtmlNodeKind::Element && node.tag == "style")
-        .flat_map(|node| &node.children)
-        .filter(|child| nodes[**child].kind == HtmlNodeKind::Text)
-        .map(|child| format!("{}\n", nodes[*child].text))
-        .collect()
+    let mut css = String::new();
+    for node in nodes {
+        if node.kind != HtmlNodeKind::Element || node.tag != "style" {
+            continue;
+        }
+        for child in &node.children {
+            let child = &nodes[*child];
+            if child.kind == HtmlNodeKind::Text {
+                // One buffer instead of a `format!` allocation per `<style>` text child.
+                css.push_str(&child.text);
+                css.push('\n');
+            }
+        }
+    }
+    css
 }
 
 fn collect_stylesheet_links(nodes: &[HtmlNode]) -> Vec<String> {
@@ -263,7 +274,7 @@ fn parse_tag(input: &str) -> Result<(String, BTreeMap<String, String>), String> 
                         break;
                     }
                 }
-                value = decode_entities(&input[start..end]);
+                value = decode_entities(&input[start..end]).into_owned();
             } else {
                 let start = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
                 while let Some((_, ch)) = chars.peek() {
@@ -273,7 +284,7 @@ fn parse_tag(input: &str) -> Result<(String, BTreeMap<String, String>), String> 
                     chars.next();
                 }
                 let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
-                value = decode_entities(&input[start..end]);
+                value = decode_entities(&input[start..end]).into_owned();
             }
         }
         attrs.insert(name, value);
@@ -310,8 +321,13 @@ fn is_void_element(tag: &str) -> bool {
     )
 }
 
-fn collapse_whitespace(input: &str) -> String {
-    let mut result = String::new();
+/// Collapses whitespace runs and trims, borrowing `input` when it is already collapsed. Text nodes
+/// go through this, so the common single-spaced text costs no allocation.
+fn collapse_whitespace(input: &str) -> Cow<'_, str> {
+    if !needs_collapsing(input) {
+        return Cow::Borrowed(input);
+    }
+    let mut result = String::with_capacity(input.len());
     let mut pending_space = false;
     for ch in input.chars() {
         if ch.is_whitespace() {
@@ -324,10 +340,32 @@ fn collapse_whitespace(input: &str) -> String {
             result.push(ch);
         }
     }
-    result.trim().to_string()
+    // Trailing whitespace never reaches `result`, so no second trim pass is needed.
+    Cow::Owned(result)
 }
 
-fn decode_entities(input: &str) -> String {
+/// Whether collapsing would change `input`: leading or trailing whitespace, a whitespace run, or any
+/// whitespace character that is not a single space.
+fn needs_collapsing(input: &str) -> bool {
+    let mut previous_space = true;
+    for ch in input.chars() {
+        if ch.is_whitespace() {
+            if previous_space {
+                return true;
+            }
+            previous_space = true;
+        } else {
+            previous_space = false;
+        }
+    }
+    previous_space
+}
+
+fn decode_entities(input: &str) -> Cow<'_, str> {
+    // Borrow when there is no entity to decode; most text and attribute values have none.
+    if !input.contains('&') {
+        return Cow::Borrowed(input);
+    }
     let mut output = String::with_capacity(input.len());
     let mut cursor = 0usize;
     while let Some(relative) = input[cursor..].find('&') {
@@ -335,7 +373,7 @@ fn decode_entities(input: &str) -> String {
         output.push_str(&input[cursor..start]);
         let Some(end_rel) = input[start..].find(';') else {
             output.push_str(&input[start..]);
-            return output;
+            return Cow::Owned(output);
         };
         let end = start + end_rel;
         let entity = &input[start + 1..end];
@@ -363,7 +401,7 @@ fn decode_entities(input: &str) -> String {
         cursor = end + 1;
     }
     output.push_str(&input[cursor..]);
-    output
+    Cow::Owned(output)
 }
 
 #[cfg(test)]

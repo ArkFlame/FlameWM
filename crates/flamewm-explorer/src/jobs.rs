@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::{renameat_with, RenameFlags, CWD};
@@ -174,56 +174,85 @@ fn cancelled() -> io::Error { io::Error::new(io::ErrorKind::Interrupted, "cancel
 /// Staging entries this process is writing right now. A copy removes its entry
 /// on every outcome; the registry lets a shutting-down UI make sure nothing is
 /// left behind before the process exits.
-fn staging_registry() -> &'static Mutex<Vec<PathBuf>> {
-    static REGISTRY: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+struct StagingRegistry {
+    entries: Mutex<Vec<PathBuf>>,
+    /// Signalled whenever the last staging entry is forgotten or swept, so a
+    /// closing window parks instead of polling every 10 ms.
+    idle: Condvar,
+}
+
+fn staging_registry() -> &'static StagingRegistry {
+    static REGISTRY: OnceLock<StagingRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| StagingRegistry {
+        entries: Mutex::new(Vec::new()),
+        idle: Condvar::new(),
+    })
+}
+
+fn lock_staging() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    staging_registry()
+        .entries
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Tracks `staging` as in-progress output.
 pub fn register_staging(staging: &Path) {
-    if let Ok(mut entries) = staging_registry().lock() {
-        entries.push(staging.to_path_buf());
-    }
+    lock_staging().push(staging.to_path_buf());
 }
 
 /// Stops tracking `staging` (it was published or already removed).
 pub fn forget_staging(staging: &Path) {
-    if let Ok(mut entries) = staging_registry().lock() {
+    let empty = {
+        let mut entries = lock_staging();
         entries.retain(|entry| entry != staging);
+        entries.is_empty()
+    };
+    if empty {
+        staging_registry().idle.notify_all();
     }
 }
 
 /// Staging entries still tracked, i.e. copies that have not finished yet.
 #[must_use]
 pub fn staging_count() -> usize {
-    staging_registry().lock().map_or(0, |entries| entries.len())
+    lock_staging().len()
 }
 
 /// Removes every tracked staging entry. Returns how many existed, so the caller
 /// can report whether an interrupted transfer left anything behind.
 #[must_use] pub fn cleanup_staging() -> usize {
-    let entries = staging_registry()
-        .lock()
-        .map(|mut entries| std::mem::take(&mut *entries))
-        .unwrap_or_default();
+    let entries = std::mem::take(&mut *lock_staging());
     for entry in &entries {
         let _ = remove_entry(entry);
+    }
+    if !entries.is_empty() {
+        staging_registry().idle.notify_all();
     }
     entries.len()
 }
 
 /// Waits until no staging entry is tracked or `timeout` elapses. Used when the
 /// window closes: the worker observes the cancel and cleans up, and only then
-/// does the process exit.
+/// does the process exit. The wait is woken by `forget_staging`, so a closing
+/// window sleeps instead of polling.
 #[must_use] pub fn await_staging_idle(timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
-    while staging_count() > 0 {
-        if std::time::Instant::now() >= deadline {
+    let mut entries = lock_staging();
+    loop {
+        if entries.is_empty() {
+            return true;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
             return false;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        entries = staging_registry()
+            .idle
+            .wait_timeout(entries, deadline - now)
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0;
     }
-    true
 }
 
 fn rename_into(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
@@ -245,19 +274,24 @@ fn remove_entry(path: &Path) -> io::Result<()> {
 }
 
 /// Copies into a fresh staging entry. Symlinks are recreated, never followed.
-/// Permissions are preserved; hardlinks become independent copies.
-fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, sink: &mut impl TransferSink) -> io::Result<()> {
+/// Permissions are preserved; hardlinks become independent copies. The returned
+/// totals describe exactly what was written, so a cross-device move can verify
+/// the copy without walking the destination a second time.
+fn copy_tree(from: &Path, to: &Path, cancel: &CancellationToken, sink: &mut impl TransferSink) -> io::Result<Totals> {
     // One transfer buffer per top-level copy: a fresh 256 KiB zeroed `Vec` per file was the largest
     // allocation cost when copying trees of many small files. It is filled on first use, so a
     // directory-only copy allocates nothing.
     let mut buffer = Vec::new();
-    copy_tree_with(from, to, cancel, sink, &mut buffer)
+    let mut totals = Totals::default();
+    copy_tree_with(from, to, cancel, sink, &mut buffer, &mut totals)?;
+    Ok(totals)
 }
 
 fn copy_tree_with(from: &Path, to: &Path, cancel: &CancellationToken,
-    sink: &mut impl TransferSink, buffer: &mut Vec<u8>) -> io::Result<()> {
+    sink: &mut impl TransferSink, buffer: &mut Vec<u8>, totals: &mut Totals) -> io::Result<()> {
     if cancel.is_cancelled() { return Err(cancelled()); }
     let meta = fs::symlink_metadata(from)?;
+    totals.items += 1;
     if meta.file_type().is_symlink() {
         return symlink(fs::read_link(from)?, to);
     }
@@ -266,7 +300,7 @@ fn copy_tree_with(from: &Path, to: &Path, cancel: &CancellationToken,
         for child in fs::read_dir(from)? {
             let child = child?;
             let name = child.file_name();
-            copy_tree_with(&from.join(&name), &to.join(&name), cancel, sink, buffer)?;
+            copy_tree_with(&from.join(&name), &to.join(&name), cancel, sink, buffer, totals)?;
         }
         return fs::set_permissions(to, meta.permissions());
     }
@@ -276,15 +310,18 @@ fn copy_tree_with(from: &Path, to: &Path, cancel: &CancellationToken,
     if buffer.is_empty() { buffer.resize(CHUNK, 0); }
     let mut input = File::open(from)?;
     let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)?;
+    let mut written = 0_u64;
     loop {
         if cancel.is_cancelled() { return Err(cancelled()); }
         let len = input.read(&mut buffer[..])?;
         if len == 0 { break; }
         output.write_all(&buffer[..len])?;
         sink.bytes(len as u64);
+        written += len as u64;
     }
     output.sync_all()?;
     drop(output);
+    totals.bytes += written;
     fs::set_permissions(to, meta.permissions())
 }
 
@@ -302,6 +339,12 @@ fn publish(staging: &Path, to: &Path, replace: bool) -> io::Result<()> {
 /// Staging is removed on every failure or cancellation.
 pub fn copy_publish(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
     sink: &mut impl TransferSink) -> io::Result<()> {
+    copy_publish_counting(from, to, replace, cancel, sink).map(|_| ())
+}
+
+/// `copy_publish` that also returns what was written, for verification without a re-walk.
+fn copy_publish_counting(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
+    sink: &mut impl TransferSink) -> io::Result<Totals> {
     if fs::symlink_metadata(from).is_ok_and(|m| m.is_dir()) {
         if to.starts_with(from) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "cannot copy a directory into itself"));
@@ -315,7 +358,8 @@ pub fn copy_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
     }
     let staging = staging_path(to);
     register_staging(&staging);
-    let result = copy_tree(from, &staging, cancel, sink).and_then(|()| publish(&staging, to, replace));
+    let result = copy_tree(from, &staging, cancel, sink)
+        .and_then(|totals| publish(&staging, to, replace).map(|()| totals));
     forget_staging(&staging);
     if result.is_err() {
         let _ = remove_entry(&staging);
@@ -340,10 +384,17 @@ pub fn move_publish(from: &Path, to: &Path, replace: bool, cancel: &Cancellation
 /// Any failure or cancellation before the removal leaves the source intact.
 pub(crate) fn cross_device_move(from: &Path, to: &Path, replace: bool, cancel: &CancellationToken,
     sink: &mut impl TransferSink) -> io::Result<()> {
-    copy_publish(from, to, replace, cancel, sink)?;
-    let want = count_tree(from, &CancellationToken::default())?;
-    let got = count_tree(to, &CancellationToken::default())?;
-    if want.errors != 0 || got.errors != 0 || want != got {
+    // The copy already reports what it wrote, so verification only needs one walk
+    // of the source instead of walking the destination a second time as well.
+    let copied = copy_publish_counting(from, to, replace, cancel, sink)?;
+    let want = match count_tree(from, cancel) {
+        Ok(want) => want,
+        Err(error) => {
+            let _ = remove_entry(to);
+            return Err(error);
+        }
+    };
+    if want.errors != 0 || want != copied {
         let _ = remove_entry(to);
         return Err(io::Error::other("copy verification failed; source kept"));
     }
@@ -392,13 +443,49 @@ fn count_meta(path: &Path, meta: &fs::Metadata, depth: usize, cancel: &Cancellat
 }
 
 /// Total of several top-level sources; a failed source counts as one error.
+/// A multi-item selection is walked by up to four threads, so the pre-transfer
+/// size pass (the progress total) no longer serialises a whole batch behind one
+/// core's stat loop.
 #[must_use] pub fn count_sources(sources: &[PathBuf], cancel: &CancellationToken) -> Totals {
-    let mut sum = Totals::default();
-    for source in sources {
-        match count_tree(source, cancel) {
-            Ok(t) => { sum.items += t.items; sum.bytes += t.bytes; sum.errors += t.errors; }
-            Err(_) => sum.errors += 1,
+    if sources.len() <= 1 {
+        let mut sum = Totals::default();
+        for source in sources {
+            match count_tree(source, cancel) {
+                Ok(t) => { sum.items += t.items; sum.bytes += t.bytes; sum.errors += t.errors; }
+                Err(_) => sum.errors += 1,
+            }
         }
+        return sum;
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = sources.len().min(4);
+    let parts = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            handles.push(scope.spawn(|| {
+                let mut local = Totals::default();
+                loop {
+                    if cancel.is_cancelled() { break; }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(source) = sources.get(index) else { break };
+                    match count_tree(source, cancel) {
+                        Ok(t) => { local.items += t.items; local.bytes += t.bytes; local.errors += t.errors; }
+                        Err(_) => local.errors += 1,
+                    }
+                }
+                local
+            }));
+        }
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .collect::<Vec<Totals>>()
+    });
+    let mut sum = Totals::default();
+    for part in parts {
+        sum.items += part.items;
+        sum.bytes += part.bytes;
+        sum.errors += part.errors;
     }
     sum
 }

@@ -49,9 +49,10 @@ pub const PRESENTATION_CATEGORIES: [(&str, StartCategory); 9] = [
 
 #[must_use]
 pub fn category_for_action(action: &str) -> Option<StartCategory> {
+    let name = action.strip_prefix("start.category.")?;
     PRESENTATION_CATEGORIES
         .iter()
-        .find(|(name, _)| action == format!("start.category.{name}"))
+        .find(|(known, _)| *known == name)
         .map(|(_, category)| *category)
 }
 

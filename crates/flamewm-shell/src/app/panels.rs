@@ -52,7 +52,10 @@ impl ShellLoop {
     /// Signal-driven dynamic refresh (§6): reconcile snapshot domains flagged
     /// by `ControlSignal` delivery, then project only the surfaces each
     /// changed domain owns.
-    pub(crate) fn refresh_dynamic(&mut self, runtime: &mut SurfaceRuntime) {
+    pub(crate) fn refresh_dynamic(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+    ) -> flamewm_shell::runtime::ChangedDomains {
         use flamewm_shell::runtime::ProjectionKind;
         let changed = self.shell.reconcile_dirty();
         if changed.panels {
@@ -74,7 +77,7 @@ impl ShellLoop {
             false
         };
         if !changed.any() && !resynced && !progress_changed {
-            return;
+            return changed;
         }
         // Context menus belong to their opening workspace. A workspace change
         // invalidates the menu before any panel or popup projection can paint
@@ -175,6 +178,7 @@ impl ShellLoop {
         if changed.windows || changed.workspaces || changed.panels || resynced {
             self.sync_icon_geometry(runtime, &snapshot);
         }
+        changed
     }
 
     /// Projects the changed domains into every panel, redraws them and republishes pager cells.

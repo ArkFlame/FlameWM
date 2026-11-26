@@ -19,6 +19,8 @@ pub struct SoftPixels {
     /// Retained frame copy for the ops that cannot run in place (blur, backdrop, clipped fill).
     /// Reused across frames so a changing document never reallocates a full frame per paint.
     frame: Vec<u8>,
+    /// Retained clip-sized buffer for the clipped fill and backdrop helpers, reused the same way.
+    region: Vec<u8>,
 }
 
 impl SoftPixels {
@@ -86,15 +88,20 @@ impl PixelBackend for SoftPixels {
             return apply_ops_in_place(self, pixels, width, height, ops);
         }
         let mut frame = std::mem::take(&mut self.frame);
+        let mut region = std::mem::take(&mut self.region);
         frame.clear();
         frame.extend_from_slice(pixels);
-        let result = apply_ops_to_scratch(self, &mut frame, width, height, ops);
+        let result = apply_ops_to_scratch(self, &mut frame, &mut region, width, height, ops);
         if result.is_ok() {
             pixels.copy_from_slice(&frame);
         }
         if frame.capacity() <= FRAME_SCRATCH_RETAIN_BYTES {
             frame.clear();
             self.frame = frame;
+        }
+        if region.capacity() <= FRAME_SCRATCH_RETAIN_BYTES {
+            region.clear();
+            self.region = region;
         }
         result
     }
@@ -170,10 +177,15 @@ pub fn fill_rounded_rect_cpu(
     if pixels.len() != width as usize * height as usize * 4 {
         return Err("pixel buffer does not match its size".to_owned());
     }
+    if color[3] == 0 {
+        // Source-over with zero alpha leaves every pixel of the fill untouched.
+        return Ok(());
+    }
     let outer = outer.normalized();
     let hole = hole.map(RoundedRect::normalized);
-    let alpha = f32::from(color[3]) / 255.0;
-    let luts = blend_luts(color, alpha);
+    // A fully opaque fill writes the colour directly; only a translucent one needs blending, so
+    // the lookup tables are built for that case alone.
+    let luts = (color[3] != 255).then(|| blend_luts(color, f32::from(color[3]) / 255.0));
     for row in 0..outer.height {
         let y = outer.y + row as i32;
         if !(0..height as i32).contains(&y) {
@@ -189,11 +201,22 @@ pub fn fill_rounded_rect_cpu(
         for (from, to) in [(start, hole_start.min(end)), (hole_end.max(start), end)] {
             if from < to {
                 let span = &mut pixels[row_base + from as usize * 4..row_base + to as usize * 4];
-                blend_span(span, &luts);
+                match &luts {
+                    Some(luts) => blend_span(span, luts),
+                    None => fill_span_solid(span, color),
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Writes an opaque `color` over every pixel of `span`, the alpha-255 case of [`blend_span`].
+fn fill_span_solid(span: &mut [u8], color: [u8; 4]) {
+    let solid = [color[0], color[1], color[2], 255];
+    for pixel in span.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&solid);
+    }
 }
 
 #[cfg(test)]

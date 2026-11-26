@@ -6,7 +6,9 @@ pub(super) fn project_slots(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let items: Vec<_> = state.model.items().take(SLOT_COUNT).collect();
+    // One iterator over the model instead of a collected copy: the per-sync `Vec` of item
+    // references was the only allocation left in an otherwise unchanged slot pass.
+    let mut items = state.model.items();
     let cache = match state.projected_cache.take() {
         Some(cache) if cache.matches(state) => cache,
         _ => ProjectedCellsCache::capture(state),
@@ -18,7 +20,7 @@ pub(super) fn project_slots(
     let mut last_grid: Option<GridConfig> = None;
     #[allow(clippy::needless_range_loop)]
     for index in 0..SLOT_COUNT {
-        let item = items.get(index).copied();
+        let item = items.next();
         if let Some(item) = item {
             let (output, cell) = &cells[index];
             let output_grid = if last_output.as_ref() == Some(output) {

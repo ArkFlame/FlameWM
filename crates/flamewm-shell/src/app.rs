@@ -133,6 +133,9 @@ pub(crate) struct ShellLoop {
     pub(crate) dock_entries: Vec<flamewm_shell_core::dock::DockEntry>,
     pub(crate) dock_hover: Option<usize>,
     pub(crate) dock_last: Option<dock::DockSync>,
+    /// Settings revision and whether a snapshot was present when the current dock layout was
+    /// built; an unchanged key plus no changed domain lets an idle turn skip the whole rebuild.
+    pub(crate) dock_settings_key: Option<(u64, bool)>,
     /// Trash folder has items, as last read on a dock rebuild or reveal.
     pub(crate) dock_trash_full: bool,
     /// Pending launch hop: the dock slot index and its bounce state.
@@ -176,6 +179,9 @@ pub(crate) struct ShellLoop {
     pub(crate) icon_geometry: IconGeometryTracker,
     /// Volume OSD: one retained overlay, driven by the audio snapshot.
     pub(crate) osd: flamewm_shell::osd::OsdController,
+    /// True once the OSD controller has observed its first level baseline; idle turns then
+    /// skip the sink/brightness reads until a system change or the hide deadline.
+    pub(crate) osd_primed: bool,
     pub(crate) switcher: flamewm_shell::switcher::SwitcherController,
     /// Weather scheduler: the only owner of weather fetches. Pushes its feed to the popup host.
     pub(crate) weather: flamewm_shell::weather_host::WeatherHost,
@@ -185,6 +191,9 @@ pub(crate) struct ShellLoop {
     pub(crate) usage: flamewm_shell::usage_host::UsageHost,
     /// When the open usage card was last projected; drives the one-minute countdown refresh.
     pub(crate) usage_projected_at: Option<std::time::Instant>,
+    /// Settings revision and whether a snapshot was present when the usage providers were last
+    /// configured; only a settings snapshot can change them, so idle turns skip the rebuild.
+    pub(crate) usage_settings_key: Option<(u64, bool)>,
     /// Focused stop of the open usage card (`None` when unfocused); cleared when the card closes.
     pub(crate) usage_focus: Option<usize>,
     /// Focused transport stop of the open media card (`None` when unfocused); cleared when it closes.
@@ -265,6 +274,7 @@ impl ShellLoop {
             dock_entries: Vec::new(),
             dock_hover: None,
             dock_last: None,
+            dock_settings_key: None,
             dock_trash_full: false,
             dock_bounce: None,
             dock_catalog: None,
@@ -290,11 +300,13 @@ impl ShellLoop {
             tray: None,
             icon_geometry: IconGeometryTracker::default(),
             osd: flamewm_shell::osd::OsdController::default(),
+            osd_primed: false,
             switcher: flamewm_shell::switcher::SwitcherController::default(),
             weather: flamewm_shell::weather_host::WeatherHost::new(),
             weather_feed_pending: true,
             usage: flamewm_shell::usage_host::UsageHost::default(),
             usage_projected_at: None,
+            usage_settings_key: None,
             usage_focus: None,
             media_focus: None,
             auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),

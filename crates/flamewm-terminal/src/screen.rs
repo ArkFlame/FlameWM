@@ -179,19 +179,31 @@ impl Screen {
 
     /// Takes the rows changed since the last call, so a renderer rebuilds only those.
     pub fn take_dirty(&mut self) -> Dirty {
-        if std::mem::take(&mut self.dirty_all) {
-            // The per-row list is unused behind `All`, so skip the scan and its allocation.
-            self.dirty_rows.fill(false);
-            return Dirty::All;
+        let mut rows = Vec::new();
+        if self.take_dirty_into(&mut rows) {
+            Dirty::All
+        } else {
+            Dirty::Rows(rows)
         }
-        let rows: Vec<usize> = self
-            .dirty_rows
-            .iter()
-            .enumerate()
-            .filter_map(|(row, dirty)| dirty.then_some(row))
-            .collect();
+    }
+
+    /// Fills `out` with the live rows written since the last take, ascending, and returns whether every row may have
+    /// changed. `out` is cleared first, so a renderer keeps one buffer and a frame allocates nothing for the list.
+    pub fn take_dirty_into(&mut self, out: &mut Vec<usize>) -> bool {
+        out.clear();
+        if std::mem::take(&mut self.dirty_all) {
+            // The per-row list is unused behind `All`, so skip the scan.
+            self.dirty_rows.fill(false);
+            return true;
+        }
+        out.extend(
+            self.dirty_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(row, dirty)| dirty.then_some(row)),
+        );
         self.dirty_rows.fill(false);
-        Dirty::Rows(rows)
+        false
     }
 
     fn mark_all(&mut self) {

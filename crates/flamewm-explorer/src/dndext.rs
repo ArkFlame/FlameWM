@@ -130,28 +130,45 @@ pub fn run_with_timeout(
         .map_err(|error| ExtractError::Spawn(error.to_string()))?;
     let pid = Pid::from_raw(child.id() as i32);
     let mut pidfd = pid.and_then(|pid| pidfd_open(pid, PidfdFlags::empty()).ok());
+    // Drain both pipes on their own threads while the child runs. Reading only
+    // after `try_wait` acknowledged the exit deadlocked on a child that writes
+    // more than one pipe buffer (64 KiB): the child blocked in write, the parent
+    // waited for the exit, and the timeout had to kill a call that had succeeded.
+    let mut out_reader = child.stdout.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut text = String::new();
+            let _ = pipe.read_to_string(&mut text);
+            text
+        })
+    });
+    let mut err_reader = child.stderr.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut text = String::new();
+            let _ = pipe.read_to_string(&mut text);
+            text
+        })
+    });
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut text = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    let _ = out.read_to_string(&mut text);
-                }
-                if let Some(mut err) = child.stderr.take() {
-                    let _ = err.read_to_string(&mut text);
-                }
+                let mut text = join_reader(&mut out_reader);
+                text.push_str(&join_reader(&mut err_reader));
                 let text: String = text.trim().chars().take(MAX_MESSAGE_CHARS).collect();
                 return Ok((status.success(), text));
             }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = join_reader(&mut out_reader);
+                let _ = join_reader(&mut err_reader);
                 return Err(ExtractError::Timeout);
             }
             Ok(None) if cancel.is_cancelled() => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = join_reader(&mut out_reader);
+                let _ = join_reader(&mut err_reader);
                 return Err(ExtractError::Cancelled);
             }
             Ok(None) => {
@@ -177,10 +194,20 @@ pub fn run_with_timeout(
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = join_reader(&mut out_reader);
+                let _ = join_reader(&mut err_reader);
                 return Err(ExtractError::Spawn(error.to_string()));
             }
         }
     }
+}
+
+/// Waits for a pipe reader thread and returns what it read (empty when there was no pipe).
+fn join_reader(handle: &mut Option<thread::JoinHandle<String>>) -> String {
+    handle
+        .take()
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
 }
 
 /// Name in `dir` that is not taken yet: `name`, then `name (2)`, `name (3)`, ...

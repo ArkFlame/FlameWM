@@ -125,6 +125,17 @@ pub(crate) fn sync_menu(
     state: &mut DesktopState,
 ) -> Result<(), String> {
     let _total = context_open_total_point().start();
+    if state.menu.is_none() {
+        // Nothing to show. Every show path pushes into `menu_rects`, so an empty vector means
+        // the menu nodes are already hidden: a hide pass here would issue a dozen no-op writes
+        // (and backdrop clears) on every projection sync of an ordinary desktop. An open delete
+        // confirm owns those rects while the menus are already hidden, so leaving them in place
+        // keeps its outside-press close path armed.
+        if state.pending_delete.is_some() || state.menu_rects.is_empty() {
+            return Ok(());
+        }
+        return hide_menus(document, &mut state.menu_rects);
+    }
     {
         let _close = context_open_close_point().start();
         hide_menus(document, &mut state.menu_rects)?;

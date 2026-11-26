@@ -102,14 +102,23 @@ pub(super) fn sync_drag_ghost(
         return Ok(());
     };
     let kind = ghost.kind;
-    let resolved = projection::project_drag_ghost_icon_scaled(
-        document,
-        &mut state.icons,
+    // Only one swap is possible per raster, and a miss must stay free: re-running the fade and
+    // upload every flush made an unresolvable drag icon (unknown theme name) cost an RGBA upload
+    // per frame for the whole drag. Wait for the drained raster instead.
+    let key = projection::ParallelIconService::icon_key_scaled(
         kind,
         ghost.icon_override.as_deref(),
         scale,
-    )?;
-    ghost.icon_resolved = resolved;
+    );
+    if state.icons.cached(&key).is_some() {
+        ghost.icon_resolved = projection::project_drag_ghost_icon_scaled(
+            document,
+            &mut state.icons,
+            kind,
+            ghost.icon_override.as_deref(),
+            scale,
+        )?;
+    }
     Ok(())
 }
 
@@ -122,7 +131,7 @@ fn set_source_tiles_visible<'a>(
 ) -> Result<(), String> {
     for (index, item) in items.take(SLOT_COUNT).enumerate() {
         if source_ids.contains(&item.id) {
-            document.visible(&format!("desktop-item-{index}"), visible)?;
+            document.visible(projection::item_slot_id(index), visible)?;
         }
     }
     Ok(())

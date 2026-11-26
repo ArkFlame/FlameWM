@@ -22,16 +22,6 @@ impl Insets {
     }
 
     #[must_use]
-    pub const fn symmetric(horizontal: i32, vertical: i32) -> Self {
-        Self {
-            left: horizontal,
-            top: vertical,
-            right: horizontal,
-            bottom: vertical,
-        }
-    }
-
-    #[must_use]
     pub const fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
         Self {
             left,

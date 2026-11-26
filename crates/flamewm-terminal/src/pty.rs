@@ -101,25 +101,19 @@ impl PtyProcess {
         })
     }
 
-    /// Whether the line discipline is canonical. Shell line editors clear ICANON while they read keys at the prompt, so
-    /// a set flag means a program reads cooked lines (sudo, cat, a REPL) rather than the prompt. Errors count as canonical.
+    /// Line-discipline flags the prompt check needs, from one ioctl: `(canonical, echoing)`. Shell line editors clear
+    /// ICANON while they read keys at the prompt, so a set flag means a program reads cooked lines (sudo, cat, a REPL);
+    /// a password prompt clears echo too, so both flags are needed. Errors count as the cooked default.
+    ///
+    /// Costs a syscall, so the session caches the pair and refreshes it per output batch and per key press, never per
+    /// frame.
     #[must_use]
-    pub fn canonical(&self) -> bool {
-        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| {
-            attrs
-                .local_modes
-                .contains(rustix::termios::LocalModes::ICANON)
-        })
-    }
-
-    /// Whether the terminal echoes typed input. A shell line editor turns echo off and draws the line itself, while
-    /// a password prompt also turns it off; the prompt check therefore needs both flags.
-    #[must_use]
-    pub fn echoing(&self) -> bool {
-        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| {
-            attrs
-                .local_modes
-                .contains(rustix::termios::LocalModes::ECHO)
+    pub fn line_modes(&self) -> (bool, bool) {
+        rustix::termios::tcgetattr(&self.master).map_or((true, true), |attrs| {
+            (
+                attrs.local_modes.contains(rustix::termios::LocalModes::ICANON),
+                attrs.local_modes.contains(rustix::termios::LocalModes::ECHO),
+            )
         })
     }
 

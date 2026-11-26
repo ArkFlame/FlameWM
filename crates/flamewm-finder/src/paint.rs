@@ -363,14 +363,20 @@ impl Finder {
         };
         doc.text("dups-sub", summary)?;
         doc.visible("dups-empty", self.groups.is_empty())?;
+        // One read guard for the whole sheet: the old path re-locked and cloned an `Entry`
+        // (two strings) per row and again per parent line.
+        let view = self.view();
         for slot in 0..DUPLICATE_SLOTS {
             let row = format!("dup-{slot}");
             let Some(group) = self.groups.get(slot) else {
                 doc.visible(&row, false)?;
                 continue;
             };
+            let Some(first) = group.first().and_then(|position| view.entries.get(*position)) else {
+                doc.visible(&row, false)?;
+                continue;
+            };
             doc.visible(&row, true)?;
-            let first = self.view().entries[group[0]].clone();
             doc.text_ref(&format!("dup-name-{slot}"), first.name())?;
             doc.text(
                 &format!("dup-meta-{slot}"),
@@ -379,9 +385,8 @@ impl Finder {
             let places: Vec<String> = group
                 .iter()
                 .take(3)
-                .map(|position| {
-                    format::parent_for_display(&self.view().entries[*position].path, &self.home)
-                })
+                .filter_map(|position| view.entries.get(*position))
+                .map(|entry| format::parent_for_display(&entry.path, &self.home))
                 .collect();
             doc.text(&format!("dup-path-{slot}"), places.join("  ·  "))?;
         }
@@ -394,15 +399,17 @@ impl Finder {
             .map(|root| format::parent_for_display(&root.to_string_lossy(), &self.home))
             .collect();
         doc.text("setup-0", roots.join(", "))?;
-        let truncated = if self.view().truncated {
+        let view = self.view();
+        let truncated = if view.truncated {
             ", limit reached"
         } else {
             ""
         };
         doc.text(
             "setup-1",
-            format!("{} files{truncated}", format::count(self.view().len())),
+            format!("{} files{truncated}", format::count(view.len())),
         )?;
+        drop(view);
         doc.text("setup-2", format!("{} folder levels", index::MAX_DEPTH))?;
         doc.text(
             "setup-3",

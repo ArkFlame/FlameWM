@@ -109,16 +109,29 @@ pub fn copy_items(
     events: &mut impl FnMut(CopyEvent),
 ) -> BatchReport {
     let mut report = BatchReport::default();
-    events(CopyEvent::Total(
-        sources.iter().map(|source| size_of(fs, source)).sum(),
-    ));
-    let mut base = 0_u64;
+    // Parse each URL once: the planned total, the directory guard and every
+    // per-item transfer used to re-parse the same strings (up to four URL
+    // parses per source, each allocating its host and path).
+    let directory_url = url_of(directory);
+    let mut source_urls = Vec::with_capacity(sources.len());
+    let mut total = 0_u64;
     for source in sources {
+        let url = url_of(source);
+        total += match &url {
+            Some(url) => fs.stat(url).map_or(0, |entry| entry.size),
+            None => fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 }),
+        };
+        source_urls.push(url);
+    }
+    events(CopyEvent::Total(total));
+    let mut base = 0_u64;
+    for (index, source) in sources.iter().enumerate() {
         if cancel.is_cancelled() {
             report.cancelled = true;
             break;
         }
-        match copy_one(fs, source, directory, cancel, base, &mut |bytes| {
+        let source_url = source_urls[index].as_ref();
+        match copy_one(fs, source, source_url, directory, directory_url.as_ref(), cancel, base, &mut |bytes| {
             events(CopyEvent::Progress(bytes));
         }) {
             Ok(bytes) => {
@@ -133,13 +146,6 @@ pub fn copy_items(
         }
     }
     report
-}
-
-fn size_of(fs: &impl RemoteOps, source: &Path) -> u64 {
-    match url_of(source) {
-        Some(url) => fs.stat(&url).map_or(0, |entry| entry.size),
-        None => fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 }),
-    }
 }
 
 /// Why one copy item failed: a refusal this module chose, or an error from the remote host.
@@ -167,7 +173,9 @@ impl std::fmt::Display for CopyError {
 fn copy_one(
     fs: &impl RemoteOps,
     source: &Path,
+    source_url: Option<&Url>,
     directory: &Path,
+    directory_url: Option<&Url>,
     cancel: &CancellationToken,
     base: u64,
     progress: &mut impl FnMut(u64),
@@ -177,14 +185,14 @@ fn copy_one(
         .and_then(|n| n.to_str())
         .ok_or(CopyError::Refused("source has no name"))?;
     let cancel_remote = RemoteCancel::new();
-    match (url_of(source), url_of(directory)) {
+    match (source_url, directory_url) {
         (None, Some(folder)) => {
             if !fs::metadata(source).is_ok_and(|meta| meta.is_file()) {
                 return Err(CopyError::Refused(
                     "folders cannot be copied to remote folders yet",
                 ));
             }
-            let target = free_remote_name(fs, &folder, name)?;
+            let target = free_remote_name(fs, folder, name)?;
             Ok(drive(
                 fs.upload(source, &target, &cancel_remote),
                 cancel,
@@ -194,14 +202,14 @@ fn copy_one(
             )?)
         }
         (Some(from), None) => {
-            if fs.stat(&from)?.kind == Kind::Dir {
+            if fs.stat(from)?.kind == Kind::Dir {
                 return Err(CopyError::Refused(
                     "folders cannot be copied from remote folders yet",
                 ));
             }
-            let target = destination_for(&to_path(&from), directory);
+            let target = destination_for(&to_path(from), directory);
             Ok(drive(
-                fs.download(&from, &target, &cancel_remote),
+                fs.download(from, &target, &cancel_remote),
                 cancel,
                 &cancel_remote,
                 base,
@@ -506,10 +514,10 @@ pub const RECENT_LIMIT: usize = 8;
 /// True for schemes this explorer lists through `flamewm-remote-fs`.
 #[must_use]
 pub fn is_remote_scheme(scheme: &str) -> bool {
-    matches!(
-        scheme.to_ascii_lowercase().as_str(),
-        "sftp" | "ssh" | "fish"
-    )
+    // No lowercased copy: `url_of` runs for every path the UI classifies.
+    scheme.eq_ignore_ascii_case("sftp")
+        || scheme.eq_ignore_ascii_case("ssh")
+        || scheme.eq_ignore_ascii_case("fish")
 }
 
 /// The URL behind a remote tab or entry path; `None` for local paths.

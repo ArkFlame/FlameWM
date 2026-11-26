@@ -22,6 +22,9 @@ pub struct Session {
     pub pty: PtyProcess,
     parser: Parser,
     pub screen: Screen,
+    /// Cached line-discipline flags `(canonical, echoing)`, refreshed per output batch and per key press. The prompt
+    /// check reads this instead of issuing an ioctl, so an idle repaint costs no syscall.
+    modes: (bool, bool),
 }
 
 impl Session {
@@ -43,18 +46,34 @@ impl Session {
             .name(format!("flamewm-terminal-read-{id}"))
             .spawn(move || read_loop(id, reader, events, pacer, notice_wake))
             .map_err(|error| error.to_string())?;
+        let modes = pty.line_modes();
         Ok(Self {
             id,
             pty,
             parser: Parser::new(),
             screen: Screen::new(size.cols as usize, size.rows as usize, scrollback),
+            modes,
         })
+    }
+
+    /// Cached line-discipline flags `(canonical, echoing)`.
+    #[must_use]
+    pub fn line_modes(&self) -> (bool, bool) {
+        self.modes
+    }
+
+    /// Reads the line-discipline flags once; call before a check that must see the child's newest state.
+    pub fn refresh_line_modes(&mut self) {
+        self.modes = self.pty.line_modes();
     }
 
     /// Feeds child output through the parser, then writes any replies (cursor reports, DA) back to the child.
     pub fn feed(&mut self, bytes: &[u8]) {
         let _parse = flamewm_profiler::start("terminal.parse");
         self.parser.advance(bytes, &mut self.screen);
+        // A line editor toggles ICANON and ECHO around its prompt, always with output; sampling here keeps the cached
+        // prompt check current without paying per frame.
+        self.modes = self.pty.line_modes();
         let replies = self.screen.take_replies();
         if !replies.is_empty() {
             let _ = self.pty.write(replies);

@@ -1,6 +1,35 @@
 //! Backend-neutral pixel operations. CPU and GPU renderers implement [`PixelBackend`]; X11 and
 //! Wayland call the same operations and never copy shared rendering logic per backend.
 
+use std::cell::RefCell;
+
+/// Largest scratch buffer the batch kernels retain between calls. A bigger buffer is released
+/// instead, so a one-off huge surface cannot pin its bytes for the life of the thread.
+const SCRATCH_RETAIN_BYTES: usize = 16 * 1024 * 1024;
+
+/// Buffers the CPU batch path reuses across frames: the full-frame copy for ops that cannot run
+/// in place, and the clip-sized region the clipped fill and backdrop helpers need.
+#[derive(Default)]
+struct BatchScratch {
+    frame: Vec<u8>,
+    region: Vec<u8>,
+}
+
+impl BatchScratch {
+    /// Drops a buffer that grew past the retention cap; smaller ones keep their capacity.
+    fn retain(buffer: &mut Vec<u8>) {
+        if buffer.capacity() > SCRATCH_RETAIN_BYTES {
+            *buffer = Vec::new();
+        }
+    }
+}
+
+thread_local! {
+    /// Backing store for [`PixelBackend::paint_batch`]'s default implementation. A backend that
+    /// keeps its own buffers (like `SoftPixels`) never touches it.
+    static BATCH_SCRATCH: RefCell<BatchScratch> = RefCell::new(BatchScratch::default());
+}
+
 /// Which pixel backend the `renderAcceleration` setting requests. `Cpu` is the default; `Gpu` is
 /// opt-in and every GPU failure falls back to the CPU backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -125,6 +154,7 @@ pub enum PixelOp<'a> {
 #[allow(clippy::too_many_arguments)]
 fn fill_clipped_cpu<B: PixelBackend + ?Sized>(
     backend: &mut B,
+    region: &mut Vec<u8>,
     pixels: &mut [u8],
     width: u32,
     height: u32,
@@ -149,7 +179,8 @@ fn fill_clipped_cpu<B: PixelBackend + ?Sized>(
     }
     let stride = width as usize * 4;
     let row_bytes = w as usize * 4;
-    let mut region = Vec::with_capacity(row_bytes * h as usize);
+    region.clear();
+    region.reserve(row_bytes * h as usize);
     for row in 0..h as usize {
         let start = (y as usize + row) * stride + x as usize * 4;
         region.extend_from_slice(&pixels[start..start + row_bytes]);
@@ -159,7 +190,7 @@ fn fill_clipped_cpu<B: PixelBackend + ?Sized>(
         y: rect.y - y,
         ..rect
     };
-    backend.fill_rounded_rect(&mut region, w, h, shift(outer), hole.map(shift), color)?;
+    backend.fill_rounded_rect(region, w, h, shift(outer), hole.map(shift), color)?;
     for row in 0..h as usize {
         let start = (y as usize + row) * stride + x as usize * 4;
         pixels[start..start + row_bytes]
@@ -202,6 +233,33 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
     corner: u32,
     radius: f32,
 ) -> Result<(), String> {
+    backdrop_blur_into(
+        backend,
+        &mut Vec::new(),
+        pixels,
+        width,
+        height,
+        clip,
+        node,
+        corner,
+        radius,
+    )
+}
+
+/// [`backdrop_blur_cpu`] with a caller-owned region buffer, so the batch path reuses one
+/// allocation instead of one per backdrop.
+#[allow(clippy::too_many_arguments)]
+fn backdrop_blur_into<B: PixelBackend + ?Sized>(
+    backend: &mut B,
+    region: &mut Vec<u8>,
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    clip: (i32, i32, u32, u32),
+    node: (i32, i32, u32, u32),
+    corner: u32,
+    radius: f32,
+) -> Result<(), String> {
     if pixels.len() != width as usize * height as usize * 4 {
         return Err("backdrop frame does not match its size".to_owned());
     }
@@ -218,12 +276,13 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
     }
     let stride = width as usize * 4;
     let row_bytes = w as usize * 4;
-    let mut region = Vec::with_capacity(row_bytes * h as usize);
+    region.clear();
+    region.reserve(row_bytes * h as usize);
     for row in 0..h as usize {
         let start = (y as usize + row) * stride + x as usize * 4;
         region.extend_from_slice(&pixels[start..start + row_bytes]);
     }
-    backend.blur_rgba(&mut region, w, h, radius)?;
+    backend.blur_rgba(region, w, h, radius)?;
     for row in 0..h as i32 {
         let Some((first, last)) = node_row_span(x, y + row, w, node, corner) else {
             continue;
@@ -232,7 +291,8 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
             let (px, py) = (x + col as i32, y + row);
             let source = (row as usize * w as usize + col as usize) * 4;
             let dest = py as usize * stride + px as usize * 4;
-            pixels[dest..dest + 3].copy_from_slice(&region[source..source + 3]);
+            // One 4-byte copy, then force the node shape opaque.
+            pixels[dest..dest + 4].copy_from_slice(&region[source..source + 4]);
             pixels[dest + 3] = 255;
         }
     }
@@ -334,6 +394,12 @@ pub fn composite_cpu(
     }
     let span = (col_end - col_start) as usize;
     let frame_x = (x + col_start as i32) as usize;
+    // The blended alpha depends only on the colour alpha and the 8-bit coverage, so the table
+    // is built once per op instead of once per row or per pixel.
+    let mask_alpha = match op {
+        PixelOp::BlendMask { color, .. } => Some(mask_alpha_lut(color)),
+        _ => None,
+    };
     for row in 0..rect_height {
         let frame_y = y + row as i32;
         if !(0..height as i32).contains(&frame_y) {
@@ -344,7 +410,8 @@ pub fn composite_cpu(
         let dst = &mut pixels[dst_start..dst_start + span * 4];
         match op {
             PixelOp::BlendMask { mask, color, .. } => {
-                blend_mask_span(dst, &mask[src_index..src_index + span], color);
+                let table = mask_alpha.as_ref().expect("table exists for a mask op");
+                blend_mask_span_with(dst, &mask[src_index..src_index + span], color, table);
             }
             PixelOp::BlendImage { rgba, .. } => {
                 blend_image_span(dst, &rgba[src_index * 4..(src_index + span) * 4]);
@@ -407,14 +474,36 @@ fn div255(t: u32) -> u32 {
 
 /// Source-over of straight `color` through per-pixel `mask` coverage onto RGBA8 `dst`.
 /// Zero coverage leaves the pixel, full coverage writes the colour, and the rest blend.
+#[cfg(test)]
 fn blend_mask_span(dst: &mut [u8], mask: &[u8], color: [u8; 4]) {
+    blend_mask_span_with(dst, mask, color, &mask_alpha_lut(color));
+}
+
+/// The blended alpha of every 8-bit coverage for `color`, the value [`blend_mask_span_with`]
+/// reads per pixel. Entry `c` is `round(color[3] * c / 255)`.
+fn mask_alpha_lut(color: [u8; 4]) -> [u8; 256] {
     let colour_alpha = u32::from(color[3]);
+    let mut table = [0u8; 256];
+    for (coverage, alpha) in table.iter_mut().enumerate() {
+        *alpha = div255(colour_alpha * coverage as u32) as u8;
+    }
+    table
+}
+
+/// The single-span entry point with the alpha table already built for `color`; the batch path
+/// builds that table once per op, not once per row.
+fn blend_mask_span_with(dst: &mut [u8], mask: &[u8], color: [u8; 4], alpha_of: &[u8; 256]) {
+    // Alpha zero would leave every pixel untouched, so the whole span can be skipped.
+    if color[3] == 0 {
+        return;
+    }
+    let solid = [color[0], color[1], color[2], 255];
     for (pixel, &coverage) in dst.chunks_exact_mut(4).zip(mask) {
-        let a = div255(colour_alpha * u32::from(coverage));
-        match a {
+        match alpha_of[usize::from(coverage)] {
             0 => {}
-            255 => pixel.copy_from_slice(&[color[0], color[1], color[2], 255]),
-            _ => {
+            255 => pixel.copy_from_slice(&solid),
+            a => {
+                let a = u32::from(a);
                 let inverse = 255 - a;
                 for channel in 0..3 {
                     pixel[channel] =
@@ -489,10 +578,28 @@ pub trait PixelBackend {
         if paints_in_place(pixels.len(), width, height, ops) {
             return apply_ops_in_place(self, pixels, width, height, ops);
         }
-        let mut scratch = pixels.to_vec();
-        apply_ops_to_scratch(self, &mut scratch, width, height, ops)?;
-        pixels.copy_from_slice(&scratch);
-        Ok(())
+        // Reuse the thread's frame scratch so a batch with a blur or backdrop does not allocate
+        // a full-frame copy every paint.
+        BATCH_SCRATCH.with(|cell| {
+            let mut guard = cell.borrow_mut();
+            let scratch = &mut *guard;
+            scratch.frame.clear();
+            scratch.frame.extend_from_slice(pixels);
+            let result = apply_ops_to_scratch(
+                self,
+                &mut scratch.frame,
+                &mut scratch.region,
+                width,
+                height,
+                ops,
+            );
+            if result.is_ok() {
+                pixels.copy_from_slice(&scratch.frame);
+            }
+            BatchScratch::retain(&mut scratch.frame);
+            BatchScratch::retain(&mut scratch.region);
+            result
+        })
     }
 }
 
@@ -523,9 +630,11 @@ pub(crate) fn apply_ops_in_place<B: PixelBackend + ?Sized>(
 
 /// Runs `ops` on `scratch`, which must already hold the frame at `width` x `height`. A caller
 /// that keeps a frame-shaped scratch buffer reuses it every frame instead of allocating one.
+/// `region` is the clip-sized buffer the clipped-fill and backdrop helpers reuse.
 pub(crate) fn apply_ops_to_scratch<B: PixelBackend + ?Sized>(
     backend: &mut B,
     scratch: &mut [u8],
+    region: &mut Vec<u8>,
     width: u32,
     height: u32,
     ops: &[PixelOp<'_>],
@@ -541,13 +650,19 @@ pub(crate) fn apply_ops_to_scratch<B: PixelBackend + ?Sized>(
                 hole,
                 color,
                 clip,
-            } => fill_clipped_cpu(backend, scratch, width, height, outer, hole, color, clip)?,
+            } => {
+                fill_clipped_cpu(
+                    backend, region, scratch, width, height, outer, hole, color, clip,
+                )?
+            }
             PixelOp::BackdropBlur {
                 clip,
                 node,
                 corner,
                 radius,
-            } => backdrop_blur_cpu(backend, scratch, width, height, clip, node, corner, radius)?,
+            } => backdrop_blur_into(
+                backend, region, scratch, width, height, clip, node, corner, radius,
+            )?,
             blend @ (PixelOp::BlendMask { .. } | PixelOp::BlendImage { .. }) => {
                 composite_cpu(scratch, width, height, blend)?;
             }

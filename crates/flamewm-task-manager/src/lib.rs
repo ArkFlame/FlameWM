@@ -170,9 +170,9 @@ impl Application {
     /// One process matches the search box: name, command or PID contains the query.
     fn matches(&self, process: &model::Process, query: &str) -> bool {
         query.is_empty()
-            || process.name.to_lowercase().contains(query)
-            || process.command.to_lowercase().contains(query)
-            || process.pid.to_string().contains(query)
+            || contains_folded(process.name.as_ref(), query)
+            || contains_folded(process.command.as_ref(), query)
+            || pid_contains(process.pid, query)
     }
     /// Matching processes without ordering: lets scrolling find its bound without a full sort.
     fn matching_count(&self) -> usize {
@@ -272,15 +272,20 @@ impl Application {
         let count = snapshot.cores.len();
         let columns = count.div_ceil(CORES_PER_COLUMN).clamp(1, CORE_COLUMNS);
         let track = core_track_width(self.window.0, columns);
+        // Two buffers reused for every element id and text cell: the metrics card updates on each
+        // sample, and `text_ref` then skips unchanged cells instead of allocating ~80 strings.
+        let mut id = String::with_capacity(24);
+        let mut text = String::with_capacity(64);
         for column in 0..CORE_COLUMNS {
-            doc.visible(
-                &format!("core-col-{column}"),
-                column == 0 || column * CORES_PER_COLUMN < count,
-            )?;
+            id.clear();
+            let _ = write!(id, "core-col-{column}");
+            doc.visible(&id, column == 0 || column * CORES_PER_COLUMN < count)?;
         }
         for i in 0..CORES {
             let visible = i < count;
-            doc.visible(&format!("core-{i}"), visible)?;
+            id.clear();
+            let _ = write!(id, "core-{i}");
+            doc.visible(&id, visible)?;
             if !visible {
                 continue;
             }
@@ -291,62 +296,79 @@ impl Application {
                 snapshot.cores[i]
             }
             .clamp(0.0, 100.0);
-            doc.text(
-                &format!("core-label-{i}"),
-                if overflow {
-                    format!("{i}+")
-                } else {
-                    i.to_string()
-                },
-            )?;
-            doc.text(&format!("core-pct-{i}"), format!("{value:.0}%"))?;
-            let fill = format!("cpu-fill-{i}");
-            doc.size(&fill, track * value as f32 / 100.0, 7.0)?;
-            doc.background(&fill, UiColor::from_rgb(load_color(value), 255))?;
+            id.clear();
+            let _ = write!(id, "core-label-{i}");
+            text.clear();
+            if overflow {
+                let _ = write!(text, "{i}+");
+            } else {
+                let _ = write!(text, "{i}");
+            }
+            doc.text_ref(&id, &text)?;
+            id.clear();
+            let _ = write!(id, "core-pct-{i}");
+            text.clear();
+            let _ = write!(text, "{value:.0}%");
+            doc.text_ref(&id, &text)?;
+            id.clear();
+            let _ = write!(id, "cpu-fill-{i}");
+            doc.size(&id, track * value as f32 / 100.0, 7.0)?;
+            doc.background(&id, UiColor::from_rgb(load_color(value), 255))?;
         }
-        doc.text("cores-count", format!("{count} threads"))?;
-        doc.text("cpu-total", format!("{:.0}%", snapshot.cpu_total))?;
-        doc.text("cpu-value", format!("{:.0}%", snapshot.cpu_total))?;
-        doc.text("cpu-foot", format!("Load {}", snapshot.load))?;
-        doc.text(
-            "mem-value",
-            format!(
-                "{:.1} / {:.1} GiB",
-                gib(snapshot.mem_used),
-                gib(snapshot.mem_total)
-            ),
-        )?;
-        doc.text(
-            "swap-text",
-            format!(
-                "{:.1} / {:.1} GiB",
-                gib(snapshot.swap_used),
-                gib(snapshot.swap_total)
-            ),
-        )?;
+        text.clear();
+        let _ = write!(text, "{count} threads");
+        doc.text_ref("cores-count", &text)?;
+        text.clear();
+        let _ = write!(text, "{:.0}%", snapshot.cpu_total);
+        doc.text_ref("cpu-total", &text)?;
+        doc.text_ref("cpu-value", &text)?;
+        text.clear();
+        let _ = write!(text, "Load {}", snapshot.load);
+        doc.text_ref("cpu-foot", &text)?;
+        text.clear();
+        let _ = write!(
+            text,
+            "{:.1} / {:.1} GiB",
+            gib(snapshot.mem_used),
+            gib(snapshot.mem_total)
+        );
+        doc.text_ref("mem-value", &text)?;
+        text.clear();
+        let _ = write!(
+            text,
+            "{:.1} / {:.1} GiB",
+            gib(snapshot.swap_used),
+            gib(snapshot.swap_total)
+        );
+        doc.text_ref("swap-text", &text)?;
         doc.size(
             "swap-fill",
             fraction_width(snapshot.swap_used, snapshot.swap_total, 60),
             5.0,
         )?;
-        doc.text("net-value", rate(snapshot.net_rx + snapshot.net_tx))?;
-        doc.text("net-down", rate(snapshot.net_rx))?;
-        doc.text("net-up", rate(snapshot.net_tx))?;
-        doc.text(
-            "summary",
-            format!(
-                "{} processes · {} threads · {} running · up {}",
-                snapshot.tasks, snapshot.threads, snapshot.running, snapshot.uptime
-            ),
-        )?;
-        doc.text("head-cpu-pct", format!("{:.0}%", snapshot.cpu_total))?;
-        doc.text(
-            "head-mem-pct",
-            format!(
-                "{:.0}%",
-                fraction_width(snapshot.mem_used, snapshot.mem_total, 100)
-            ),
-        )
+        rate_into(&mut text, snapshot.net_rx + snapshot.net_tx);
+        doc.text_ref("net-value", &text)?;
+        rate_into(&mut text, snapshot.net_rx);
+        doc.text_ref("net-down", &text)?;
+        rate_into(&mut text, snapshot.net_tx);
+        doc.text_ref("net-up", &text)?;
+        text.clear();
+        let _ = write!(
+            text,
+            "{} processes · {} threads · {} running · up {}",
+            snapshot.tasks, snapshot.threads, snapshot.running, snapshot.uptime
+        );
+        doc.text_ref("summary", &text)?;
+        text.clear();
+        let _ = write!(text, "{:.0}%", snapshot.cpu_total);
+        doc.text_ref("head-cpu-pct", &text)?;
+        text.clear();
+        let _ = write!(
+            text,
+            "{:.0}%",
+            fraction_width(snapshot.mem_used, snapshot.mem_total, 100)
+        );
+        doc.text_ref("head-mem-pct", &text)
     }
     fn paint_graphs(&self, doc: &mut impl UiDocumentAccess) -> Result<(), String> {
         let histories = &self.histories;
@@ -414,16 +436,19 @@ impl Application {
         let hits = self.sorted();
         let max_first = hits.len().saturating_sub(self.viewport);
         self.first = self.first.min(max_first);
-        doc.text(
-            "search",
-            if self.search_active {
-                format!("{}▌", self.query)
-            } else if self.query.is_empty() {
-                "Search processes".into()
-            } else {
-                format!("{}  ×", self.query)
-            },
-        )?;
+        // One id and one value buffer for the whole table: a visible row costs no `String`
+        // allocation per cell, and `text_ref` skips unchanged cells inside the document.
+        let mut id = String::with_capacity(32);
+        let mut value = String::with_capacity(96);
+        value.clear();
+        if self.search_active {
+            let _ = write!(value, "{}▌", self.query);
+        } else if self.query.is_empty() {
+            value.push_str("Search processes");
+        } else {
+            let _ = write!(value, "{}  ×", self.query);
+        }
+        doc.text_ref("search", &value)?;
         doc.text_ref("status", &self.message)?;
         for (sort, id, label) in [
             (Sort::Name, "head-name-label", "Name"),
@@ -436,14 +461,12 @@ impl Application {
                 (true, true) => " ↓",
                 (true, false) => " ↑",
             };
-            doc.text(id, format!("{label}{arrow}"))?;
+            value.clear();
+            let _ = write!(value, "{label}{arrow}");
+            doc.text_ref(id, &value)?;
         }
         self.rows.clear();
         let total = self.snapshot.mem_total.max(1);
-        // One id and one value buffer for the whole table: a visible row costs no `String`
-        // allocation per cell, and `text_ref` skips unchanged cells inside the document.
-        let mut id = String::with_capacity(32);
-        let mut value = String::with_capacity(96);
         for slot in 0..ROWS {
             id.clear();
             let _ = write!(id, "row-{slot}");
@@ -767,15 +790,15 @@ impl Application {
 fn display_name(process: &model::Process) -> &str {
     const COMM_LIMIT: usize = 15;
     if process.name.len() < COMM_LIMIT {
-        return process.name.as_str();
+        return process.name.as_ref();
     }
     process
         .command
         .split_whitespace()
         .next()
         .and_then(|program| program.rsplit('/').next())
-        .filter(|program| program.starts_with(process.name.as_str()))
-        .unwrap_or(process.name.as_str())
+        .filter(|program| program.starts_with(process.name.as_ref()))
+        .unwrap_or(process.name.as_ref())
 }
 /// Writes one row-cell element id into the reused buffer: no `format!` per cell per paint.
 fn cell_id(id: &mut String, slot: usize, cell: &str) {
@@ -791,15 +814,49 @@ fn memory_text_into(out: &mut String, kib: u64) {
         let _ = write!(out, "{:.1} MB", kib as f64 / 1024.0);
     }
 }
-fn rate(bytes_per_second: f64) -> String {
+fn rate_into(out: &mut String, bytes_per_second: f64) {
+    out.clear();
     let value = bytes_per_second.max(0.0);
     if value >= 1_048_576.0 {
-        format!("{:.1} MiB/s", value / 1_048_576.0)
+        let _ = write!(out, "{:.1} MiB/s", value / 1_048_576.0);
     } else if value >= 1024.0 {
-        format!("{:.1} KiB/s", value / 1024.0)
+        let _ = write!(out, "{:.1} KiB/s", value / 1024.0);
     } else {
-        format!("{value:.0} B/s")
+        let _ = write!(out, "{value:.0} B/s");
     }
+}
+/// Substring test that ignores ASCII case, where `needle` is already lowercased. The search runs
+/// on every process on every paint; doing it on bytes avoids the two `String` allocations that
+/// `to_lowercase()` made per process. Non-ASCII text keeps the exact former behaviour.
+fn contains_folded(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.is_ascii() && needle.is_ascii() {
+        let (haystack, needle) = (haystack.as_bytes(), needle.as_bytes());
+        return haystack
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle));
+    }
+    haystack.to_lowercase().contains(needle)
+}
+/// Matches a PID against `needle` by writing its decimal digits into a stack buffer, so the
+/// search never allocates the `to_string()` of every process.
+fn pid_contains(pid: u32, needle: &str) -> bool {
+    let mut digits = [0_u8; 10];
+    let mut start = digits.len();
+    let mut value = pid;
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    std::str::from_utf8(&digits[start..])
+        .unwrap_or_default()
+        .contains(needle)
 }
 fn state_name(state: char) -> &'static str {
     match state {
@@ -887,13 +944,14 @@ fn window_backdrop(snapshot: &SettingsSnapshot) -> flamewm_ui_x11::backdrop::Win
         _ => flamewm_api::settings_groups::DEFAULT_SURFACE_OPACITY,
     };
     let fit = text("wallpaperFit");
+    let (opacity_percent, blur_percent) =
+        flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur);
     flamewm_ui_x11::backdrop::WindowBackdrop {
         wallpaper: text("wallpaper"),
         fit: if fit.is_empty() { "fill".into() } else { fit },
         packaged_root: flamewm_api::paths::workspace_packaged_root(),
-        opacity_percent: flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur)
-            .0,
-        blur_percent: flamewm_ui_core::glass::window_backdrop_material(snapshot, opacity, blur).1,
+        opacity_percent,
+        blur_percent,
     }
 }
 
@@ -1130,6 +1188,11 @@ mod tests {
     }
     #[test]
     fn rates_and_memory_use_readable_units() {
+        let rate = |bytes| {
+            let mut text = String::new();
+            rate_into(&mut text, bytes);
+            text
+        };
         assert_eq!(rate(512.0), "512 B/s");
         assert_eq!(rate(2048.0), "2.0 KiB/s");
         assert_eq!(rate(3.0 * 1_048_576.0), "3.0 MiB/s");
@@ -1146,5 +1209,15 @@ mod tests {
         assert_eq!(visible_rows(HEIGHT), 15);
         assert_eq!(visible_rows(0), 1);
         assert_eq!(visible_rows(4096), ROWS);
+    }
+    #[test]
+    fn search_folds_ascii_case_and_matches_pid_digits_in_place() {
+        assert!(contains_folded("Firefox", "fire"));
+        assert!(contains_folded("firefox", "FIRE"));
+        assert!(!contains_folded("firefox", "chrome"));
+        assert!(!contains_folded("fire", "firefox"));
+        assert!(pid_contains(4242, "242"));
+        assert!(pid_contains(0, "0"));
+        assert!(!pid_contains(4242, "999"));
     }
 }

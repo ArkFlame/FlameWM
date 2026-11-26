@@ -36,7 +36,8 @@ impl<'a> RuleIndex<'a> {
     /// Positions of every rule that might match `node`, ascending (source order), without duplicates.
     pub(crate) fn candidates(&self, html: &ParsedHtml, node: usize) -> Vec<usize> {
         let element = &html.nodes[node];
-        let mut found = self.unkeyed.clone();
+        let mut found = Vec::with_capacity(self.unkeyed.len() + 4);
+        found.extend_from_slice(&self.unkeyed);
         let mut take = |bucket: Option<&Vec<usize>>| {
             if let Some(positions) = bucket {
                 found.extend_from_slice(positions);

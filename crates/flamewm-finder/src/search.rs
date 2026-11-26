@@ -159,8 +159,7 @@ pub fn score(entry: &Entry, query: &Query, now: i64) -> Option<i64> {
     for term in &query.terms {
         total += term_score(&entry.lower, entry.name_at, term)?;
     }
-    let depth = entry.path.matches('/').count().min(40);
-    let depth = i64::try_from(depth).unwrap_or(40);
+    let depth = i64::from(entry.depth.min(40));
     Some(total + recency_bonus(entry.modified, now) - depth)
 }
 

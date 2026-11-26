@@ -596,9 +596,12 @@ impl NotificationHost {
         runtime: &mut SurfaceRuntime,
         wake: Option<&flamewm_reactor::WakeDeadline>,
     ) -> Result<(), String> {
-        self.provider
-            .expire(std::time::Instant::now())
-            .map_err(|error| error.message)?;
+        // `expire` only removes entries past their own deadline, so skipping it until the
+        // earliest deadline is due is behavior-preserving; the deadline is still published.
+        let now = std::time::Instant::now();
+        if self.provider.next_deadline().is_some_and(|at| at <= now) {
+            self.provider.expire(now).map_err(|error| error.message)?;
+        }
         // The provider queues one typed update per view change (upsert, close, reset), so an
         // empty drain means the toasts and their history are unchanged. A passive turn then
         // never clones the active views, whose icon pixels would be copied on every wake.

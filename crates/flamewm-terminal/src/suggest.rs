@@ -662,6 +662,12 @@ impl LineInput {
         self.text.clone()
     }
 
+    /// The line as borrowed text, for checks that run per frame and must not allocate.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
     /// True when a suggestion may be drawn: the line is exact and the cursor sits at its end.
     #[must_use]
     pub fn is_ready(&self) -> bool {

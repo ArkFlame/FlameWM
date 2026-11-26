@@ -4,6 +4,7 @@
 //! totals and feeds the caller's sink in coarse steps (about a hundred per operation), so memory
 //! stays bounded by the copy buffer and the UI is not woken once per chunk.
 
+use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -169,6 +170,12 @@ impl Read for Tracked<'_, '_> {
 /// read/write syscall pairs.
 const COPY_BUFFER: usize = 64 * 1024;
 
+thread_local! {
+    /// Reused copy buffer. An archive of many small files used to allocate and zero a 64 KiB
+    /// buffer for every entry; one scratch buffer per worker thread removes that per-entry churn.
+    static COPY_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+}
+
 /// Copies `src` into `dst` through the reporter. Returns the bytes copied.
 pub fn copy_tracked(
     src: &mut dyn Read,
@@ -176,12 +183,28 @@ pub fn copy_tracked(
     rep: &mut Reporter<'_>,
 ) -> Result<u64> {
     rep.check()?;
-    let mut buffer = vec![0_u8; COPY_BUFFER];
+    // A nested copy on the same thread (re-entrant writer) cannot share the scratch buffer, so it
+    // falls back to a temporary one instead of panicking on an already-borrowed `RefCell`.
+    match COPY_SCRATCH.try_with(|scratch| scratch.try_borrow_mut()) {
+        Ok(Ok(mut buffer)) => copy_chunks(src, dst, rep, &mut buffer),
+        _ => copy_chunks(src, dst, rep, &mut vec![0_u8; COPY_BUFFER]),
+    }
+}
+
+fn copy_chunks(
+    src: &mut dyn Read,
+    dst: &mut dyn Write,
+    rep: &mut Reporter<'_>,
+    buffer: &mut Vec<u8>,
+) -> Result<u64> {
+    if buffer.len() < COPY_BUFFER {
+        buffer.resize(COPY_BUFFER, 0);
+    }
     let mut total = 0_u64;
     loop {
         // Cancel between chunks, like the `Tracked` reader does for tar entries.
         rep.check()?;
-        let n = match src.read(&mut buffer) {
+        let n = match src.read(&mut buffer[..]) {
             Ok(0) => return Ok(total),
             Ok(n) => n,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,

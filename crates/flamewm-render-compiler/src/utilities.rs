@@ -337,14 +337,14 @@ pub(crate) const UTILITIES_REVISION: u64 = table_hash(UTILITIES, SCALED);
 /// Candidates are filtered cheaply, then deduplicated, so `lookup` runs once per distinct token.
 pub(crate) fn rules_for(html: &ParsedHtml, first_order: u32) -> Vec<Rule> {
     // Most tokens are component classes: the two-byte mask rejects them with no lookup. Survivors are
-    // looked up in place; only the (few) matches are sorted, so the common page never sorts its tokens.
+    // deduplicated first, so `lookup` runs once per distinct token instead of once per occurrence.
     let mut used: Vec<&str> = Vec::new();
     for node in &html.nodes {
         let Some(class) = node.attrs.get("class") else {
             continue;
         };
         for token in class.split_ascii_whitespace() {
-            if is_candidate(token) && lookup(token).is_some() {
+            if is_candidate(token) {
                 used.push(token);
             }
         }
@@ -357,15 +357,16 @@ pub(crate) fn rules_for(html: &ParsedHtml, first_order: u32) -> Vec<Rule> {
     let mut rules = Vec::new();
     let mut order = first_order;
     for token in used {
-        if let Some(resolved) = lookup(token) {
-            rules.push(class_rule(
-                token.to_string(),
-                resolved.state,
-                order,
-                resolved.declarations(),
-            ));
-            order += 1;
-        }
+        let Some(resolved) = lookup(token) else {
+            continue;
+        };
+        rules.push(class_rule(
+            token.to_string(),
+            resolved.state,
+            order,
+            resolved.declarations(),
+        ));
+        order += 1;
     }
     rules
 }

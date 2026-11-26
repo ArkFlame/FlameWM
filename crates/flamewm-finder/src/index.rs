@@ -2,7 +2,7 @@
 //! wall-clock budget; symlinks are never followed and hidden or dependency folders are skipped. The
 //! last walk is cached on disk so the next launch can search before the new walk finishes.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -26,6 +26,9 @@ pub struct Entry {
     pub lower: String,
     /// Byte offset of the file name inside `lower`.
     pub name_at: usize,
+    /// Number of `/` separators in `path` (capped at `u32::MAX`). Ranking subtracts it, so it is
+    /// folded once here instead of rescanning every path on each keystroke.
+    pub depth: u32,
     pub is_dir: bool,
     pub size: u64,
     pub modified: i64,
@@ -36,10 +39,12 @@ impl Entry {
     pub fn new(path: String, is_dir: bool, size: u64, modified: i64) -> Self {
         let lower = path.to_lowercase();
         let name_at = lower.rfind('/').map_or(0, |slash| slash + 1);
+        let depth = u32::try_from(path.matches('/').count()).unwrap_or(u32::MAX);
         Self {
             path,
             lower,
             name_at,
+            depth,
             is_dir,
             size,
             modified,
@@ -102,11 +107,16 @@ impl Index {
 
         self.docs.clear();
         if !self.doc_paths.is_empty() {
-            let position: HashMap<&str, usize> = entries
-                .iter()
-                .enumerate()
-                .map(|(i, entry)| (entry.path.as_str(), i))
-                .collect();
+            // Resolve the small recent-document list against the entries instead of building a
+            // map of every entry: a watcher commit runs this after any change, and a full-index
+            // map allocated several megabytes each time.
+            let wanted: HashSet<&str> = self.doc_paths.iter().map(String::as_str).collect();
+            let mut position: HashMap<&str, usize> = HashMap::with_capacity(wanted.len());
+            for (index, entry) in entries.iter().enumerate() {
+                if wanted.contains(entry.path.as_str()) {
+                    position.insert(entry.path.as_str(), index);
+                }
+            }
             self.docs = self
                 .doc_paths
                 .iter()

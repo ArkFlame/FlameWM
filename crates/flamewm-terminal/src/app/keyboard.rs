@@ -112,6 +112,11 @@ impl App {
     /// line sends the suggestion's suffix instead of the key. Enter records the line when the shell is at its prompt.
     fn track_key(&mut self, event: &UiKeyEvent, bytes: Vec<u8>) -> Vec<u8> {
         self.history.refresh();
+        // The child may have toggled its line discipline since the last output batch; one ioctl per key press keeps
+        // the prompt check exact without costing a syscall per frame.
+        if let Some(pane) = self.focused_pane_mut() {
+            pane.session.refresh_line_modes();
+        }
         let name = event.key.to_ascii_lowercase();
         let mods = Mods::from_names(event.modifiers.iter());
         if !mods.ctrl
@@ -140,7 +145,8 @@ impl App {
 
     /// The shell reads keys at its prompt: no full-screen program, the line discipline is not canonical, and the
     /// terminal does not echo. A password prompt (canonical, no echo) and a program that reads keys with echo on are
-    /// both excluded, so what is typed there is never recorded.
+    /// both excluded, so what is typed there is never recorded. Reads the session's cached flags; the key path
+    /// refreshes them first.
     pub(super) fn at_prompt(&self) -> bool {
         let Some(pane) = self.focused_pane() else {
             return false;
@@ -149,9 +155,8 @@ impl App {
         if let Some(prompt) = pane.prompt {
             return prompt;
         }
-        !pane.session.screen.alt_active()
-            && !pane.session.pty.canonical()
-            && !pane.session.pty.echoing()
+        let (canonical, echoing) = pane.session.line_modes();
+        !pane.session.screen.alt_active() && !canonical && !echoing
     }
 
     fn shortcut(&mut self, shortcut: Shortcut) {

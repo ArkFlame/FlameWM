@@ -609,13 +609,6 @@ impl ExplorerApp {
         let origin=self.origin(rows);
         // One snapshot of the source for all slots, same sequence as `entry_at`; slot k maps to position k-1+origin.
         let first=origin.saturating_sub(1);
-        // A full pass replaces the thumbnail requests, but only when the window it shows changed:
-        // pruning and re-requesting the same rows cloned every queued key and re-hashed the pending
-        // set on each wake. Search results are re-ordered when the walk finishes, so they always restart.
-        if let Some(queue)=self.thumb_queue.as_ref()
-            && (self.search_rows.is_some() || thumb_pass_changed(tab,first,rows)) {
-            self.thumbs.borrow_mut().start_pass(queue);
-        }
         let mut window: [Option<&Entry>; ROW_SLOTS] = [None; ROW_SLOTS];
         match self.search_rows.as_ref() {
             Some(results)=>{
@@ -630,6 +623,30 @@ impl ExplorerApp {
                 for (slot, entry) in tab.visible().skip(first).take(ROW_SLOTS).enumerate() { window[slot]=Some(entry); }
             },
         }
+        // A full pass replaces the thumbnail requests, but only when the window it shows changed:
+        // pruning and re-requesting the same rows cloned every queued key and re-hashed the pending
+        // set on each wake. Search results are re-ordered when the walk finishes, so they always restart.
+        // A job for a row that is still projected in view is kept as-is; only rows that left the view
+        // lose their request (and are never decoded).
+        let mut visible=[false;ROW_SLOTS];
+        for (slot,shown) in visible.iter_mut().enumerate() {
+            let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
+            *shown=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+        }
+        if let Some(queue)=self.thumb_queue.as_ref()
+            && (self.search_rows.is_some() || thumb_pass_changed(tab,first,rows)) {
+            self.thumbs.borrow_mut().start_pass_keeping(queue,|key|{
+                // Window position `pos` holds the entry of absolute row `first + pos`, shown by slot
+                // `first + pos - origin + 1`; a listing at its first row shifts by one because `first`
+                // saturates at zero.
+                window.iter().enumerate().any(|(pos,entry)|{
+                    let slot=(first+pos) as isize-origin as isize+1;
+                    let shown=usize::try_from(slot).ok().and_then(|slot|visible.get(slot).copied()).unwrap_or(false);
+                    shown&&matches!(*entry,Some(entry)
+                        if entry.path==key.path&&entry.size==key.size&&entry.modified==key.modified)
+                })
+            });
+        }
         let ids=IdTables::get();
         let today=today_cached();
         let occupancy=ROW_LABELS.with(|cell|->Result<[bool;ROW_SLOTS],String>{
@@ -640,7 +657,7 @@ impl ExplorerApp {
                 let index=flamewm_explorer::row_slot_index(origin,slot);
                 let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
                 let entry=if slot<=rows+1 {usize::try_from(index).ok().and_then(|i|i.checked_sub(first)).and_then(|p|window.get(p).copied().flatten())} else {None};
-                let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+                let in_view=visible[slot];
                 occupancy[slot]=entry.is_some();
                 if let Some(entry)=entry {
                     // Contents are set even off-view, so a row that glides into view later already shows its entry.

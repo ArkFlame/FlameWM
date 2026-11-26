@@ -128,7 +128,12 @@ pub(crate) fn set_slot_labels(
 impl ShellLoop {
     /// Creates, moves, projects, or destroys the dock surface to match the settings and windows.
     /// Auto-hide slides the dock toward its edge; once fully hidden, only the reveal strip is mapped.
-    pub(crate) fn sync_dock(&mut self, runtime: &mut SurfaceRuntime) {
+    pub(crate) fn sync_dock(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        changed: flamewm_shell::runtime::ChangedDomains,
+        force: bool,
+    ) {
         let settings: DockSettings = dock::dock_settings(self.settings_cache.as_ref());
         if !settings.enabled {
             self.dock_entries.clear();
@@ -141,6 +146,29 @@ impl ShellLoop {
                 let _ = runtime.destroy(reveal);
             }
             self.dock_stage = DockStage::default();
+            return;
+        }
+        // Pointer motion is the bulk of the event stream; only a domain change, a settings
+        // revision change, or an owned animation (auto-hide, drag, menu) needs a rebuild.
+        let now = std::time::Instant::now();
+        // A slide still in progress (for example auto-hide just turned off) must keep stepping.
+        let stage_settled = self
+            .dock_stage
+            .autohide
+            .is_none_or(|model| model.deadline(now).is_none());
+        let idle = !force
+            && self.dock_last.is_some()
+            && !changed.windows
+            && !changed.workspaces
+            && !changed.panels
+            && self.dock_settings_key
+                == Some((self.settings_revision, self.settings_cache.is_some()))
+            && !settings.auto_hide
+            && stage_settled
+            && self.dock_drag.is_none()
+            && self.dock_menu_slot.is_none()
+            && self.dock_bounce.is_none();
+        if idle {
             return;
         }
         if self.dock_last.is_none() {
@@ -201,7 +229,6 @@ impl ShellLoop {
         let geometry = output.geometry;
         let output_rect = (geometry.x, geometry.y, geometry.width, geometry.height);
         let placed = dock::place(&frame, output_rect, scale, inset);
-        let now = std::time::Instant::now();
         let mut model = self
             .dock_stage
             .autohide
@@ -369,6 +396,7 @@ impl ShellLoop {
             },
         );
         self.sync_dock_label(runtime);
+        self.dock_settings_key = Some((self.settings_revision, self.settings_cache.is_some()));
     }
 
     /// Shows the hover label of the hovered slot as its own popup above or below the bar, or
@@ -612,7 +640,11 @@ impl ShellLoop {
             model.set_pointer(surface, inside, now);
             self.dock_stage.autohide = Some(model);
         }
-        self.sync_dock(runtime);
+        self.sync_dock(
+            runtime,
+            flamewm_shell::runtime::ChangedDomains::default(),
+            true,
+        );
         self.publish_wake(now);
     }
 
@@ -779,6 +811,8 @@ impl ShellLoop {
                     return Ok(());
                 }
                 if let Some(mut drag) = self.dock_drag.take() {
+                    // The drag's pinned-open hold must be stepped out by a real sync.
+                    self.dock_settings_key = None;
                     if drag.active {
                         drag.pos = (x, y);
                         self.finish_dock_drag(drag);
@@ -945,12 +979,18 @@ impl ShellLoop {
 
     /// Hides the right-click menu. The surface stays alive for the next open.
     pub(crate) fn close_dock_menu(&mut self, runtime: &mut SurfaceRuntime) {
+        let was_open = self.dock_menu_slot.take().is_some();
         if let Some(menu) = self.dock_menu {
             let _ = runtime.ungrab_pointer(menu);
             let _ = runtime.hide(menu);
         }
-        self.dock_menu_slot = None;
         self.dock_menu_items.clear();
+        if was_open {
+            // The dock's pinned-open hold must be stepped out by a real sync even when the
+            // idle early-out would otherwise skip it (notably a fullscreen window on the dock
+            // output while auto-hide is off).
+            self.dock_settings_key = None;
+        }
     }
 
     /// Shows the menu beside dock slot `index` on the dock's edge.

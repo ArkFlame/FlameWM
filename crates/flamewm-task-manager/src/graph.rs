@@ -124,6 +124,12 @@ fn blend(pixels: &mut [u8], x: usize, y: usize, source: [u8; 4]) {
     let Some(target) = pixels.get_mut(index..index + 4) else {
         return;
     };
+    // An opaque line and an empty pixel both resolve to the source exactly; skipping the
+    // floating-point source-over for them removes most of the per-sample graph math.
+    if source[3] == 255 || (source[3] != 0 && target[3] == 0) {
+        target.copy_from_slice(&source);
+        return;
+    }
     let source_alpha = f32::from(source[3]) / 255.0;
     let target_alpha = f32::from(target[3]) / 255.0;
     let alpha = source_alpha + target_alpha * (1.0 - source_alpha);
@@ -181,5 +187,16 @@ mod tests {
         let grid_row = (HEIGHT as usize / 4) * WIDTH as usize * 4;
         assert_eq!(pixels[grid_row + 3], GRID[3]);
         assert!(pixels[..grid_row].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn blend_fast_paths_preserve_the_source_value() {
+        let mut pixels = vec![0_u8; 16];
+        // Empty target: straight-alpha source-over resolves to the source exactly.
+        blend(&mut pixels, 1, 0, [10, 20, 30, 52]);
+        assert_eq!(&pixels[4..8], &[10, 20, 30, 52]);
+        // Opaque line over a translucent fill stays exactly opaque.
+        blend(&mut pixels, 1, 0, [200, 100, 50, 255]);
+        assert_eq!(&pixels[4..8], &[200, 100, 50, 255]);
     }
 }

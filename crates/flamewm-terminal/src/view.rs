@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::glyphs::{Arm, Rects, blend, glyph_rects};
-use crate::screen::{Cell, Color, CursorShape, Dirty, Screen, attr};
+use crate::screen::{Cell, Color, CursorShape, Screen, attr};
 use crate::themes::Palette;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -225,6 +225,8 @@ pub struct RunCache {
     rows: Vec<Row>,
     /// Per-frame row scratch, kept so an update allocates no state bitmap.
     stale: Vec<bool>,
+    /// Live rows the screen reported changed, in one buffer reused across frames.
+    changed: Vec<usize>,
     /// Rows rebuilt by the last `update`.
     pub rebuilt: usize,
 }
@@ -238,7 +240,7 @@ impl RunCache {
         palette: &Palette,
         options: &GridOptions,
     ) -> &[Row] {
-        let dirty = screen.take_dirty();
+        let all_dirty = screen.take_dirty_into(&mut self.changed);
         let rows = screen.rows();
         let top = top_line(screen, options);
         let cursor = cursor_drawn(screen, options).then(|| screen.cursor());
@@ -249,13 +251,11 @@ impl RunCache {
         let mut stale = std::mem::take(&mut self.stale);
         stale.clear();
         stale.resize(rows, false);
-        if !key_matches || self.rows.len() != rows || dirty == Dirty::All {
+        if !key_matches || self.rows.len() != rows || all_dirty {
             stale.fill(true);
         } else {
-            if let Dirty::Rows(changed) = dirty {
-                for live in changed {
-                    mark_live(screen, top, live, &mut stale);
-                }
+            for &live in &self.changed {
+                mark_live(screen, top, live, &mut stale);
             }
             if cursor != self.cursor {
                 for live in [self.cursor, cursor].into_iter().flatten() {

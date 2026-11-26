@@ -1,6 +1,8 @@
 //! Startup Applications additions: the installed-app picker and the custom command field.
 //! Kept apart from `app_impl_3` so the page projection stays within its size budget.
 
+use flamewm_settings_core::xdg_startup::StartupCandidate;
+
 use super::*;
 use crate::startup_page;
 
@@ -64,12 +66,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
         type_command(&mut self.startup_command, text, startup_page::add_command);
     }
 
-    /// Projects the picker's current candidate and the command field.
+    /// Projects the picker's current candidate and the command field from the candidates the
+    /// caller already resolved for this refresh.
     pub(crate) fn sync_startup_extras(
         &self,
         document: &mut impl UiDocumentAccess,
+        candidates: &[StartupCandidate],
     ) -> Result<(), String> {
-        let candidates = startup_page::candidates();
         let (name, can_add) = if candidates.is_empty() {
             (
                 "Every installed application already starts at sign-in".to_owned(),

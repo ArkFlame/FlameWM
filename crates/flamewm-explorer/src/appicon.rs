@@ -139,11 +139,56 @@ pub fn icon_candidates(icon: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// First candidate that exists as a regular file.
+///
+/// Probes the same order as `icon_candidates`, but builds and stats one path at a time: a hit in the
+/// first theme costs a handful of allocations instead of the up to 512 paths a full candidate list
+/// allocates before finding it.
 #[must_use]
 pub fn resolve_icon(icon: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
-    icon_candidates(icon, dirs)
-        .into_iter()
-        .find(|path| path.is_file())
+    let icon = icon.trim();
+    if icon.is_empty() || icon.chars().any(char::is_control) {
+        return None;
+    }
+    if Path::new(icon).is_absolute() {
+        let path = PathBuf::from(icon);
+        return path.is_file().then_some(path);
+    }
+    if icon.contains('/') || icon.contains("..") {
+        return None;
+    }
+    let probe = |path: PathBuf| path.is_file().then_some(path);
+    let mut probed = 0usize;
+    for dir in dirs {
+        // Flat roots (pixmaps) hold `<name>.<ext>` directly.
+        for extension in ICON_EXTENSIONS {
+            probed += 1;
+            if let Some(found) = probe(dir.join(format!("{icon}.{extension}"))) {
+                return Some(found);
+            }
+        }
+        for theme in ICON_THEMES {
+            for size in ICON_SIZES {
+                for extension in ICON_EXTENSIONS {
+                    if probed >= MAX_ICON_CANDIDATES {
+                        return None;
+                    }
+                    probed += 1;
+                    if let Some(found) = probe(
+                        dir.join(theme)
+                            .join(size)
+                            .join("apps")
+                            .join(format!("{icon}.{extension}")),
+                    ) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        if probed >= MAX_ICON_CANDIDATES {
+            break;
+        }
+    }
+    None
 }
 
 /// Icon file named by a `.desktop` entry, read without executing it. `dirs` is injected so the

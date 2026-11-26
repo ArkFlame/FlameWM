@@ -50,7 +50,8 @@ impl App {
         if !pane.input.is_ready() || !self.at_prompt() {
             return None;
         }
-        self.history.suggest(&pane.input.text())
+        // Borrowed: the ghost is computed on every frame, and a clone per frame would allocate for nothing.
+        self.history.suggest(pane.input.as_str())
     }
 
     /// Draws the suggestion after the cursor cell of the focused pane, 40% of the way from the foreground colour to
@@ -141,7 +142,6 @@ impl App {
             .collect()
     }
 
-    /// Paints the context menu over window rows starting at `row`, column `col`.
     /// Paints the find bar over the tab row and highlights every match on screen. The current match uses the
     /// cursor colour; the others use the selection colour. Runs on top of the cached grid rows.
     pub(super) fn draw_find(&self, rows: &mut [Row], banner: usize) {
@@ -206,6 +206,7 @@ impl App {
         }
     }
 
+    /// Paints the context menu over window rows starting at `row`, column `col`.
     pub(super) fn draw_menu(&self, rows: &mut [Row], row: usize, col: usize) {
         let width = menu_width();
         for (index, item) in MENU.iter().enumerate() {

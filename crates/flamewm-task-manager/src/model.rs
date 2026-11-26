@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone, Debug, Default)]
@@ -12,8 +13,10 @@ pub struct Process {
     /// Number of ancestors that are also in the snapshot; 0 for roots. Drives tree indentation.
     pub depth: u32,
     pub start: u64,
-    pub name: String,
-    pub user: String,
+    /// `name`, `user` and `command` are shared: the cache and the snapshot clone a `Process` per
+    /// rotating read, and an `Arc<str>` clone is a refcount bump instead of a heap copy.
+    pub name: Arc<str>,
+    pub user: Arc<str>,
     pub state: char,
     pub nice: i32,
     pub priority: i64,
@@ -21,7 +24,7 @@ pub struct Process {
     pub rss_kib: u64,
     pub virt_kib: u64,
     pub cpu: f64,
-    pub command: String,
+    pub command: Arc<str>,
     ticks: u64,
 }
 
@@ -55,9 +58,13 @@ pub struct Sampler {
     path: String,
     /// Reused pid list, so the per-sample walk allocates nothing.
     pids: Vec<u32>,
+    /// Reused pid→ppid map for `assign_depths`; cleared each sample, capacity kept.
+    parents: HashMap<u32, u32>,
+    /// Reused CPU ranking behind the hot set; cleared each sample, capacity kept.
+    ranked: Vec<(f64, u32)>,
     tick: u64,
     page_bytes: u64,
-    user_cache: Option<HashMap<u32, String>>,
+    user_cache: Option<HashMap<u32, Arc<str>>>,
     prev_net: Option<(u64, u64, Instant)>,
     /// Highest-CPU processes of the last sample: read `/proc/<pid>/stat` every tick.
     hot: HashSet<u32>,
@@ -82,14 +89,17 @@ pub fn cpu_percent(process_ticks: u64, span_ticks: u64, cpu_count: f64) -> f64 {
     100.0 * cpu_count * process_ticks as f64 / span_ticks as f64
 }
 
-/// The `HOT_COUNT` pids with the highest CPU in `processes`.
-pub fn hot_pids(processes: &[Process]) -> HashSet<u32> {
-    let mut ranked: Vec<(f64, u32)> = processes.iter().map(|p| (p.cpu, p.pid)).collect();
+/// Rebuilds `hot` with the `HOT_COUNT` highest-CPU pids of `processes`, reusing `hot` and
+/// `ranked` so the per-sample hot-set update allocates nothing after the first sample.
+pub fn hot_pids_into(hot: &mut HashSet<u32>, ranked: &mut Vec<(f64, u32)>, processes: &[Process]) {
+    hot.clear();
+    ranked.clear();
+    ranked.extend(processes.iter().map(|p| (p.cpu, p.pid)));
     if ranked.len() > HOT_COUNT {
         ranked.select_nth_unstable_by(HOT_COUNT, |a, b| b.0.total_cmp(&a.0));
         ranked.truncate(HOT_COUNT);
     }
-    ranked.into_iter().map(|(_, pid)| pid).collect()
+    hot.extend(ranked.iter().map(|&(_, pid)| pid));
 }
 
 /// Static-per-process fields are re-read on first sight, on a rename (comm changed), and at
@@ -108,10 +118,10 @@ struct Cached {
     ticks: u64,
     seen: u64,
     refreshed: u64,
-    name: String,
+    name: Arc<str>,
     uid: u32,
-    user: String,
-    command: String,
+    user: Arc<str>,
+    command: Arc<str>,
     /// Last full `stat` sample, reused between rotating reads.
     last: Option<Process>,
     /// Global CPU total ticks at this process's last `stat` read.
@@ -126,7 +136,7 @@ struct Cpu {
 fn cpu_ticks(line: &str) -> Option<Cpu> {
     let mut fields = line.split_whitespace();
     let _name = fields.next()?;
-    // The first eight counters are user..guest; a small stack array avoids a Vec per CPU line.
+    // The first eight counters are user..steal; idle plus iowait is the idle share.
     let mut values = [0_u64; 8];
     let mut count = 0;
     for field in fields.take(8) {
@@ -166,26 +176,52 @@ pub fn parse_stat(pid: u32, text: &str, page_bytes: u64) -> Option<Process> {
     if first >= last {
         return None;
     }
-    let fields: Vec<&str> = text.get(last + 1..)?.split_whitespace().collect();
-    if fields.len() < 22 {
+    // One indexed pass over the fields: the sampler parses a `stat` per due task per tick, so
+    // collecting a `Vec<&str>` of all fifty-odd fields would allocate for every read.
+    let rest = text.get(last + 1..)?;
+    let mut state: Option<char> = None;
+    let mut ppid: Option<u32> = None;
+    let mut utime: Option<u64> = None;
+    let mut stime: Option<u64> = None;
+    let mut priority: Option<i64> = None;
+    let mut nice: Option<i32> = None;
+    let mut threads: Option<u32> = None;
+    let mut start: Option<u64> = None;
+    let mut vsize: Option<u64> = None;
+    let mut pages: Option<u64> = None;
+    let mut count = 0_usize;
+    for field in rest.split_whitespace() {
+        match count {
+            0 => state = field.chars().next(),
+            1 => ppid = field.parse().ok(),
+            11 => utime = field.parse().ok(),
+            12 => stime = field.parse().ok(),
+            15 => priority = field.parse().ok(),
+            16 => nice = field.parse().ok(),
+            17 => threads = field.parse().ok(),
+            19 => start = field.parse().ok(),
+            20 => vsize = field.parse().ok(),
+            21 => pages = field.parse().ok(),
+            _ => {}
+        }
+        count += 1;
+    }
+    if count < 22 {
         return None;
     }
-    let utime = fields[11].parse::<u64>().ok()?;
-    let stime = fields[12].parse::<u64>().ok()?;
     // Field 24 (rss) is in pages: it replaces /proc/<pid>/status VmRSS, one read fewer per task.
-    let pages = fields[21].parse::<u64>().ok()?;
     Some(Process {
         pid,
-        ppid: fields[1].parse().ok()?,
-        name: sanitize(text.get(first + 1..last)?, 64),
-        state: fields[0].chars().next()?,
-        priority: fields[15].parse().ok()?,
-        nice: fields[16].parse().ok()?,
-        threads: fields[17].parse().ok()?,
-        start: fields[19].parse().ok()?,
-        virt_kib: fields[20].parse::<u64>().ok()? / 1024,
-        rss_kib: pages.saturating_mul(page_bytes) / 1024,
-        ticks: utime.saturating_add(stime),
+        ppid: ppid?,
+        name: sanitize(text.get(first + 1..last)?, 64).into(),
+        state: state?,
+        priority: priority?,
+        nice: nice?,
+        threads: threads?,
+        start: start?,
+        virt_kib: vsize? / 1024,
+        rss_kib: pages?.saturating_mul(page_bytes) / 1024,
+        ticks: utime?.saturating_add(stime?),
         ..Process::default()
     })
 }
@@ -239,17 +275,18 @@ pub fn parse_uid(status: &str) -> u32 {
         .and_then(|v| v.split_whitespace().next()?.parse().ok())
         .unwrap_or(u32::MAX)
 }
-fn command(scratch: &mut Vec<u8>, path: &mut String, pid: u32, name: &str) -> String {
+fn command(scratch: &mut Vec<u8>, path: &mut String, pid: u32, name: &str) -> Arc<str> {
     if let Some(bytes) = read_proc(scratch, proc_path(path, pid, "cmdline")) {
         let args = String::from_utf8_lossy(bytes);
         // `sanitize` already maps every control byte, including the NUL argument separators,
         // to a space, so no intermediate replacement string is needed.
-        let text = sanitize(&args, 180).trim().to_owned();
-        if !text.is_empty() {
-            return text;
+        let text = sanitize(&args, 180);
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Arc::from(trimmed);
         }
     }
-    format!("[{name}]")
+    Arc::from(format!("[{name}]"))
 }
 fn memory() -> (u64, u64, u64, u64) {
     let text = fs::read_to_string("/proc/meminfo").unwrap_or_default();
@@ -299,19 +336,31 @@ pub fn parse_net_dev(text: &str) -> (u64, u64) {
             (rx.saturating_add(r), tx.saturating_add(t))
         })
 }
-fn user_names() -> HashMap<u32, String> {
-    // /etc/passwd is read once by the worker, not on each frame or in the UI callback.
+fn user_names() -> HashMap<u32, Arc<str>> {
+    // /etc/passwd is read once by the worker, not on each frame or in the UI callback. Every
+    // process of one uid shares the single `Arc<str>` name.
     fs::read_to_string("/etc/passwd")
         .unwrap_or_default()
         .lines()
         .filter_map(|line| {
             let mut fields = line.split(':');
-            let name = fields.next()?.to_owned();
+            let name: Arc<str> = fields.next()?.into();
             let _password = fields.next()?;
             let uid = fields.next()?.parse::<u32>().ok()?;
             Some((uid, name))
         })
         .collect()
+}
+/// The three load averages joined with single spaces, built in place (no `Vec` per sample).
+fn load_summary(text: &str) -> String {
+    let mut out = String::with_capacity(24);
+    for (index, field) in text.split_whitespace().take(3).enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        out.push_str(field);
+    }
+    out
 }
 impl Sampler {
     pub fn collect(&mut self) -> Snapshot {
@@ -325,12 +374,7 @@ impl Sampler {
             mem_used,
             swap_total,
             swap_used,
-            load: fs::read_to_string("/proc/loadavg")
-                .unwrap_or_default()
-                .split_whitespace()
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" "),
+            load: load_summary(&fs::read_to_string("/proc/loadavg").unwrap_or_default()),
             uptime: fs::read_to_string("/proc/uptime")
                 .ok()
                 .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
@@ -394,8 +438,8 @@ impl Sampler {
             result.processes.push(task);
         }
         self.tasks.retain(|_, cached| cached.seen == tick);
-        assign_depths(&mut result.processes);
-        self.hot = hot_pids(&result.processes);
+        assign_depths(&mut self.parents, &mut result.processes);
+        hot_pids_into(&mut self.hot, &mut self.ranked, &result.processes);
         result.tasks = result.processes.len();
         let (rx, tx) = parse_net_dev(&fs::read_to_string("/proc/net/dev").unwrap_or_default());
         let sampled = Instant::now();
@@ -415,7 +459,6 @@ impl Sampler {
     /// One task per sample: `stat` every time (CPU and RSS), `status` and `cmdline` only when
     /// the cached static fields are stale. Returns `None` for tasks that vanished mid-read.
     fn sample_task(&mut self, pid: u32, tick: u64, total: u64, cpu_count: f64) -> Option<Process> {
-        // Hot pids are re-read every tick, so their cached replay copy would never be used.
         let hot = self.hot.contains(&pid);
         if !hot
             && let Some(cached) = self.tasks.get_mut(&pid)
@@ -449,16 +492,17 @@ impl Sampler {
             cached.uid = status
                 .and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .map_or(u32::MAX, parse_uid);
+            let uid = cached.uid;
             cached.user = self
                 .user_cache
                 .as_ref()
-                .and_then(|names| names.get(&cached.uid))
+                .and_then(|names| names.get(&uid))
                 .cloned()
                 .unwrap_or_else(|| {
-                    if cached.uid == u32::MAX {
-                        "?".into()
+                    if uid == u32::MAX {
+                        Arc::from("?")
                     } else {
-                        cached.uid.to_string()
+                        Arc::from(uid.to_string())
                     }
                 });
             // exec can replace argv without changing PID/starttime; the refresh bounds that lag.
@@ -473,15 +517,22 @@ impl Sampler {
         cached.seen = tick;
         task.user.clone_from(&cached.user);
         task.command.clone_from(&cached.command);
-        cached.last = (!hot).then(|| task.clone());
+        // Keep the replay copy for every pid, including hot ones: a process that leaves the hot
+        // set replays this sample when its first rotating read is not due, and with `Arc<str>`
+        // fields the clone is a few refcount bumps. (u26 skipped it for hot pids, which let a
+        // process that had been hot replay a sample from before it became hot.)
+        cached.last = Some(task.clone());
         Some(task)
     }
 }
 
 /// Tree depth from `ppid` links inside the snapshot. Bounded, so a corrupt cycle cannot loop.
-pub fn assign_depths(processes: &mut [Process]) {
+/// The caller owns the `parents` map so the sampler reuses one allocation per process table
+/// across samples instead of rebuilding a fresh `HashMap` each tick.
+pub fn assign_depths(parents: &mut HashMap<u32, u32>, processes: &mut [Process]) {
     const MAX_DEPTH: u32 = 32;
-    let parents: HashMap<u32, u32> = processes.iter().map(|p| (p.pid, p.ppid)).collect();
+    parents.clear();
+    parents.extend(processes.iter().map(|p| (p.pid, p.ppid)));
     for process in processes.iter_mut() {
         let mut depth = 0;
         let mut parent = process.ppid;
@@ -558,7 +609,7 @@ mod tests {
         fields[21] = "512".into();
         let line = format!("23 (some ) process) {}", fields.join(" "));
         let p = parse_stat(23, &line, 4096).expect("parse");
-        assert_eq!(p.name, "some ) process");
+        assert_eq!(&*p.name, "some ) process");
         assert_eq!(
             (
                 p.start, p.priority, p.nice, p.threads, p.virt_kib, p.rss_kib
@@ -597,7 +648,7 @@ mod tests {
         assert_eq!(
             (
                 uid,
-                task.name.as_str(),
+                task.name.as_ref(),
                 task.start,
                 task.virt_kib,
                 task.threads
@@ -633,6 +684,15 @@ mod tests {
         let text = "Inter-|   Receive |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes\n    lo: 500 5 0 0 0 0 0 0 500 5 0 0 0 0 0 0\n  eth0: 1000 10 0 0 0 0 0 0 250 3 0 0 0 0 0 0\n wlan0: 24 1 0 0 0 0 0 0 6 1 0 0 0 0 0 0\n";
         assert_eq!(parse_net_dev(text), (1024, 256));
         assert_eq!(parse_net_dev(""), (0, 0));
+    }
+    #[test]
+    fn load_summary_joins_the_three_averages_without_a_vec() {
+        assert_eq!(
+            load_summary("0.52 0.58 0.59 1/1234 5678\n"),
+            "0.52 0.58 0.59"
+        );
+        assert_eq!(load_summary("0.10 0.20\n"), "0.10 0.20");
+        assert_eq!(load_summary(""), "");
     }
     #[test]
     fn priorities_are_bounded_without_unsigned_overflow() {
@@ -714,7 +774,7 @@ mod tree_tests {
         let text = "42 (a (b) c) S 7 42 42 0 -1 0 0 0 0 0 1 2 0 0 20 0 1 0 100 0 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
         let p = parse_stat(42, text, 4096).expect("parse");
         assert_eq!(p.ppid, 7);
-        assert_eq!(p.name, "a (b) c");
+        assert_eq!(&*p.name, "a (b) c");
     }
 
     #[test]
@@ -727,7 +787,8 @@ mod tree_tests {
             proc_at(30, 31),
             proc_at(31, 30),
         ];
-        assign_depths(&mut list);
+        let mut parents = std::collections::HashMap::new();
+        assign_depths(&mut parents, &mut list);
         let depth = |pid| list.iter().find(|p| p.pid == pid).unwrap().depth;
         assert_eq!(depth(1), 0);
         assert_eq!(depth(10), 1);
@@ -778,11 +839,14 @@ mod sampling_schedule_tests {
         let mut processes: Vec<Process> = (0..(HOT_COUNT as u32 + 10))
             .map(|pid| process(pid, f64::from(pid)))
             .collect();
-        let hot = hot_pids(&processes);
+        let mut hot = std::collections::HashSet::new();
+        let mut ranked = Vec::new();
+        hot_pids_into(&mut hot, &mut ranked, &processes);
         assert_eq!(hot.len(), HOT_COUNT);
         assert!(hot.contains(&(HOT_COUNT as u32 + 9)));
         assert!(!hot.contains(&0));
         processes.truncate(3);
-        assert_eq!(hot_pids(&processes).len(), 3);
+        hot_pids_into(&mut hot, &mut ranked, &processes);
+        assert_eq!(hot.len(), 3);
     }
 }

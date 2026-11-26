@@ -20,6 +20,35 @@ use crate::entry::{
 };
 
 const STICKY_SLOTS: usize = projection::STICKY_SLOT_COUNT;
+const RESIZE_CORNERS: [&str; 4] = ["nw", "ne", "sw", "se"];
+
+/// Node ids one sticky slot owns, formatted once per process. Each visible note used to rebuild
+/// six ids (plus one per resize corner) on every sync.
+struct StickySlotIds {
+    note: String,
+    text: String,
+    drag: String,
+    resize: [String; RESIZE_CORNERS.len()],
+}
+
+impl StickySlotIds {
+    fn new(number: usize) -> Self {
+        Self {
+            note: format!("sticky-{number}"),
+            text: format!("sticky-{number}-text"),
+            drag: format!("sticky-{number}-drag"),
+            resize: RESIZE_CORNERS.map(|corner| format!("sticky-{number}-resize-{corner}")),
+        }
+    }
+}
+
+/// Cached ids for one sticky slot; callers pass the 1-based slot number.
+fn sticky_ids(number: usize) -> &'static StickySlotIds {
+    static IDS: std::sync::OnceLock<Box<[StickySlotIds; STICKY_SLOTS]>> =
+        std::sync::OnceLock::new();
+    &IDS.get_or_init(|| Box::new(std::array::from_fn(|slot| StickySlotIds::new(slot + 1))))
+        [number - 1]
+}
 /// Coalesced save delay: every mutation within this window shares one write.
 const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// Upper bound for the exponential retry delay after failed saves.
@@ -57,6 +86,8 @@ pub(crate) struct StickyState {
     persist_failures: u32,
     /// Slots whose nodes were last shown, so an emptied slot is cleared exactly once.
     shown: [bool; STICKY_SLOTS],
+    /// Inputs of the last projection; an equal key skips every document write.
+    projected: Option<StickyProjection>,
     /// Reactor wake deadline; set to `persist_due` while a save is armed.
     wake: WakeDeadline,
 }
@@ -75,6 +106,7 @@ impl StickyState {
             persist_due: None,
             persist_failures: 0,
             shown: [true; STICKY_SLOTS],
+            projected: None,
             wake: WakeDeadline::default(),
         }
     }
@@ -134,6 +166,98 @@ impl StickyState {
 struct StickyEdit {
     note_id: String,
     buffer: String,
+}
+
+/// Inputs of the last sticky projection: the visible note set as drawn, the enabled gates, the
+/// gesture preview and the active edit buffer. An equal key means the document already shows this
+/// state, so a sync caused by an unrelated change writes nothing and formats no node id.
+struct StickyProjection {
+    show_any: bool,
+    notes: Vec<StickyProjectionNote>,
+    preview: Option<Rect>,
+    editing: Option<(String, String)>,
+}
+
+struct StickyProjectionNote {
+    id: String,
+    rect: Rect,
+    text: String,
+    background: (u8, u8, u8),
+    foreground: (u8, u8, u8),
+    text_size: u8,
+    bold: bool,
+}
+
+impl StickyProjection {
+    /// Borrowed comparison against the live notes, so an unchanged sync allocates nothing.
+    fn matches(
+        &self,
+        visible: &[&StickyNote],
+        show_any: bool,
+        preview: Option<Rect>,
+        editing: Option<(&str, &str)>,
+    ) -> bool {
+        self.show_any == show_any
+            && self.preview == preview
+            && self
+                .editing
+                .as_ref()
+                .map(|(id, buffer)| (id.as_str(), buffer.as_str()))
+                == editing
+            && self.notes.len() == visible.len()
+            && self.notes.iter().zip(visible).all(|(stored, note)| {
+                stored.id == note.id
+                    && stored.rect == note.rect
+                    && stored.text == note.text
+                    && stored.background
+                        == (
+                            note.background.red,
+                            note.background.green,
+                            note.background.blue,
+                        )
+                    && stored.foreground
+                        == (
+                            note.foreground.red,
+                            note.foreground.green,
+                            note.foreground.blue,
+                        )
+                    && stored.text_size == note.text_size
+                    && stored.bold == note.bold
+            })
+    }
+
+    fn capture(
+        visible: &[&StickyNote],
+        show_any: bool,
+        preview: Option<Rect>,
+        editing: Option<(&str, &str)>,
+    ) -> Self {
+        Self {
+            show_any,
+            notes: visible
+                .iter()
+                .map(|note| StickyProjectionNote {
+                    id: note.id.clone(),
+                    rect: note.rect,
+                    text: note.text.clone(),
+                    background: (
+                        note.background.red,
+                        note.background.green,
+                        note.background.blue,
+                    ),
+                    foreground: (
+                        note.foreground.red,
+                        note.foreground.green,
+                        note.foreground.blue,
+                    ),
+                    text_size: note.text_size,
+                    bold: note.bold,
+                })
+                .collect(),
+            preview,
+            editing: editing.map(|(id, buffer)| (id.to_owned(), buffer.to_owned())),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -221,7 +345,13 @@ pub(crate) fn sync_sticky(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let visible = visible_sticky_notes(state);
+    let visible: Vec<&StickyNote> = state
+        .sticky
+        .store
+        .notes_for_workspace(state.workspace.active_index())
+        .into_iter()
+        .take(STICKY_SLOTS)
+        .collect();
     let show_any =
         state.sticky.notes_enabled && state.sticky.store.enabled() && !visible.is_empty();
     let preview = state
@@ -235,9 +365,22 @@ pub(crate) fn sync_sticky(
         })
         .and_then(|gesture| gesture.preview)
         .filter(|_| show_any);
+    let editing = state
+        .sticky
+        .edit
+        .as_ref()
+        .map(|edit| (edit.note_id.as_str(), edit.buffer.as_str()));
+    if state
+        .sticky
+        .projected
+        .as_ref()
+        .is_some_and(|projected| projected.matches(&visible, show_any, preview, editing))
+    {
+        return Ok(());
+    }
     for slot in 0..STICKY_SLOTS {
         let number = slot + 1;
-        let note = visible.get(slot).filter(|_| show_any);
+        let note = visible.get(slot).copied().filter(|_| show_any);
         if let Some(note) = note {
             let editing = state
                 .sticky
@@ -253,17 +396,21 @@ pub(crate) fn sync_sticky(
             state.sticky.shown[slot] = false;
         }
     }
-    sync_sticky_move_preview(document, preview)
+    sync_sticky_move_preview(document, preview)?;
+    state.sticky.projected = Some(StickyProjection::capture(
+        &visible, show_any, preview, editing,
+    ));
+    Ok(())
 }
 
 /// Hides one sticky slot's note, text and its drag/resize handles.
 fn hide_sticky_slot(document: &mut impl UiDocumentAccess, number: usize) -> Result<(), String> {
-    let id = format!("sticky-{number}");
-    document.visible(&id, false)?;
-    document.text_ref(&format!("sticky-{number}-text"), "")?;
-    let _ = document.visible(&format!("sticky-{number}-drag"), false);
-    for corner in ["nw", "ne", "sw", "se"] {
-        let _ = document.visible(&format!("sticky-{number}-resize-{corner}"), false);
+    let ids = sticky_ids(number);
+    document.visible(&ids.note, false)?;
+    document.text_ref(&ids.text, "")?;
+    let _ = document.visible(&ids.drag, false);
+    for id in &ids.resize {
+        let _ = document.visible(id, false);
     }
     Ok(())
 }
@@ -275,12 +422,13 @@ fn sync_sticky_slot(
     editing: Option<&str>,
     visible: bool,
 ) -> Result<(), String> {
-    let id = format!("sticky-{number}");
-    document.visible(&id, visible)?;
-    document.position(&id, note.rect.x as f32, note.rect.y as f32)?;
-    document.size(&id, note.rect.width as f32, note.rect.height as f32)?;
+    let ids = sticky_ids(number);
+    let id = ids.note.as_str();
+    document.visible(id, visible)?;
+    document.position(id, note.rect.x as f32, note.rect.y as f32)?;
+    document.size(id, note.rect.width as f32, note.rect.height as f32)?;
     document.background(
-        &id,
+        id,
         UiColor {
             r: note.background.red,
             g: note.background.green,
@@ -288,15 +436,15 @@ fn sync_sticky_slot(
             a: 255,
         },
     )?;
-    let text_id = format!("sticky-{number}-text");
+    let text_id = ids.text.as_str();
     match editing {
-        Some(buffer) => document.text(&text_id, projection::caret_text(buffer, true))?,
-        None => document.text_ref(&text_id, &note.text)?,
+        Some(buffer) => document.text(text_id, projection::caret_text(buffer, true))?,
+        None => document.text_ref(text_id, &note.text)?,
     }
-    document.font_size(&text_id, f32::from(note.text_size))?;
-    document.font_weight(&text_id, if note.bold { 700 } else { 400 })?;
+    document.font_size(text_id, f32::from(note.text_size))?;
+    document.font_weight(text_id, if note.bold { 700 } else { 400 })?;
     document.foreground(
-        &text_id,
+        text_id,
         UiColor {
             r: note.foreground.red,
             g: note.foreground.green,
@@ -304,9 +452,9 @@ fn sync_sticky_slot(
             a: 255,
         },
     )?;
-    document.visible(&format!("sticky-{number}-drag"), visible)?;
-    for corner in ["nw", "ne", "sw", "se"] {
-        document.visible(&format!("sticky-{number}-resize-{corner}"), visible)?;
+    document.visible(&ids.drag, visible)?;
+    for id in &ids.resize {
+        document.visible(id, visible)?;
     }
     Ok(())
 }
@@ -764,8 +912,9 @@ mod tests {
 
     use super::{
         PERSIST_DEBOUNCE, PERSIST_RETRY_CAP, StickyEdit, StickyGesture, StickyGestureMode,
-        StickyState, apply_move_event, cancel_edit_and_gesture, is_note_body_action,
-        owns_active_move_event, sticky_drag_exceeded, sync_sticky_move_preview, sync_sticky_slot,
+        StickyProjection, StickyState, apply_move_event, cancel_edit_and_gesture,
+        is_note_body_action, owns_active_move_event, sticky_drag_exceeded,
+        sync_sticky_move_preview, sync_sticky_slot,
     };
 
     fn state() -> StickyState {
@@ -1041,5 +1190,44 @@ mod tests {
         assert!(is_note_body_action("sticky.2.text"));
         assert!(!is_note_body_action("sticky.2.resize-se"));
         assert!(!is_note_body_action("sticky.2.menu"));
+    }
+
+    #[test]
+    fn sticky_projection_key_tracks_notes_gates_preview_and_edit() {
+        let note = StickyNote::new("n1", OutputId::new("default"), 0, 10, 20);
+        let key = StickyProjection::capture(&[&note], true, None, Some(("n1", "hi")));
+        assert!(key.matches(&[&note], true, None, Some(("n1", "hi"))));
+        assert!(
+            !key.matches(&[&note], true, None, Some(("n1", "hi!"))),
+            "an edit buffer change must re-project the caret text"
+        );
+        assert!(
+            !key.matches(&[&note], false, None, Some(("n1", "hi"))),
+            "disabling notes must hide the slots"
+        );
+        assert!(
+            !key.matches(
+                &[&note],
+                true,
+                Some(Rect::new(1, 1, 190, 190)),
+                Some(("n1", "hi"))
+            ),
+            "a move preview must repaint"
+        );
+        let moved = StickyNote::new("n1", OutputId::new("default"), 0, 11, 20);
+        assert!(
+            !key.matches(&[&moved], true, None, Some(("n1", "hi"))),
+            "a changed rect must repaint"
+        );
+        let mut bold = StickyNote::new("n1", OutputId::new("default"), 0, 10, 20);
+        bold.bold = true;
+        assert!(
+            !key.matches(&[&bold], true, None, Some(("n1", "hi"))),
+            "a bold toggle must repaint"
+        );
+        assert!(
+            !key.matches(&[&note, &moved], true, None, Some(("n1", "hi"))),
+            "a note appearing must repaint"
+        );
     }
 }

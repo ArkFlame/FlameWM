@@ -32,12 +32,13 @@ struct Expander {
 
 impl Expander {
     fn expand(&mut self, file: &Path, source: &str) -> Result<(), String> {
-        let text = strip_comments(source)?;
+        let stripped = strip_comments(source)?;
+        let text: &str = &stripped;
         let mut cursor = 0usize;
         while let Some(relative) = text[cursor..].find(IMPORT_KEYWORD) {
             let at = cursor + relative;
             self.output.push_str(&text[cursor..at]);
-            let (target, end) = parse_import(&text, at)?;
+            let (target, end) = parse_import(text, at)?;
             cursor = end;
             let path = file.parent().unwrap_or(Path::new(".")).join(target);
             let resolved = fs::canonicalize(&path).map_err(|error| {

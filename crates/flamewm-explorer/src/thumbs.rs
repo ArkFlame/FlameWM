@@ -7,6 +7,7 @@
 //! failure so the UI keeps the type icon in the slot.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
@@ -32,6 +33,9 @@ pub const CACHE_CAPACITY: usize = 256;
 pub const CACHE_BYTES: usize = 256 * 1024;
 /// Alpha at or above this value counts as a visible pixel; anything less is an invisible thumbnail.
 pub const MIN_VISIBLE_ALPHA: u8 = 8;
+/// Front bytes probed before the rest of a source is read. Every container this pipeline accepts
+/// advertises its canvas near the front, so an oversized source is refused without reading it whole.
+const HEADER_BYTES: usize = 64 * 1024;
 
 /// Source kind behind one row thumbnail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +233,12 @@ pub fn visible_canvas(canvas: &[u8]) -> bool {
 #[must_use]
 pub fn thumbnail_from_bytes(bytes: &[u8], format: ThumbFormat) -> Option<Vec<u8>> {
     let (width, height) = probe_dimensions(bytes, format)?;
+    decode_canvas(bytes, format, width, height)
+}
+
+/// Decodes bytes whose canvas size the caller already probed. Keeping the probe separate lets a
+/// header-first reader reject an oversized source without reading (or probing) it a second time.
+fn decode_canvas(bytes: &[u8], format: ThumbFormat, width: u32, height: u32) -> Option<Vec<u8>> {
     if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
         return None;
     }
@@ -260,13 +270,55 @@ pub fn thumbnail_from_bytes(bytes: &[u8], format: ThumbFormat) -> Option<Vec<u8>
     visible_canvas(&canvas).then_some(canvas)
 }
 
-/// Reads a source file, refusing anything that is not a regular file within the byte cap.
-fn read_source(path: &Path) -> Option<Vec<u8>> {
+/// Opens a source that is a regular file within the byte cap. The type and size check runs before the
+/// open so a FIFO or device in the listing can never block the worker on a read.
+fn open_source(path: &Path) -> Option<fs::File> {
     let meta = fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_SOURCE_BYTES {
         return None;
     }
-    fs::read(path).ok()
+    fs::File::open(path).ok()
+}
+
+/// Reads at most `limit` bytes from the front of `file`, stopping early at end of file.
+fn read_prefix(file: &mut fs::File, limit: usize) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    (&mut *file).take(limit as u64).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// Reads the rest of `file` into `bytes`.
+fn read_rest(file: &mut fs::File, mut bytes: Vec<u8>) -> Option<Vec<u8>> {
+    file.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// Decodes one opened source into a fitted canvas without reading a rejected source whole: the header
+/// alone proves an oversized canvas, and a source already fully in the prefix is decoded from it.
+fn thumbnail_from_file(mut file: fs::File, format: ThumbFormat) -> Option<Vec<u8>> {
+    let mut header = read_prefix(&mut file, HEADER_BYTES)?;
+    let whole = header.len() < HEADER_BYTES;
+    if let Some((width, height)) = probe_dimensions(&header, format) {
+        if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
+            return None;
+        }
+        if whole {
+            return decode_canvas(&header, format, width, height);
+        }
+    }
+    // The header did not finish the probe (a JPEG whose frame header sits past the prefix) or the
+    // source is longer than the prefix: read the rest and decode from the complete bytes.
+    if !whole {
+        header = read_rest(&mut file, header)?;
+    }
+    thumbnail_from_bytes(&header, format)
+}
+
+/// Whole-file read used by the pipeline tests.
+#[cfg(test)]
+fn read_source(path: &Path) -> Option<Vec<u8>> {
+    let mut file = open_source(path)?;
+    read_rest(&mut file, Vec::new())
 }
 
 /// Reads and decodes one image into a thumbnail canvas. Runs on the worker thread; `None` means no thumbnail.
@@ -277,9 +329,9 @@ pub fn render_thumbnail(key: &ThumbKey) -> Option<Vec<u8>> {
         // The .desktop file itself is data, not a picture: its Icon= names the artwork to decode.
         let icon = appicon::icon_file(&key.path)?;
         let icon_format = thumb_format(&icon).filter(|format| format.is_image())?;
-        return thumbnail_from_bytes(&read_source(&icon)?, icon_format);
+        return thumbnail_from_file(open_source(&icon)?, icon_format);
     }
-    thumbnail_from_bytes(&read_source(&key.path)?, format)
+    thumbnail_from_file(open_source(&key.path)?, format)
 }
 
 /// Result of a cache lookup on the UI thread.
@@ -353,6 +405,16 @@ impl ThumbQueue {
         });
         dropped
     }
+
+    /// True when no job waits. The decoder reads it to wake the UI only for the last job of a burst
+    /// (or once per interval), so a run of fast decodes costs a few projections instead of one each.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    }
 }
 
 /// Bounded LRU of decoded thumbnails plus the set of keys whose decode is queued.
@@ -385,17 +447,32 @@ impl Thumbnails {
     /// A re-projection of a row whose decode is still waiting keeps the pending set untouched, so
     /// no key (path allocation) is cloned per frame while decodes lag behind the scroll.
     pub fn begin(&mut self, key: &ThumbKey) -> bool {
-        if self.pending.contains(key) { return false; }
+        if self.pending.contains(key) {
+            return false;
+        }
         self.pending.insert(key.clone());
         true
     }
 
     /// Starts a full projection pass. Jobs still waiting in `queue` came from earlier passes; the pass
-    /// re-requests every row it shows, so the old jobs are dropped (scrolled-away rows never decode)
-    /// and their keys leave `pending`, which lets a visible row request them again.
+    /// re-requests every row it shows, so jobs whose row left the view are dropped (those rows never
+    /// decode) and their keys leave `pending`, which lets a visible row request them again.
     /// Returns the number of dropped jobs.
     pub fn start_pass(&mut self, queue: &ThumbQueue) -> usize {
-        let dropped = queue.retain(|_| false);
+        self.start_pass_keeping(queue, |_| false)
+    }
+
+    /// Starts a full projection pass, keeping the queued jobs `keep` accepts.
+    ///
+    /// A kept job stays in the queue with its pending mark untouched, so a one-row scroll no longer
+    /// re-clones and re-hashes the key of every row that is still shown; only rows that scrolled away
+    /// lose their job and their pending mark.
+    pub fn start_pass_keeping(
+        &mut self,
+        queue: &ThumbQueue,
+        keep: impl FnMut(&ThumbKey) -> bool,
+    ) -> usize {
+        let dropped = queue.retain(keep);
         for key in &dropped {
             self.pending.remove(key);
         }

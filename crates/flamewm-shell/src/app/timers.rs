@@ -153,9 +153,9 @@ impl ShellLoop {
         // Start launch results arrive via the mutation result drain; apply
         // them here so a failed launch shows its error on this turn.
         self.apply_start_launch_outcomes(runtime)?;
-        self.refresh_dynamic(runtime);
+        let changed = self.refresh_dynamic(runtime);
         self.project_settings(runtime)?;
-        self.sync_dock(runtime);
+        self.sync_dock(runtime, changed, false);
         self.tick_weather(runtime);
         self.tick_usage(runtime);
         // Signal-queued controls (StartMenuToggleRequested -> ToggleStart) arrive
@@ -167,7 +167,7 @@ impl ShellLoop {
             self.apply_controls(runtime)?;
             runtime.redraw_dirty()?;
         }
-        self.tick_osd(runtime);
+        self.tick_osd(runtime, changed);
         self.tick_switcher(runtime);
         self.tick_dock_bounce(runtime, std::time::Instant::now());
         self.publish_wake(std::time::Instant::now());
@@ -204,18 +204,15 @@ impl ShellLoop {
 
     /// Volume and brightness OSD: shows a kind's snapshot level when it changes and
     /// hides at the single deadline. Nonfatal: a failure never stops the loop.
-    pub(super) fn tick_osd(&mut self, runtime: &mut SurfaceRuntime) {
+    pub(super) fn tick_osd(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        changed: flamewm_shell::runtime::ChangedDomains,
+    ) {
         let snapshot = self.shell.snapshot();
         let system = &snapshot.system;
         // The live "raise maximum volume" cap, the same value the mixer slider uses.
         let max = self.audio_settings.max_percent();
-        // Raw reading only: building a row's owned id/label strings per turn would allocate on
-        // every shell wake for two fields the card needs.
-        let volume = flamewm_shell::taskbar::status::audio::default_sink_level(&system.audio)
-            .map(|(volume, muted)| flamewm_shell::osd::Level::new(volume, muted, max));
-        let brightness = (system.brightness.availability
-            == flamewm_api::system::ServiceAvailability::Available)
-            .then(|| flamewm_shell::osd::Level::brightness(system.brightness.percent));
         // Same output source as the panel scale: the shown panel's placement output. The lookup is
         // lazy: the controller calls it only when the card shows, so idle ticks allocate nothing.
         let target = || active_output_target(&self.surfaces, snapshot);
@@ -235,11 +232,26 @@ impl ShellLoop {
         {
             eprintln!("flamewm-shell: workspace OSD failed (nonfatal): {error:?}");
         }
-        let updated = self
+        // The two levels only move with a system snapshot change, and the hide deadline owns
+        // expiry. Once the baseline observation has run, an idle or pointer-motion turn (no
+        // system change, no deadline) can skip the sink/brightness reads and the card update.
+        let sample = !self.osd_primed || changed.system || self.osd.deadline().is_some();
+        if !sample {
+            return;
+        }
+        // Raw reading only: building a row's owned id/label strings per turn would allocate on
+        // every shell wake for two fields the card needs.
+        let volume = flamewm_shell::taskbar::status::audio::default_sink_level(&system.audio)
+            .map(|(volume, muted)| flamewm_shell::osd::Level::new(volume, muted, max));
+        let brightness = (system.brightness.availability
+            == flamewm_api::system::ServiceAvailability::Available)
+            .then(|| flamewm_shell::osd::Level::brightness(system.brightness.percent));
+        match self
             .osd
-            .update(runtime, volume, brightness, target, settings, now);
-        if let Err(error) = updated {
-            eprintln!("flamewm-shell: OSD failed (nonfatal): {error:?}");
+            .update(runtime, volume, brightness, target, settings, now)
+        {
+            Ok(()) => self.osd_primed = true,
+            Err(error) => eprintln!("flamewm-shell: OSD failed (nonfatal): {error:?}"),
         }
     }
 

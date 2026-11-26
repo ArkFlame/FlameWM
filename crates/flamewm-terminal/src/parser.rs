@@ -69,7 +69,23 @@ impl Parser {
     }
 
     pub fn advance(&mut self, bytes: &[u8], performer: &mut impl Perform) {
-        for &byte in bytes {
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            // Fast path: printable ASCII in the ground state is one character per byte and changes no state, which is
+            // the bulk of ordinary output. Handle the whole run here instead of running the state machine per byte.
+            if self.state == State::Ground && self.utf8_need == 0 {
+                let mut end = 0;
+                while end < rest.len() && (0x20..=0x7e).contains(&rest[end]) {
+                    performer.print(char::from(rest[end]));
+                    end += 1;
+                }
+                if end > 0 {
+                    rest = &rest[end..];
+                    continue;
+                }
+            }
+            let byte = rest[0];
+            rest = &rest[1..];
             self.byte(byte, performer);
         }
     }

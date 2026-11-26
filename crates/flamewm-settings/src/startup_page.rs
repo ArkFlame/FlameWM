@@ -18,10 +18,11 @@ pub fn display_name(entry: &StartupEntry) -> String {
         )
 }
 
-/// Startup entries in XDG precedence order, from the live user and system roots.
-pub fn rows() -> Result<Vec<StartupEntry>, String> {
-    ApplicationSettings::from_environment()
-        .and_then(|settings| settings.startup_entries())
+/// Startup entries from an already opened facade, so one refresh reads rows and candidates
+/// through a single environment read.
+pub fn rows_with(settings: &ApplicationSettings) -> Result<Vec<StartupEntry>, String> {
+    settings
+        .startup_entries()
         .map_err(|error| error.to_string())
 }
 
@@ -87,11 +88,10 @@ pub fn delay_text(entry: &StartupEntry) -> String {
     delay_label(startup_delay(&entry.text))
 }
 
-/// Installed applications that can still be added, in display order.
-pub fn candidates() -> Vec<StartupCandidate> {
-    ApplicationSettings::from_environment()
-        .and_then(|settings| settings.startup_candidates())
-        .unwrap_or_default()
+/// Installed applications that can still be added, in display order, from an already opened
+/// facade that shares one environment read with [`rows_with`].
+pub fn candidates_with(settings: &ApplicationSettings) -> Vec<StartupCandidate> {
+    settings.startup_candidates().unwrap_or_default()
 }
 
 /// Advances the delay of the entry in `slot` to the next preset.

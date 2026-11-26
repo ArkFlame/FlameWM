@@ -11,9 +11,16 @@ impl ShellLoop {
     /// Usage tick: applies settings, polls the fetch worker, starts a due fetch, and reprojects the
     /// open card on fresh snapshots or once a minute.
     pub(super) fn tick_usage(&mut self, runtime: &mut SurfaceRuntime) {
-        let (providers, interval) =
-            crate::entry::settings_projection::usage::usage_settings(self.settings_cache.as_ref());
-        self.usage.configure(providers, interval);
+        // The provider list and interval change only with a settings snapshot; rebuilding the
+        // provider Vec on every pointer-motion wake is wasted work.
+        if self.usage_settings_key != Some((self.settings_revision, self.settings_cache.is_some()))
+        {
+            let (providers, interval) = crate::entry::settings_projection::usage::usage_settings(
+                self.settings_cache.as_ref(),
+            );
+            self.usage.configure(providers, interval);
+            self.usage_settings_key = Some((self.settings_revision, self.settings_cache.is_some()));
+        }
         let waker = self.result_wake.waker();
         let now = Instant::now();
         let changed = self.usage.tick(now, |providers| {

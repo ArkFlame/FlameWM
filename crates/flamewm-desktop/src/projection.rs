@@ -213,6 +213,51 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
 }
 
 const SLOT_COUNT: usize = 128;
+const ICON_KIND_COUNT: usize = ICON_KINDS.len();
+
+/// Document ids one desktop slot owns, formatted once and shared for the life of the process.
+/// A full rescan used to allocate roughly seventeen id strings per tile (and five more per
+/// glyph apply), which was the largest allocation source in the projection path.
+struct SlotIds {
+    item: String,
+    glyphs: [String; ICON_KIND_COUNT],
+    label: String,
+    label_lines: [String; 2],
+}
+
+impl SlotIds {
+    fn new(index: usize) -> Self {
+        Self {
+            item: format!("desktop-item-{index}"),
+            glyphs: ICON_KINDS.map(|kind| format!("desktop-glyph-{index}-{kind}")),
+            label: format!("desktop-label-{index}"),
+            label_lines: [
+                format!("desktop-label-{index}-line-1"),
+                format!("desktop-label-{index}-line-2"),
+            ],
+        }
+    }
+}
+
+fn slot_ids_table() -> &'static [SlotIds; SLOT_COUNT] {
+    static IDS: std::sync::OnceLock<Box<[SlotIds; SLOT_COUNT]>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| Box::new(std::array::from_fn(SlotIds::new)))
+}
+
+/// Cached ids for one desktop slot; callers pass an index below [`SLOT_COUNT`].
+fn slot_ids(index: usize) -> &'static SlotIds {
+    &slot_ids_table()[index]
+}
+
+/// The tile node id of one desktop slot (`desktop-item-{index}`).
+pub(crate) fn item_slot_id(index: usize) -> &'static str {
+    &slot_ids(index).item
+}
+
+/// Position of an icon-kind name inside [`ICON_KINDS`].
+fn icon_kind_position(kind: &str) -> Option<usize> {
+    ICON_KINDS.iter().position(|candidate| *candidate == kind)
+}
 
 pub const TRANSIENT_HIDDEN_IDS: [&str; 11] = [
     "desktop-convert-preview",
@@ -335,28 +380,27 @@ impl ParallelIconService {
         icon_override: Option<&str>,
         scale: u16,
     ) -> Result<IconKey, String> {
-        let item_id = format!("desktop-item-{index}");
-        document.visible(&item_id, true)?;
-        document.position(&item_id, point.x as f32, point.y as f32)?;
+        let ids = slot_ids(index);
+        let item_id = ids.item.as_str();
+        document.visible(item_id, true)?;
+        document.position(item_id, point.x as f32, point.y as f32)?;
         let factor = f32::from(scale) / 100.0;
         document.size(
-            &item_id,
+            item_id,
             DESKTOP_TILE_WIDTH * factor,
             DESKTOP_TILE_HEIGHT * factor,
         )?;
         // Keep all click/drag children on the same output-local physical scale as the grid.
-        for kind in ICON_KINDS {
-            let id = format!("desktop-glyph-{index}-{kind}");
-            document.position(&id, 18.0 * factor, 5.0 * factor)?;
-            document.size(&id, 44.0 * factor, 44.0 * factor)?;
+        for id in &ids.glyphs {
+            document.position(id, 18.0 * factor, 5.0 * factor)?;
+            document.size(id, 44.0 * factor, 44.0 * factor)?;
         }
-        let label_id = format!("desktop-label-{index}");
-        document.position(&label_id, 2.0 * factor, 52.0 * factor)?;
-        document.size(&label_id, 76.0 * factor, 30.0 * factor)?;
-        for line in 1..=2 {
-            let id = format!("desktop-label-{index}-line-{line}");
-            document.size(&id, 76.0 * factor, 15.0 * factor)?;
-            document.font_size(&id, LABEL_FONT_SIZE_PX * factor)?;
+        let label_id = ids.label.as_str();
+        document.position(label_id, 2.0 * factor, 52.0 * factor)?;
+        document.size(label_id, 76.0 * factor, 30.0 * factor)?;
+        for id in &ids.label_lines {
+            document.size(id, 76.0 * factor, 15.0 * factor)?;
+            document.font_size(id, LABEL_FONT_SIZE_PX * factor)?;
         }
         // Per-frame theme watch (throttled inside needs_rebuild). A new
         // generation changes the key below, so stale cache entries miss.
@@ -439,10 +483,11 @@ fn apply_raster(
     raster: Rgba8Raster,
 ) -> Result<(), String> {
     let selected = icon_semantic(kind);
-    document.image_rgba8(
-        &format!("desktop-glyph-{index}-{selected}"),
-        RuntimeImage::from(raster),
-    )?;
+    let ids = slot_ids(index);
+    let image = icon_kind_position(selected).map_or(ids.glyphs[0].as_str(), |position| {
+        ids.glyphs[position].as_str()
+    });
+    document.image_rgba8(image, RuntimeImage::from(raster))?;
     set_glyph_visibility(document, index, Some(selected))
 }
 
@@ -452,10 +497,10 @@ fn set_glyph_visibility(
     index: usize,
     selected: Option<&str>,
 ) -> Result<(), String> {
-    for icon_kind in ICON_KINDS {
+    for (position, icon_kind) in ICON_KINDS.iter().enumerate() {
         document.visible(
-            &format!("desktop-glyph-{index}-{icon_kind}"),
-            Some(icon_kind) == selected,
+            &slot_ids(index).glyphs[position],
+            Some(*icon_kind) == selected,
         )?;
     }
     Ok(())
@@ -476,8 +521,7 @@ pub fn project_item(
 }
 
 pub fn clear_item(document: &mut impl UiDocumentAccess, index: usize) -> Result<(), String> {
-    let item_id = format!("desktop-item-{index}");
-    document.visible(&item_id, false)?;
+    document.visible(item_slot_id(index), false)?;
     set_glyph_visibility(document, index, None)?;
     project_item_label(document, index, "", 100)
 }
@@ -556,8 +600,9 @@ fn project_item_label(
     // the text node, which is measured with the renderer's own 0.49em metric.
     // Do not shrink the line to that estimate: real glyphs (notably W) are
     // wider, and a tight box clips the last character.
-    document.text(&format!("desktop-label-{index}-line-1"), first)?;
-    document.text(&format!("desktop-label-{index}-line-2"), second)
+    let lines = &slot_ids(index).label_lines;
+    document.text(&lines[0], first)?;
+    document.text(&lines[1], second)
 }
 
 #[cfg(test)]
@@ -687,6 +732,20 @@ mod tests {
             0,
         );
         (packaged_root, resolver)
+    }
+
+    #[test]
+    fn slot_ids_are_cached_and_cover_every_glyph_kind() {
+        assert_eq!(item_slot_id(0), "desktop-item-0");
+        assert_eq!(item_slot_id(SLOT_COUNT - 1), "desktop-item-127");
+        assert!(
+            std::ptr::eq(slot_ids(3), slot_ids(3)),
+            "node ids must be built once, not per projection"
+        );
+        let ids = slot_ids(2);
+        assert_eq!(ids.glyphs.len(), ICON_KINDS.len());
+        assert_eq!(ids.glyphs[0], "desktop-glyph-2-directory");
+        assert_eq!(ids.label_lines[1], "desktop-label-2-line-2");
     }
 
     #[test]

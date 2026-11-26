@@ -147,7 +147,11 @@ struct SyncKey {
     weather: WeatherFeedSnapshot,
     media: MediaSnapshot,
     editing: Option<(u32, String)>,
-    placeholders: Placeholders,
+    /// Display name and host as drawn into custom templates. The sample values at draw time are
+    /// already in `samples` and the time/date/weekday derive from `time`, so the key needs no
+    /// formatted placeholder strings: an unchanged sync then formats and allocates nothing.
+    username: String,
+    hostname: String,
     time: Option<WallTime>,
     samples: SampleKey,
 }
