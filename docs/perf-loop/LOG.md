@@ -335,3 +335,6 @@ PTY reader coalesces wakes to one per 16 ms frame; scroll glide thread runs per 
 
 ## Shell timers scout: nothing ranked
 Profiler wake gated on enabled(); weather/usage/clock intervals are 5 min to 6 h; launch-feedback polls 50/250 ms only while a launch is pending; weather_host 10 ms sleep is test-only. No change.
+
+## Duplicate dependency scout: nothing ranked
+Duplicate crate versions (x11rb 0.13/0.14, rustix 0.38/1, thiserror 1/2) come from vendored smithay/winit/calloop; removing them means patching third_party, size gain small. No change.
