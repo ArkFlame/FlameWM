@@ -5,4 +5,4 @@ Workers were unavailable (opencode-go and openai providers returned 401 auth err
 | terminal/src/pty.rs:53 | $SHELL missing | falls back to /bin/sh already |
 | terminal/src/session.rs:68, pty.rs:95 | thread spawn | results handled; unwrap/expect in this crate are all in #[cfg(test)] code |
 | render-core glyphs.rs | missing font | bundled DejaVuSansMono last resort (earlier unit) |
-Open: PTY open failure messaging not yet traced beyond spawn; needs a fault-injection test (next unit). PARTIAL.
+PTY open failure: pty.rs spawn returns io::Result (every step uses ?), app.rs start_pane maps it to Err(String); no panic path. Remaining: a fault-injection test that forces a bad program (needs a build slot). PASS for panics, PARTIAL for test coverage.
