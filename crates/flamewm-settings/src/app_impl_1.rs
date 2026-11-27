@@ -161,8 +161,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return self.settle(document);
         }
         let action = parse_action(event.action.as_str())?;
+        let page_only = matches!(
+            action,
+            SettingsAction::Page(_) | SettingsAction::AppearanceTab(_)
+        );
         self.execute(action)?;
-        self.settle(document)
+        // A page change leaves every authoritative snapshot untouched; only the nav marker/ink,
+        // page visibility and the lazy XDG page need projecting, not the whole document.
+        if page_only {
+            self.sync_page(document)
+        } else {
+            self.settle(document)
+        }
     }
 
     /// Drag preview is display-local and never persists until the pointer releases,
@@ -520,7 +530,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 Ok(None) => {}
                 Err(error) => completion_errors.push(error),
             }
-            if wallpaper_changed {
+            if wallpaper_changed && !self.obscured {
                 self.settle(document)?;
             }
         }
@@ -764,6 +774,74 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.sync_cursor_theme();
         self.reconcile_pages();
         self.sync(document)
+    }
+
+    /// Tracks the window's obscured state. Returns true only on the hidden-to-visible transition,
+    /// the one frame that must flush every projection deferred while the window was hidden.
+    pub(crate) fn set_obscured(&mut self, obscured: bool) -> bool {
+        let uncovered = self.obscured && !obscured;
+        self.obscured = obscured;
+        uncovered
+    }
+
+    #[must_use]
+    pub(crate) fn is_obscured(&self) -> bool {
+        self.obscured
+    }
+
+    /// Page-switch projection: the nodes a page change can alter. A full `settle` walks every
+    /// page's nodes, but the settings/displays/panels snapshots and the nav query are unchanged
+    /// here; `sync_nodes` writes everything else from those same values.
+    pub(crate) fn sync_page(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        self.error = None;
+        self.sync_error(document);
+        let index = self.nav_index();
+        let filtering = !self.nav_query.is_empty();
+        document.position("nav-selection", 8.0, nav_top(index))?;
+        let accent = match self.setting_value("accent") {
+            Some(SettingValue::Text(value)) => Some(solid_color(value.as_str())?),
+            _ => None,
+        };
+        if let Some(ink) = accent.map(flamewm_ui_x11::on_accent_color) {
+            let selected = NAV_PAGES[index].0;
+            for (slug, _) in NAV_PAGES {
+                let id = format!("nav-{slug}");
+                if slug == selected && !filtering {
+                    document.foreground(&id, ink)?;
+                } else {
+                    document.foreground_clear(&id)?;
+                }
+            }
+        }
+        for tab in AppearanceTab::ALL {
+            document.visible(
+                &format!("page-{}", tab.node()),
+                self.client.ui().page == SettingsPage::Appearance && self.appearance_tab == tab,
+            )?;
+        }
+        for (name, page) in [
+            ("desktop", SettingsPage::Desktop),
+            ("taskbar", SettingsPage::Taskbar),
+            ("dock", SettingsPage::Dock),
+            ("displays", SettingsPage::Displays),
+            ("fonts", SettingsPage::Fonts),
+            ("accessibility", SettingsPage::Accessibility),
+            ("hotkeys", SettingsPage::Hotkeys),
+            ("startup", SettingsPage::Startup),
+            ("defaults", SettingsPage::Defaults),
+            ("assistant", SettingsPage::Assistant),
+            ("usage", SettingsPage::Usage),
+            ("about", SettingsPage::About),
+        ] {
+            document.visible(&format!("page-{name}"), self.client.ui().page == page)?;
+        }
+        // These two pages project live XDG state only while visible, exactly as in `sync_nodes`.
+        match self.client.ui().page {
+            SettingsPage::Startup => self.sync_startup(document)?,
+            SettingsPage::Defaults => self.sync_defaults(document)?,
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Clamps both page cursors to the authoritative snapshots and stamps them with the

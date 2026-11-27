@@ -162,7 +162,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
         scope: SettingsScope,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
-        let panels_before = self.client().panels().cloned();
+        // The panels snapshot is a full clone; only the Panels scope compares it. Cloning it on
+        // every other wake would allocate a whole snapshot just to discard the comparison.
+        let panels_before = if scope == SettingsScope::Panels {
+            self.client().panels().cloned()
+        } else {
+            None
+        };
         let refreshed = match scope {
             SettingsScope::Settings => self.client_mut().refresh_settings(),
             SettingsScope::Displays => self.client_mut().refresh_displays(),
@@ -171,6 +177,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         };
         refreshed.map_err(crate::control_error)?;
         if !panels_refresh_changed(scope, panels_before.as_ref(), self.client().panels()) {
+            return Ok(());
+        }
+        if self.is_obscured() {
+            // State is current now; the document is projected once when the window is uncovered.
             return Ok(());
         }
         self.settle(document)

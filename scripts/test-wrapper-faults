@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Fault-injection test for the session wrapper missing-library preflight.
+#
+# The real preflight_libs (and the two preflight helpers it calls) are extracted from
+# scripts/flamewm-session-wrapper and sourced into this process; the wrapper's main tail is never
+# executed. ldd is shadowed on a sandbox-prefixed PATH so it prints a controlled, fake result for a
+# fake, executable binary. No real ldd, session, compositor, cargo build or network access is used.
+#
+# Cases:
+#   1. ldd prints 'libfoo.so.1 => not found': preflight_libs returns non-zero and a failure record
+#      naming libfoo.so.1 is written to the session log.
+#   2. ldd prints every NEEDED library resolved: preflight_libs returns 0 and writes nothing.
+#
+# Usage: bash scripts/test-wrapper-faults
+# Exit: 0 when every case passes, 1 otherwise. Prints PASS/FAIL per case plus a SUMMARY line.
+set -uo pipefail
+
+SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd -- "$SELF_DIR/.." && pwd)
+WRAPPER="$ROOT/scripts/flamewm-session-wrapper"
+
+BASE=$(mktemp -d "${TMPDIR:-/tmp}/flamewm-wrapper-faults.XXXXXX") || exit 1
+cleanup() { rm -rf "$BASE"; }
+trap cleanup EXIT
+
+BIN="$BASE/bin"
+STATE="$BASE/state"
+mkdir -p "$BIN" "$STATE" || exit 1
+
+# A fake, executable binary: ldd is shadowed, so its contents are never really inspected.
+printf '#!/bin/sh\nexit 0\n' >"$BIN/fake-app"
+chmod 700 "$BIN/fake-app"
+
+# Extract the real preflight functions from the wrapper without running its main tail. The block is
+# contiguous: session_preflight_blast, session_preflight_record and preflight_libs. Stop at the
+# closing brace of preflight_libs rather than at a hard-coded line number.
+EXTRACTED="$BASE/preflight.inc"
+awk '
+    /^session_preflight_blast\(\)/ { on=1 }
+    on { print }
+    on && /^preflight_libs\(\)/ { in_pl=1 }
+    in_pl && /^}/ { exit }
+' "$WRAPPER" >"$EXTRACTED" || exit 1
+if ! grep -qF 'preflight_libs()' "$EXTRACTED"; then
+    printf 'FAIL setup: could not extract preflight_libs from %s\n' "$WRAPPER"
+    exit 1
+fi
+
+# Mechanical helpers the extracted functions call. They carry no behavior under test: timing is
+# pinned and blast-radius labels are fixed tokens.
+CHAIN_START_MS=0
+chain_now_ms() { printf '0'; }
+chain_ms() { printf '0'; }
+chain_works() { case "$1" in
+    x11) printf 'x_server+x11_clients' ;;
+    safe) printf 'shell+diagnostics' ;;
+    *) printf 'unknown' ;;
+esac; }
+chain_degraded() { case "$1" in
+    x11) printf 'wayland_native+compositor+kms_presentation' ;;
+    safe) printf 'gui+shell+desktop+compositor' ;;
+    *) printf 'unknown_component' ;;
+esac; }
+
+CHAIN_LOG="$BASE/chain.log"
+export XDG_STATE_HOME="$STATE"
+LOG="$STATE/flamewm/session.log"
+
+# shellcheck source=/dev/null
+source "$EXTRACTED" || exit 1
+
+# Shadow ldd: it prints the preset FAKE_LDD_OUT file regardless of the binary argument.
+cat >"$BIN/ldd" <<'EOF'
+#!/bin/sh
+cat "${FAKE_LDD_OUT:?}"
+EOF
+chmod 700 "$BIN/ldd"
+export PATH="$BIN:$PATH"
+
+CASES=0
+FAILED_CASES=0
+CASE_NAME=""
+CASE_FAILS=0
+RC=0
+
+start_case() {
+    CASE_NAME="$1"
+    CASE_FAILS=0
+    CASES=$((CASES + 1))
+    printf 'CASE %s\n' "$CASE_NAME"
+}
+assert_case() { # description command [args...]
+    local desc="$1"
+    shift
+    if "$@"; then
+        printf '  ok   %s\n' "$desc"
+    else
+        printf '  FAIL %s\n' "$desc"
+        CASE_FAILS=$((CASE_FAILS + 1))
+    fi
+}
+end_case() {
+    if (( CASE_FAILS == 0 )); then
+        printf 'PASS %s\n' "$CASE_NAME"
+    else
+        printf 'FAIL %s\n' "$CASE_NAME"
+        FAILED_CASES=$((FAILED_CASES + 1))
+    fi
+}
+
+nonzero_rc() { (( RC != 0 )); }
+zero_rc() { (( RC == 0 )); }
+record_names_lib() { # log-file
+    grep -aEq 'FLAMEWM-SESSION-CHAIN stage=preflight status=fail cause=missing_lib .*detail=lib=libfoo\.so\.1' "$1"
+}
+no_log_write() { # log-file
+    [[ ! -s "$1" ]];
+}
+
+# Case 1: one unresolved NEEDED library.
+start_case missing-library
+MISSING_OUT="$BASE/ldd-missing.txt"
+printf '%s\n' 'libfoo.so.1 => not found' >"$MISSING_OUT"
+export FAKE_LDD_OUT="$MISSING_OUT"
+rm -f "$LOG"
+preflight_libs "$BIN/fake-app" >"$BASE/case1.out" 2>"$BASE/case1.err"
+RC=$?
+assert_case "non-zero return when a NEEDED library is unresolved" nonzero_rc
+assert_case "failure record naming libfoo.so.1 in session.log" record_names_lib "$LOG"
+end_case
+
+# Case 2: every NEEDED library resolves.
+start_case all-resolved
+RESOLVED_OUT="$BASE/ldd-resolved.txt"
+cat >"$RESOLVED_OUT" <<'EOF'
+	linux-vdso.so.1 (0x00007ffd00000000)
+	libfoo.so.1 => /usr/lib/libfoo.so.1 (0x00007f0000000000)
+	libc.so.6 => /usr/lib/libc.so.6 (0x00007f0001000000)
+EOF
+export FAKE_LDD_OUT="$RESOLVED_OUT"
+rm -f "$LOG"
+preflight_libs "$BIN/fake-app" >"$BASE/case2.out" 2>"$BASE/case2.err"
+RC=$?
+assert_case "zero return when all NEEDED libraries resolve" zero_rc
+assert_case "no session log entry written" no_log_write "$LOG"
+end_case
+
+printf 'SUMMARY cases=%s passed=%s failed=%s\n' \
+    "$CASES" "$((CASES - FAILED_CASES))" "$FAILED_CASES"
+(( FAILED_CASES == 0 ))
