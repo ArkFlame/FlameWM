@@ -73,29 +73,36 @@ fn scale_bilinear(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]
     let src_h = source.height as usize;
     let x_ratio = src_w as f32 / target_w as f32;
     let y_ratio = src_h as f32 / target_h as f32;
+    // The horizontal mapping is the same on every row: compute each column's two byte offsets and
+    // weight once instead of once per pixel.
+    let columns: Vec<(usize, usize, f32)> = (0..target_w)
+        .map(|x| {
+            let source_x = (x as f32 + 0.5) * x_ratio - 0.5;
+            let x0 = source_x.floor().max(0.0) as usize;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let fx = (source_x - x0 as f32).clamp(0.0, 1.0);
+            (x0 * 4, x1 * 4, fx)
+        })
+        .collect();
     for y in 0..target_h {
         let source_y = (y as f32 + 0.5) * y_ratio - 0.5;
         let y0 = source_y.floor().max(0.0) as usize;
         let y1 = (y0 + 1).min(src_h - 1);
         let fy = (source_y - y0 as f32).clamp(0.0, 1.0);
-        for x in 0..target_w {
-            let source_x = (x as f32 + 0.5) * x_ratio - 0.5;
-            let x0 = source_x.floor().max(0.0) as usize;
-            let x1 = (x0 + 1).min(src_w - 1);
-            let fx = (source_x - x0 as f32).clamp(0.0, 1.0);
-            let output_index = (y * target_w + x) * 4;
-            let (p00, p10) = ((y0 * src_w + x0) * 4, (y0 * src_w + x1) * 4);
-            let (p01, p11) = ((y1 * src_w + x0) * 4, (y1 * src_w + x1) * 4);
-            for channel in 0..4 {
-                let a = f32::from(source.pixels[p00 + channel]);
-                let b = f32::from(source.pixels[p10 + channel]);
-                let c = f32::from(source.pixels[p01 + channel]);
-                let d = f32::from(source.pixels[p11 + channel]);
+        let row0 = &source.pixels[y0 * src_w * 4..][..src_w * 4];
+        let row1 = &source.pixels[y1 * src_w * 4..][..src_w * 4];
+        let out_row = &mut output[y * target_w * 4..][..target_w * 4];
+        for (out, &(i0, i1, fx)) in out_row.as_chunks_mut::<4>().0.iter_mut().zip(&columns) {
+            for (channel, slot) in out.iter_mut().enumerate() {
+                let a = f32::from(row0[i0 + channel]);
+                let b = f32::from(row0[i1 + channel]);
+                let c = f32::from(row1[i0 + channel]);
+                let d = f32::from(row1[i1 + channel]);
                 let value = a * (1.0 - fx) * (1.0 - fy)
                     + b * fx * (1.0 - fy)
                     + c * (1.0 - fx) * fy
                     + d * fx * fy;
-                output[output_index + channel] = value.round().clamp(0.0, 255.0) as u8;
+                *slot = value.round().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -203,6 +210,63 @@ mod tests {
 
     fn fixture_rgba() -> RgbaImage {
         RgbaImage::from_rgba8(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128]).unwrap()
+    }
+
+    /// The per-pixel bilinear this module shipped before the column mapping was hoisted.
+    fn bilinear_reference(source: &RgbaImage, width: u32, height: u32) -> Vec<u8> {
+        let (target_w, target_h) = (width as usize, height as usize);
+        let (src_w, src_h) = (source.width as usize, source.height as usize);
+        let x_ratio = src_w as f32 / target_w as f32;
+        let y_ratio = src_h as f32 / target_h as f32;
+        let mut output = vec![0_u8; target_w * target_h * 4];
+        for y in 0..target_h {
+            let source_y = (y as f32 + 0.5) * y_ratio - 0.5;
+            let y0 = source_y.floor().max(0.0) as usize;
+            let y1 = (y0 + 1).min(src_h - 1);
+            let fy = (source_y - y0 as f32).clamp(0.0, 1.0);
+            for x in 0..target_w {
+                let source_x = (x as f32 + 0.5) * x_ratio - 0.5;
+                let x0 = source_x.floor().max(0.0) as usize;
+                let x1 = (x0 + 1).min(src_w - 1);
+                let fx = (source_x - x0 as f32).clamp(0.0, 1.0);
+                let output_index = (y * target_w + x) * 4;
+                let (p00, p10) = ((y0 * src_w + x0) * 4, (y0 * src_w + x1) * 4);
+                let (p01, p11) = ((y1 * src_w + x0) * 4, (y1 * src_w + x1) * 4);
+                for channel in 0..4 {
+                    let a = f32::from(source.pixels[p00 + channel]);
+                    let b = f32::from(source.pixels[p10 + channel]);
+                    let c = f32::from(source.pixels[p01 + channel]);
+                    let d = f32::from(source.pixels[p11 + channel]);
+                    let value = a * (1.0 - fx) * (1.0 - fy)
+                        + b * fx * (1.0 - fy)
+                        + c * (1.0 - fx) * fy
+                        + d * fx * fy;
+                    output[output_index + channel] = value.round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn hoisted_bilinear_is_bit_identical_to_the_per_pixel_version() {
+        let (sw, sh) = (37_u32, 23_u32);
+        let mut seed = 0x2545_f491_u32;
+        let pixels: Vec<u8> = (0..sw * sh * 4)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed >> 8) as u8
+            })
+            .collect();
+        let source = RgbaImage::from_rgba8(sw, sh, pixels).unwrap();
+        // Upscale, the 1.33x shrink the lock wallpaper takes, equal size and a 1 px column.
+        for (w, h) in [(80, 50), (28, 18), (37, 23), (1, 9), (9, 1), (50, 23)] {
+            let mut fast = vec![0_u8; w as usize * h as usize * 4];
+            scale_bilinear(&source, w, h, &mut fast);
+            assert_eq!(fast, bilinear_reference(&source, w, h), "{w}x{h}");
+        }
     }
 
     #[test]
