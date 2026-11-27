@@ -1,0 +1,4 @@
+# Worker brief ({{UNIT_NAME}})
+Repo: FlameWM, shared checkout edited by many workers at once. RULES: no git, no cargo, no python, no builds, no sleep loops. Re-read every file right before editing it; smallest coherent edit; do not reformat files you do not own; never loosen gates; visuals stay pixel-identical.
+Your unit file: {{UNIT_PATH}}. Read it. First append a heading `## Result` with the line `STARTED`, then do the work: investigate with rg/Read, then make at most 3 production edits (plus tests where asked). Reference-first: check `.vendor/` for how KDE/xfce/smithay do it when relevant.
+Finish by editing the unit file: replace the line `STATUS: OPEN` with `STATUS: DONE` (or `STATUS: PARTIAL`), and under `## Result` list rows (file:line, finding, change, risk), mark every edit UNBUILT, and end with one paragraph starting `PASS` or `PARTIAL`. Your final reply ends with `Status: PASS|UNVERIFIED|FAILED`.
