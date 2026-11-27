@@ -60,8 +60,7 @@ mod tests {
     // OBSERVABLE: the disabled provider is dropped and the interval clamps to 60 s..1 h.
     #[test]
     fn disabled_providers_drop_and_interval_clamps() {
-        let (providers, interval) =
-            usage_settings_from(|p| p != UsageProvider::Claude, 10);
+        let (providers, interval) = usage_settings_from(|p| p != UsageProvider::Claude, 10);
         assert!(!providers.contains(&UsageProvider::Claude));
         assert_eq!(providers.len(), 4);
         assert_eq!(interval, Duration::from_secs(60));

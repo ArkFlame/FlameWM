@@ -434,8 +434,8 @@ mod all_programs_rule_tests {
         assert_eq!(
             labels,
             [
-                "##", "9Lives", "~tilde", "#A", "Alpha", "apple", "#B", "beta", "#Z", "Zed", "session",
-                "session", "session"
+                "##", "9Lives", "~tilde", "#A", "Alpha", "apple", "#B", "beta", "#Z", "Zed",
+                "session", "session", "session"
             ]
         );
     }
