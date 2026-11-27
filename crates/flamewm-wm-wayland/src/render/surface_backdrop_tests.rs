@@ -102,3 +102,51 @@ fn premultiply_pixel_matches_the_buffer_form() {
         }
     }
 }
+
+/// The straightforward per-block average the strip downscale must reproduce exactly, edges included.
+fn downscale_reference(
+    strip: &[u8],
+    (width, y0, rows): (usize, usize, usize),
+    stored: &mut [u8],
+    (sw, sh): (usize, usize),
+) {
+    let end = y0 + rows;
+    for sy in (y0 / DESKTOP_SCALE)..end.div_ceil(DESKTOP_SCALE).min(sh) {
+        for sx in 0..sw {
+            let (mut sum, mut count) = ([0u32; 4], 0u32);
+            for y in (sy * DESKTOP_SCALE).max(y0)..((sy + 1) * DESKTOP_SCALE).min(end) {
+                for x in (sx * DESKTOP_SCALE)..((sx + 1) * DESKTOP_SCALE).min(width) {
+                    for c in 0..4 {
+                        sum[c] += u32::from(strip[((y - y0) * width + x) * 4 + c]);
+                    }
+                    count += 1;
+                }
+            }
+            for c in 0..4 {
+                stored[(sy * sw + sx) * 4 + c] = ((sum[c] + count / 2) / count.max(1)) as u8;
+            }
+        }
+    }
+}
+
+#[test]
+fn strip_downscale_matches_the_reference_for_full_and_partial_blocks() {
+    // Widths and heights that are and are not multiples of the scale, strips split mid-image.
+    for (width, height) in [(16_usize, 16_usize), (17, 13), (5, 9), (1, 1), (7, 4)] {
+        let sw = width.div_ceil(DESKTOP_SCALE);
+        let sh = height.div_ceil(DESKTOP_SCALE);
+        let source: Vec<u8> = (0..width * height * 4)
+            .map(|i| (i.wrapping_mul(37) ^ (i >> 3)) as u8)
+            .collect();
+        let (mut fast, mut slow) = (vec![0u8; sw * sh * 4], vec![0u8; sw * sh * 4]);
+        let mut y0 = 0;
+        while y0 < height {
+            let rows = (2 * DESKTOP_SCALE).min(height - y0);
+            let strip = &source[y0 * width * 4..(y0 + rows) * width * 4];
+            downscale_strip(strip, (width, y0, rows), &mut fast, (sw, sh));
+            downscale_reference(strip, (width, y0, rows), &mut slow, (sw, sh));
+            y0 += rows;
+        }
+        assert_eq!(fast, slow, "{width}x{height}");
+    }
+}

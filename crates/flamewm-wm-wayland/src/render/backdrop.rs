@@ -310,22 +310,30 @@ pub(super) fn downscale_strip(
     (sw, sh): (usize, usize),
 ) {
     let end = y0 + rows;
+    // One accumulator row per stored row: each source row is read once, front to back, and the
+    // division happens once per stored pixel instead of once per channel of a nested block walk.
+    let mut sums = vec![0u32; sw * 4];
     for sy in (y0 / DESKTOP_SCALE)..end.div_ceil(DESKTOP_SCALE).min(sh) {
-        for sx in 0..sw {
-            let mut sum = [0u32; 4];
-            let mut count = 0u32;
-            for y in (sy * DESKTOP_SCALE).max(y0)..((sy + 1) * DESKTOP_SCALE).min(end) {
-                for x in (sx * DESKTOP_SCALE)..((sx + 1) * DESKTOP_SCALE).min(width) {
-                    let at = ((y - y0) * width + x) * 4;
-                    for (total, byte) in sum.iter_mut().zip(&strip[at..at + 4]) {
+        sums.fill(0);
+        let source_rows = (sy * DESKTOP_SCALE).max(y0)..((sy + 1) * DESKTOP_SCALE).min(end);
+        let row_count = source_rows.len() as u32;
+        for y in source_rows {
+            let row = &strip[(y - y0) * width * 4..(y - y0 + 1) * width * 4];
+            let blocks = row.as_chunks::<4>().0.chunks(DESKTOP_SCALE);
+            for (pixels, sum) in blocks.zip(sums.as_chunks_mut::<4>().0) {
+                for pixel in pixels {
+                    for (total, byte) in sum.iter_mut().zip(pixel) {
                         *total += u32::from(*byte);
                     }
-                    count += 1;
                 }
             }
+        }
+        for (sx, sum) in sums.as_chunks::<4>().0.iter().enumerate() {
+            let columns = width.saturating_sub(sx * DESKTOP_SCALE).min(DESKTOP_SCALE) as u32;
+            let count = (row_count * columns).max(1);
             let at = (sy * sw + sx) * 4;
-            for (c, total) in sum.iter().enumerate() {
-                stored[at + c] = ((total + count / 2) / count.max(1)) as u8;
+            for (out, total) in stored[at..at + 4].iter_mut().zip(sum) {
+                *out = ((total + count / 2) / count) as u8;
             }
         }
     }
