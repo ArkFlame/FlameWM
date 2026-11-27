@@ -246,9 +246,166 @@ mod crop_tests {
     }
 }
 
-/// Reads the `dims` region of `texture` back in [`DESKTOP_STRIP_ROWS`] strips and box-averages each
-/// into the reduced image, so only one strip of full-size pixels is ever resident.
+/// Half- and quarter-size render targets for the GPU downscale, reused while the capture size is unchanged.
+struct ReduceTargets {
+    dims: (usize, usize),
+    half: GlesTexture,
+    quarter: GlesTexture,
+}
+
+thread_local! {
+    static REDUCE_TARGETS: std::cell::RefCell<Option<ReduceTargets>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Draws `source` into `target` at exactly half size. Linear filtering samples the midpoint of every 2x2
+/// block, which is that block's box average; texels past `source_size` clamp to the edge.
+fn halve(
+    renderer: &mut GlowRenderer,
+    source: &GlesTexture,
+    source_size: (usize, usize),
+    target: &mut GlesTexture,
+    target_size: (usize, usize),
+) -> Result<(), Box<dyn Error>> {
+    use smithay::backend::renderer::{Frame as _, Renderer as _};
+    let size = Size::<i32, Physical>::from((target_size.0 as i32, target_size.1 as i32));
+    let mut bound = renderer.bind(target)?;
+    let mut frame = renderer.render(&mut bound, size, Transform::Normal)?;
+    let dst = Rectangle::<i32, Physical>::from_size(size);
+    let src = Rectangle::<f64, Buffer>::from_size(Size::from((
+        source_size.0 as f64,
+        source_size.1 as f64,
+    )));
+    frame.render_texture_from_to(source, src, dst, &[dst], &[], Transform::Normal, 1.0)?;
+    // Same GL context as the readback that follows, so the fence need not be waited on.
+    let _ = frame.finish()?;
+    Ok(())
+}
+
+/// Box-averages `texture` to the stored size. The whole 4x4 blocks are averaged on the GPU (two exact 2x2
+/// halvings, so no sample ever leaves the texture) and only the quarter-size result is read back: 16x fewer
+/// bytes cross to the CPU than the strip readback. A partial last column or row (at most 3 pixels, absent when
+/// the size is divisible by 4) is averaged on the CPU from a tiny readback with the same rounding.
+fn read_reduced_gpu(
+    renderer: &mut GlowRenderer,
+    texture: &mut GlesTexture,
+    dims: (usize, usize),
+    clock: &mut PhaseClock,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let (sw, sh) = stored_size(dims);
+    let (fw, fh) = (dims.0 / DESKTOP_SCALE, dims.1 / DESKTOP_SCALE);
+    if fw == 0 || fh == 0 {
+        return Err("capture smaller than one block".into());
+    }
+    let mut targets = match REDUCE_TARGETS.take() {
+        Some(targets) if targets.dims == dims => targets,
+        _ => {
+            let mut make = |w: usize, h: usize| {
+                renderer.create_buffer(
+                    Fourcc::Abgr8888,
+                    Size::<i32, Buffer>::from((w as i32, h as i32)),
+                )
+            };
+            ReduceTargets {
+                dims,
+                half: make(2 * fw, 2 * fh)?,
+                quarter: make(fw, fh)?,
+            }
+        }
+    };
+    halve(
+        renderer,
+        texture,
+        (4 * fw, 4 * fh),
+        &mut targets.half,
+        (2 * fw, 2 * fh),
+    )?;
+    halve(
+        renderer,
+        &targets.half,
+        (2 * fw, 2 * fh),
+        &mut targets.quarter,
+        (fw, fh),
+    )?;
+    clock.split("gpu_downscale");
+    let mut stored = vec![0u8; sw * sh * 4];
+    {
+        let target = renderer.bind(&mut targets.quarter)?;
+        let region =
+            Rectangle::<i32, Buffer>::new(Point::from((0, 0)), Size::from((fw as i32, fh as i32)));
+        // Same `Argb8888` request as the CPU path (see `read_reduced_cpu`): straight RGBA bytes.
+        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Argb8888)?;
+        clock.split("copy");
+        let bytes = renderer.map_texture(&mapping)?;
+        clock.split("map");
+        if bytes.len() != fw * fh * 4 {
+            return Err("quarter readback has an unexpected size".into());
+        }
+        for (row, source) in bytes.chunks_exact(fw * 4).enumerate() {
+            stored[row * sw * 4..][..fw * 4].copy_from_slice(source);
+        }
+    }
+    let target = renderer.bind(texture)?;
+    let rest_rows = dims.1 - 4 * fh;
+    if rest_rows > 0 {
+        // Bottom rows, full width: one stored row, including the corner block.
+        let region = Rectangle::<i32, Buffer>::new(
+            Point::from((0, (4 * fh) as i32)),
+            Size::from((dims.0 as i32, rest_rows as i32)),
+        );
+        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Argb8888)?;
+        let strip = renderer.map_texture(&mapping)?;
+        downscale_strip(strip, (dims.0, 4 * fh, rest_rows), &mut stored, (sw, sh));
+    }
+    let rest_cols = dims.0 - 4 * fw;
+    if rest_cols > 0 {
+        // Right columns above the bottom remainder: one stored column of whole 4-row blocks.
+        let region = Rectangle::<i32, Buffer>::new(
+            Point::from((4 * fw as i32, 0)),
+            Size::from((rest_cols as i32, (4 * fh) as i32)),
+        );
+        let mapping = renderer.copy_framebuffer(&target, region, Fourcc::Argb8888)?;
+        let strip = renderer.map_texture(&mapping)?;
+        let count = (DESKTOP_SCALE * rest_cols) as u32;
+        for sy in 0..fh {
+            let mut sum = [0u32; 4];
+            for y in sy * DESKTOP_SCALE..(sy + 1) * DESKTOP_SCALE {
+                let row = &strip[y * rest_cols * 4..(y + 1) * rest_cols * 4];
+                for pixel in row.as_chunks::<4>().0 {
+                    for (total, byte) in sum.iter_mut().zip(pixel) {
+                        *total += u32::from(*byte);
+                    }
+                }
+            }
+            let at = (sy * sw + fw) * 4;
+            for (out, total) in stored[at..at + 4].iter_mut().zip(sum) {
+                *out = ((total + count / 2) / count) as u8;
+            }
+        }
+    }
+    clock.split("remainder");
+    drop(target);
+    REDUCE_TARGETS.set(Some(targets));
+    Ok(stored)
+}
+
+/// Reduced copy of `texture` for the blur: GPU downscale, falling back to the CPU strip path on any error.
 pub(super) fn read_reduced(
+    renderer: &mut GlowRenderer,
+    texture: &mut GlesTexture,
+    dims: (usize, usize),
+    clock: &mut PhaseClock,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    // Measured against the CPU path on 55 live captures (1180x641 and 1350x641): at most 1 level per byte
+    // apart, from rounding twice, and no byte off by more than 2.
+    match read_reduced_gpu(renderer, texture, dims, clock) {
+        Ok(stored) => Ok(stored),
+        Err(_) => read_reduced_cpu(renderer, texture, dims, clock),
+    }
+}
+
+/// CPU fallback: reads the `dims` region of `texture` back in [`DESKTOP_STRIP_ROWS`] strips and box-averages
+/// each into the reduced image, so only one strip of full-size pixels is ever resident.
+fn read_reduced_cpu(
     renderer: &mut GlowRenderer,
     texture: &mut GlesTexture,
     dims: (usize, usize),

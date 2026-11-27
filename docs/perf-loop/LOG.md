@@ -299,3 +299,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Correction: the nested harness runs on the machine's Intel GPU (`FLAMEWM_GL_RENDERER ... Mesa Intel(R) UHD Graphics (TGL GT1) class=hardware`), not llvmpipe, so u162 is measurable here. Earlier notes calling it software GL were wrong.
 - New profile-only split: `PhaseClock::gpu_wait` waits on the render's `SyncPoint` (never when profiling is off) so `gpu_wait` is the GPU finishing the scene and `copy`/`map` are the readback alone.
 - 90-step drag, 48 phase lines (busy machine, read the shares): total 83.4 ms; map 35.8 (43%), crop 20.9, store 11.7, blur 6.4, gpu_wait 5.0, downscale 2.1, copy 1.5, render 0.4. `gpu_wait` is small, so `map` is the transfer of the full-size readback, not waiting for the scene. Reading 16x fewer bytes is the lever.
+
+## u162 GPU-side capture downscale (done)
+Capture total 83.4 -> 26.5 ms on real Intel GPU (map 35.8 -> 2.6 ms) by halving twice on the GPU and reading back 1/16 of the bytes. Output within 1 level/byte of the CPU path (55 live captures). clippy -D warnings and 460 wm-wayland tests pass. Next: crop/store (~14 ms) via GPU upscale.

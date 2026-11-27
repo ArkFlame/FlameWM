@@ -14,3 +14,7 @@ Risk: extra render passes and two textures of VRAM; only worth it if the readbac
 
 ## Design reference (added)
 See `docs/perf-loop/REFERENCE-TRANSPARENCY.md`: KWin's dual-Kawase pyramid with per-window reusable FBOs and damage-clipped blur is the model; port the structure (downsample chain, upsample chain, colour matrix in the last pass), not constants.
+
+## Result (done)
+Implemented in `render/backdrop.rs`: two exact 2x2 linear halvings on the GPU into reusable half/quarter textures, read back only the quarter texture; a partial last row/column (<=3 px) is averaged on the CPU from a tiny readback; CPU strip path kept as fallback on any error. Verified in situ against the CPU path on 55 live captures: max 1 level per byte (double rounding), 0 bytes off by more than 2.
+Real Intel GPU drag probe, per capture (us): total 83351 -> 26463, map 35786 -> 2563, copy 1457 -> 135, CPU downscale 2145 -> ~0 (GPU blit 424), remainder 2132. Remaining shares: crop 7957, store 6149, blur 3199, gpu_wait 3458. Next: hand the low-res capture to the GPU for the upscale (crop+store ~14 ms).
