@@ -210,8 +210,11 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         settings.background_image.as_deref(),
     ) {
         (LockBackgroundMode::Custom, Some(path)) => {
-            // Reuse the shared on-disk decode cache; pixels identical to a plain decode.
-            let natural = flamewm_image_core::wallpaper::decode_file(path).ok()?;
+            // Reuse the shared on-disk decode cache and its in-process decoded handle: an
+            // unchanged path+len+mtime is decoded once, then borrowed by every output and lock
+            // show instead of being decoded or copied again. Both paths fall back to the same
+            // plain decode, so the pixels are identical.
+            let natural = flamewm_image_core::wallpaper::decode_file_shared(path).ok()?;
             Some(RuntimeImage::from_rgba(
                 path.display().to_string(),
                 cover_rgba(&natural, width, height)?,
