@@ -799,7 +799,9 @@ fn worker_loop<R: IconResolve>(
                     queue.low.pop_front()
                 };
                 let Some(queued) = queued else {
-                    tracing::warn!("cached icon job vanished; skip (blast radius: result undelivered)");
+                    tracing::warn!(
+                        "cached icon job vanished; skip (blast radius: result undelivered)"
+                    );
                     continue;
                 };
                 // Queue wait: envelope submitted_at -> dequeue, not Condvar idle.

@@ -36,12 +36,6 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
     crate::decode_cache::decode_file_cached(path)
 }
 
-/// Like [`decode_file`], but returns a shared handle: repeated requests for an unchanged
-/// path, byte length and mtime borrow one decoded raster instead of copying or decoding it again.
-pub fn decode_file_shared(path: &Path) -> Result<std::sync::Arc<RgbaImage>, String> {
-    crate::decode_cache::decode_file_shared(path)
-}
-
 /// Decodes `path` without consulting the decode cache.
 pub fn decode_file_uncached(path: &Path) -> Result<RgbaImage, String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;

@@ -75,10 +75,7 @@ pub fn resolve_palette(
     themes
         .iter()
         .find(|theme| theme.name == active)
-        .map_or_else(
-            || DEFAULT_PALETTE.clone(),
-            |theme| theme.palette.clone(),
-        )
+        .map_or_else(|| DEFAULT_PALETTE.clone(), |theme| theme.palette.clone())
 }
 
 /// Backdrop for the window: shared wallpaper settings with the terminal opacity and blur. `None` at 100% opacity.

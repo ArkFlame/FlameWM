@@ -55,3 +55,5 @@ PARTIAL — shared decoded buffer and covered/teardown release are applied in th
 path, and unchanged path+mtime reuse now avoids both re-decode and re-read inside a process; the
 covered-by-windows hook is deferred because its signal owner is outside this unit, and all changes
 remain UNBUILT with no measured result.
+
+NOTE u17b: decode_file_shared (+80 LOC in flamewm-image-core) reverted: architecture gate core-source-loc>2400. Redo inside flamewm-desktop or after trimming image-core.
