@@ -92,7 +92,6 @@ fn glyph_source(text: &str, size: f32, x: f32, y: f32, color: [u8; 4]) -> Prepar
     }
 }
 
-/// One source per `Text`, `TextShadow` and `Image` command, in command order.
 /// The document holds straight RGBA8 but `PixelOp::BlendImage` composites premultiplied pixels;
 /// handing it straight edges left a dark fringe on every soft-edged image.
 fn premultiplied(straight: &[u8]) -> Vec<u8> {
@@ -106,6 +105,7 @@ fn premultiplied(straight: &[u8]) -> Vec<u8> {
     out
 }
 
+/// One source per `Text`, `TextShadow` and `Image` command, in command order.
 fn prepare_sources(commands: &[PaintCommand], document: &RuntimeDocument) -> Vec<Prepared> {
     let mut sources = Vec::new();
     for command in commands {
