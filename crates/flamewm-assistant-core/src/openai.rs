@@ -474,6 +474,24 @@ fn curl_error(label: &str, exit: Option<i32>) -> AssistantError {
     }
 }
 
+impl AssistantError {
+    /// True only for transient failures a chat turn may retry. A rejected key, a cancelled turn,
+    /// local I/O, and the server's own error text are terminal: retrying them hides the cause.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Unreachable(_)
+                | Self::Timeout
+                | Self::Protocol(_)
+                | Self::Http {
+                    status: 429 | 500..=599,
+                    ..
+                }
+        )
+    }
+}
+
 /// The message shown to the user. Never raw HTML or JSON bodies, and never the key.
 #[must_use]
 pub fn human_error(error: &AssistantError, label: &str) -> String {
@@ -746,5 +764,53 @@ mod tests {
         assert_eq!(error, AssistantError::Cancelled);
         assert_eq!(deltas, 1);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn retryable_only_covers_transient_provider_failures() {
+        let cases = [
+            (AssistantError::Unreachable("host".into()), true),
+            (AssistantError::Timeout, true),
+            (AssistantError::Protocol("bad json".into()), true),
+            (
+                AssistantError::Http {
+                    status: 429,
+                    message: String::new(),
+                },
+                true,
+            ),
+            (
+                AssistantError::Http {
+                    status: 503,
+                    message: String::new(),
+                },
+                true,
+            ),
+            (
+                AssistantError::Http {
+                    status: 401,
+                    message: String::new(),
+                },
+                false,
+            ),
+            (
+                AssistantError::Http {
+                    status: 404,
+                    message: String::new(),
+                },
+                false,
+            ),
+            (AssistantError::Cancelled, false),
+            (AssistantError::Config("x".into()), false),
+            (AssistantError::NotConfigured("x".into()), false),
+            (AssistantError::Io("x".into()), false),
+            (AssistantError::RunFailed("x".into()), false),
+            (AssistantError::Store("x".into()), false),
+            (AssistantError::ChecksumUnavailable("x".into()), false),
+            (AssistantError::ChecksumMismatch("x".into()), false),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.is_retryable(), expected, "{error:?}");
+        }
     }
 }

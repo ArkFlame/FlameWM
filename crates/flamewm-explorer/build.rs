@@ -4,7 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 fn main() {
-    let base = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest"));
+    let base = match env::var("CARGO_MANIFEST_DIR") {
+        Ok(value) => PathBuf::from(value),
+        Err(error) => {
+            println!(
+                "cargo:warning=flamewm-explorer: CARGO_MANIFEST_DIR unavailable ({error}); using current dir"
+            );
+            env::current_dir().unwrap_or_default()
+        }
+    };
     let root = base
         .parent()
         .and_then(Path::parent)

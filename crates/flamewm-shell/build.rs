@@ -5,7 +5,15 @@ use std::path::{Path, PathBuf};
 use flamewm_render_compiler::{compile_file, encode, rerun_tree, stage_tree, CompileOptions};
 
 fn main() {
-    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let manifest = match env::var_os("CARGO_MANIFEST_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => {
+            println!(
+                "cargo:warning=flamewm-shell: CARGO_MANIFEST_DIR unavailable; using current dir"
+            );
+            env::current_dir().unwrap_or_default()
+        }
+    };
     let root = manifest
         .parent()
         .and_then(Path::parent)

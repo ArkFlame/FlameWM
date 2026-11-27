@@ -110,3 +110,20 @@ fn primary_text_is_separate_from_clipboard_text() {
         Some("clip-text".to_owned())
     );
 }
+
+/// Fault: a fresh display has no selection owner. Reads must return empty results,
+/// never an error or a wait-loop spin.
+#[test]
+fn absent_selection_owner_reads_as_none() {
+    let _serial = SERVER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((_server, display)) = start_server() else {
+        eprintln!("skipped: Xvfb not available or no free display");
+        return;
+    };
+    let reader = Clipboard::connect_display(Some(&display)).expect("reader connects");
+    assert_eq!(reader.get_text().expect("empty clipboard"), None);
+    assert_eq!(reader.get_primary_text().expect("empty primary"), None);
+    assert_eq!(reader.get_files().expect("no file owner"), None);
+}

@@ -1,7 +1,7 @@
 //! `org.kde.StatusNotifierWatcher` service on the session bus, driven by the caller's
 //! `flamewm-dbus-reactor` pump. Owns no thread and no timer: all work happens in `on_ready`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use flamewm_api::FlameResult;
 use flamewm_dbus_reactor::{
@@ -70,6 +70,7 @@ struct WatcherState {
     registry: Registry,
     pending: HashMap<u32, Pending>,
     layouts: BTreeMap<ItemKey, LayoutReply>,
+    iconless_reported: BTreeSet<ItemKey>,
 }
 
 pub struct TrayWatcher {
@@ -215,10 +216,16 @@ impl WatcherState {
 
     fn register_item(&mut self, pump: &BusPump, message: &Message) -> MessageDisposition {
         let Some(argument) = single_string(message) else {
+            eprintln!(
+                "flamewm-tray: skip StatusNotifierItem registration: expected one string argument"
+            );
             return MessageDisposition::Unhandled;
         };
         let sender = message.sender();
         let Ok(key) = parse_registration(&argument, sender.as_deref()) else {
+            eprintln!(
+                "flamewm-tray: skip malformed StatusNotifierItem registration {argument:?} from {sender:?}"
+            );
             return MessageDisposition::Unhandled;
         };
         match self.registry.register_item(key.clone()) {
@@ -247,19 +254,31 @@ impl WatcherState {
                 self.request_props(pump, &key);
             }
             Ok(Registration::Known) => {}
-            Err(_) => return MessageDisposition::Unhandled,
+            Err(_) => {
+                eprintln!(
+                    "flamewm-tray: skip StatusNotifierItem {}: item registry full",
+                    key.registry_string()
+                );
+                return MessageDisposition::Unhandled;
+            }
         }
         MessageDisposition::Reply(message.method_return())
     }
 
     fn register_host(&mut self, pump: &BusPump, message: &Message) -> MessageDisposition {
         let Some(argument) = single_string(message) else {
+            eprintln!(
+                "flamewm-tray: skip StatusNotifierHost registration: expected one string argument"
+            );
             return MessageDisposition::Unhandled;
         };
         match self.registry.add_host(&argument) {
             Ok(Registration::Added) => emit(pump, "StatusNotifierHostRegistered", None),
             Ok(Registration::Known) => {}
-            Err(_) => return MessageDisposition::Unhandled,
+            Err(_) => {
+                eprintln!("flamewm-tray: skip StatusNotifierHost {argument}: host registry full");
+                return MessageDisposition::Unhandled;
+            }
         }
         MessageDisposition::Reply(message.method_return())
     }
@@ -273,8 +292,17 @@ impl WatcherState {
             Some(Pending::Props(key)) => {
                 if let [MessageItem::Dict(dict)] = items.as_slice() {
                     let props = props_from_entries(dict);
-                    self.registry
-                        .set_props(&key, crate::item::ItemProps::from_owned_props(props));
+                    let item = crate::item::ItemProps::from_owned_props(props);
+                    if item.icon_name.is_empty()
+                        && item.icon_pixmaps.is_empty()
+                        && self.iconless_reported.insert(key.clone())
+                    {
+                        eprintln!(
+                            "flamewm-tray: item {} has no icon; using the fallback glyph",
+                            item.id
+                        );
+                    }
+                    self.registry.set_props(&key, item);
                 }
             }
             Some(Pending::Owner(key)) => {
@@ -348,6 +376,8 @@ impl WatcherState {
         self.pending
             .retain(|_, pending| registry.get(pending.key()).is_some());
         self.layouts.retain(|key, _| registry.get(key).is_some());
+        self.iconless_reported
+            .retain(|key, _| registry.get(key).is_some());
     }
 
     fn request_props(&mut self, pump: &BusPump, key: &ItemKey) {

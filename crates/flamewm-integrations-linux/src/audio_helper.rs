@@ -15,13 +15,17 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
-use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction};
+use flamewm_api::system::{AudioMuteAction, AudioSnapshot, AudioVolumeAction, ServiceAvailability};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 use crate::audio_protocol::{AudioRequest, SnapshotDecoder, encode_request};
 
 /// Executable name of the helper, installed next to the WM binary.
 pub const HELPER_BINARY: &str = "flamewm-audio-helper";
+
+/// A helper that cannot start retries on a doubling schedule, never a fixed short tick.
+const RETRY_FLOOR: std::time::Duration = std::time::Duration::from_millis(300);
+const RETRY_CAP: std::time::Duration = std::time::Duration::from_secs(8);
 
 type SnapshotCallback = Box<dyn FnMut(AudioSnapshot) + Send>;
 
@@ -36,6 +40,12 @@ struct Session {
 struct Process {
     next_id: u64,
     session: Option<Session>,
+    /// Generations of the last published snapshot, so a synthesized Unavailable keeps its place.
+    last_generation: u64,
+    last_server_generation: u64,
+    /// Earliest instant a failed spawn may be retried; None while no backoff is pending.
+    retry_at: Option<std::time::Instant>,
+    failures: u8,
 }
 
 /// Helper process state shared by the writer thread and the reader threads it starts.
@@ -132,7 +142,23 @@ fn writer_stopped() -> FlameError {
 impl Core {
     /// Writer thread body: delivers queued lines in order until the queue is closed.
     fn run_writer(&self, receiver: &Receiver<String>) {
-        for line in receiver {
+        loop {
+            let retry_at = lock(&self.process).retry_at;
+            let line = match retry_at {
+                Some(at) => match receiver
+                    .recv_timeout(at.saturating_duration_since(std::time::Instant::now()))
+                {
+                    Ok(line) => line,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        encode_request(&AudioRequest::Get)
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                },
+                None => match receiver.recv() {
+                    Ok(line) => line,
+                    Err(_) => break,
+                },
+            };
             if let Err(error) = self.deliver(&line) {
                 eprintln!("flamewm-integrations-linux: audio request dropped: {error}");
             }
@@ -145,10 +171,20 @@ impl Core {
     /// Write one encoded request, spawning or respawning the helper as needed.
     fn deliver(&self, line: &str) -> FlameResult<()> {
         let mut process = lock(&self.process);
+        if process
+            .retry_at
+            .is_some_and(|at| std::time::Instant::now() < at)
+        {
+            return Err(FlameError::new(
+                ErrorCode::Unavailable,
+                "audio helper is backing off",
+            ));
+        }
+        process.retry_at = None;
         for _attempt in 0..2 {
             reap_exited(&mut process);
-            if process.session.is_none() {
-                self.spawn(&mut process)?;
+            if process.session.is_none() && self.spawn(&mut process).is_err() {
+                break;
             }
             let Some(session) = process.session.as_mut() else {
                 break;
@@ -157,12 +193,19 @@ impl Core {
                 .and_then(|()| session.stdin.flush())
                 .is_ok()
             {
+                process.failures = 0;
                 return Ok(());
             }
             if let Some(session) = process.session.take() {
                 retire(session.child);
             }
         }
+        process.failures = process.failures.saturating_add(1);
+        let shift = u32::from(process.failures.min(7));
+        let delay = RETRY_FLOOR.saturating_mul(1_u64 << shift).min(RETRY_CAP);
+        process.retry_at = Some(std::time::Instant::now() + delay);
+        drop(process);
+        publish_unavailable(&self.on_snapshot, &self.process);
         Err(FlameError::new(
             ErrorCode::Unavailable,
             "audio helper is not accepting requests",
@@ -215,7 +258,11 @@ impl Drop for AudioHelper {
         }
         self.requests.take();
         if let Some(writer) = self.writer.take() {
-            let _ = writer.join();
+            // A pending backoff wake holds the writer in recv_timeout. Closing the queue makes its
+            // next wake exit, so joining here would only stall shutdown until that one deadline.
+            if lock(&self.core.process).retry_at.is_none() {
+                let _ = writer.join();
+            }
         }
     }
 }
@@ -233,6 +280,11 @@ fn read_events(
         };
         match decoder.push_line(&line) {
             Ok(Some(snapshot)) => {
+                {
+                    let mut state = lock(process);
+                    state.last_generation = snapshot.generation;
+                    state.last_server_generation = snapshot.server_generation;
+                }
                 if let Ok(mut emit) = callback.lock() {
                     emit(snapshot);
                 }
@@ -243,14 +295,24 @@ fn read_events(
     }
     // stdout closed: the helper exited (idle timeout or crash). Reap it now instead of at the
     // next request. A newer session has a different id and is left alone.
-    let mut process = lock(process);
-    if process
-        .session
-        .as_ref()
-        .is_some_and(|session| session.id == id)
-        && let Some(session) = process.session.take()
-    {
-        retire(session.child);
+    let status = {
+        let mut process = lock(process);
+        if process
+            .session
+            .as_ref()
+            .is_some_and(|session| session.id == id)
+        {
+            process
+                .session
+                .take()
+                .and_then(|session| retire(session.child))
+        } else {
+            None
+        }
+    };
+    // A backend that died mid-session must hide the controls; an idle exit is a normal success.
+    if status.is_some_and(|status| !status.success()) {
+        publish_unavailable(callback, process);
     }
 }
 
@@ -272,10 +334,26 @@ fn reap_exited(process: &mut Process) -> Option<ExitStatus> {
     }
 }
 
-/// Stop and collect a helper that is no longer usable.
-fn retire(mut child: Child) {
+/// Stop and collect a helper that is no longer usable. Returns its status when collected.
+fn retire(mut child: Child) -> Option<ExitStatus> {
     let _ = child.kill();
-    let _ = child.wait();
+    child.wait().ok()
+}
+
+/// Publish Unavailable with the last seen generations so the host accepts the state change
+/// and repeated failures dedupe instead of republishing on every retry.
+fn publish_unavailable(callback: &Mutex<SnapshotCallback>, process: &Mutex<Process>) {
+    let (generation, server_generation) = {
+        let state = lock(process);
+        (state.last_generation, state.last_server_generation)
+    };
+    let mut emit = lock(callback);
+    emit(AudioSnapshot {
+        availability: ServiceAvailability::Unavailable,
+        generation,
+        server_generation,
+        ..AudioSnapshot::default()
+    });
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -392,6 +470,7 @@ mod tests {
                 child,
                 stdin,
             }),
+            ..Process::default()
         };
         let deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {
@@ -443,5 +522,31 @@ mod tests {
             .request_snapshot()
             .expect_err("stopped writer must refuse requests");
         assert_eq!(error.code, ErrorCode::Unavailable);
+    }
+
+    // REGRESSION: an absent helper used to leave the snapshot at Unknown, so the shell kept the
+    // audio controls visible forever. It must publish Unavailable and schedule a backed-off retry.
+    #[test]
+    fn missing_helper_hides_audio_and_retries_with_backoff() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let helper = AudioHelper::new(
+            PathBuf::from("/no/such/flamewm-audio-helper"),
+            Vec::new(),
+            Box::new(move |snapshot| lock(&sink).push(snapshot)),
+        )
+        .expect("writer thread starts");
+        helper.request_snapshot().expect("queue request");
+        wait_for(|| !lock(&seen).is_empty());
+        assert_eq!(
+            lock(&seen)[0].availability,
+            ServiceAvailability::Unavailable
+        );
+        let (failures, retry_at) = {
+            let process = lock(&helper.core.process);
+            (process.failures, process.retry_at)
+        };
+        assert_eq!(failures, 1);
+        assert!(retry_at.is_some());
     }
 }

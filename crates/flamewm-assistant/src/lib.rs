@@ -58,6 +58,9 @@ const HEIGHT: u32 = 780;
 const WHEEL_STEP: isize = 3;
 /// A UI-thread step at or above this length is logged to stderr.
 const SEND_STALL_LOG: Duration = Duration::from_millis(50);
+/// Bounded backoff for a transient chat failure. A turn waits at most the sum of these delays,
+/// and a cancelled turn waits for none of them. No timer runs while the window is idle.
+const CHAT_RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(500), Duration::from_millis(1_000)];
 /// Settings `accent` default; keep equal to `DEFAULT_ACCENT` in `flamewm-platform/src/settings.rs`.
 const ACCENT_RGB: u32 = flamewm_api::settings::DEFAULT_ACCENT_RGB;
 const KEY_TINT: u32 = 0x00ff_ffff;
@@ -75,6 +78,8 @@ enum Msg {
     /// The reply finished with its full text, or ended with the reason it did not.
     /// The label names the endpoint that answered, for error text.
     TurnDone(Result<String, AssistantError>, &'static str),
+    /// Clears text streamed by a failed attempt before a retry starts.
+    ResetPending,
     /// Voice setup progress: percent and the step it is on.
     VoiceProgress(u8, String),
     /// The voice setup finished, with the TTS model directory or the reason it failed.
@@ -224,6 +229,7 @@ impl Assistant {
             Msg::Proxy(models) => self.proxy = models,
             Msg::Notice(text) => self.notice = text,
             Msg::Delta(text) => self.history.append_pending(&text),
+            Msg::ResetPending => self.history.set_pending(Some(String::new())),
             Msg::TurnDone(result, label) => self.finish_turn(result, label),
             Msg::VoiceProgress(percent, label) => {
                 self.notice = voice_setup_ui::progress_notice(percent, &label);
@@ -983,11 +989,35 @@ fn turn_job(bus: &Bus, selected: &Selection, ark_key: &str, turns: &[Turn], canc
     }
     let ep = endpoint(used.provider, ark_key);
     let label = ep.label;
-    let result = OpenAiClient::new(ep).and_then(|client| {
-        client.chat(&used.model, turns, cancel, &mut |delta| {
-            bus.send(Msg::Delta(delta.to_owned()));
+    let attempt = || {
+        OpenAiClient::new(ep.clone()).and_then(|client| {
+            client.chat(&used.model, turns, cancel, &mut |delta| {
+                bus.send(Msg::Delta(delta.to_owned()));
+            })
         })
-    });
+    };
+    let mut result = attempt();
+    for delay in CHAT_RETRY_DELAYS {
+        if !result
+            .as_ref()
+            .err()
+            .is_some_and(AssistantError::is_retryable)
+            || cancel.is_cancelled()
+        {
+            break;
+        }
+        bus.send(Msg::ResetPending);
+        bus.send(Msg::Notice(format!(
+            "Connection problem, retrying in {:.1}s...",
+            delay.as_secs_f64()
+        )));
+        thread::sleep(delay);
+        if cancel.is_cancelled() {
+            result = Err(AssistantError::Cancelled);
+            break;
+        }
+        result = attempt();
+    }
     bus.send(Msg::TurnDone(result, label));
 }
 

@@ -29,13 +29,18 @@ pub(crate) fn spawn(
     std::thread::Builder::new()
         .name("flamewm-clipboard-owner".into())
         .spawn(move || {
-            // Failures after the claim have no caller left, so the thread just ends.
+            // Report a post-readiness failure once: no caller remains to see it.
             if let Err(error) = run(display.as_deref(), selection, payloads, &ready_tx) {
-                let _ = ready_tx.send(Err(error));
+                if ready_tx.send(Err(error.clone())).is_err() {
+                    eprintln!("flamewm: clipboard owner stopped: {error}");
+                }
             }
         })
         .map_err(err)?;
-    ready_rx.recv().map_err(err)?
+    let ready = ready_rx.recv().map_err(err)?;
+    // Close the channel so a late failure is reported, not silently dropped.
+    drop(ready_rx);
+    ready
 }
 
 /// Serves `payloads` on the calling thread until another client takes `selection`.

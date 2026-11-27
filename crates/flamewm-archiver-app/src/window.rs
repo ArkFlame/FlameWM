@@ -345,7 +345,8 @@ impl App {
                     let paths = self
                         .selected
                         .iter()
-                        .map(|&index| self.entries[index].path.clone())
+                        .filter_map(|&index| self.entries.get(index))
+                        .map(|entry| entry.path.clone())
                         .collect();
                     self.extract(paths)?;
                 }
@@ -388,6 +389,9 @@ impl App {
     }
 
     fn toggle(&mut self, row: usize) {
+        if row >= ROWS {
+            return;
+        }
         let index = self.page * ROWS + row;
         if index < self.entries.len() && !self.selected.insert(index) {
             self.selected.remove(&index);
@@ -431,6 +435,8 @@ impl App {
                             format!("{} entries", entries.len())
                         };
                         self.entries = entries;
+                        self.selected.clear();
+                        self.page = 0;
                     }
                     Err(error) => self.status = format!("Cannot open: {error}"),
                 }

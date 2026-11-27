@@ -12,7 +12,15 @@ mod ui_contract;
 const DESKTOP_ASSETS: [&str; 2] = ["wallpaper.ppm", "watermark.png"];
 
 fn main() {
-    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let manifest = match env::var_os("CARGO_MANIFEST_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => {
+            println!(
+                "cargo:warning=flamewm-desktop: CARGO_MANIFEST_DIR unavailable; using current dir"
+            );
+            env::current_dir().unwrap_or_default()
+        }
+    };
     let root = manifest
         .parent()
         .and_then(Path::parent)
