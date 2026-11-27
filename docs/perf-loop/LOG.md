@@ -270,3 +270,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## u161 follow-up: titlebar reuse rule is unit tested
 - The moved-titlebar reuse decision is now the pure `stale_reuse_allowed(age, reused)`; `ChromeBuffer::reused_ok` calls it (with `saturating_duration_since`, so a clock step cannot panic). New test covers young, over-budget and past-both cases. No behaviour change. 459 compositor tests green, clippy clean.
+
+## Reliability: calendar grid has no panic path
+- `shell-core` calendar built its 42 cells with `try_into().expect(...)`; the constructor already returns `Option`, so a wrong length now yields `None` instead of aborting the shell (`panic = "abort"`). Same result for every valid month. 143 shell-core tests green, clippy clean. This was the last runtime unwrap/expect found by the sweep outside the two documented compositor trait impls.

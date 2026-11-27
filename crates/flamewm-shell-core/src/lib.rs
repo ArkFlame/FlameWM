@@ -338,7 +338,7 @@ impl CalendarGrid {
         Some(Self {
             year,
             month,
-            cells: cells.try_into().expect("calendar has 42 cells"),
+            cells: cells.try_into().ok()?,
         })
     }
 }
