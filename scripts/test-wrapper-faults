@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fault-injection test for the session wrapper missing-library preflight.
+# Fault-injection test for the session wrapper preflight and last-resort minimal mode.
 #
-# The real preflight_libs (and the two preflight helpers it calls) are extracted from
+# The real preflight_libs, run_minimal_mode and run_safe_mode functions are extracted from
 # scripts/flamewm-session-wrapper and sourced into this process; the wrapper's main tail is never
 # executed. ldd is shadowed on a sandbox-prefixed PATH so it prints a controlled, fake result for a
 # fake, executable binary. No real ldd, session, compositor, cargo build or network access is used.
@@ -10,6 +10,8 @@
 #   1. ldd prints 'libfoo.so.1 => not found': preflight_libs returns non-zero and a failure record
 #      naming libfoo.so.1 is written to the session log.
 #   2. ldd prints every NEEDED library resolved: preflight_libs returns 0 and writes nothing.
+#   3. safe mode finds a WM but no shell/xmessage: minimal mode reuses that WM and records it.
+#   4. minimal mode finds no display or WM: it records the failure and returns non-zero.
 #
 # Usage: bash scripts/test-wrapper-faults
 # Exit: 0 when every case passes, 1 otherwise. Prints PASS/FAIL per case plus a SUMMARY line.
@@ -46,21 +48,36 @@ if ! grep -qF 'preflight_libs()' "$EXTRACTED"; then
     exit 1
 fi
 
+# The last-resort minimal-mode helper is a separate function; extract it verbatim too.
+MINIMAL="$BASE/minimal.inc"
+awk '
+    /^run_minimal_mode\(\)/ { on=1 }
+    on { print }
+    on && /^}/ { exit }
+' "$WRAPPER" >"$MINIMAL" || exit 1
+if ! grep -qF 'run_minimal_mode()' "$MINIMAL"; then
+    printf 'FAIL setup: could not extract run_minimal_mode from %s\n' "$WRAPPER"
+    exit 1
+fi
+
 # Mechanical helpers the extracted functions call. They carry no behavior under test: timing is
 # pinned and blast-radius labels are fixed tokens.
 CHAIN_START_MS=0
 chain_now_ms() { printf '0'; }
 chain_ms() { printf '0'; }
 chain_works() { case "$1" in
-    x11) printf 'x_server+x11_clients' ;;
+    x11|minimal) printf 'x_server+x11_clients' ;;
     safe) printf 'shell+diagnostics' ;;
     *) printf 'unknown' ;;
 esac; }
 chain_degraded() { case "$1" in
     x11) printf 'wayland_native+compositor+kms_presentation' ;;
     safe) printf 'gui+shell+desktop+compositor' ;;
+    minimal) printf 'shell+desktop+compositor' ;;
     *) printf 'unknown_component' ;;
 esac; }
+MINIMAL_RECORD="$BASE/minimal-record.log"
+chain_record() { printf '%s\n' "$*" >>"$MINIMAL_RECORD"; }
 
 CHAIN_LOG="$BASE/chain.log"
 export XDG_STATE_HOME="$STATE"
@@ -68,6 +85,8 @@ LOG="$STATE/flamewm/session.log"
 
 # shellcheck source=/dev/null
 source "$EXTRACTED" || exit 1
+# shellcheck source=/dev/null
+source "$MINIMAL" || exit 1
 
 # Shadow ldd: it prints the preset FAKE_LDD_OUT file regardless of the binary argument.
 cat >"$BIN/ldd" <<'EOF'

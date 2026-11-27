@@ -812,6 +812,17 @@ fn register_icon_and_wallpaper_wakes(
             // superseded by a newer request, or an already-drained wake) does not arm the full
             // settings projection pass. Only an applied image or a new diagnostic repaints.
             let outcome = state.wallpaper_loader.poll();
+            // This poll consumes the completion, so the later settings projection pass sees
+            // Idle and cannot report it. Record the one failure here instead of losing it.
+            if let wallpaper_loader::PollOutcome::Failed { generation } = &outcome {
+                if let Some(diagnostic) = &state.wallpaper_loader.state().diagnostic {
+                    eprintln!(
+                        "desktop: wallpaper generation {generation} failed for {}: {}",
+                        diagnostic.path.display(),
+                        diagnostic.message
+                    );
+                }
+            }
             if !matches!(
                 outcome,
                 wallpaper_loader::PollOutcome::Idle | wallpaper_loader::PollOutcome::Stale { .. }

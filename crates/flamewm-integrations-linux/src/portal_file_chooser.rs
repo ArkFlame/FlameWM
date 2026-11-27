@@ -26,8 +26,29 @@ pub const RESPONSE: &str = "Response";
 pub const WALLPAPER_TITLE: &str = "Choose Wallpaper";
 pub const THEME_SOURCE_TITLE: &str = "Choose Theme";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Shown at the trigger point when no desktop portal is installed to answer the chooser.
+pub const PORTAL_ABSENT_MESSAGE: &str =
+    "File chooser unavailable: install xdg-desktop-portal to choose wallpapers and theme files.";
 
 static NEXT_HANDLE_TOKEN: AtomicU64 = AtomicU64::new(1);
+static PORTAL_ABSENT_RECORDED: AtomicBool = AtomicBool::new(false);
+const PORTAL_ABSENT_EVENT: flamewm_debug::DebugEventId =
+    flamewm_debug::DebugEventId("portal.absent");
+
+/// One diagnostic record per process, then a clear error the caller can show at the trigger point.
+fn portal_absent() -> FlameError {
+    if !PORTAL_ABSENT_RECORDED.swap(true, Ordering::Relaxed) {
+        flamewm_debug::emit(PORTAL_ABSENT_EVENT, Duration::from_secs(1), || {
+            "portal FileChooser skipped: xdg-desktop-portal is not available".to_owned()
+        });
+    }
+    FlameError::unavailable(PORTAL_ABSENT_MESSAGE)
+}
+
+/// Only a missing portal service is skipped; other D-Bus failures keep their original cause.
+fn is_portal_absent(error: &FlameError) -> bool {
+    error.message.contains("ServiceUnknown") && error.message.contains(PORTAL_SERVICE)
+}
 
 /// One-session-bus `FileChooser` provider. Calls intentionally block the caller;
 /// Settings must invoke this provider from its worker boundary.
@@ -109,7 +130,16 @@ impl PortalFileChooser {
             OPEN_FILE,
         )?
         .append3(parent_window.to_owned(), title.to_owned(), options);
-        let reply = self.pump.send_with_reply(call, self.timeout)?;
+        let reply = self
+            .pump
+            .send_with_reply(call, self.timeout)
+            .map_err(|error| {
+                if is_portal_absent(&error) {
+                    portal_absent()
+                } else {
+                    error
+                }
+            })?;
         let request_path = one_object_path(&reply.get_items(), "portal OpenFile handle")?;
         if request_path != expected_request_path {
             self.add_response_match(&request_path)?;

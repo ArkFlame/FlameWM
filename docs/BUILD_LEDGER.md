@@ -22,3 +22,5 @@ PLAN hour 4 (from 15:11): slot 1 = cargo check (shell, wm-wayland fixes) + cargo
 HOUR 4 RESULT: slot 2 cargo check --tests exit 0 for shell, wm-wayland, wm-x11, wm, platform, lock, desktop, terminal, integrations-linux, render-core, session-core. Tests TYPE-CHECK only; none run. Hour 4 slots spent (15:11, 15:13). NEXT SLOT ~16:11: cargo test -p flamewm-platform -p flamewm-session-core -p flamewm-wm-x11 -p flamewm-wm-wayland -p flamewm-integrations-linux, then release build + nested smoke + baseline.
 
 OPEN (from hour 4 warnings): platform/src/storage.rs quarantine_and_report + quarantine_unparsable are dead outside their own test (load.rs has its own quarantine) -> remove or unify; terminal/src/theme.rs:11 unused import builtin_themes. cleanup_own_temps now called at host start (UNBUILT).
+| 2026-11-27T16:01-03:00 | cargo test -p platform session-core wm-x11 wm-wayland integrations-linux (pool idle, 429 backoff) | hour 5 slot 1 |
+HOUR 5 slot 1: platform/session-core/wm-x11/integrations-linux tests ran; platform had 5 fails (corrupt_name './' prefix; cleanup_own_temps racing parallel tests) fixed, 415/415 x2.

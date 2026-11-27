@@ -134,6 +134,14 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
         ));
     }
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    // Check the header dimensions before decoding. The post-decode guard below is too late:
+    // a small file can declare an enormous raster and make the decoder allocate it first.
+    if let Ok(size) = imagesize::blob_size(&bytes) {
+        let declared = (size.width as u64).saturating_mul(size.height as u64);
+        if declared > MAX_PIXELS {
+            return Err("image has too many pixels to show".into());
+        }
+    }
     let format = ImageSourceFormat::from_magic(&bytes)
         .or_else(|| ImageSourceFormat::from_extension(path))
         .ok_or("unsupported image format")?;
@@ -474,6 +482,36 @@ mod tests {
     fn decodes_a_jpeg_fixture_by_magic() {
         let image = decode_file(&fixture("baseline-16x16.jpg")).expect("jpeg decodes");
         assert_eq!((image.width, image.height), (16, 16));
+    }
+
+    #[test]
+    fn rejects_huge_declared_dimensions_before_decoding() {
+        let dir = std::env::temp_dir().join(format!("imgv-huge-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
+        png.extend_from_slice(&20_000u32.to_be_bytes());
+        png.extend_from_slice(&20_000u32.to_be_bytes());
+        png.extend_from_slice(&[0; 13]);
+        let png_path = dir.join("huge.png");
+        fs::write(&png_path, &png).unwrap();
+        let error = decode_file(&png_path).expect_err("huge png is rejected");
+        assert!(error.contains("too many pixels"), "{error}");
+
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&u16::MAX.to_le_bytes());
+        gif.extend_from_slice(&u16::MAX.to_le_bytes());
+        let gif_path = dir.join("huge.gif");
+        fs::write(&gif_path, &gif).unwrap();
+        let error = decode_file(&gif_path).expect_err("huge gif is rejected");
+        assert!(error.contains("too many pixels"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_file_returns_an_error() {
+        let missing = fixture("this-image-does-not-exist.png");
+        let error = decode_file(&missing).expect_err("missing file is rejected");
+        assert!(!error.is_empty());
     }
 
     #[test]

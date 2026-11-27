@@ -2,8 +2,8 @@
 //! needed: each decision is a pure function over the failure inputs, and every
 //! degrading stage is checked to produce a failure record.
 use super::{
-    ErrorKind, RandrQuery, StartupFault, missing_extension_fault, randr_event_fault,
-    second_wm_fault,
+    CORE_FALLBACK_EXTENSIONS, ErrorKind, RandrQuery, StartupFault, core_fallback_fault,
+    missing_extension_fault, randr_event_fault, second_wm_fault,
 };
 use crate::{empty_randr_resources, randr_resource_fault};
 

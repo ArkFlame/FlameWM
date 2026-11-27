@@ -55,11 +55,7 @@ pub(crate) const CORE_FALLBACK_EXTENSIONS: &[(&[u8], &str, &str)] = &[
 ];
 
 /// Pure reduction of one optional-extension query to a single failure record.
-pub(crate) fn core_fallback_fault(
-    name: &str,
-    detail: &str,
-    present: bool,
-) -> Option<StartupFault> {
+pub(crate) fn core_fallback_fault(name: &str, detail: &str, present: bool) -> Option<StartupFault> {
     (!present).then(|| missing_extension_fault(name, detail))
 }
 

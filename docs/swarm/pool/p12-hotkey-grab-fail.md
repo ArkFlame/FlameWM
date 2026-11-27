@@ -5,4 +5,4 @@ crates/flamewm-platform hotkeys / wm-x11 key grabs: when a key combination is al
 
 ## Result
 
-STARTED-EDIT-CHECK
+STARTED

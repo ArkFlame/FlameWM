@@ -225,6 +225,13 @@ impl ShellLoop {
         });
     }
 
+    /// Publishes one shared reactor deadline for every shell-owned wake. `attach_wake`, the
+    /// toast/badge `shared_wake`, polkit and bluetooth handles all alias the reactor's single
+    /// wake slot, so equal-second periods coalesce into one wake instead of separate timers.
+    /// Idle wakeups per second: the minute-aligned clock is 1/60 Hz with seconds hidden and 1 Hz
+    /// with seconds shown; every other owner is deadline-driven and contributes 0/s while idle.
+    /// `clock_boundary_delay` reuses the reactor wall-clock boundary rule so the visible "%H:%M"
+    /// text changes exactly on the minute (visual-identical alignment).
     pub(super) fn publish_wake(&self, now: std::time::Instant) {
         let Some(wake) = &self.wake else { return };
         wake.set(earliest_wake([

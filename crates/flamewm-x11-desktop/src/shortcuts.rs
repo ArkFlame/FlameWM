@@ -786,9 +786,11 @@ mod tests {
             !backend.held.iter().any(|grab| grab.keycode == 113),
             "all variants of the conflicted binding are released"
         );
-        assert!(backend
-            .held
-            .contains(&base_grab(114, MOD_CONTROL | MOD_SUPER)));
+        assert!(
+            backend
+                .held
+                .contains(&base_grab(114, MOD_CONTROL | MOD_SUPER))
+        );
         assert_eq!(grabs.action_for_key(113, MOD_CONTROL | MOD_SUPER), None);
         assert_eq!(
             grabs.action_for_key(114, MOD_CONTROL | MOD_SUPER),
@@ -885,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn required_grab_conflict_still_rolls_back_even_with_optional_bindings() {
+    fn required_grab_conflict_degrades_even_with_optional_bindings() {
         let lookup = FakeLookup(BTreeMap::from([
             (keysym_for_name("F4").unwrap(), vec![70]),
             (0x1008_ff13, vec![123]),
@@ -904,15 +906,21 @@ mod tests {
                 &lookup,
             )
             .unwrap();
-        let error = grabs
+        grabs
             .commit(&mut backend)
-            .expect_err("required conflict must fail");
-        assert_eq!(error.code, ErrorCode::Conflict);
-        assert_eq!(grabs.active(), []);
-        assert!(
-            backend.held.is_empty(),
-            "optional grab released on rollback"
+            .expect("a conflict must not fail the commit");
+        assert_eq!(
+            grabs.action_for_key(70, MOD_ALT),
+            None,
+            "the conflicted required binding is skipped"
         );
+        assert_eq!(
+            grabs.action_for_key(123, 0),
+            Some("VolumeUp"),
+            "the optional binding still commits"
+        );
+        assert!(backend.held.contains(&base_grab(123, 0)));
+        assert!(!backend.held.iter().any(|grab| grab.keycode == 70));
     }
 
     /// Every key the shipped defaults bind, with a keycode per keysym.

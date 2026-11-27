@@ -96,7 +96,7 @@ fn read_reply_with_deadline(
     const REPLY_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
-        scope.spawn(|| {
+        scope.spawn(move || {
             let outcome = read_message(stdout, reply);
             let _ = tx.send(outcome);
         });

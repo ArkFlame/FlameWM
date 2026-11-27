@@ -146,7 +146,7 @@ fn present_wayland(username: &str) -> ExitCode {
         *stale.borrow_mut() = None;
         loaded
     };
-    match wayland::run(load, username, move |view, width, height| {
+    let result = wayland::run(load, username, move |view, width, height| {
         let current = painted.borrow();
         let settings = &*current;
         let template = document::template()?;
@@ -175,7 +175,13 @@ fn present_wayland(username: &str) -> ExitCode {
             document::apply_power(&mut access, width, height, &power)?;
         }
         paint_document(&runtime, width, height, 1.0)
-    }) {
+    });
+    // The lock surfaces are gone on either outcome. Drop the cached output-sized raster and
+    // the process-local decoded source before returning; a later lock show re-reads the same
+    // on-disk decode entry, so the pixels are unchanged.
+    cache.borrow_mut().take();
+    flamewm_image_core::decode_cache::release_shared_raster();
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("flamewm-lock: {error}");

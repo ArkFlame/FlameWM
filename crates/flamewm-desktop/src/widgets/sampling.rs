@@ -74,9 +74,10 @@ impl WidgetState {
             // the deadline a few microseconds before the displayed boundary, so the tick paints
             // the previous value and stays stale until the following minute or second.
             let clock_now = Instant::now();
-            clock_now + Duration::from_millis(
-                wall_clock_delay_ms(epoch_ms, rate == TickRate::Second).max(1),
-            )
+            clock_now
+                + Duration::from_millis(
+                    wall_clock_delay_ms(epoch_ms, rate == TickRate::Second).max(1),
+                )
         });
         self.wake
             .set([self.due, self.sample_due].into_iter().flatten().min());

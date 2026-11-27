@@ -1216,6 +1216,15 @@ pub fn run() -> Result<(), String> {
                     if !active.load(Ordering::Relaxed) {
                         break;
                     }
+                    // The gate is the authority for visibility: never arm the 1 s channel timer
+                    // while hidden, even when a queued hide message was dropped by the bounded
+                    // channel. Parking here keeps an obscured window at zero timed wakeups.
+                    if worker_hidden.load(Ordering::Relaxed) {
+                        if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
+                            break 'sampler;
+                        }
+                        break;
+                    }
                     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                     if remaining.is_zero() {
                         break;

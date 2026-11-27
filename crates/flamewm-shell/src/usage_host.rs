@@ -11,13 +11,21 @@ use std::time::{Duration, Instant};
 
 use flamewm_usage::{
     claude_token, codex_credentials, commandcode_token, fetch_snapshot, ProviderSnapshot,
-    UsageProvider, CLAUDE_BASE, CODEX_BASE, COMMANDCODE_BASE,
+    ProviderState, UsageProvider, CLAUDE_BASE, CODEX_BASE, COMMANDCODE_BASE,
 };
 
 use crate::weather_host::spawn_worker;
 
 /// How often enabled providers are refetched while the shell runs.
 pub const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+
+/// Cap for retrying a refresh whose snapshots were all failed or unconfigured. CodexBar's
+/// `.vendor/CodexBar-main/Sources/CodexBarCore/Providers/Claude/ClaudeOAuth/ClaudeOAuthRefreshFailureGate.swift`
+/// uses the same pattern: a transient base delay that doubles up to a cap.
+pub const USAGE_BACKOFF_CAP: Duration = Duration::from_secs(30 * 60);
+
+/// Floor for the retry delay, so even a misconfigured zero interval cannot busy-poll.
+const USAGE_RETRY_MIN: Duration = Duration::from_secs(60);
 
 /// Providers fetched by default. `OpenCodeGo` (cookie-only) and `OpenDesign` (no usage source)
 /// are not in this list; they stay "not configured".
@@ -35,6 +43,10 @@ pub struct UsageHost {
     interval: Duration,
     pub snapshots: UsageResult,
     last_started: Option<Instant>,
+    /// Earliest instant another fetch may start after a failed/unconfigured result.
+    retry_at: Option<Instant>,
+    /// Consecutive unsuccessful refreshes; drives the bounded doubling delay.
+    failures: u8,
     inflight: Option<mpsc::Receiver<UsageResult>>,
 }
 
@@ -45,34 +57,50 @@ impl Default for UsageHost {
             interval: USAGE_REFRESH_INTERVAL,
             snapshots: Vec::new(),
             last_started: None,
+            retry_at: None,
+            failures: 0,
             inflight: None,
         }
     }
 }
 
 impl UsageHost {
-    /// True when no fetch is running and the refresh interval has elapsed (or none ran yet).
+    /// True when at least one provider is enabled, no fetch is running, and both the normal
+    /// interval and any failure backoff have elapsed.
     #[must_use]
     pub fn due(&self, now: Instant) -> bool {
-        self.inflight.is_none()
+        !self.enabled.is_empty()
+            && self.inflight.is_none()
+            && self.retry_at.is_none_or(|at| now >= at)
             && self
                 .last_started
                 .is_none_or(|t| now.duration_since(t) >= self.interval)
     }
 
     /// Applies the saved provider list and refresh interval; takes effect on the next due check.
+    /// A changed selection clears the backoff so a newly added credential is picked up promptly.
     pub fn configure(&mut self, enabled: Vec<UsageProvider>, interval: Duration) {
-        self.enabled = enabled;
-        self.interval = interval;
+        if self.enabled != enabled || self.interval != interval {
+            self.enabled = enabled;
+            self.interval = interval;
+            self.last_started = None;
+            self.retry_at = None;
+            self.failures = 0;
+        }
     }
 
-    /// Instant the next refresh becomes due, for the reactor wake; `None` while a fetch runs.
+    /// Instant the next refresh becomes due, for the reactor wake. `None` when no provider is
+    /// enabled (idle wakeups stay at zero) or while a fetch runs: its worker writes the wake.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Instant> {
-        if self.inflight.is_some() {
+        if self.enabled.is_empty() || self.inflight.is_some() {
             return None;
         }
-        self.last_started.map(|started| started + self.interval)
+        let interval_at = self.last_started.map(|started| started + self.interval);
+        match (interval_at, self.retry_at) {
+            (Some(interval_at), Some(retry_at)) => Some(interval_at.max(retry_at)),
+            (interval_at, retry_at) => interval_at.or(retry_at),
+        }
     }
 
     /// Polls a finished fetch, then starts a new one when due. Returns `true` when snapshots changed.
@@ -85,12 +113,19 @@ impl UsageHost {
         if let Some(rx) = self.inflight.as_ref() {
             match rx.try_recv() {
                 Ok(snapshots) => {
+                    let usable = snapshots
+                        .iter()
+                        .any(|snapshot| matches!(snapshot.state, ProviderState::Ready(_)));
+                    self.record_outcome(now, usable);
                     self.snapshots = snapshots;
                     self.inflight = None;
                     changed = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.inflight = None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.record_outcome(now, false);
+                    self.inflight = None;
+                }
             }
         }
         if self.due(now) {
@@ -98,6 +133,23 @@ impl UsageHost {
             self.inflight = Some(fetch(self.enabled.clone()));
         }
         changed
+    }
+
+    /// Advances the retry schedule: no usable snapshot means every enabled provider failed or
+    /// lacks credentials, so the next attempt waits longer, bounded by [`USAGE_BACKOFF_CAP`].
+    fn record_outcome(&mut self, now: Instant, usable: bool) {
+        if usable {
+            self.failures = 0;
+            self.retry_at = None;
+            return;
+        }
+        self.failures = self.failures.saturating_add(1);
+        let shift = u32::from(self.failures.min(5));
+        let delay = self
+            .interval
+            .saturating_mul(1_u32 << shift)
+            .clamp(USAGE_RETRY_MIN, USAGE_BACKOFF_CAP);
+        self.retry_at = Some(now + delay);
     }
 }
 

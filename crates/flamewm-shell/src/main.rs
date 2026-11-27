@@ -105,6 +105,34 @@ mod icon_wait_tests {
         assert!(!icon_wait_expired(start + Duration::from_secs(5), start));
     }
 }
+/// Append one diagnostics failure record when the notification daemon cannot start. Notifications
+/// are the only lost capability: the shell, panel, dock and window management keep running.
+fn record_notifications_unavailable(cause: impl std::fmt::Display) {
+    use flamewm_session_core::diagnostics::{
+        append_record, session_log_path, BlastRadius, FailureCode, FailureRecord,
+    };
+    let fallback = PathBuf::from("/tmp/flamewm-session.log");
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let log = session_log_path(
+        std::env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    );
+    let record = FailureRecord::at_now(
+        "notifications",
+        FailureCode::SubsystemError,
+        cause.to_string(),
+        BlastRadius::new(
+            ["session", "shell", "wm", "panel", "dock"],
+            ["notifications", "notification_center"],
+        ),
+        true,
+    );
+    if let Err(error) = append_record(&log, &record) {
+        eprintln!("flamewm-shell: notification failure record write failed: {error}");
+    }
+}
+
 impl NotificationHost {
     fn connect(
         runtime: &mut SurfaceRuntime,
@@ -112,10 +140,31 @@ impl NotificationHost {
         icon_root: PathBuf,
     ) -> Result<Option<Self>, String> {
         let mut provider =
-            flamewm_integrations_linux::notifications::NotificationProvider::connect()
-                .map_err(|error| error.message)?;
-        if !provider.start().map_err(|error| error.message)? {
-            return Ok(None);
+            match flamewm_integrations_linux::notifications::NotificationProvider::connect() {
+                Ok(provider) => provider,
+                Err(error) => {
+                    record_notifications_unavailable(format!(
+                        "notification D-Bus session bus unavailable: {}",
+                        error.message
+                    ));
+                    return Ok(None);
+                }
+            };
+        match provider.start() {
+            Ok(true) => {}
+            Ok(false) => {
+                record_notifications_unavailable(
+                    "org.freedesktop.Notifications is already owned by another daemon",
+                );
+                return Ok(None);
+            }
+            Err(error) => {
+                record_notifications_unavailable(format!(
+                    "notification D-Bus name request failed: {}",
+                    error.message
+                ));
+                return Ok(None);
+            }
         }
         let Some(output) = snapshot
             .displays
@@ -880,15 +929,18 @@ fn execute() -> Result<(), String> {
             None
         }
     };
-    let notifications =
-        match NotificationHost::connect(&mut runtime, &snapshot, loader_root.clone()) {
-            Ok(Some(host)) => Some(Rc::new(RefCell::new(host))),
-            Ok(None) => None,
-            Err(error) => {
-                eprintln!("flamewm-shell: native notifications disabled: {error}");
-                None
-            }
-        };
+    let notifications = match NotificationHost::connect(
+        &mut runtime,
+        &snapshot,
+        loader_root.clone(),
+    ) {
+        Ok(Some(host)) => Some(Rc::new(RefCell::new(host))),
+        Ok(None) => None,
+        Err(error) => {
+            eprintln!("flamewm-shell: native notifications disabled (blast radius: no notifications): {error}");
+            None
+        }
+    };
 
     // Polkit agent for this session. It registers only when POLKIT_AGENT_CAN_ANSWER is set, so a
     // registered agent always has a prompt card that takes input and answers the helper.

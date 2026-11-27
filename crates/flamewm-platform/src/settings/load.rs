@@ -51,10 +51,7 @@ pub(crate) fn failure_reason(failure: ReadFailure) -> &'static str {
 /// overwriting an earlier quarantine. Pure: no filesystem access.
 pub(crate) fn corrupt_name(path: &Path, epoch_secs: u64, attempt: u16) -> Option<PathBuf> {
     let stem = path.file_stem()?;
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let mut name = stem.to_os_string();
     name.push(format!(".corrupt-{epoch_secs}"));
     if attempt > 0 {
