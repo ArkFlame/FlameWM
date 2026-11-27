@@ -260,13 +260,14 @@ impl LockClient {
         height: u32,
     ) -> Result<(WlBuffer, WlShmPool, std::fs::File), LockError> {
         let stride = (width * 4) as i32;
+        let pixels = rgba_to_wl_argb8888(pixels);
         let len = pixels.len();
         let file = shm_file(len).map_err(|error| LockError::Protocol(error.to_string()))?;
         {
             use std::io::Write;
             let mut writer = &file;
             writer
-                .write_all(pixels)
+                .write_all(&pixels)
                 .map_err(|error| LockError::Protocol(error.to_string()))?;
         }
         let pool = shm.create_pool(file.as_fd(), len as i32, qh, ());
@@ -275,13 +276,24 @@ impl LockClient {
             width as i32,
             height as i32,
             stride,
-            // The painter writes straight RGBA8 bytes in native order.
+            // `Argb8888` is little-endian, so its bytes are B, G, R, A: the painter's RGBA bytes are
+            // converted above. Unlike `Abgr8888`, this format is one every compositor must offer.
             Format::Argb8888,
             qh,
             (),
         );
         Ok((buffer, pool, file))
     }
+}
+
+/// Reorders the painter's straight `R, G, B, A` bytes into the `B, G, R, A` bytes of `wl_shm`
+/// `Argb8888`. Writing them unchanged swaps red and blue on screen.
+fn rgba_to_wl_argb8888(rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    for px in out.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    out
 }
 
 /// A private, unlinked file for one shm buffer.
@@ -784,6 +796,15 @@ fn wait_readable(connection: &Connection, authenticating: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn painter_rgba_bytes_become_wayland_argb8888_bytes() {
+        let rgba = [10_u8, 20, 30, 255, 1, 2, 3, 4];
+        assert_eq!(
+            super::rgba_to_wl_argb8888(&rgba),
+            [30, 20, 10, 255, 3, 2, 1, 4]
+        );
+    }
+
     #[test]
     fn the_connection_poll_is_fast_only_while_a_password_check_is_pending() {
         let fast = super::poll_timeout(true);
