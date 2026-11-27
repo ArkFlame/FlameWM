@@ -3,38 +3,31 @@
 Paste as the Claude Code goal. It never completes.
 
 ## Objective
-1. Lower CPU and RAM of the desktop as far as possible with ZERO visual change.
+1. Lower CPU and RAM as far as possible with ZERO visual change.
 2. Start and run on every machine (X11, Wayland, missing libs, broken GPU): no hard fails; detect, report with blast radius, auto work around.
 
 ## Workers
-Orchestrator is Claude Code. Never spawn native subagents (they drain quota). Use the OpenCode MCP: `delegate_task` / `run_pool` with model hy4-flash-free on opencode-go, shared checkout. Keep the pool full (dozens), refill on every finish, `wait_any` to block (no sleep loops, no python, no ctx_execute scripts). Medium or hard units: gpt-6-luna or gpt-6-sol. Workers run no git or full builds; the orchestrator builds once per batch.
+Orchestrator is Claude Code. Never native subagents. Use the OpenCode MCP (`delegate_task` / `run_pool`, shared checkout) with hy4-flash-free on opencode-go: keep 10-20 running in parallel on different areas, refill on every finish, block with `wait_any`. gpt-6-luna or gpt-6-sol only for hard units. No python, ctx_execute scripts or sleep loops. Workers run no git and no builds or tests.
+
+## Loop
+research, investigate, fix, improve -> build/test (only if budget allows) -> if no budget, research new areas and land more edits anyway -> repeat.
+- BUILD BUDGET: at most 2 builds or test runs per hour in total, batched. Keep a ledger in `docs/BUILD_LEDGER.md` (time, command, result). Spend a slot only when a meaningful batch of edits is waiting. No slot: never idle, never poll; keep researching, editing and queuing units. Only the orchestrator builds, then fixes stacked errors in one round.
+- LAND REALTIME: every fix is committed and pushed at once (small commits, `cargo fmt` first: the pre-push hook checks it). Unbuilt edits say "unbuilt" in the message and are verified in the next slot.
 
 ## Phase 0: benchmark ONCE, never again
-- Write `scripts/bench-baseline` (bash or Rust, reusable). Scoped per `.agents/skills/scoped-perf-tests/SKILL.md`: one component, one second of simulated use, report share per subsystem, not absolute CPU.
-- Cover: idle compositor, move/resize, start menu, popups, clock tick, notifications, icons, lock, terminal, settings, per-process RSS and wakeups/s.
-- Save to `docs/PERF_BASELINE.md` (date, commit, machine, raw numbers). It is frozen. Never re-benchmark the whole system; later passes only run the small scoped test of the one thing they changed and compare to the frozen row.
+`scripts/bench-baseline` (bash or Rust, reusable), scoped per `.agents/skills/scoped-perf-tests/SKILL.md`: one component, one second of use, share per subsystem. Cover idle compositor, move/resize, start menu, popups, clock tick, notifications, icons, lock, terminal, settings, per-process RSS and wakeups/s. Freeze results in `docs/PERF_BASELINE.md`. Never re-benchmark the whole system; later work runs only the small scoped test of what it changed.
 
 ## Phase 1: ranked contributors
-Build `docs/PERF_HOTLIST.md`: every CPU, RAM and wakeup contributor, sorted by share, one row each: area, share, cause, planned cut, status. Re-rank after each cut.
+`docs/PERF_HOTLIST.md`: every CPU, RAM and wakeup contributor sorted by share: area, share, cause, planned cut, status. Re-rank after each cut.
 
 ## Phase 2: cut, forever
-Take the hottest row. Cut it: idle wakeups to zero (event driven, coalesced timers), cache and reuse allocations, lazy-load, shrink embedded assets and tiers, drop per-frame work, damage-only repaint, share buffers. Visuals must stay pixel-identical: capture before and after with `scripts/shots/shot.mjs` or `scripts/look-capture`, READ both frames, reject any difference. Gates never loosen. Then next row. When the list is exhausted, research new areas (profile one scoped component, read the code, find unmeasured cost) and add rows. Never declare done.
+Take the hottest row: zero idle wakeups (event driven, coalesced timers), reuse allocations, lazy-load, shrink embedded assets, damage-only repaint, shared buffers. Visuals stay pixel-identical: compare frames from `scripts/shots/shot.mjs` or `scripts/look-capture` and READ them. Gates never loosen. When the list is empty, research new areas and add rows. Never declare done.
 
 ## Phase 3: reliability and fail-safe
-Build a robust layer: startup stages with explicit error codes, a failure-report record (stage, cause, blast radius: what still works, what degraded), and an automatic fallback chain per stage:
-- backend: DRM, then nested/winit, then X11, then headless-safe minimal mode.
-- GPU: hardware, then software render, then plain CPU raster.
-- missing library, font, icon, theme, config or portal: bundled fallback or skip the feature, never abort.
-- corrupt or unreadable settings: quarantine the file, load defaults, tell the user once.
-- crash or panic: catch at subsystem boundary, restart the subsystem, keep the session alive, write a report under the session log.
-Each fallback gets a fault-injection test asserting the session still starts. Collect the laptop failure modes (X11 and Wayland no-start) from logs first, reproduce, then fix the root cause, not only the fallback.
+Staged startup with error codes and a failure record (stage, cause, blast radius: what works, what degraded). Automatic fallbacks: backend DRM, nested, X11, minimal mode; GPU hardware, software, CPU raster; missing lib, font, icon, theme or portal: bundled fallback or skip the feature, never abort; corrupt settings: quarantine, load defaults, tell the user once; panic: catch at subsystem boundary, restart it, keep the session, report to the session log. Each fallback gets a fault-injection test. Start from the real laptop logs of the X11 and Wayland no-start failures: reproduce, fix the root cause, then add the fallback.
 
 ## Reference-first
-Before inventing, read how competitors do it in `.vendor/`: kwin-master, xfwm4-master, icewm-master, cosmic-epoch, smithay-master, mangowm, starling-main, vela-main, mate-desktop-master, xfdesktop-master, sddm and lightdm for session startup. Port proven algorithms, record the precedent (path and choice) in the commit message or docs. Clone more into `.vendor/` shallow if needed.
+Read competitors in `.vendor/` before inventing: kwin-master, xfwm4-master, icewm-master, cosmic-epoch, smithay-master, mangowm, starling-main, vela-main, mate-desktop-master, xfdesktop-master, sddm-develop, lightdm-main. Port proven algorithms; record the precedent (path, choice) in the commit message.
 
 ## Rules
-- Judge by the running desktop and frames you read, not green scripts.
-- Failed attempt: change method, never stop.
-- Existing `AGENTS.md` and `.opencode` governance apply. One owner per file; re-read before edit.
-- Commit and push each verified slice. Log one board line per unit: status, files, scoped measurement before and after, frame path, next units.
-- After every batch, write the next hottest and least reliable areas as units and launch them.
+Judge by the running desktop and frames you read, not green scripts. A failed attempt means change method. One owner per file; re-read before edit. Board line per unit: status, files, scoped before/after, frame path, next units. After every batch write the next hottest and least reliable areas as units and launch them.
