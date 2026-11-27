@@ -67,3 +67,24 @@ fn strip_downscale_box_averages_blocks_across_strips() {
     assert_eq!(&stored[0..4], &[0, 0, 0, 0]);
     assert_eq!(&stored[4..8], &[200, 200, 200, 200]);
 }
+
+/// The opaque fast path must equal the general premultiply for every channel and alpha.
+#[test]
+fn premultiplied_argb_bytes_match_the_formula_for_every_channel_and_alpha() {
+    for alpha in 0..=255_u32 {
+        for channel in 0..=255_u32 {
+            let rgba = [
+                channel as u8,
+                (255 - channel) as u8,
+                (channel / 2) as u8,
+                alpha as u8,
+            ];
+            let scale = |c: u8| ((u32::from(c) * alpha + 127) / 255) as u8;
+            assert_eq!(
+                super::premultiplied_argb_bytes(&rgba),
+                vec![scale(rgba[2]), scale(rgba[1]), scale(rgba[0]), rgba[3]],
+                "channel {channel} alpha {alpha}"
+            );
+        }
+    }
+}

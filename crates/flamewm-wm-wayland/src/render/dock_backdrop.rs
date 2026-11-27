@@ -316,14 +316,25 @@ fn capture_dock(
     let radius = key.radius as f32 / scale as f32;
     let mut pixels = crop_capture(&blurred, dims, (0, 0), w, h, scale);
     clock.split("crop");
+    let is_dock = key.site == BackdropSite::Dock(key.rect);
+    // A window's silhouette only rounds its four corner squares, so a row clear of both the top
+    // and bottom radii is fully opaque: set its alpha without evaluating the mask per pixel.
+    let top = usize::from(key.window_radii[0].max(key.window_radii[1]));
+    let bottom = usize::from(key.window_radii[2].max(key.window_radii[3]));
     for y in 0..h {
-        for x in 0..w {
-            let alpha = if key.site == BackdropSite::Dock(key.rect) {
+        let (row, _) = pixels[y * w * 4..(y + 1) * w * 4].as_chunks_mut::<4>();
+        if !is_dock && y >= top && y + bottom < h {
+            for px in row.iter_mut() {
+                px[3] = 255;
+            }
+            continue;
+        }
+        for (x, px) in row.iter_mut().enumerate() {
+            px[3] = if is_dock {
                 rounded_coverage(w, h, radius, x, y)
             } else {
                 client_mask_coverage(w, h, key.window_radii, x, y)
             };
-            pixels[(y * w + x) * 4 + 3] = alpha;
         }
     }
     let buffer = MemoryRenderBuffer::from_slice(

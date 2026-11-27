@@ -78,15 +78,20 @@ pub(super) fn opaque_argb_bytes(rgba: &[u8]) -> Vec<u8> {
 /// element's texture is premultiplied, so a straight-alpha outline would show a bright fringe on
 /// its antialiased arc.
 pub(crate) fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
-    rgba.as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|px| {
-            let alpha = u32::from(px[3]);
+    let (source, _) = rgba.as_chunks::<4>();
+    let mut out = vec![0_u8; source.len() * 4];
+    let (target, _) = out.as_chunks_mut::<4>();
+    for (dst, px) in target.iter_mut().zip(source) {
+        let alpha = u32::from(px[3]);
+        // Opaque pixels dominate (`(c * 255 + 127) / 255 == c`): only reorder their channels.
+        *dst = if alpha == 255 {
+            [px[2], px[1], px[0], 255]
+        } else {
             let scale = |channel: u8| ((u32::from(channel) * alpha + 127) / 255) as u8;
             [scale(px[2]), scale(px[1]), scale(px[0]), px[3]]
-        })
-        .collect()
+        };
+    }
+    out
 }
 
 pub(super) struct ChromeBuffer {
