@@ -89,20 +89,6 @@ fn premultiplied_argb_bytes_match_the_formula_for_every_channel_and_alpha() {
     }
 }
 
-/// The fused store pass must match `premultiplied_argb_bytes` for every alpha.
-#[test]
-fn premultiply_pixel_matches_the_buffer_form() {
-    for alpha in 0..=255_u8 {
-        for channel in [0_u8, 1, 77, 128, 254, 255] {
-            let px = [channel, 255 - channel, channel / 3, 0];
-            assert_eq!(
-                super::dock_backdrop::premultiply_pixel(px, alpha).to_vec(),
-                super::premultiplied_argb_bytes(&[px[0], px[1], px[2], alpha]),
-            );
-        }
-    }
-}
-
 /// The straightforward per-block average the strip downscale must reproduce exactly, edges included.
 fn downscale_reference(
     strip: &[u8],

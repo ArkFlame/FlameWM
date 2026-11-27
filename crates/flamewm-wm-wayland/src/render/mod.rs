@@ -29,6 +29,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transfor
 use smithay::wayland::shell::wlr_layer::Layer;
 
 mod backdrop;
+mod backing_element;
 mod dock_backdrop;
 pub(crate) use dock_backdrop::backdrop_captures;
 pub(crate) mod stage_timers;
@@ -58,6 +59,7 @@ render_elements! {
     Surface=WaylandSurfaceRenderElement<GlowRenderer>,
     Rounded=RoundedSurfaceElement,
     Memory=MemoryRenderBufferRenderElement<GlowRenderer>,
+    Backing=backing_element::RoundedMemoryElement,
 }
 
 pub(crate) const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
@@ -387,7 +389,7 @@ fn collect_occluders(elements: &[Elem], scale: f64, occluders: &mut Vec<Rectangl
             Elem::Solid(solid) => solid.opaque_regions(scale.into()),
             Elem::Surface(surface) => surface.opaque_regions(scale.into()),
             Elem::Rounded(rounded) => rounded.opaque_regions(scale.into()),
-            Elem::Memory(_) | Elem::_GenericCatcher(_) => continue,
+            Elem::Memory(_) | Elem::Backing(_) | Elem::_GenericCatcher(_) => continue,
         };
         // `Element::opaque_regions` is element-local, as the renderer expects: shift each region
         // by this element's placed geometry so the stored rects are in output space.

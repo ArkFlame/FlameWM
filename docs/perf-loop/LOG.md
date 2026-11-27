@@ -311,3 +311,6 @@ Capture residual: crop 30%, store 23%, blur 12%, gpu_wait 13%, map 10%. Next uni
 
 ## gpu_wait check
 `gpu_wait` (~3.5 ms, 13% of capture) is the GPU finishing the scene render the capture needs; it is inherent work (profile-only split), and without the wait the same time would move into the readback. Only fewer or cheaper captured elements reduce it; no change.
+
+## u166 GPU upscale of the backdrop backing (done)
+Capture total 26.5 -> ~6 ms per capture (crop 7.9 ms and store 6.1 ms removed) by drawing the reduced blurred capture at full size on the GPU with the surface clip program. 459 wm-wayland tests, clippy -D warnings pass; frame compared with the CPU-path frame.

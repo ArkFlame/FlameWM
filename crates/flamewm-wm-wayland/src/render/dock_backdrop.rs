@@ -10,6 +10,7 @@
 //! allocation-free stamp comparison per frame: no render, readback or blur. Opaque material
 //! captures nothing.
 
+use super::backing_element::RoundedMemoryElement;
 use super::*;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::utils::Scale;
@@ -70,6 +71,8 @@ pub(super) struct BackdropKey {
 pub(super) struct DockBacking {
     pub(super) key: BackdropKey,
     pub(super) buffer: MemoryRenderBuffer,
+    /// Pixel size of `buffer`, the reduced capture the GPU upscales.
+    pub(super) reduced: (usize, usize),
     pub(super) captured_at: Instant,
     /// Consecutive frames this capture was reused while its window moved.
     pub(super) reused: std::cell::Cell<u8>,
@@ -133,21 +136,6 @@ const CONTENT_REFRESH_CAP: std::time::Duration = std::time::Duration::from_milli
 fn refresh_due(captured_at: Instant, cost: std::time::Duration, now: Instant) -> bool {
     let wait = (cost * CONTENT_REFRESH_FACTOR).min(CONTENT_REFRESH_CAP);
     now.saturating_duration_since(captured_at) >= wait
-}
-
-/// Coverage (0..=255) of pixel `(x, y)` inside a `w` x `h` rounded rectangle of corner `radius`,
-/// sampled at the pixel centre. The interior and the edges are fully covered; corners fall off.
-pub(super) fn rounded_coverage(w: usize, h: usize, radius: f32, x: usize, y: usize) -> u8 {
-    let (w, h) = (w as f32, h as f32);
-    let r = radius.clamp(0.0, w.min(h) / 2.0);
-    // Signed distance from the pixel centre to the rounded outline (negative inside), then one
-    // pixel of antialiasing across the edge.
-    let (px, py) = (x as f32 + 0.5 - w / 2.0, y as f32 + 0.5 - h / 2.0);
-    let (qx, qy) = (px.abs() - (w / 2.0 - r), py.abs() - (h / 2.0 - r));
-    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
-    let inside = qx.max(qy).min(0.0);
-    let distance = outside + inside - r;
-    ((0.5 - distance).clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// A mapped strut surface that may be a translucent Dock.
@@ -284,14 +272,13 @@ pub(crate) fn backdrop_captures() -> u64 {
 }
 
 /// Renders the overlapping scene into a Dock-sized target, reduces and blurs it, and builds the
-/// buffer beneath the Dock: opaque inside the Dock's rounded outline and transparent in its corners.
+/// reduced blurred buffer the GPU later upscales beneath the Dock (see `backing_element`).
 fn capture_dock(
     renderer: &mut GlowRenderer,
     decorations: &mut Decorations,
     elements: Vec<Elem>,
     key: BackdropKey,
     region: Rectangle<i32, Physical>,
-    scale: f64,
 ) -> Result<DockBacking, Box<dyn Error>> {
     CAPTURES.fetch_add(1, Ordering::Relaxed);
     let started = Instant::now();
@@ -329,44 +316,23 @@ fn capture_dock(
     let blurred = blur_reduced(stored, stored_size(dims), key.material.blur);
     clock.split("blur");
 
-    // The logical buffer is sampled from the blurred capture, then its alpha is the Dock's outline.
-    let (w, h) = (key.rect.2.max(1) as usize, key.rect.3.max(1) as usize);
-    let radius = key.radius as f32 / scale as f32;
-    let pixels = crop_capture(&blurred, dims, (0, 0), w, h, scale);
-    clock.split("crop");
-    let is_dock = key.site == BackdropSite::Dock(key.rect);
-    // One pass writes the premultiplied BGRA bytes with the silhouette alpha. A window's
-    // silhouette only rounds its four corner squares, so a row clear of both the top and bottom
-    // radii is fully opaque: its alpha is 255 and the mask is not evaluated per pixel.
-    let top = usize::from(key.window_radii[0].max(key.window_radii[1]));
-    let bottom = usize::from(key.window_radii[2].max(key.window_radii[3]));
-    let mut argb = vec![0_u8; w * h * 4];
-    for (y, (out_row, in_row)) in argb
-        .chunks_exact_mut(w * 4)
-        .zip(pixels.chunks_exact(w * 4))
-        .enumerate()
+    // The blurred capture stays at its reduced size: the GPU upscales it to the element size and the
+    // `clip` program rounds the silhouette (see `backing_element`), so no full-size copy is written.
+    let (sw, sh) = stored_size(dims);
+    let mut reduced = vec![0_u8; sw * sh * 4];
+    for (out, px) in reduced
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(blurred.as_chunks::<4>().0)
     {
-        let (out_row, _) = out_row.as_chunks_mut::<4>();
-        let (in_row, _) = in_row.as_chunks::<4>();
-        if !is_dock && y >= top && y + bottom < h {
-            for (dst, px) in out_row.iter_mut().zip(in_row) {
-                *dst = [px[2], px[1], px[0], 255];
-            }
-            continue;
-        }
-        for (x, (dst, px)) in out_row.iter_mut().zip(in_row).enumerate() {
-            let alpha = if is_dock {
-                rounded_coverage(w, h, radius, x, y)
-            } else {
-                client_mask_coverage(w, h, key.window_radii, x, y)
-            };
-            *dst = premultiply_pixel(*px, alpha);
-        }
+        // Straight RGBA in, little-endian BGRA with an opaque alpha out.
+        *out = [px[2], px[1], px[0], 255];
     }
     let buffer = MemoryRenderBuffer::from_slice(
-        &argb,
+        &reduced,
         Fourcc::Argb8888,
-        (w as i32, h as i32),
+        (sw as i32, sh as i32),
         1,
         Transform::Normal,
         None,
@@ -376,35 +342,10 @@ fn capture_dock(
     Ok(DockBacking {
         key,
         buffer,
+        reduced: (sw, sh),
         captured_at: Instant::now(),
         cost: started.elapsed(),
         reused: std::cell::Cell::new(0),
-    })
-}
-
-fn client_mask_coverage(w: usize, h: usize, radii: [u8; 4], x: usize, y: usize) -> u8 {
-    let corner = if x < usize::from(radii[0]) && y < usize::from(radii[0]) {
-        Some((0, radii[0]))
-    } else if x + usize::from(radii[1]) >= w && y < usize::from(radii[1]) {
-        Some((1, radii[1]))
-    } else if x + usize::from(radii[2]) >= w && y + usize::from(radii[2]) >= h {
-        Some((2, radii[2]))
-    } else if x < usize::from(radii[3]) && y + usize::from(radii[3]) >= h {
-        Some((3, radii[3]))
-    } else {
-        None
-    };
-    corner.map_or(255, |(index, radius)| {
-        let r = f32::from(radius);
-        let (cx, cy) = match index {
-            0 => (r, r),
-            1 => (w as f32 - r, r),
-            2 => (w as f32 - r, h as f32 - r),
-            _ => (r, h as f32 - r),
-        };
-        let dx = x as f32 + 0.5 - cx;
-        let dy = y as f32 + 0.5 - cy;
-        ((r + 0.5 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0) * 255.0).round() as u8
     })
 }
 
@@ -584,7 +525,7 @@ pub(crate) fn refresh_dock_backdrops(
                 .get(&site.site)
                 .map(|backing| &backing.key),
         ) {
-            let backing = capture_dock(renderer, &mut decorations, elements, key, region, scale)?;
+            let backing = capture_dock(renderer, &mut decorations, elements, key, region)?;
             decorations.docks.insert(site.site, backing);
         }
         live.push(site.site);
@@ -603,54 +544,68 @@ impl Decorations {
     /// The cached backdrop of the Dock at `rect`, placed beneath the Dock surface. `None` when no
     /// backdrop was captured for it (opaque material, or no mapped Dock there).
     pub(super) fn dock_backdrop(
-        &self,
+        &mut self,
         renderer: &mut GlowRenderer,
         rect: RectKey,
         scale: f64,
     ) -> Option<Elem> {
-        let backing = self.docks.get(&BackdropSite::Dock(rect))?;
-        Self::backing_element(backing, renderer, rect, scale)
+        self.backing_element(BackdropSite::Dock(rect), renderer, rect, scale)
     }
 
     pub(super) fn window_backdrop(
-        &self,
+        &mut self,
         renderer: &mut GlowRenderer,
         id: WindowId,
         rect: RectKey,
         scale: f64,
     ) -> Option<Elem> {
-        let backing = self.docks.get(&BackdropSite::Window(id))?;
-        Self::backing_element(backing, renderer, rect, scale)
+        self.backing_element(BackdropSite::Window(id), renderer, rect, scale)
     }
 
+    /// The reduced capture drawn at `rect`'s size: the GPU filter upscales it and the clip program
+    /// rounds the silhouette (a Dock's pill outline, or a window's corner radii).
     fn backing_element(
-        backing: &DockBacking,
+        &mut self,
+        site: BackdropSite,
         renderer: &mut GlowRenderer,
         rect: RectKey,
         scale: f64,
     ) -> Option<Elem> {
+        let program = self.clip_program(renderer)?;
+        let backing = self.docks.get(&site)?;
+        let (w, h) = (rect.2.max(1) as usize, rect.3.max(1) as usize);
+        let radii = match site {
+            BackdropSite::Dock(_) => [u8::try_from(backing.key.radius).unwrap_or(u8::MAX); 4],
+            BackdropSite::Window(_) => backing
+                .key
+                .window_radii
+                .map(|radius| super::physical_radius(radius, scale)),
+        };
         let origin = physical_point(rect.0, rect.1, scale);
-        MemoryRenderBufferRenderElement::from_buffer(
+        let inner = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
             Point::from((f64::from(origin.x), f64::from(origin.y))),
             &backing.buffer,
             None,
-            None,
-            None,
+            Some(super::backing_element::source_rect(
+                w,
+                h,
+                scale,
+                DESKTOP_SCALE,
+            )),
+            Some(Size::from((w as i32, h as i32))),
             Kind::Unspecified,
         )
-        .ok()
-        .map(Elem::Memory)
+        .ok()?;
+        Some(Elem::Backing(RoundedMemoryElement::new(
+            inner,
+            &program,
+            radii,
+            backing.reduced,
+        )))
     }
 }
 
-/// One straight RGBA pixel with `alpha` as premultiplied little-endian BGRA bytes (the per-pixel
-/// form of `premultiplied_argb_bytes`).
-pub(super) fn premultiply_pixel(px: [u8; 4], alpha: u8) -> [u8; 4] {
-    let a = u32::from(alpha);
-    let scale = |channel: u8| ((u32::from(channel) * a + 127) / 255) as u8;
-    [scale(px[2]), scale(px[1]), scale(px[0]), alpha]
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,6 +635,7 @@ mod tests {
         cached.site = BackdropSite::Window(1);
         let backing = DockBacking {
             key: cached.clone(),
+            reduced: (1, 1),
             buffer: MemoryRenderBuffer::from_slice(
                 &[0, 0, 0, 0],
                 Fourcc::Argb8888,
@@ -946,36 +902,6 @@ mod tests {
             }
         }
         assert_eq!(recaptures, 0, "a static scene never recaptures");
-    }
-
-    #[test]
-    fn corner_mask_is_transparent_outside_the_pill_and_opaque_inside() {
-        let (w, h, r) = (40usize, 20usize, 10.0f32);
-        assert_eq!(
-            rounded_coverage(w, h, r, 0, 0),
-            0,
-            "corner pixel is outside the arc"
-        );
-        assert_eq!(rounded_coverage(w, h, r, w - 1, h - 1), 0);
-        assert_eq!(
-            rounded_coverage(w, h, r, w / 2, h / 2),
-            255,
-            "centre is covered"
-        );
-        assert_eq!(
-            rounded_coverage(w, h, r, w / 2, 0),
-            255,
-            "top edge is covered"
-        );
-        assert!(
-            rounded_coverage(w, h, r, 0, h / 2) >= 250,
-            "the left edge mid-height is covered up to the arc's antialiasing"
-        );
-        assert_eq!(
-            rounded_coverage(w, h, 0.0, 0, 0),
-            255,
-            "a square dock has no corner to cut"
-        );
     }
 
     #[test]

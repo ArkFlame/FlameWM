@@ -14,3 +14,8 @@ The backing is consumed as `Elem::Memory(MemoryRenderBufferRenderElement)` (`doc
 
 ## Attempt 1 (worker luna, rejected)
 First worker draft of the rounded memory element did not compile (src typed `Rectangle<f64, Buffer>` where `from_buffer` wants `Rectangle<f64, Logical>`, an unhandled `Elem::Backing` arm in `mod.rs`, an ambiguous `borrow_mut`), and its shader used only `radius.x`, ignoring per-corner window radii and the dock outline. Backed out; not committed. A retry needs: per-corner radius uniform (match `client_mask_coverage`), compile pass in the brief (workers may not run cargo, so the orchestrator must fix type errors), and the `Elem` match in `mod.rs` handled.
+
+## Result (done, u166)
+`render/backing_element.rs`: `RoundedMemoryElement` wraps the memory element, draws the reduced blurred capture (sw x sh, opaque BGRA) at element size with the GPU linear filter (`source_rect` reproduces `crop_capture`'s mapping exactly) and reuses the surface clip program (per-corner radii; dock = pill radius in device px, window = `physical_radius(window_radii, scale)`). `crop_capture`'s dock/window use, the full-size store loop and the CPU `rounded_coverage`/`client_mask_coverage`/`premultiply_pixel` (and their tests) are deleted. `Decorations::dock_backdrop`/`window_backdrop` now take `&mut self` (they fetch the clip program).
+Real Intel GPU drag probe, per capture: total 26.5 ms -> about 6 ms; crop 7.9 -> 0, store 6.1 -> 0.3 ms. Frame read (dock/titlebar blur behind the Task Manager, drag probe) matches the CPU-path frame: same banded backdrop, rounded corners intact; RMSE 3% is live task manager text and graphs.
+`crop_capture` is still used by titlebar.rs (its own strip).
