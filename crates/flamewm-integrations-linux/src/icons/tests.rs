@@ -647,6 +647,26 @@ fn corrupt_candidate_keeps_fallback_reason() {
 }
 
 #[test]
+fn missing_icon_uses_packaged_fallback_without_panic() {
+    let dir = test_dir("missing-fallback");
+    let missing = dir.join("no-such-icon.ppm");
+    let mut resolver = IconResolver::new(workspace_root(), Vec::new(), Vec::new(), 0);
+    let raster = resolver
+        .prepare(IconRequest::path(missing.clone()), IconSize::new(16, 16))
+        .expect("missing icon must use the packaged fallback");
+    assert_eq!(raster.origin, IconOrigin::PackagedFallback);
+    assert!(
+        raster.source.ends_with("flamewm-icon.svg"),
+        "unexpected fallback source: {}",
+        raster.source
+    );
+    let cached = resolver
+        .prepare(IconRequest::path(missing), IconSize::new(16, 16))
+        .expect("cached packaged fallback");
+    assert_eq!(cached, raster);
+}
+
+#[test]
 fn set_preferred_theme_rebuilds_once_per_change_and_skips_no_op() {
     let mut resolver = IconResolver::new(
         std::env::temp_dir(),
@@ -764,6 +784,25 @@ fn ark_ai_svg_rasterises_at_taskbar_sizes() {
             .filter(|pixel| pixel[3] == 255 && pixel[..3] == [255, 255, 255])
             .count();
         assert!(opaque_white > 0, "ARK AI glyph is empty at {size}px");
+    }
+}
+
+#[test]
+fn missing_packaged_glyph_uses_generated_fallback() {
+    let packaged = test_dir("generated-fallback");
+    let mut resolver = IconResolver::new(packaged, Vec::new(), Vec::new(), 0);
+    let size = IconSize::new(16, 16);
+    let result = resolver.prepare_semantic("never-installed-icon", size);
+    assert!(
+        result.is_ok(),
+        "missing packaged glyph must fall back, not fail"
+    );
+    if let Ok(raster) = result {
+        assert_eq!((raster.width, raster.height), (16, 16));
+        assert!(
+            raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+            "generated glyph fallback must not be blank"
+        );
     }
 }
 

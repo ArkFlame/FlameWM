@@ -7,9 +7,22 @@
 
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::{ConfigStore, ProductSettings};
+
+/// Upper bound for a settings snapshot. A larger file is a fault, not something to read into
+/// memory: a runaway writer or a corrupted file must never make startup stall or exhaust RAM.
+pub(crate) const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
+
+/// Read at most one byte past the limit so an oversized file is detected without loading it whole.
+fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 
 /// Result of a startup load: usable settings plus at most one user-visible notice.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,11 +37,13 @@ pub(crate) enum ReadFailure {
     NotFound,
     Unreadable,
     NotUtf8,
+    TooLarge,
 }
 
 /// Decode bytes that were already read. No IO side effects, so the mapping is unit-testable.
 pub(crate) fn decode_read(bytes: io::Result<Vec<u8>>) -> Result<String, ReadFailure> {
     match bytes {
+        Ok(bytes) if bytes.len() as u64 > MAX_SETTINGS_BYTES => Err(ReadFailure::TooLarge),
         Ok(bytes) => String::from_utf8(bytes).map_err(|_| ReadFailure::NotUtf8),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(ReadFailure::NotFound),
         Err(_) => Err(ReadFailure::Unreadable),
@@ -41,6 +56,7 @@ pub(crate) fn failure_reason(failure: ReadFailure) -> &'static str {
         ReadFailure::NotFound => "missing",
         ReadFailure::Unreadable => "unreadable",
         ReadFailure::NotUtf8 => "not UTF-8",
+        ReadFailure::TooLarge => "too large",
     }
 }
 
@@ -113,12 +129,13 @@ fn report(notice: &str) -> String {
 
 /// Load settings from `path`, degrading to defaults on every failure.
 ///
-/// A missing file is a normal fresh install and is silent. An unreadable, non-UTF-8 or unparsable
+/// A missing file is a normal fresh install and is silent. An unreadable, oversized,
+/// non-UTF-8 or unparsable
 /// file is quarantined to `settings.corrupt-<epoch>` and reported once; defaults are used instead.
 /// This function never returns an `Err`, so a bad file or a read-only home cannot abort startup.
 pub(crate) fn load_settings(path: &Path, epoch_secs: u64) -> LoadOutcome {
     let defaults = ProductSettings::default();
-    match decode_read(fs::read(path)) {
+    match decode_read(read_bounded(path)) {
         Ok(text) => match ConfigStore::default().parse_snapshot(&text) {
             Ok(parsed) => {
                 let mut settings = parsed;
@@ -177,6 +194,12 @@ mod tests {
     }
 
     #[test]
+    fn decode_read_rejects_oversized_input() {
+        let huge = vec![b'#'; MAX_SETTINGS_BYTES as usize + 1];
+        assert_eq!(decode_read(Ok(huge)), Err(ReadFailure::TooLarge));
+    }
+
+    #[test]
     fn decode_read_distinguishes_missing_from_unreadable() {
         let missing = io::Error::new(ErrorKind::NotFound, "gone");
         let denied = io::Error::new(ErrorKind::PermissionDenied, "denied");
@@ -189,6 +212,7 @@ mod tests {
         assert_eq!(failure_reason(ReadFailure::NotFound), "missing");
         assert_eq!(failure_reason(ReadFailure::Unreadable), "unreadable");
         assert_eq!(failure_reason(ReadFailure::NotUtf8), "not UTF-8");
+        assert_eq!(failure_reason(ReadFailure::TooLarge), "too large");
     }
 
     #[test]

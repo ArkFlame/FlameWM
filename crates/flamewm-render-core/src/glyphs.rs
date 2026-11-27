@@ -556,6 +556,26 @@ mod tests {
     }
 
     #[test]
+    fn bundled_font_fallback_parses_and_inks_a_glyph() {
+        // The bundled asset is the last resort after every system candidate fails. It must parse
+        // and rasterize on its own, independent of what fonts the host happens to have installed.
+        let fallback = Font::from_bytes(
+            &include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf")[..],
+            FontSettings::default(),
+        )
+        .expect("bundled DejaVuSansMono fallback must parse");
+        let (_, coverage) = fallback.rasterize('A', 24.0);
+        assert!(
+            coverage.iter().any(|&value| value > 0),
+            "bundled fallback must ink a visible glyph"
+        );
+        assert!(
+            find_font().is_some(),
+            "find_font must yield a font even when system candidates fail"
+        );
+    }
+
+    #[test]
     fn empty_text_produces_no_mask() {
         assert!(text_mask("", 14.0, 0.0, 0.0).is_none());
         assert!(text_mask("A", 0.0, 0.0, 0.0).is_none());

@@ -871,11 +871,13 @@ fn execute() -> Result<(), String> {
     let settings_worker = std::thread::Builder::new()
         .name("flamewm-shell-settings".into())
         .spawn(move || {
-            if let Some(snapshot) = load_startup_settings() {
-                if startup_settings_tx.try_send(snapshot).is_ok() {
-                    let _ = settings_done.write(&[1]);
+            let _ = flamewm_session_core::diagnostics::guard("shell-settings", move || {
+                if let Some(snapshot) = load_startup_settings() {
+                    if startup_settings_tx.try_send(snapshot).is_ok() {
+                        let _ = settings_done.write(&[1]);
+                    }
                 }
-            }
+            });
         });
     if settings_worker.is_err() {
         static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();

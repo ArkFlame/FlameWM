@@ -20,7 +20,8 @@ use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_session_core::diagnostics::{
-    CHECK_EXIT_FATAL, Severity, check_exit_code, describe_exit, fallback_plan, format_report,
+    BlastRadius, CHECK_EXIT_FATAL, FailureCode, FailureRecord, Severity, append_record,
+    check_exit_code, describe_exit, fallback_plan, format_report, unix_seconds_now,
 };
 use flamewm_session_core::{
     ChildExit, Keyring, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
@@ -119,6 +120,86 @@ fn session_paths() -> Result<(flamewm_session_core::SessionPaths, PathBuf), Stri
     Ok((paths, home))
 }
 
+/// Start the window manager with bounded readiness recovery. A WM that exits before EWMH
+/// readiness, or a spawn that fails, is recorded as a typed failure; restarts use the supervisor
+/// backoff, and when the budget is exhausted the next backend (the fallback plan) is started so
+/// the desktop and shell can still be launched.
+fn start_wm_or_fallback(
+    running: &mut Vec<Running>,
+    role_plans: &mut [ProcessPlan],
+    parent: Pid,
+    stop_requested: &AtomicBool,
+) -> Result<(), String> {
+    let mut supervisor = ProcessSupervisorPolicy::default();
+    let original = role_plans[0].clone();
+    loop {
+        check_stop(stop_requested)?;
+        let mut child = match spawn(role_plans[0].clone()) {
+            Ok(child) => child,
+            Err(error) => {
+                let decision = supervisor.child_exited(ChildExit::SpawnFailed);
+                let recovery = abort_recovery(
+                    SessionRole::WindowManager,
+                    &error,
+                    decision,
+                    decision == SupervisorDecision::GiveUp,
+                    unix_seconds_now(),
+                );
+                record_failure(&recovery.record);
+                match recovery.decision {
+                    SupervisorDecision::GiveUp => {
+                        role_plans[0] = fallback_plan(&original, &log_path_text());
+                        running.push(spawn(role_plans[0].clone())?);
+                        return Ok(());
+                    }
+                    SupervisorDecision::RestartAfter(delay) => {
+                        wait_backoff(delay, parent, stop_requested)?;
+                        continue;
+                    }
+                    SupervisorDecision::StopCleanly => return Err(SHUTDOWN_SIGNAL.to_owned()),
+                    SupervisorDecision::SpawnNow => {
+                        unreachable!("child_exited never requests SpawnNow")
+                    }
+                }
+            }
+        };
+        match wait_ready(&mut child, parent, stop_requested) {
+            Ok(()) => {
+                running.push(child);
+                return Ok(());
+            }
+            Err(error) => {
+                let observed = child.child.try_wait().ok().flatten();
+                let exit = observed.map_or(ChildExit::ExitCode(1), status_to_exit);
+                let _ = stop_role(&mut child);
+                let decision = supervisor.child_exited(exit);
+                let recovery = abort_recovery(
+                    SessionRole::WindowManager,
+                    &error,
+                    decision,
+                    decision == SupervisorDecision::GiveUp,
+                    unix_seconds_now(),
+                );
+                record_failure(&recovery.record);
+                match recovery.decision {
+                    SupervisorDecision::GiveUp => {
+                        role_plans[0] = fallback_plan(&original, &log_path_text());
+                        running.push(spawn(role_plans[0].clone())?);
+                        return Ok(());
+                    }
+                    SupervisorDecision::RestartAfter(delay) => {
+                        wait_backoff(delay, parent, stop_requested)?;
+                    }
+                    SupervisorDecision::StopCleanly => return Err(SHUTDOWN_SIGNAL.to_owned()),
+                    SupervisorDecision::SpawnNow => {
+                        unreachable!("child_exited never requests SpawnNow")
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn execute() -> Result<(), String> {
     let stop_requested = Arc::new(AtomicBool::new(false));
     for signal in [SIGTERM, SIGINT, SIGHUP] {
@@ -197,8 +278,7 @@ fn execute() -> Result<(), String> {
 
     let result = (|| {
         check_stop(&stop_requested)?;
-        running.push(spawn(role_plans[0].clone())?);
-        wait_ready(&mut running[0], parent, &stop_requested)?;
+        start_wm_or_fallback(&mut running, &mut role_plans, parent, &stop_requested)?;
         for index in [1, 2] {
             check_stop(&stop_requested)?;
             let started = start_optional(&mut role_plans[index], parent, &stop_requested)?;

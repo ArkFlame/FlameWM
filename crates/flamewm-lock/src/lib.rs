@@ -4,6 +4,7 @@ pub mod background;
 pub mod backoff;
 pub mod clock;
 pub mod document;
+pub mod fail_safe;
 pub mod instance;
 #[cfg(feature = "wayland")]
 pub mod keys;

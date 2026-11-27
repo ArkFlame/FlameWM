@@ -1,5 +1,59 @@
 use super::*;
 
+/// Recovery action for one supervisor abort path, paired with the typed failure record that
+/// describes it. Keeping both in one value lets the supervisor record and act atomically, and
+/// lets fault-injection tests assert stage, cause, blast radius and fallback without a real
+/// process tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AbortRecovery {
+    pub(super) decision: SupervisorDecision,
+    pub(super) record: FailureRecord,
+}
+
+/// Build the recovery for a supervisor abort path. `cause` is the injected fault description and
+/// `timestamp` is injected so tests stay deterministic; production passes [`unix_seconds_now`].
+/// The blast radius names the roles that still work and the role that is degraded, so records from
+/// different paths can be compared field by field.
+pub(super) fn abort_recovery(
+    role: SessionRole,
+    cause: &str,
+    decision: SupervisorDecision,
+    fallback_taken: bool,
+    timestamp: u64,
+) -> AbortRecovery {
+    let still_works: &[&str] = match role {
+        SessionRole::WindowManager => &[],
+        SessionRole::Desktop => &["window manager", "shell"],
+        SessionRole::Shell => &["window manager", "desktop"],
+    };
+    let degraded: &[&str] = match role {
+        SessionRole::WindowManager => &["desktop", "shell"],
+        SessionRole::Desktop => &["desktop"],
+        SessionRole::Shell => &["shell"],
+    };
+    let record = FailureRecord::new(
+        role_label(role),
+        if decision == SupervisorDecision::GiveUp {
+            FailureCode::RestartLimit
+        } else {
+            FailureCode::SubsystemError
+        },
+        cause,
+        BlastRadius::new(still_works.iter().copied(), degraded.iter().copied()),
+        fallback_taken,
+        timestamp,
+    );
+    AbortRecovery { decision, record }
+}
+
+/// Append a typed failure record to the resolved session log. Best effort: a missing log
+/// location must never abort recovery.
+pub(super) fn record_failure(record: &FailureRecord) {
+    if let Some((path, _)) = session_diagnostics::log_location() {
+        let _ = append_record(&path, record);
+    }
+}
+
 pub(super) struct Running {
     pub(super) plan: ProcessPlan,
     pub(super) child: Child,
@@ -134,8 +188,17 @@ pub(super) fn supervise(
             }
             match children[index].supervisor.child_exited(exit) {
                 SupervisorDecision::GiveUp => {
+                    let role = children[index].plan.role;
+                    let recovery = abort_recovery(
+                        role,
+                        "restart budget exhausted; starting the fallback instead",
+                        SupervisorDecision::GiveUp,
+                        true,
+                        unix_seconds_now(),
+                    );
+                    record_failure(&recovery.record);
                     session_diagnostics::log(
-                        role_label(children[index].plan.role),
+                        role_label(role),
                         "restart budget exhausted; starting the fallback instead",
                     );
                     children[index] = spawn(fallback_plan(&role_plans[index], &log_path_text()))?;
@@ -150,10 +213,39 @@ pub(super) fn supervise(
                     wait_backoff(delay, parent, stop_requested)?;
                     let plan = role_plans[index].clone();
                     let supervisor = children[index].supervisor.clone();
-                    children[index] = spawn(plan)?;
+                    let child = match spawn(plan.clone()) {
+                        Ok(child) => child,
+                        Err(error) => {
+                            let recovery = abort_recovery(
+                                plan.role,
+                                &error,
+                                SupervisorDecision::GiveUp,
+                                true,
+                                unix_seconds_now(),
+                            );
+                            record_failure(&recovery.record);
+                            session_diagnostics::log(
+                                role_label(plan.role),
+                                "respawn failed; starting the fallback instead",
+                            );
+                            spawn(fallback_plan(&plan, &log_path_text()))?
+                        }
+                    };
+                    children[index] = child;
                     children[index].supervisor = supervisor;
                     if index == 0 {
-                        wait_ready(&mut children[0], parent, stop_requested)?;
+                        if let Err(error) = wait_ready(&mut children[0], parent, stop_requested) {
+                            let recovery = abort_recovery(
+                                SessionRole::WindowManager,
+                                &error,
+                                SupervisorDecision::GiveUp,
+                                true,
+                                unix_seconds_now(),
+                            );
+                            record_failure(&recovery.record);
+                            let _ = stop_role(&mut children[0]);
+                            children[0] = spawn(fallback_plan(&role_plans[0], &log_path_text()))?;
+                        }
                         // Dependents reuse the original launch plans, strictly after WM readiness.
                         for plan in role_plans.iter().skip(1) {
                             children.push(spawn(plan.clone())?);

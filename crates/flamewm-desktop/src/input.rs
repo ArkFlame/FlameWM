@@ -59,16 +59,18 @@ pub(crate) fn paste_clipboard_files(directory: PathBuf) {
     let spawned = std::thread::Builder::new()
         .name("flamewm-paste".to_owned())
         .spawn(move || {
-            let read =
-                flamewm_clipboard::Clipboard::connect().and_then(|clipboard| clipboard.get_files());
-            match read {
-                Ok(Some((paths, op))) => {
-                    let cut = matches!(op, flamewm_clipboard::FileOp::Cut);
-                    paste_paths_now(&directory, &paths, cut);
+            let _ = flamewm_session_core::diagnostics::guard("desktop-paste", move || {
+                let read = flamewm_clipboard::Clipboard::connect()
+                    .and_then(|clipboard| clipboard.get_files());
+                match read {
+                    Ok(Some((paths, op))) => {
+                        let cut = matches!(op, flamewm_clipboard::FileOp::Cut);
+                        paste_paths_now(&directory, &paths, cut);
+                    }
+                    Ok(None) => {}
+                    Err(error) => report_action_failure("read clipboard files", error),
                 }
-                Ok(None) => {}
-                Err(error) => report_action_failure("read clipboard files", error),
-            }
+            });
         });
     if let Err(error) = spawned {
         report_action_failure("start paste", error.to_string());
@@ -98,7 +100,11 @@ pub(crate) fn handle_desktop_drag(drag: &UiDragEvent, state: &DesktopState) -> R
         let paths = paths.clone();
         let spawned = std::thread::Builder::new()
             .name("flamewm-drop".to_owned())
-            .spawn(move || paste_paths_now(&directory, &paths, false));
+            .spawn(move || {
+                let _ = flamewm_session_core::diagnostics::guard("desktop-drop", move || {
+                    paste_paths_now(&directory, &paths, false)
+                });
+            });
         if let Err(error) = spawned {
             report_action_failure("start drop", error.to_string());
         }
@@ -224,9 +230,11 @@ pub(crate) fn run_wheel_slot(
             let spawned = std::thread::Builder::new()
                 .name("flamewm-tool".to_owned())
                 .spawn(move || {
-                    if let Err(error) = run_tool(&path, tool) {
-                        report_action_failure("file tool", error);
-                    }
+                    let _ = flamewm_session_core::diagnostics::guard("desktop-tool", move || {
+                        if let Err(error) = run_tool(&path, tool) {
+                            report_action_failure("file tool", error);
+                        }
+                    });
                 });
             if let Err(error) = spawned {
                 report_action_failure("start file tool", error.to_string());

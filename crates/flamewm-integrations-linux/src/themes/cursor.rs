@@ -41,7 +41,30 @@ impl fmt::Display for CursorError {
 
 impl std::error::Error for CursorError {}
 
+/// Bundled `left_ptr` preview for themes with no usable cursor file.
+///
+/// Smithay's anvil uses the same shape: a bundled cursor image when the configured theme cannot be
+/// loaded (`.vendor/smithay-master/anvil/src/cursor.rs:9,26-40`). A machine with a good theme never
+/// faults these bytes into RAM; the `OnceLock` makes a theme-less machine parse them once.
+static BUNDLED_PREVIEW: std::sync::OnceLock<Option<CursorPreview>> = std::sync::OnceLock::new();
+static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn bundled_preview() -> Option<CursorPreview> {
+    BUNDLED_PREVIEW
+        .get_or_init(|| {
+            parse_xcursor_preview(
+                &include_bytes!("../../../../assets/cursors/cursors/left_ptr")[..],
+            )
+            .ok()
+        })
+        .clone()
+}
+
 /// Load `<theme_root>/cursors/left_ptr` and decode its preview frame.
+///
+/// Missing, oversized or corrupt cursors never panic: the failure is reported once per process and
+/// a bundled preview is shown instead, so a theme row is never blank. The root/escape and size gates
+/// still run first, so a refused file is never decoded.
 pub fn load_left_ptr_preview(theme_root: &Path) -> Result<CursorPreview, CursorError> {
     let preview = (|| {
         let path = resolve_in_theme_root(theme_root, &theme_root.join("cursors").join("left_ptr"))
@@ -51,13 +74,18 @@ pub fn load_left_ptr_preview(theme_root: &Path) -> Result<CursorPreview, CursorE
             .ok_or(CursorError::TooLarge)?;
         parse_xcursor_preview(&bytes)
     })();
-    if let Err(error) = &preview {
-        eprintln!(
-            "flamewm: cursor theme {} left_ptr preview unavailable: {error}; preview skipped; blast_radius=works:cursor-theme,system-cursor|degraded:theme-preview",
-            theme_root.display()
-        );
+    match preview {
+        Ok(preview) => Ok(preview),
+        Err(error) => {
+            if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "flamewm: cursor theme {} left_ptr preview unavailable: {error}; using bundled left_ptr fallback; blast_radius=works:cursor-theme,system-cursor|degraded:theme-preview",
+                    theme_root.display()
+                );
+            }
+            bundled_preview().ok_or(error)
+        }
     }
-    preview
 }
 
 /// Canonicalizes `path` and accepts it only when it stays under the canonical
@@ -154,7 +182,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::symlink;
 
-    use super::{CursorError, load_left_ptr_preview, parse_xcursor_preview};
+    use super::{bundled_preview, load_left_ptr_preview, parse_xcursor_preview};
 
     fn one_pixel_xcursor() -> Vec<u8> {
         let mut v = b"Xcur".to_vec();
@@ -215,11 +243,36 @@ mod tests {
         fs::create_dir_all(root.join("cursors")).expect("cursors dir");
         let file = fs::File::create(root.join("cursors").join("left_ptr")).expect("left_ptr");
         file.set_len(16 * 1024 * 1024 + 1).expect("sparse oversize");
-        let err = load_left_ptr_preview(&root).unwrap_err();
+        let expected = bundled_preview();
+        assert!(expected.is_some(), "bundled preview must decode");
+        let result = load_left_ptr_preview(&root);
         assert!(
-            matches!(err, CursorError::TooLarge),
-            "oversized left_ptr must be refused: {err:?}"
+            result.is_ok(),
+            "oversized left_ptr must fall back, not panic"
         );
+        if let (Some(expected), Ok(preview)) = (expected, result) {
+            assert_eq!(
+                preview, expected,
+                "oversized file must be refused; bundled shown"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_left_ptr_uses_bundled_fallback_without_panic() {
+        let root =
+            std::env::temp_dir().join(format!("flamewm-cursor-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+        let result = load_left_ptr_preview(&root);
+        assert!(
+            result.is_ok(),
+            "missing left_ptr must use the bundled fallback, not error"
+        );
+        if let Ok(preview) = result {
+            assert!(!preview.rgba.is_empty(), "bundled preview is decoded");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -232,11 +285,19 @@ mod tests {
         fs::create_dir_all(root.join("cursors")).expect("cursors dir");
         fs::write(base.join("outside"), one_pixel_xcursor()).expect("outside file");
         symlink(base.join("outside"), root.join("cursors").join("left_ptr")).expect("symlink");
-        let err = load_left_ptr_preview(&root).unwrap_err();
+        let expected = bundled_preview();
+        assert!(expected.is_some(), "bundled preview must decode");
+        let result = load_left_ptr_preview(&root);
         assert!(
-            matches!(err, CursorError::Io(_)),
-            "escaping left_ptr symlink must be refused: {err:?}"
+            result.is_ok(),
+            "escaping symlink must fall back, not decode"
         );
+        if let (Some(expected), Ok(preview)) = (expected, result) {
+            assert_eq!(
+                preview, expected,
+                "escaping file must be refused; bundled shown"
+            );
+        }
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -251,5 +312,25 @@ mod tests {
         let preview = load_left_ptr_preview(&root).expect("in-root symlink previews");
         assert_eq!((preview.width, preview.height), (1, 1));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bundled_left_ptr_preview_is_usable() {
+        let Some(preview) = bundled_preview() else {
+            panic!("the bundled left_ptr preview must decode")
+        };
+        assert!(
+            preview.width > 0 && preview.height > 0,
+            "bundled preview has a frame"
+        );
+        assert_eq!(
+            preview.rgba.len(),
+            (preview.width * preview.height * 4) as usize,
+            "bundled preview is straight RGBA"
+        );
+        assert!(
+            preview.rgba.iter().any(|&channel| channel != 0),
+            "bundled preview has visible pixels"
+        );
     }
 }

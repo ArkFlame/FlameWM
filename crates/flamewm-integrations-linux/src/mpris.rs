@@ -12,7 +12,6 @@ use flamewm_api::ports::FdEvents;
 use flamewm_api::system::{MediaSnapshot, PlaybackState, SystemAction};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
-use flamewm_integrations_core::backoff::next_reconnect_delay_ms;
 use flamewm_integrations_core::mpris::{MediaIntent, MprisController, PlayerInfo};
 
 pub const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
@@ -96,10 +95,8 @@ pub struct MprisProvider {
     /// Keeps the socketpair peer alive so the dormant fd never reports readiness.
     _dormant_peer: UnixStream,
     dormant: UnixStream,
-    /// `start()` was requested; re-applied on every successful (re)connect.
+    /// `start()` was requested; applied on the initial successful connect only.
     wanted: bool,
-    backoff: ReconnectBackoff,
-    retry_at: Option<Instant>,
     controller: MprisController,
     players: BTreeMap<String, PlayerInfo>,
     owners: BTreeMap<String, String>,
@@ -111,51 +108,12 @@ pub struct MprisProvider {
     changed_pending: bool,
 }
 
-const RECONNECT_INITIAL_MS: u64 = 1_000;
-const RECONNECT_MAX_MS: u64 = 30_000;
-/// Fast attempts before an absent session bus is treated as idle.
-const FAST_ATTEMPTS: u8 = 7;
-/// Idle retry interval once the fast budget is spent; a bus appearing later is still picked up.
-const IDLE_RETRY_MS: u64 = 120_000;
-
-/// Two-stage reconnect schedule for the optional session bus. Delegates to the shared
-/// `flamewm-integrations-core` exponential helper for the initial fast attempts, then uses a long
-/// idle interval so an absent bus costs one wake every two minutes instead of one every 30 s.
-/// `reset()` restores the fast schedule after any successful connect.
-#[derive(Debug)]
-struct ReconnectBackoff {
-    attempts: u8,
-    pending: bool,
-}
-
-impl ReconnectBackoff {
-    const fn new() -> Self {
-        Self {
-            attempts: 0,
-            pending: true,
-        }
-    }
-
-    fn next_delay(&mut self) -> Duration {
-        let ms = next_reconnect_delay_ms(
-            RECONNECT_INITIAL_MS,
-            RECONNECT_MAX_MS,
-            FAST_ATTEMPTS,
-            &mut self.attempts,
-            &mut self.pending,
-        )
-        .unwrap_or(IDLE_RETRY_MS);
-        Duration::from_millis(ms)
-    }
-
-    const fn reset(&mut self) {
-        self.attempts = 0;
-        self.pending = true;
-    }
-}
+/// MPRIS arms no reactor timer: an absent session bus stays offline for this session and player
+/// discovery relies on the `NameOwnerChanged` signal match installed by `subscribe()`.
 
 impl MprisProvider {
-    /// Never fails on an absent session bus: the provider starts offline and retries lazily.
+    /// Never fails on an absent session bus: the provider starts offline. Players are discovered
+    /// from `NameOwnerChanged`; no timer or polling is armed.
     pub fn connect() -> FlameResult<Self> {
         let (peer, dormant) = UnixStream::pair()
             .map_err(|io| FlameError::unavailable(format!("socketpair failed: {io}")))?;
@@ -165,8 +123,6 @@ impl MprisProvider {
             _dormant_peer: peer,
             dormant,
             wanted: false,
-            backoff: ReconnectBackoff::new(),
-            retry_at: None,
             controller: MprisController::default(),
             players: BTreeMap::new(),
             owners: BTreeMap::new(),
@@ -175,7 +131,7 @@ impl MprisProvider {
             state: MprisProviderState::Disconnected,
             changed_pending: false,
         };
-        provider.try_connect(Instant::now());
+        provider.try_connect();
         Ok(provider)
     }
 
@@ -193,7 +149,6 @@ impl MprisProvider {
 
     pub fn stop(&mut self) {
         self.wanted = false;
-        self.retry_at = None;
         self.drop_connection();
         self.dead_pump = None;
     }
@@ -210,32 +165,24 @@ impl MprisProvider {
         Ok(())
     }
 
-    fn try_connect(&mut self, now: Instant) {
+    fn try_connect(&mut self) {
         self.dead_pump = None;
         match BusPump::connect(BusKind::Session) {
             Ok(pump) => {
                 self.pump = Some(pump);
-                self.backoff.reset();
-                self.retry_at = None;
                 if self.wanted {
                     if let Err(error) = self.subscribe() {
-                        eprintln!("flamewm: MPRIS subscribe failed, retrying: {error}");
+                        eprintln!("flamewm: MPRIS subscribe failed: {error}");
                         self.drop_connection();
-                        self.schedule_retry(now);
                         return;
                     }
                     self.changed_pending = true;
                 }
             }
             Err(error) => {
-                self.schedule_retry(now);
-                eprintln!("flamewm: MPRIS session bus unavailable, retrying: {error}");
+                eprintln!("flamewm: MPRIS session bus unavailable: {error}");
             }
         }
-    }
-
-    fn schedule_retry(&mut self, now: Instant) {
-        self.retry_at = Some(now + self.backoff.next_delay());
     }
 
     /// Tears down the live connection and player state; keeps `wanted` for the next connect.
@@ -253,21 +200,12 @@ impl MprisProvider {
         self.changed_pending = true;
     }
 
-    /// Retries the session bus once its backoff is due. A no-op while connected.
-    fn retry_if_due(&mut self, now: Instant) {
-        if self.pump.is_some() || self.retry_at.is_none_or(|at| now < at) {
-            return;
-        }
-        self.try_connect(now);
-    }
-
-    /// Time until the next lazy reconnect attempt; `None` while connected.
+    /// MPRIS never arms a reactor timer. A player is (re)discovered only through the
+    /// `NameOwnerChanged` match installed in `subscribe()`, so an absent or lost session bus stays
+    /// offline for this session instead of waking the reactor on a deadline.
     #[must_use]
-    pub fn next_retry_in(&self, now: Instant) -> Option<Duration> {
-        if self.pump.is_some() {
-            return None;
-        }
-        self.retry_at.map(|at| at.saturating_duration_since(now))
+    pub const fn next_retry_in(&self, _now: Instant) -> Option<Duration> {
+        None
     }
 
     #[must_use]
@@ -304,7 +242,6 @@ impl MprisProvider {
     /// Reconcile a coalesced property update using the core controller's deterministic active-player
     /// policy. The native event has already supplied the player values.
     pub fn reconcile(&mut self) -> bool {
-        self.retry_if_due(Instant::now());
         let changed = self.controller.reconcile();
         changed | std::mem::take(&mut self.changed_pending)
     }
@@ -371,10 +308,9 @@ impl MprisProvider {
         let count = match read {
             Ok(count) => count,
             Err(error) => {
-                // A lost bus degrades to the offline state and reconnects with backoff.
-                eprintln!("flamewm: MPRIS session bus lost, retrying: {error}");
+                // A lost bus degrades to the offline state; no timer or polling is armed.
+                eprintln!("flamewm: MPRIS session bus lost: {error}");
                 self.drop_connection();
-                self.schedule_retry(Instant::now());
                 return Ok(0);
             }
         };
@@ -893,51 +829,11 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_backoff_starts_small_doubles_and_caps() {
-        let mut backoff = ReconnectBackoff::new();
-        let delays: Vec<u64> = (0..7)
-            .map(|_| backoff.next_delay().as_millis() as u64)
-            .collect();
-        assert_eq!(delays, [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
-    }
-
-    #[test]
-    fn reconnect_backoff_lengthens_to_idle_interval_after_budget_is_spent() {
-        let mut backoff = ReconnectBackoff::new();
-        for _ in 0..u32::from(FAST_ATTEMPTS) {
-            assert!(backoff.next_delay() <= Duration::from_millis(RECONNECT_MAX_MS));
-        }
-        for _ in 0..50 {
-            assert_eq!(backoff.next_delay(), Duration::from_millis(IDLE_RETRY_MS));
-        }
-        backoff.reset();
-        assert_eq!(
-            backoff.next_delay(),
-            Duration::from_millis(RECONNECT_INITIAL_MS)
-        );
-    }
-
-    #[test]
-    fn reconnect_backoff_reset_restarts_at_initial_delay() {
-        let mut backoff = ReconnectBackoff::new();
-        for _ in 0..4 {
-            backoff.next_delay();
-        }
-        backoff.reset();
-        assert_eq!(
-            backoff.next_delay(),
-            Duration::from_millis(RECONNECT_INITIAL_MS)
-        );
-    }
-
-    #[test]
-    fn retry_is_due_only_after_scheduled_instant() {
-        let mut provider = offline_provider_for_test();
-        let now = Instant::now();
-        provider.retry_at = Some(now + Duration::from_secs(5));
-        assert_eq!(provider.next_retry_in(now), Some(Duration::from_secs(5)));
-        provider.retry_if_due(now);
-        assert!(provider.retry_at.is_some(), "not due yet: no attempt");
+    fn absent_session_bus_arms_no_reactor_timer() {
+        let provider = offline_provider_for_test();
+        assert!(!provider.is_connected());
+        assert!(provider.players.is_empty());
+        assert_eq!(provider.next_retry_in(Instant::now()), None);
     }
 
     const OFFLINE_CHILD_ENV: &str = "FLAMEWM_MPRIS_ABSENT_BUS_CHILD";
@@ -951,8 +847,6 @@ mod tests {
             _dormant_peer: peer,
             dormant,
             wanted: false,
-            backoff: ReconnectBackoff::new(),
-            retry_at: None,
             controller: MprisController::default(),
             players: BTreeMap::new(),
             owners: BTreeMap::new(),
@@ -970,7 +864,7 @@ mod tests {
                 MprisProvider::connect().expect("absent session bus must not fail connect");
             assert!(!provider.is_connected());
             assert_eq!(provider.state(), MprisProviderState::Disconnected);
-            assert!(provider.next_retry_in(Instant::now()).is_some());
+            assert!(provider.next_retry_in(Instant::now()).is_none());
             let watch = provider.watch();
             assert!(watch.fd >= 0, "reactor registration needs a real fd");
             assert_eq!(watch.events, FdEvents::READABLE);

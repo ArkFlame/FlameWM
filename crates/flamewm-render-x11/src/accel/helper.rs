@@ -208,10 +208,10 @@ pub fn serve_gpu_helper() -> Result<(), String> {
             return Ok(());
         }
     };
-    // One message buffer, one frame buffer and one reply buffer for the life of the helper: a
-    // request reuses their capacity instead of allocating a whole frame per call.
+    // One request buffer and one reply buffer for the life of the helper: the reply payload is
+    // painted in place, so no second full-frame scratch buffer is retained. Capacity is reused
+    // instead of allocating a whole frame per call.
     let mut body = Vec::new();
-    let mut frame = Vec::new();
     let mut reply = reply_ok(gpu.device().as_bytes());
     write_message(&mut output, &reply)?;
     loop {
@@ -220,7 +220,7 @@ pub fn serve_gpu_helper() -> Result<(), String> {
             return Ok(());
         }
         reply.clear();
-        match serve_one(&mut gpu, &body, &mut frame, &mut reply) {
+        match serve_one(&mut gpu, &body, &mut reply) {
             Ok(()) => {}
             Err(error) => {
                 reply.push(1);
@@ -231,19 +231,21 @@ pub fn serve_gpu_helper() -> Result<(), String> {
     }
 }
 
-/// Runs one decoded request into `frame` and writes the status byte plus the result into `reply`.
-fn serve_one(
-    gpu: &mut gles::GpuBlur,
-    body: &[u8],
-    frame: &mut Vec<u8>,
-    reply: &mut Vec<u8>,
-) -> Result<(), String> {
+/// Runs one decoded request: the reply payload is painted in place, so the helper keeps one
+/// frame-sized buffer instead of a separate staging frame. On error the reply carries the reason.
+fn serve_one(gpu: &mut gles::GpuBlur, body: &[u8], reply: &mut Vec<u8>) -> Result<(), String> {
     let request = decode_request(body)?;
-    frame.clear();
-    frame.extend_from_slice(request.frame);
-    gpu.paint_batch(frame, request.width, request.height, &request.ops)?;
+    reply.clear();
     reply.push(0);
-    reply.extend_from_slice(frame);
+    reply.resize(request.frame.len() + 1, 0);
+    reply[1..].copy_from_slice(request.frame);
+    if let Err(error) =
+        gpu.paint_batch(&mut reply[1..], request.width, request.height, &request.ops)
+    {
+        reply.clear();
+        reply.push(1);
+        reply.extend_from_slice(error.as_bytes());
+    }
     Ok(())
 }
 

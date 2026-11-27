@@ -366,3 +366,79 @@ fn supporting_wm_check_requires_matching_nonzero_self_reference() {
     assert!(!supporting_wm_check_is_valid(Some(42), Some(43)));
     assert!(!supporting_wm_check_is_valid(Some(0), Some(0)));
 }
+
+#[test]
+fn fault_wm_exit_before_readiness_records_stage_cause_and_backoff() {
+    let recovery = abort_recovery(
+        SessionRole::WindowManager,
+        "WindowManager at /bin/false exited before readiness: exit status 1",
+        SupervisorDecision::RestartAfter(500),
+        false,
+        11,
+    );
+    assert_eq!(recovery.decision, SupervisorDecision::RestartAfter(500));
+    assert_eq!(recovery.record.stage, "window manager");
+    assert_eq!(recovery.record.code, FailureCode::SubsystemError);
+    assert!(recovery.record.cause.contains("exited before readiness"));
+    assert!(recovery.record.blast_radius.still_works.is_empty());
+    assert_eq!(recovery.record.blast_radius.degraded, ["desktop", "shell"]);
+    assert!(!recovery.record.fallback_taken);
+    assert_eq!(recovery.record.timestamp, 11);
+}
+
+#[test]
+fn fault_failed_respawn_records_fallback_taken_and_blast_radius() {
+    let recovery = abort_recovery(
+        SessionRole::Desktop,
+        "spawn Desktop at /missing/desktop: No such file or directory",
+        SupervisorDecision::GiveUp,
+        true,
+        12,
+    );
+    assert_eq!(recovery.decision, SupervisorDecision::GiveUp);
+    assert_eq!(recovery.record.stage, "desktop");
+    assert_eq!(recovery.record.code, FailureCode::RestartLimit);
+    assert!(recovery.record.cause.contains("spawn Desktop"));
+    assert_eq!(
+        recovery.record.blast_radius.still_works,
+        ["window manager", "shell"]
+    );
+    assert_eq!(recovery.record.blast_radius.degraded, ["desktop"]);
+    assert!(recovery.record.fallback_taken);
+}
+
+#[test]
+fn fault_repeated_crash_loop_gives_up_after_bounded_backoff() {
+    let mut supervisor = ProcessSupervisorPolicy::new(SupervisorPolicy {
+        maximum_restarts: 3,
+        restart_window_ms: 1_000,
+        initial_backoff_ms: 100,
+        maximum_backoff_ms: 400,
+        ..SupervisorPolicy::default()
+    });
+    let start = Instant::now();
+    let mut delays = Vec::new();
+    let decision = loop {
+        let at = start + std::time::Duration::from_millis(delays.len() as u64 * 50);
+        match supervisor.child_exited_at(ChildExit::ExitCode(1), at) {
+            SupervisorDecision::RestartAfter(delay) => {
+                assert!(delay <= 400, "backoff must stay bounded: {delay}");
+                delays.push(delay);
+            }
+            other => break other,
+        }
+    };
+    assert_eq!(decision, SupervisorDecision::GiveUp);
+    assert_eq!(delays, [100, 200, 400]);
+    let recovery = abort_recovery(
+        SessionRole::WindowManager,
+        "three crashes inside one window",
+        decision,
+        true,
+        13,
+    );
+    assert_eq!(recovery.record.code, FailureCode::RestartLimit);
+    assert!(recovery.record.fallback_taken);
+    assert!(supervisor.gave_up());
+    assert_eq!(supervisor.restarts(), 3);
+}

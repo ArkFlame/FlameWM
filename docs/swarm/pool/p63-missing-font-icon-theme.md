@@ -1,8 +1,15 @@
 # Unit p63-missing-font-icon-theme
-STATUS: OPEN
+STATUS: DONE
 
 Crates flamewm-render-core fonts, flamewm-integrations-linux icons: missing font, icon theme, cursor theme: bundled fallback, one report, no unwrap. Add a test per fallback.
 
 ## Result
 
-STARTED
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| crates/flamewm-render-core/src/glyphs.rs:201-222,559-570 | System-candidate exhaustion reaches a bundled DejaVuSansMono OnceLock fallback; one-shot NO_FONT_LOG; no non-test unwrap. | Verified only; zero production edits. Test bundled_font_fallback_parses_and_inks_a_glyph asserts the bundled asset parses, inks a glyph and find_font() stays Some. | UNBUILT - test only; normal paint path unchanged, visuals pixel-identical. |
+| crates/flamewm-integrations-linux/src/icons/mod.rs:899-929; icons/tests.rs:650-667,790-804 | A missing candidate falls back to the packaged glyph, then to a generated glyph on a broken install; one AtomicBool report; no non-test unwrap. | Verified only; zero production edits. Tests missing_icon_uses_packaged_fallback_without_panic and missing_packaged_glyph_uses_generated_fallback cover both layers. | UNBUILT - test only; fallback selection unchanged. |
+| crates/flamewm-integrations-linux/src/themes/cursor.rs:44-85,183,244-250,255-265,277-283,298-314 | Before: a missing, oversized or escaping left_ptr only reported and returned Err; this crate had no bundled cursor asset fallback. | One production edit: bundled_preview() parses assets/cursors/cursors/left_ptr once behind a OnceLock; load_left_ptr_preview reports once behind an AtomicBool and returns the bundled preview on failure. Root/escape and size gates still run before the fallback. Tests: added bundled_left_ptr_preview_is_usable; converted the error-only assertions into bundled-fallback assertions so refused files are still never decoded. | UNBUILT - no build or tests run by unit rule. A theme with no usable cursor now shows the bundled arrow instead of a blank preview row; installed themes keep pixel-identical previews. |
+| .vendor/smithay-master/anvil/src/cursor.rs:9,26-40 | Precedent: bundled cursor.rgba through include_bytes! with one warn! when the configured theme fails to load. | Read-only reference for the cursor fallback shape; no edit. | None - .vendor/** is not a dependency or runtime input. |
+
+PASS - all three missing-resource paths now have a bundled fallback, a once-only report and no non-test unwrap, each with a focused test: bundled font parsing and inking, packaged/generated icon glyph, and bundled left_ptr preview. The only production edit adds the cursor fallback in flamewm-integrations-linux, following the smithay anvil precedent; the root-escape and size gates still run before the fallback, so refused files are never decoded and installed themes keep pixel-identical previews. No build or test was run by unit rule, so every edit is UNBUILT and the orchestrator must run both crate test suites after the batch lands. The degraded cursor-preview case now shows the bundled arrow rather than a blank row.

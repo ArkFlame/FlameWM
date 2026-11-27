@@ -142,22 +142,24 @@ impl TrashJobs {
         std::thread::Builder::new()
             .name("flamewm-desktop-trash".to_owned())
             .spawn(move || {
-                let finished = match work {
-                    TrashWork::MoveToTrash(paths) => paths
-                        .into_iter()
-                        .map(|path| move_entry_to_trash(&path))
-                        .collect(),
-                    TrashWork::EmptyHome => vec![empty_home_trash()],
-                };
-                results
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .extend(finished);
-                // A full wake pipe still leaves the earlier byte pending, and the drain that byte
-                // triggers reports every finished outcome, so a lost write cannot hide a result.
-                if let Ok(mut writer) = wake.try_clone() {
-                    let _ = writer.write(&[1]);
-                }
+                let _ = flamewm_session_core::diagnostics::guard("desktop-trash", move || {
+                    let finished = match work {
+                        TrashWork::MoveToTrash(paths) => paths
+                            .into_iter()
+                            .map(|path| move_entry_to_trash(&path))
+                            .collect(),
+                        TrashWork::EmptyHome => vec![empty_home_trash()],
+                    };
+                    results
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .extend(finished);
+                    // A full wake pipe still leaves the earlier byte pending, and the drain that byte
+                    // triggers reports every finished outcome, so a lost write cannot hide a result.
+                    if let Ok(mut writer) = wake.try_clone() {
+                        let _ = writer.write(&[1]);
+                    }
+                });
             })
             .map(|_| ())
             .map_err(|error| format!("start trash worker: {error}"))
