@@ -347,3 +347,6 @@ flamewm-wayland RSS ~123 MB, +55 voluntary ctx switches (~5.5/s); flamewm-shell 
 
 ## Compositor RSS breakdown (smaps, nested harness)
 RSS 123 MB = libLLVM 45 + nvidia GL libs 31 + gallium 13 (shared, file-backed driver pages) + binary 7 + heap 11.7 + anon 4. Private anon ~25 MB. Renderer reported as Mesa Intel UHD (hardware). No RAM unit: the compositors own footprint is small; why libLLVM is resident on the hardware path is a driver question, not ranked.
+
+## Lock screen poll scout: reverted, no measurable gain
+flamewm-lock wayland.rs polls the compositor connection with a 16 ms timeout while locked, which by reading is ~62 wakeups/s. I made it 16 ms only while a PAM result is pending (1 s otherwise) and measured old vs new builds (--features wayland, nested harness, 6 s): old +26 timeslices / 1.6 ms CPU, new +34 / 3 ms CPU, i.e. both idle at ~4-6 wakeups/s. The expected 16 ms rate does not appear, reason not found, so no benefit was demonstrated and the change was reverted rather than shipped to a security-sensitive path. A real session may behave differently; recheck there.
