@@ -263,3 +263,7 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Task manager: the sampler parks on `SampleGate` while hidden (no timer, no /proc walk), wakes at once on show, sleeps on the action channel between 1 s samples. Already optimal.
 - Shell: periodic work is all slow (usage 300 s, weather 30 min, heap trim 10 min, reproject 60 s) or short-lived animation (launch feedback 50/250 ms polling only while a launch indicator is live, OSD hold/fade). No always-on short timer found.
 - No change.
+
+## Explorer scroll/thumbnail scout: nothing ranked
+- Thumbnail cache is bounded three ways (256 entries, byte cap, source <= 25 MB / 25 Mpx). Projection ids are pre-built once per slot (no per-frame `format!`). No change.
+- CI note: the run for 37d8407c failed in "Install native build dependencies" (apt exit 100, runner flake, no build or test ran); later commits carry the same code and are the evidence.
