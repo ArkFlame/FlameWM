@@ -2,3 +2,6 @@
 STATUS: OPEN
 
 Crate flamewm-x11-desktop: desktop icon layout, file watching: inotify not polling, zero wakeups idle, bounded caches; missing XDG dirs degrade silently with one report.
+
+## Result
+STARTED

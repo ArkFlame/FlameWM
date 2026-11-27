@@ -4,9 +4,9 @@ Ranked by the share each contributor takes in a one-second scoped sample, or, wh
 sample exists yet, by its bounded retention / measured decode cost. Shares below are
 **composition shares** (percent of a sample, not absolute CPU or whole-system memory);
 estimates are labelled and come from code budgets or scoped measurements already recorded
-in the evidence paths. `docs/PERF_BASELINE.md` is still a placeholder — no frozen
-whole-session baseline has been captured, so this list is re-ranked from the component
-samples in `docs/perf-loop/LOG.md` and the per-app RSS tables in `docs/PERFORMANCE.md`.
+whole-session baseline FROZEN 2026-11-27 (docs/PERF_BASELINE.md, nested winit session on 12:00-12:05 release binaries,
+pre-wave). See BASELINE section below for the measured top rows; remaining rows are component samples
+from `docs/perf-loop/LOG.md` and the per-app RSS tables in `docs/PERFORMANCE.md`.
 No visual change is a cut criterion: every planned cut in this list is either already
 pixel-verified or deferred because it is not.
 
@@ -44,3 +44,16 @@ Re-rank triggers: first frozen `docs/PERF_BASELINE.md` capture, any tier-occupan
 measurement for row 2, a real-GPU capture sample for row 1, or a cut landing in rows 1–3.
 Rows 13–20 re-rank when a comparable sample appears: a GPU-host smaps capture for rows 13–16,
 or a wakeup count for rows 17–20.
+
+## BASELINE (frozen 2026-11-27, idle nested session, 1 s window)
+
+Measured wakeups/s share: flamewm-desktop 21.0 (51.2%), flamewm-wayland 19.0 (46.3%), flamewm-shell 1.0 (2.4%), audio-helper 0, gpu-helper 0.
+Measured RSS: gpu-helper 142924 kB, wayland 123992 kB, desktop 24652 kB, shell 17960 kB, audio-helper 6424 kB.
+Caveat: pre-wave binaries; nested winit, idle, no input. The wave 2-6 edits are not in this sample.
+
+| rank | area | share | cause | planned cut | status |
+| --- | --- | --- | --- | --- | --- |
+| B1 | flamewm-desktop idle wakeups | 51% of wakeups, 21/s | unknown: widgets sampler / clock / wallpaper ticks while idle | find source with scoped strace -c -f or per-thread ctxt_switches; coalesce or park | open (p02,p35 touched, unmeasured) |
+| B2 | flamewm-wayland idle wakeups | 46% of wakeups, 19/s | winit pacing / redraw request loop likely; p29 found loop event driven in code | per-thread ctxt delta to find the thread; check winit frame pacing while idle | open |
+| B3 | flamewm-gpu-helper RSS | 142 MB, largest RSS | GPU context + buffers in helper for a nested idle session | lazy-start helper on first GPU use, or software path when idle | open |
+| B4 | flamewm-wayland RSS | 124 MB | glyph/atlas + surfaces | p20 glyph byte cap landed (unmeasured) | open, re-sample after release build |
