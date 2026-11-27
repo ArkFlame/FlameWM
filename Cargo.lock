@@ -968,6 +968,7 @@ dependencies = [
  "flamewm-render-compiler",
  "flamewm-render-core",
  "flamewm-ribbons",
+ "flamewm-session-core",
  "flamewm-ui-core",
  "flamewm-ui-document",
  "flamewm-ui-x11",
@@ -982,6 +983,7 @@ name = "flamewm-platform"
 version = "0.1.7"
 dependencies = [
  "flamewm-api",
+ "flamewm-session-core",
 ]
 
 [[package]]
