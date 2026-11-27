@@ -39,14 +39,33 @@ crates/flamewm-wm-x11/src/frame/geometry_shape.rs:645:                i32::try_f
 crates/flamewm-wm-x11/src/frame/geometry_shape.rs:650:                i32::try_from(end).unwrap(),
 crates/flamewm-wm-x11/src/frame/geometry_shape.rs:663:        let first = usize::try_from(u32::from(titlebar)).unwrap();
 
+## u25 audit — X11 session start path (file:line, failure, fix)
+
+crates/flamewm-wm-x11/src/wm/event_loop.rs:54 — `x11rb::connect(None)?` aborts with no DISPLAY — REQUIRED (no X server means no X11 session); left as-is.
+crates/flamewm-wm-x11/src/wm/event_loop.rs:66 — `become_wm(...)?` aborts when another WM holds the root selection — REQUIRED (ICCCM single-WM ownership); left as-is.
+crates/flamewm-wm-x11/src/wm/construct.rs:10-33 — RandR `query_extension` / `randr_select_input` previously aborted on absent extension — ALREADY CONVERTED: `match` on query, `eprintln!` with "blast radius: no live output hotplug/CRTC change notifications, root geometry is used", continues.
+crates/flamewm-wm-x11/src/lib.rs:958-970 — `randr_get_screen_resources_current()?` aborted when RandR resources unavailable — ALREADY CONVERTED: match + "blast radius: no per-output geometry/modes, falling back to root geometry", `(0, Vec::new())` fallback.
+crates/flamewm-wm-x11/src/lib.rs:973-978 — `randr_get_output_primary()?` aborted on missing reply — ALREADY CONVERTED: `.ok().and_then(...).map_or(0, ...)`; falls back to primary 0.
+crates/flamewm-wm-x11/src/wm/mod.rs:818-837 — `composite_query_version` / `_NET_WM_CM_S<screen>` selection-owner lookup could abort when compositor absent — ALREADY CONVERTED: `.ok()` chains, returns `false` (frame-band ring fallback); no extension is mandatory.
+crates/flamewm-wm-x11/src/wm/raw_keys.rs:307-312 — `query_extension(b"XInputExtension")?.reply()?` aborted when XInput absent — ALREADY CONVERTED: logs "XInput absent; raw escape keys disabled" and returns `Ok(())`; caller at wm/event_loop.rs:80-82 also logs any remaining `Err` and continues.
+crates/flamewm-wm-x11/src/wm/construct.rs:77-93 — `ExternalDecorationRenderer::open("IBM Plex Sans")` (glyph atlas + cursor theme) aborted when font/theme/atlas missing — ALREADY CONVERTED: `.ok()` makes renderer optional, outline-overlay availability probed, cursor define is `let _ =`; frame-band ring fallback.
+crates/flamewm-wm-x11/src/wm/event_loop.rs:67-69 — clipboard keeper spawn `Err` — ALREADY CONVERTED: "clipboard keeper unavailable" log, session continues.
+crates/flamewm-wm-x11/src/wm/event_loop.rs:93-95 — window-rules watch registration `Err` — ALREADY CONVERTED: "window rules hot reload unavailable" log, session continues.
+crates/flamewm-wm-x11/src/runtime/mod.rs:143 — `connect_control_session` — ALREADY OPTIONAL: returns `Option`, missing session bus is retried lazily with capped backoff.
+crates/flamewm-wm-x11/src/runtime/mod.rs:324-328 — `register_settings_wake` `Err` — ALREADY CONVERTED: `inspect_err` logs "XSettings wake not registered", `.ok()` drops the wake.
+crates/flamewm-wm-x11/src/atoms.rs:143-150 and crates/flamewm-wm-x11/src/lib.rs:139-148 — `intern_atom` / reply `?` on startup — REQUIRED core X atoms; left as-is.
+crates/flamewm-wm-x11/src/runtime/mod.rs:145-159,168-175 — `LinuxIntegrationRuntime::connect()?`, `start()` error, five `register(...)?` calls, `AudioHelper::connect(...)?` hard-fail on missing system bus/NetworkManager/Bluetooth/PowerProfiles/PulseAudio — NOT CONVERTED: these are system-service integrations, outside the named optional set (X11 extension / atlas / cursor theme / compositor). Flagged as the strongest remaining "laptop no-start" candidate; converting them needs `Option<ProviderRegistration>` plumbing through runtime/mod.rs:498-521 and is left for a separate verified slice.
+
+Status: UNBUILT
+
 ## Step 2 — startup-path audit (narrow retry)
 
 Scope: `crates/flamewm-wm-x11/src`, production paths. Every `expect(`/`unwrap(` hit in the
 Step 1 list resolves to a `#[cfg(test)] mod tests` block (blue_light.rs:306,
 switcher_thumb_x11.rs:76, geometry_shape.rs:306, outline_tune.rs:148,
 window_config.rs:191, output_scale.rs:156, lib.rs:1136+) or to an internal
-invariant assert (wm/controllers.rs:54, wm/chrome_runtime.rs:101). None are on
-X11 startup. The five startup categories below already degrade gracefully;
+invariant assert (runtime/mod.rs:435, wm/controllers.rs:54,
+wm/chrome_runtime.rs:101). None are on X11 startup. The five startup categories below already degrade gracefully;
 there is no remaining hard-fail to convert, so no code file was changed.
 
 | # | category | site | failure record / blast radius | action |
