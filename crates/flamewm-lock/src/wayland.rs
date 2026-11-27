@@ -589,7 +589,7 @@ where
             .flush()
             .map_err(|error| LockError::Protocol(error.to_string()))?;
         if let Some(guard) = connection.prepare_read() {
-            let readable = wait_readable(&connection);
+            let readable = wait_readable(&connection, client.outcomes.is_some());
             if readable && let Err(error) = guard.read() {
                 return Err(LockError::Protocol(error.to_string()));
             }
@@ -753,18 +753,29 @@ impl LockClient {
 ///
 /// Returns `false` on timeout so the caller can service work that does not arrive on the
 /// Wayland socket, such as a PAM result.
-fn wait_readable(connection: &Connection) -> bool {
+/// How long the lock loop blocks on the compositor connection. A PAM result arrives on a channel that
+/// does not wake the poll, so a pending authentication is checked every frame; otherwise keys and
+/// compositor events wake the poll themselves and the wait is only a safety net.
+fn poll_timeout(authenticating: bool) -> rustix::event::Timespec {
+    if authenticating {
+        rustix::event::Timespec {
+            tv_sec: 0,
+            tv_nsec: 16_000_000,
+        }
+    } else {
+        rustix::event::Timespec {
+            tv_sec: 1,
+            tv_nsec: 0,
+        }
+    }
+}
+
+fn wait_readable(connection: &Connection, authenticating: bool) -> bool {
     use rustix::event::{PollFd, PollFlags, poll};
     let backend = connection.backend();
     let fd = backend.poll_fd();
     let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-    match poll(
-        &mut fds,
-        Some(&rustix::event::Timespec {
-            tv_sec: 0,
-            tv_nsec: 16_000_000,
-        }),
-    ) {
+    match poll(&mut fds, Some(&poll_timeout(authenticating))) {
         Ok(count) => count > 0,
         // A poll failure is treated as "not ready"; the next dispatch reports the real error.
         Err(_) => false,
@@ -773,6 +784,14 @@ fn wait_readable(connection: &Connection) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_connection_poll_is_fast_only_while_a_password_check_is_pending() {
+        let fast = super::poll_timeout(true);
+        let idle = super::poll_timeout(false);
+        assert_eq!((fast.tv_sec, fast.tv_nsec), (0, 16_000_000));
+        assert_eq!((idle.tv_sec, idle.tv_nsec), (1, 0));
+    }
+
     use super::*;
     use crate::state::{Effect, Key, Status};
 
