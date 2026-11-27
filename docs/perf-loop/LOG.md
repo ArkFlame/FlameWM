@@ -278,3 +278,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - `downscale_strip` (box average of the GPU readback to the stored 1/4 image) now accumulates one source row at a time into a per-stored-row sum buffer and divides once per stored pixel, instead of a nested per-block walk with a per-channel division. Rounding and partial edge blocks are identical: a new test compares it with the old formula for 16x16, 17x13, 5x9, 1x1 and 7x4 images split into strips.
 - Measured (90-step drag, release, nested software GL, 108 vs 238 captures): downscale 2601 -> 1819 us/capture. The untouched blur phase moved 3609 -> 3114 us in the same runs (machine speed), so the gain net of that control is about 19%, not 30%. Capture total 39.7 -> 28.2 ms is mostly machine noise and not claimed.
 - Composition: downscale was ~6.5% of a capture; this trims it by roughly a fifth, i.e. ~1% of a capture. Small, safe, tested. 460 compositor tests green, clippy clean.
+
+## Capture crop scouted: at CPU floor
+- Read `crop_capture` again: nothing left to hoist. Remaining cost is the full-resolution bilinear upscale itself; folded into u162 (GPU does the upscale). No code change.

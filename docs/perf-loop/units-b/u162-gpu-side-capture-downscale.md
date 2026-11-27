@@ -8,3 +8,6 @@ Idea: draw the capture texture into a 1/4-size texture on the GPU and read back 
 
 Acceptance: measure `copy`+`map` on a real GPU session (DRM backend), frame diff of titlebar/dock blur vs current (tolerance 2/byte), no new per-frame texture allocation (reuse the half and quarter textures).
 Risk: extra render passes and two textures of VRAM; only worth it if the readback share on real hardware is large.
+
+## Addendum (crop)
+`crop_capture` (5-8 ms per capture) is at its CPU floor: columns hoisted, one vertical blend per row, 10-bit fixed point, reference-tested. What remains is writing a full-resolution bilinear upscale of the 1/4 capture. The only way to remove that is to hand the low-resolution capture to the GPU and let texture filtering do the upscale, which is the same architectural change as this unit; measure it on a real GPU together with the downscale and map phases.
