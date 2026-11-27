@@ -52,7 +52,7 @@ pub fn configured_icon_theme(config_home: &Path) -> Option<String> {
         Ok(text) => parse_ini_value(&text, "Settings", "gtk-icon-theme-name"),
         Err(error) => {
             eprintln!(
-                "flamewm: icon theme config {} unreadable: {error}; using bundled default",
+                "flamewm: icon theme config {} unreadable: {error}; using bundled default; blast_radius=works:ui,icon-lookup|degraded:configured-icon-theme",
                 gtk.display()
             );
             None

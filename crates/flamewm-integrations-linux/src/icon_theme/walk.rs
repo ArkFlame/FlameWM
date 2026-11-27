@@ -145,7 +145,7 @@ pub(super) fn read_theme_inherits(roots: &[PathBuf], theme: &str) -> Option<Icon
             Ok(file) => file,
             Err(error) => {
                 eprintln!(
-                    "flamewm: icon theme {theme} index {} unreadable: {error}; skipping inherited theme",
+                    "flamewm: icon theme {theme} index {} unreadable: {error}; skipping inherited theme; blast_radius=works:other-themes,icon-lookup|degraded:inherits-list",
                     index_file.display()
                 );
                 return None;
@@ -167,7 +167,7 @@ pub(super) fn read_theme_index(roots: &[PathBuf], theme: &str) -> Option<IconThe
             Ok(text) => text,
             Err(error) => {
                 eprintln!(
-                    "flamewm: icon theme {theme} index {} unreadable: {error}; skipping theme index",
+                    "flamewm: icon theme {theme} index {} unreadable: {error}; skipping theme index; blast_radius=works:other-themes,hicolor-fallback|degraded:icon-directories",
                     index_file.display()
                 );
                 return None;

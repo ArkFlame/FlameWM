@@ -1,7 +1,7 @@
 # u11 — Settings quarantine and safe defaults
 
-Status: **UNBUILT** (edits are complete by inspection only; the brief forbids `cargo`, builds and
-tests, so nothing in this unit has been compiled or executed).
+Status: **UNBUILT** (edits, including the caller integration below, are complete by inspection only;
+the brief forbids `cargo`, builds and tests, so nothing in this unit has been compiled or executed).
 
 ## Ownership and route
 
@@ -77,5 +77,7 @@ reachable through `crate::settings::*`.
 
 ## Verification
 
-- UNBUILT: no `cargo`, build or test command was run, per the brief. The tests above are written but
-  unverified; the orchestrator must compile and run them after integration.
+- UNBUILT: no `cargo`, build or test command was run, per the brief. Signatures were checked by
+  reading `load.rs`, `persist.rs`, `settings.rs`, `host.rs`, `services/settings.rs`,
+  `snapshot_parse.rs` and `snapshot_serialize.rs` before editing. The tests above and the existing
+  writer tests are unverified; the orchestrator must compile and run them after integration.

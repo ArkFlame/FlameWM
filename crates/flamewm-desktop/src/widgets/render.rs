@@ -173,8 +173,7 @@ pub(crate) fn sync_widgets(
                 }
                 if widget.kind == WidgetKind::Calendar
                     && previous_time.is_some_and(|before| {
-                        (before.year, before.month, before.day)
-                            == (time.year, time.month, time.day)
+                        (before.year, before.month, before.day) == (time.year, time.month, time.day)
                     })
                 {
                     continue;

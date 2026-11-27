@@ -53,7 +53,7 @@ pub fn load_left_ptr_preview(theme_root: &Path) -> Result<CursorPreview, CursorE
     })();
     if let Err(error) = &preview {
         eprintln!(
-            "flamewm: cursor theme {} left_ptr preview unavailable: {error}; preview skipped",
+            "flamewm: cursor theme {} left_ptr preview unavailable: {error}; preview skipped; blast_radius=works:cursor-theme,system-cursor|degraded:theme-preview",
             theme_root.display()
         );
     }
