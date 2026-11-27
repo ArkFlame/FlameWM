@@ -30,6 +30,15 @@ embedded font binaries), and the release profile already uses fat LTO, one codeg
 Cargo.toml profile or feature change was made — no safe tweak exists and dependency trim
 is a disk-only question with no runtime share.
 
+The retry extends the same hotlist with rows 13–20 in a second table: Xwayland idle RSS/PSS
+(61.6 MB PSS / 114.6 MB RSS, 14.8 MB of it output-sized shared pixmaps), Mesa llvmpipe mappings
+(about 33% of the flamewm-wayland idle PSS sample), the unattributed allocator heap (about 40 MB,
+with only 0.46 MB of live Rust bytes in wm), unmeasured per-process font tables, thread and channel
+wake mechanics, the previously unbounded desktop watcher name set (capped at 1024), explorer burst
+refresh debounce and reactor timer realignment. They are appended rather than folded into rows
+1–12 because the cited samples come from different revisions and harnesses; no new build, runtime
+sample or visual change was made.
+
 ## Evidence paths
 
 - Ranked table: `docs/PERF_HOTLIST.md`
@@ -40,6 +49,13 @@ is a disk-only question with no runtime share.
 - Wallpaper peak allocations: `docs/history/FLAMEWM_PASS46_WALLPAPER_PEAK_MEMORY_AUDIT_2026-10-20.md:10-12`
 - Pools and embedded assets: `crates/flamewm-terminal/build.rs:46-65`, `crates/flamewm-terminal/src/pool.rs:14-25`, `crates/flamewm-terminal/src/main.rs:31-33,179`, `crates/flamewm-lock/src/document.rs:21`, `crates/flamewm-desktop/build.rs:28,90`
 - Release profile: `Cargo.toml:66-71,76-121`
+
+- Added extension rows 13–20: `docs/backlog/wayland-rss.md:13-14,18,22-26,32-36,39,43-56`;
+  `docs/PERFORMANCE_PSS_DUPLICATION_SCOUT_2026-11-05.md:4-16`;
+  `docs/perf-loop/LOG-u77-thread-audit.md:10-23,27-52,53-66`;
+  `docs/perf-loop/LOG-u75-ram-structs.md:43-52`;
+  `docs/perf-loop/LOG-u110-debounce-audit.md:45-58`;
+  `docs/perf-loop/LOG-u11-reactor-timers.md:43`.
 
 **Changed paths:** `docs/PERF_HOTLIST.md`, `docs/swarm/units/u07-ram-audit.md`.
 **Verification:** none executed by design (no cargo/git/tests in this unit); all figures
