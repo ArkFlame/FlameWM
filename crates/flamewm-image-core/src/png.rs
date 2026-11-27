@@ -22,9 +22,8 @@ mod tests {
 
     #[test]
     fn decodes_fixture_with_alpha() {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../assets/branding/flamewm-wordmark.png");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/branding/flamewm-wordmark.png");
         let bytes = std::fs::read(path).expect("PNG fixture");
         let image = decode(&bytes).unwrap();
         assert_eq!(
