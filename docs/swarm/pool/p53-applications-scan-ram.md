@@ -39,10 +39,9 @@ Rows (file:line, finding, change, risk):
 Already satisfied, no edit: lazy discovery (`OnceLock`, background warm-up thread,
 `ready_shared_application_catalog`), incremental refresh (`dir_stamps` +
 `refresh_if_dirs_changed` + `delta_to`), and skipping unreadable/malformed files with
-one `eprintln!` report each while discovery continues. Reference-first: `.vendor/` has
-no Rust `Arc<str>` app-index precedent; xfdesktop relies on `GDesktopAppInfo` caching
-plus GQuark-style interning, which supports sharing repeated strings rather than
-cloning them, so the edits move/borrow strings instead of introducing a new interner.
+one `eprintln!` report each while discovery continues. Reference-first: `.vendor/`
+has no direct Rust `Arc<str>` app-index precedent, so no new interner was introduced;
+duplicates were removed by moving or borrowing the strings the scan already owns.
 
 PARTIAL — three production edits made as scoped above; no build or test was run
 because this worker is barred from `cargo`, so every edit is UNBUILT. The id
