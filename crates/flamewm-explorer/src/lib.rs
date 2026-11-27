@@ -364,23 +364,38 @@ fn merge_refresh(rows: &mut Vec<Entry>, items: Vec<Entry>, sort: view::ColumnSor
     let mut old = old.into_iter().peekable();
     let mut new = items.into_iter().peekable();
     loop {
-        match (old.peek().is_some(), new.peek().is_some()) {
-            (false, false) => break,
-            (true, false) => { changed = true; old.next(); }
-            (false, true) => { changed = true; merged.extend(new); break; }
-            (true, true) => {
-                let order = view::column_order(
-                    old.peek().expect("peeked row"),
-                    new.peek().expect("peeked row"),
-                    sort,
-                );
-                match order {
-                    std::cmp::Ordering::Less => { changed = true; old.next(); }
-                    std::cmp::Ordering::Greater => { changed = true; merged.extend(new.next()); }
-                    std::cmp::Ordering::Equal => {
-                        let previous = old.next().expect("peeked row");
-                        let next = new.next().expect("peeked row");
-                        if previous == next { merged.push(previous); } else { changed = true; merged.push(next); }
+        // Matching on the peeked rows keeps this free of panics: a row is only compared while both
+        // sides still have one.
+        let order = match (old.peek(), new.peek()) {
+            (None, None) => break,
+            (Some(_), None) => {
+                changed = true;
+                old.next();
+                continue;
+            }
+            (None, Some(_)) => {
+                changed = true;
+                merged.extend(new);
+                break;
+            }
+            (Some(previous), Some(next)) => view::column_order(previous, next, sort),
+        };
+        match order {
+            std::cmp::Ordering::Less => {
+                changed = true;
+                old.next();
+            }
+            std::cmp::Ordering::Greater => {
+                changed = true;
+                merged.extend(new.next());
+            }
+            std::cmp::Ordering::Equal => {
+                if let (Some(previous), Some(next)) = (old.next(), new.next()) {
+                    if previous == next {
+                        merged.push(previous);
+                    } else {
+                        changed = true;
+                        merged.push(next);
                     }
                 }
             }
@@ -811,6 +826,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/duplicate_naming_tests.rs"]
 mod duplicate_naming_tests;
+
+#[cfg(test)]
+#[path = "tests/merge_refresh_tests.rs"]
+mod merge_refresh_tests;
 
 /// Caret and selection for the one active text edit (path bar, search, inline rename, place rename).
 /// Indexes are char positions. A selection is replaced by the next typed character.

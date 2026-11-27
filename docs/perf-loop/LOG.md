@@ -240,3 +240,10 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 | task-manager | 2 | 30.8 MB | 5 (25 ms/s, ~2.5% of a core, 100% in the sampler thread) |
 - RAM is small and even (22-31 MB); no cache stands out, so no RAM unit is ranked. The only idle consumer is the task manager's 1 Hz sampler (581 processes): already buffer-reusing, one `stat` read per task (RSS from it), bounded `status` read, sleeps while obscured; the remaining ~25 ms/sample is the per-process open/read/close syscalls, which a visible process table needs. Not changed.
 - Ranking now: compositor capture residual (u162/u163) > task-manager sampler (~2.5% core while visible) > everything else at 0.
+
+## Reliability sweep: runtime unwrap/expect inventory (release is `panic = "abort"`)
+- Method: `cargo clippy -p <crate> -- -W clippy::unwrap_used -W clippy::expect_used` (no `--all-targets`, so inline test modules are excluded and counts are real runtime sites).
+- Compositor (`flamewm-wm-wayland`): 2 sites, `xwayland.rs` `xwm_state` and `session_lock.rs` `lock_state`. Both implement library trait methods that must return `&mut` (no error path possible) and document their invariant (XWayland handlers fire only while the X11 WM runs; the lock global is created at startup). Left as is.
+- Apps (explorer, terminal, shell, task manager): ~45 hits are `build.rs` (build-time, fine). Runtime: explorer `merge_refresh` (4 `expect("peeked row")`), explorer `scroll.rs` (`checked_sub().unwrap()`), shell-core calendar (`try_into().expect("42 cells")`).
+- Fixed: `merge_refresh` now matches on the peeked rows (no panic path, same merge semantics) and has its first tests (identical, added/removed rows, leftover rows on either side, empty cases); `ResizeGate::offer` uses `Duration::saturating_sub` (identical value in the guarded branch). The calendar expect is a constant-size loop product, left as is.
+- No performance change; reliability only. 252 explorer tests green, clippy `-D warnings` clean.

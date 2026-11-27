@@ -82,11 +82,7 @@ impl ResizeGate {
         match self.applied {
             Some(at) if now.saturating_duration_since(at) < RESIZE_INTERVAL => {
                 self.pending = Some(size);
-                Resize::Defer(
-                    RESIZE_INTERVAL
-                        .checked_sub(now.saturating_duration_since(at))
-                        .unwrap(),
-                )
+                Resize::Defer(RESIZE_INTERVAL.saturating_sub(now.saturating_duration_since(at)))
             }
             _ => {
                 self.applied = Some(now);
