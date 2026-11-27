@@ -95,6 +95,8 @@ pub struct LockClient {
     pub(crate) outcomes: Option<std::sync::mpsc::Receiver<crate::pam::Outcome>>,
     /// User being authenticated.
     pub(crate) username: String,
+    /// Hour and minute the clock was last painted with, so the next minute repaints it.
+    pub(crate) shown_minute: Option<(u8, u8)>,
     /// Settings the lock paints with.
     pub(crate) settings: crate::settings::LockSettings,
     /// How a submitted password is checked.
@@ -127,6 +129,7 @@ impl LockClient {
             input: crate::seat::SeatInput::default(),
             outcomes: None,
             username: String::new(),
+            shown_minute: None,
             settings: crate::settings::LockSettings::default(),
             authenticate: std::sync::Arc::new(Box::new(crate::pam::authenticate)),
             view: crate::view::LockView::project(
@@ -284,6 +287,16 @@ impl LockClient {
         );
         Ok((buffer, pool, file))
     }
+}
+
+/// The hour and minute a clock paint shows, or `None` when no time is available.
+fn clock_minute(now: Option<crate::native_time::LocalTime>) -> Option<(u8, u8)> {
+    now.map(|time| (time.hour, time.minute))
+}
+
+/// Whether the clock on screen (`shown`) is out of date against `now`.
+fn minute_changed(shown: Option<(u8, u8)>, now: Option<crate::native_time::LocalTime>) -> bool {
+    clock_minute(now) != shown
 }
 
 /// Reorders the painter's straight `R, G, B, A` bytes into the `B, G, R, A` bytes of `wl_shm`
@@ -555,9 +568,11 @@ where
         .flush()
         .map_err(|error| LockError::Protocol(error.to_string()))?;
     client.settings = load_settings();
+    let now = crate::native_time::local_now();
+    client.shown_minute = clock_minute(now);
     client.view = crate::view::LockView::project(
         &client.settings,
-        None,
+        now,
         username,
         client.state.password(),
         client.state.status(),
@@ -580,6 +595,7 @@ where
         }
         // A PAM outcome can land while no event is pending, so check before blocking.
         client.poll_outcome();
+        client.tick_clock();
         if client.dirty && !client.configured.is_empty() {
             client.dirty = false;
             client.repaint(&queue.handle());
@@ -684,6 +700,13 @@ impl LockClient {
         let _ = qh;
     }
 
+    /// Marks the lock for repaint once the local minute differs from the one on screen.
+    fn tick_clock(&mut self) {
+        if minute_changed(self.shown_minute, crate::native_time::local_now()) {
+            self.dirty = true;
+        }
+    }
+
     /// Moves the typed secret to the PAM worker and enters the authenticating state.
     fn submit(&mut self) {
         let secret = self.state.begin_authentication();
@@ -731,9 +754,11 @@ impl LockClient {
     /// Repaints every configured surface from the current lock state.
     fn repaint(&mut self, qh: &QueueHandle<Self>) {
         // Project the live state: the masked dots and the status line follow the keystrokes.
+        let now = crate::native_time::local_now();
+        self.shown_minute = clock_minute(now);
         self.view = crate::view::LockView::project(
             &self.settings,
-            None,
+            now,
             &self.username,
             self.state.password(),
             self.state.status(),
@@ -796,6 +821,22 @@ fn wait_readable(connection: &Connection, authenticating: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_clock_repaints_only_when_the_minute_changes() {
+        use crate::native_time::LocalTime;
+        let at = |hour, minute| LocalTime {
+            year: 2026,
+            month: 1,
+            day: 1,
+            hour,
+            minute,
+        };
+        assert!(!super::minute_changed(Some((13, 7)), Some(at(13, 7))));
+        assert!(super::minute_changed(Some((13, 7)), Some(at(13, 8))));
+        assert!(super::minute_changed(None, Some(at(0, 0))));
+        assert!(!super::minute_changed(None, None));
+    }
+
     #[test]
     fn painter_rgba_bytes_become_wayland_argb8888_bytes() {
         let rgba = [10_u8, 20, 30, 255, 1, 2, 3, 4];

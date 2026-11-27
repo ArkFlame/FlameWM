@@ -360,3 +360,6 @@ Separate finding, NOT from this change (old build identical): in the nested harn
 ## Wayland lock: red/blue swapped (fixed)
 `shm_buffer` declared wl_shm `Argb8888` (bytes B,G,R,A) but the painter writes R,G,B,A, so red and blue were swapped on the Wayland lock (orange sky). Now converted by `rgba_to_wl_argb8888` (unit-tested), format kept as `Argb8888` because every compositor must offer it. Frame read in the nested harness: sky blue, lake teal, background blurred (was orange/olive before); 177 tests, clippy -D warnings green with --features wayland.
 Still wrong in the same frame (open, unexamined): the "Log out / Cancel" menu and the "Are you sure?" dialog are drawn open, the clock reads `--:--`. Next unit: the software painter on the Wayland path seems to ignore hidden nodes and the clock text.
+
+## Wayland lock: no clock or date (fixed)
+All Wayland projections passed `None` for the time, so the lock could never show a clock or date (`--:--`). Now `native_time::local_now()` feeds the projection, and the loop repaints when the minute changes (`minute_changed`, checked on the existing ~1 s wake; unit-tested). Frame read in the nested harness: `01:03` and `Friday, 27 November 2026` shown. 178 tests + clippy -D warnings green with --features wayland. Still open: the "Log out / Cancel" menu and "Are you sure?" dialog are drawn open in the same frame.
