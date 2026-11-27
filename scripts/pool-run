@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Run every OPEN unit in docs/swarm/pool/ as a parallel `opencode run` worker (hy4-flash-free).
+# Used when the claude-opencode MCP workers fail auth but the CLI works.
+# Usage: scripts/pool-run [parallel=12]   Logs: .target/pool-logs/<unit>.log
+set -u
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+P=${1:-12}
+BRIEF=$ROOT/docs/swarm/pool/BRIEF.md
+LOGDIR=$ROOT/.target/pool-logs
+mkdir -p "$LOGDIR"
+run_one() {
+  unit=$1
+  name=$(basename "$unit" .md)
+  prompt=$(sed -e "s|{{UNIT_PATH}}|$unit|g" -e "s|{{UNIT_NAME}}|$name|g" "$BRIEF")
+  (cd "$ROOT" && timeout 1500 opencode run -m opencode-go/hy4-flash-free "$prompt" >"$LOGDIR/$name.log" 2>&1)
+  echo "$name exit=$?"
+}
+export -f run_one
+export ROOT BRIEF LOGDIR
+grep -l '^STATUS: OPEN' "$ROOT"/docs/swarm/pool/p*.md | xargs -P "$P" -I{} bash -c 'run_one {}'
