@@ -288,3 +288,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## Binary size scout: terminal 14 MB is by design
 - `flamewm-terminal` is the largest binary (14.0 MB vs compositor 8.9, shell 7.4, explorer 5.4, task manager 3.6) because it embeds three compiled UI tiers (0.75, 2.4 and 7.2 MB, 24x80 / 48x128 / 96x192 run slots). A window decodes only the smallest tier that fits its grid (`pool_tier_for`); the other tiers are untouched read-only file pages and never resident. Measured RSS stays 22-31 MB (per-app table). Disk size only; no runtime share. No change.
+
+## Reference pass: KWin and other desktops (user request)
+- Cloned `.vendor/kwin-master` (sparse) and compared KWin blur, scenefx optimized blur (mangowm) and COSMIC `ext_background_effect`. Findings and how they map to u162/u163 are in `docs/perf-loop/REFERENCE-TRANSPARENCY.md`. Our desktop-level cached backdrop already matches scenefx; the open gap is KWin's GPU pyramid + damage-clipped blur (u162).

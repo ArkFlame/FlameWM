@@ -11,3 +11,6 @@ Risk: extra render passes and two textures of VRAM; only worth it if the readbac
 
 ## Addendum (crop)
 `crop_capture` (5-8 ms per capture) is at its CPU floor: columns hoisted, one vertical blend per row, 10-bit fixed point, reference-tested. What remains is writing a full-resolution bilinear upscale of the 1/4 capture. The only way to remove that is to hand the low-resolution capture to the GPU and let texture filtering do the upscale, which is the same architectural change as this unit; measure it on a real GPU together with the downscale and map phases.
+
+## Design reference (added)
+See `docs/perf-loop/REFERENCE-TRANSPARENCY.md`: KWin's dual-Kawase pyramid with per-window reusable FBOs and damage-clipped blur is the model; port the structure (downsample chain, upsample chain, colour matrix in the last pass), not constants.
