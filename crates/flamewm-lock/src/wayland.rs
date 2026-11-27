@@ -555,6 +555,27 @@ where
     L: FnOnce() -> crate::settings::LockSettings + 'static,
     F: FnMut(&crate::view::LockView, u32, u32) -> Result<Frame, String> + 'static,
 {
+    let result = run_with_inner(load_settings, username, authenticate, frame);
+    if let Err(ref error) = result {
+        crate::pam::record_failure(
+            "lock-protocol",
+            format!("session lock unavailable: {error}"),
+        );
+    }
+    result
+}
+
+/// The protocol loop itself. Every failure returns to [`run_with`] for exactly one record.
+fn run_with_inner<L, F>(
+    load_settings: L,
+    username: &str,
+    authenticate: Authenticator,
+    frame: F,
+) -> Result<(), LockError>
+where
+    L: FnOnce() -> crate::settings::LockSettings + 'static,
+    F: FnMut(&crate::view::LockView, u32, u32) -> Result<Frame, String> + 'static,
+{
     let connection =
         Connection::connect_to_env().map_err(|error| LockError::Connect(error.to_string()))?;
     let mut client = LockClient::new(Box::new(frame));
@@ -591,7 +612,8 @@ where
             return Ok(());
         }
         if client.finished {
-            return Ok(());
+            // A refused or ended lock is a failure, never a silent successful exit.
+            return Err(LockError::Refused);
         }
         // A PAM outcome can land while no event is pending, so check before blocking.
         client.poll_outcome();
@@ -722,11 +744,13 @@ impl LockClient {
                 let _ = tx.send(outcome);
             });
         if spawned.is_err() {
+            crate::pam::record_failure("pam", "cannot spawn the PAM authentication worker");
             if let Some(rx) = self.outcomes.take() {
                 drop(rx);
             }
             self.state
                 .finish(crate::pam::Outcome::Unavailable, std::time::Instant::now());
+            self.dirty = true;
         }
     }
 
@@ -735,8 +759,17 @@ impl LockClient {
         let Some(rx) = self.outcomes.as_ref() else {
             return;
         };
-        let Ok(outcome) = rx.try_recv() else {
-            return;
+        let outcome = match rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // The helper died without a verdict: do not stay in `Authenticating` forever.
+                crate::pam::record_failure("pam", "PAM worker exited without an outcome");
+                eprintln!(
+                    "flamewm-lock: PAM worker exited without an outcome; screen stays locked"
+                );
+                crate::pam::Outcome::Unavailable
+            }
         };
         self.outcomes = None;
         match outcome {
@@ -746,6 +779,9 @@ impl LockClient {
                 eprintln!("flamewm-lock: authentication unavailable");
             }
         }
+        // The status line is painted from the state; without this repaint the screen would keep
+        // showing "Authenticating…" after a backend failure.
+        self.dirty = true;
         if self.state.finish(outcome, std::time::Instant::now()) {
             self.unlock = true;
         }

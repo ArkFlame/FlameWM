@@ -16,6 +16,7 @@ flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-ribbons = { path = "../flamewm-ribbons" }
+flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-ui-document = { path = "../flamewm-ui-document" }
 rustix = { workspace = true }
 

@@ -83,21 +83,52 @@ pub trait PamSession {
     fn end(&mut self, status: c_int);
 }
 
+/// Appends one typed failure record for a PAM or session-lock backend failure. This is pure
+/// diagnostics: it never changes the lock decision and never writes the typed password.
+pub fn record_failure(stage: &str, cause: impl std::fmt::Display) {
+    use flamewm_session_core::diagnostics::{
+        BlastRadius, FailureCode, FailureRecord, append_record, session_log_path,
+    };
+    let fallback = std::path::PathBuf::from("/tmp/flamewm-session.log");
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let log = session_log_path(
+        std::env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    );
+    let record = FailureRecord::at_now(
+        stage,
+        FailureCode::SubsystemError,
+        cause.to_string(),
+        // Authentication is the only degraded capability; the session, shell and other windows
+        // keep working. No fallback is taken: the screen stays locked.
+        BlastRadius::new(["session", "shell", "wm"], ["lock_auth", "lock_surface"]),
+        false,
+    );
+    if let Err(error) = append_record(&log, &record) {
+        eprintln!("flamewm-lock: failure record write failed: {error}");
+    }
+}
+
 /// Runs the transaction and maps every outcome to a lock decision.
 pub fn run_flow(session: &mut dyn PamSession) -> Outcome {
-    if session.start().is_err() {
+    if let Err(code) = session.start() {
+        record_failure("pam", format!("pam_start failed with code {code}"));
         return Outcome::Unavailable;
     }
     let auth = session.authenticate();
     let outcome = if auth == PAM_SUCCESS {
-        if session.acct_mgmt() == PAM_SUCCESS {
-            Outcome::Unlocked
-        } else {
-            Outcome::Denied
+        match session.acct_mgmt() {
+            PAM_SUCCESS => Outcome::Unlocked,
+            code => {
+                record_failure("pam", format!("pam_acct_mgmt failed with code {code}"));
+                Outcome::Denied
+            }
         }
     } else if auth == PAM_AUTH_ERR || auth == PAM_USER_UNKNOWN {
         Outcome::Denied
     } else {
+        record_failure("pam", format!("pam_authenticate failed with code {auth}"));
         Outcome::Unavailable
     };
     session.end(if outcome == Outcome::Unlocked {
@@ -111,11 +142,19 @@ pub fn run_flow(session: &mut dyn PamSession) -> Outcome {
 /// Authenticates `username` with `password` through the `flamewm-lock` PAM service.
 #[must_use]
 pub fn authenticate(username: &str, password: &str) -> Outcome {
-    let Ok(library) = DynamicPam::load_from(&LIBRARY_NAMES) else {
-        return Outcome::Unavailable;
+    let library = match DynamicPam::load_from(&LIBRARY_NAMES) {
+        Ok(library) => library,
+        Err(error) => {
+            record_failure("pam", format!("PAM library unavailable: {error}"));
+            return Outcome::Unavailable;
+        }
     };
-    let Ok(mut session) = library.session(username, password) else {
-        return Outcome::Unavailable;
+    let mut session = match library.session(username, password) {
+        Ok(session) => session,
+        Err(error) => {
+            record_failure("pam", format!("PAM session setup failed: {error}"));
+            return Outcome::Unavailable;
+        }
     };
     run_flow(&mut session)
 }

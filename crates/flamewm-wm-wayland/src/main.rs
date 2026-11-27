@@ -132,7 +132,9 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::graphics::{DisplayProtocol, choose_provider};
 use flamewm_render_core::RenderAcceleration;
-use flamewm_session_core::diagnostics::{fallback_log_path, install_panic_hook, session_log_path};
+use flamewm_session_core::diagnostics::{
+    fallback_log_path, guard, install_panic_hook, session_log_path,
+};
 use rustix::process::getuid;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::{WinitEvent, init_from_attributes};
@@ -696,6 +698,23 @@ fn abort_startup(reason: &str) {
     }
 }
 
+/// Runs a non-essential startup subsystem behind `guard`, returning `None` when it panicked so the
+/// caller degrades instead of ending the session. The installed panic hook already appended the
+/// `code=panic` record with this subsystem as its stage, so this only reports the degrade on stderr;
+/// the event loop core is deliberately never wrapped.
+fn guard_startup<T>(subsystem: &'static str, operation: impl FnOnce() -> T) -> Option<T> {
+    match guard(subsystem, operation) {
+        Ok(value) => Some(value),
+        Err(failure) => {
+            eprintln!(
+                "flamewm-wayland: {subsystem} panicked ({}); continuing without it",
+                failure.cause
+            );
+            None
+        }
+    }
+}
+
 /// Runs the compositor and returns its exit code.
 fn run() -> Result<i32, Box<dyn Error>> {
     // Before any thread or child exists: XWayland, the session clients and the compositor's own
@@ -709,11 +728,11 @@ fn run() -> Result<i32, Box<dyn Error>> {
         "FLAMEWM_RENDER_PROVIDER {} (real GL driver reported as FLAMEWM_GL_RENDERER)",
         graphics.name()
     );
-    report_render_acceleration();
-    {
+    let _ = guard_startup("render-acceleration", report_render_acceleration);
+    let _ = guard_startup("cursor-theme", || {
         let (theme, size) = cursor::saved_appearance();
         cursor::export_session_theme(theme.as_deref(), size);
-    }
+    });
     let explicit = std::env::var("FLAMEWM_WAYLAND_BACKEND").ok();
     let backend = select_backend(explicit.as_deref());
     if let Some(requested) = explicit
@@ -738,8 +757,10 @@ fn run() -> Result<i32, Box<dyn Error>> {
         std::env::var("FLAMEWM_WAYLAND_SOCKET").unwrap_or_else(|_| "wayland-flame".to_owned());
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
     let handle = event_loop.handle();
-    profile::init();
-    profile::install_compose_dump(&handle);
+    let _ = guard_startup("profiling", || {
+        profile::init();
+        profile::install_compose_dump(&handle);
+    });
     let mut display: Display<State> = Display::new()?;
     let dh = display.handle();
     // calloop watches a duplicate of the display fd; the Display itself is dispatched through the
@@ -754,10 +775,13 @@ fn run() -> Result<i32, Box<dyn Error>> {
     )?;
     // Advertise ext-session-lock-v1 before clients connect: the lock UI is an ordinary client,
     // so this global is the only way it can paint while the session is locked.
-    state.init_session_lock();
-    state.init_screencopy();
-    // Control service: a failed bus connection leaves the compositor usable without the shell API.
-    if let Err(error) = control::install(&mut state) {
+    let _ = guard_startup("session-protocols", || {
+        state.init_session_lock();
+        state.init_screencopy();
+    });
+    // Control service: a failed bus connection (or a panic in the bus setup) leaves the compositor
+    // usable without the shell API.
+    if let Some(Err(error)) = guard_startup("control", || control::install(&mut state)) {
         eprintln!("flamewm-wayland: control service unavailable: {error}");
     }
 

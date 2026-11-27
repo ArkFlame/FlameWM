@@ -589,6 +589,8 @@ mod release;
 mod shake_locate;
 mod show_desktop;
 mod stack_layer;
+#[cfg(test)]
+mod startup_fault_tests;
 mod super_tap;
 mod switcher;
 // Alt+Tab thumbnail policy, provider and X11 source; driven by the switcher (see switcher.rs).
@@ -605,6 +607,7 @@ mod workspace;
 mod workspace_state;
 
 use configure_summary::*;
+pub(crate) use construct::StartupFault;
 use construct::*;
 use controllers::*;
 use counters::{bump, emit_resize_summary, move_counters, read, resize_counters};

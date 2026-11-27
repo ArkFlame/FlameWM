@@ -951,29 +951,46 @@ fn single_output_root_geometry(
     (Rect::from_parts(Point::new(0, 0), root_size), mode)
 }
 
+/// Pure: RandR resources failed, so output geometry falls back to the root window.
+pub(crate) fn randr_resource_fault(error: String) -> crate::wm::StartupFault {
+    crate::wm::StartupFault {
+        stage: "randr-resources",
+        message: format!(
+            "flamewm: RandR screen resources unavailable: {error}; blast radius: no per-output geometry/modes, falling back to root geometry"
+        ),
+        exit_code: None,
+    }
+}
+
+/// Pure: values used when RandR resources are unavailable (no timestamp, no
+/// outputs, no modes), so the single root-output fallback supplies geometry.
+pub(crate) fn empty_randr_resources() -> (u32, Vec<u32>, Vec<randr::ModeInfo>) {
+    (0, Vec::new(), Vec::new())
+}
+
 impl DisplayPort for X11Desktop {
     fn display_snapshot(&self) -> FlameResult<DisplaySnapshot> {
         // RandR is optional: without it the WM must still start. Blast radius: no
         // per-output modes or hotplug geometry; the existing root-output fallback below
         // supplies a single connected output so panels and geometry still work.
-        let (config_timestamp, output_ids, resource_modes) = match self
+        let resources = self
             .conn
             .randr_get_screen_resources_current(self.root)
             .map_err(ReplyError::from)
-            .and_then(|cookie| cookie.reply())
-        {
-            Ok(resources) => (
-                resources.config_timestamp,
-                resources.outputs,
-                resources.modes,
-            ),
-            Err(error) => {
-                eprintln!(
-                    "flamewm: RandR screen resources unavailable: {error}; blast radius: no per-output geometry/modes, falling back to root geometry"
-                );
-                (0, Vec::new(), Vec::new())
-            }
-        };
+            .and_then(|cookie| cookie.reply());
+        if let Err(error) = &resources {
+            eprintln!("{}", randr_resource_fault(error.to_string()).message);
+        }
+        let (config_timestamp, output_ids, resource_modes) = resources.map_or_else(
+            |_| empty_randr_resources(),
+            |resources| {
+                (
+                    resources.config_timestamp,
+                    resources.outputs,
+                    resources.modes,
+                )
+            },
+        );
         // Stable physical output identity: never infer primary from RandR
         // resource enumeration order (it can change after hotplug/rotation).
         let primary_output = self

@@ -1,44 +1,109 @@
 //! Wm construction and the become-WM handshake.
 use super::*;
 
+/// Failure record for a degraded startup stage. It keeps the exact operator-facing
+/// text so the fallback decision can be pure and tested without an X server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StartupFault {
+    pub(crate) stage: &'static str,
+    pub(crate) message: String,
+    /// `Some` only for a fatal stage; `run_with_hook` propagates it to `exit(1)`.
+    pub(crate) exit_code: Option<i32>,
+}
+
+/// RandR query outcome, reduced from the extension cookie reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RandrQuery {
+    Present,
+    Absent,
+    Failed(String),
+}
+
+/// Pure: an absent or failed optional extension degrades with a failure record.
+pub(crate) fn missing_extension_fault(extension: &str, detail: &str) -> StartupFault {
+    StartupFault {
+        stage: "extension",
+        message: format!("flamewm: {extension} absent; blast radius: {detail}"),
+        exit_code: None,
+    }
+}
+
+/// Pure: resolve the RandR event stage to live events or a root-geometry fallback,
+/// recording the reason whenever it degrades.
+pub(crate) fn randr_event_fault(
+    query: RandrQuery,
+    selection_error: Option<String>,
+) -> Option<StartupFault> {
+    match query {
+        RandrQuery::Present if selection_error.is_none() => None,
+        RandrQuery::Present => selection_error.map(|error| StartupFault {
+            stage: "randr-events",
+            message: format!(
+                "flamewm: RandR event selection failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used until restart"
+            ),
+            exit_code: None,
+        }),
+        RandrQuery::Absent => Some(missing_extension_fault(
+            "RandR",
+            "no live output hotplug/CRTC change notifications, root geometry is used",
+        )),
+        RandrQuery::Failed(error) => Some(StartupFault {
+            stage: "randr-events",
+            message: format!(
+                "flamewm: RandR query failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used"
+            ),
+            exit_code: None,
+        }),
+    }
+}
+
+/// Pure: a second WM holding the root `SubstructureRedirect` selection is fatal.
+pub(crate) fn second_wm_fault(error_kind: Option<ErrorKind>) -> Option<StartupFault> {
+    (error_kind == Some(ErrorKind::Access)).then_some(StartupFault {
+        stage: "root-selection",
+        message: "flamewm: another window manager is already running on this display".into(),
+        exit_code: Some(1),
+    })
+}
+
 pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError> {
     let attrs = ChangeWindowAttributesAux::new().event_mask(super::hot_corner::root_event_mask());
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
     // RandR is optional: a server without it still gets a working WM. Losing this
     // selection means no live SCREEN_CHANGE/OUTPUT_CHANGE/CRTC_CHANGE notifications;
     // output geometry falls back to the root window until the next start.
-    match conn
+    let query = match conn
         .query_extension(b"RANDR")
         .map_err(ReplyError::from)
         .and_then(|cookie| cookie.reply())
     {
-        Ok(reply) if reply.present => {
-            let selection = conn.randr_select_input(
+        Ok(reply) if reply.present => RandrQuery::Present,
+        Ok(_) => RandrQuery::Absent,
+        Err(error) => RandrQuery::Failed(error.to_string()),
+    };
+    let selection_error = (query == RandrQuery::Present)
+        .then(|| {
+            conn.randr_select_input(
                 screen.root,
                 randr::NotifyMask::SCREEN_CHANGE
                     | randr::NotifyMask::OUTPUT_CHANGE
                     | randr::NotifyMask::CRTC_CHANGE,
-            );
-            if let Err(error) = selection
-                .map_err(ReplyError::from)
-                .and_then(|cookie| cookie.check())
-            {
-                eprintln!(
-                    "flamewm: RandR event selection failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used until restart"
-                );
-            }
-        }
-        Ok(_) => eprintln!(
-            "flamewm: RandR absent; blast radius: no live output hotplug/CRTC change notifications, root geometry is used"
-        ),
-        Err(error) => eprintln!(
-            "flamewm: RandR query failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used"
-        ),
+            )
+            .map_err(ReplyError::from)
+            .and_then(|cookie| cookie.check())
+            .err()
+            .map(|error| error.to_string())
+        })
+        .flatten();
+    if let Some(fault) = randr_event_fault(query, selection_error) {
+        eprintln!("{}", fault.message);
     }
-    if let Err(ReplyError::X11Error(ref error)) = result
-        && error.error_kind == ErrorKind::Access
-    {
-        eprintln!("flamewm: another window manager is already running on this display");
+    let selection_kind = match &result {
+        Err(ReplyError::X11Error(error)) => Some(error.error_kind),
+        _ => None,
+    };
+    if let Some(fault) = second_wm_fault(selection_kind) {
+        eprintln!("{}", fault.message);
     }
     result
 }

@@ -217,23 +217,26 @@ pub(crate) fn sync_widgets(
         time: time_key,
         samples: state.widgets.sample_key(),
     };
+    // The key already owns a snapshot of every widget; borrow it instead of cloning each slot a
+    // second time. Full syncs run on every sample tick, so the duplicate allocations were idle
+    // cost on a desktop with sampling widgets.
     for slot in 0..MAX_WIDGETS {
         let id = format!("widget-{}", slot + 1);
-        let Some(widget) = state.widgets.store.widgets().get(slot).cloned() else {
+        let Some(widget) = key.widgets.get(slot) else {
             document.visible(&id, false)?;
             state.widgets.rings[slot] = None;
             state.widgets.graphs[slot] = None;
             state.widgets.faces[slot] = None;
             continue;
         };
-        let editing = editing_buffer(state, &widget);
-        sync_card_chrome(document, &id, &widget, surface, editing.as_deref())?;
+        let editing = editing_buffer(state, widget);
+        sync_card_chrome(document, &id, widget, surface, editing.as_deref())?;
         sync_card_content(
             document,
             state,
             slot,
             &id,
-            &widget,
+            widget,
             time,
             accent,
             placeholders.as_ref(),

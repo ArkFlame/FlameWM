@@ -1,5 +1,6 @@
 //! Frame composition: layer surfaces, windows with server-side titlebars, popups, frame callbacks.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
@@ -60,6 +61,39 @@ render_elements! {
     Rounded=RoundedSurfaceElement,
     Memory=MemoryRenderBufferRenderElement<GlowRenderer>,
     Backing=backing_element::RoundedMemoryElement,
+}
+
+/// Monotonic scene generation of the nested winit paint path. Every path that changes the scene
+/// below the cursor funnels through `State::request_paint`, which sets `scene_dirty`; the frame
+/// that observes the flag bumps this counter once. A cursor-only paint reuses the previous element
+/// list only while its cached generation still matches. The counter lives here rather than in
+/// `State` because the render module does not own that type.
+static SCENE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn bump_scene_generation() -> u64 {
+    SCENE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+fn scene_generation() -> u64 {
+    SCENE_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The last full desktop scene. The first `cursor_len` entries are the topmost cursor elements,
+/// replaced on every paint; the rest are window, decoration, backdrop and overlay elements from
+/// the frame that last bumped [`SCENE_GENERATION`].
+struct SceneCache {
+    generation: u64,
+    size: Size<i32, Physical>,
+    scale: f64,
+    host_draws_pointer: bool,
+    cursor_len: usize,
+    elements: Vec<Elem>,
+}
+
+thread_local! {
+    /// The nested event loop is single-threaded. A thread-local keeps the cache out of `State`,
+    /// which this module does not own. Frames that are not a desktop composite drop it.
+    static WINIT_SCENE: RefCell<Option<SceneCache>> = const { RefCell::new(None) };
 }
 
 pub(crate) const CLEAR: [f32; 4] = [0.07, 0.08, 0.11, 1.0];
@@ -786,6 +820,13 @@ fn render_into(
     scene_dirty: bool,
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
+    // One bump per observed scene change; a cursor-only frame leaves the generation untouched.
+    if scene_dirty {
+        bump_scene_generation();
+    }
+    let generation = scene_generation();
+    let scene_scale = state.output_scale();
+    let host_draws_pointer = State::host_draws_pointer_status(&state.cursor_status);
     let mut lap = stage_timers::Lap::start();
     refresh_desktop_backdrop(state, backend.renderer(), size)?;
     lap.mark(stage_timers::Stage::DesktopBackdrop);
@@ -797,32 +838,57 @@ fn render_into(
     // other clients' content back on the output the lock exists to cover. A dead locker leaves an
     // opaque cover (`screen_for`), it never reveals the desktop.
     crate::session_lock::prune_dead_locks(state);
-    let elements = match crate::session_lock::screen_for(state.session_locked, state.lock_surface())
-    {
-        Screen::Lock(surface) => surface_elements(
-            backend.renderer(),
-            surface.wl_surface(),
-            0,
-            0,
-            state.output_scale(),
-        ),
-        Screen::Blank => vec![solid_lock_cover(Rectangle::from_size(size))],
-        Screen::Desktop => {
-            // The host window draws a named pointer itself (see `State::sync_host_cursor`).
-            let mut elements = if State::host_draws_pointer_status(&state.cursor_status) {
-                Vec::new()
-            } else {
-                state.cursors.elements(
-                    backend.renderer(),
-                    &state.cursor_status,
-                    state.pointer,
-                    state.output_scale(),
-                )
-            };
-            build_elements_into(state, backend.renderer(), &mut elements);
-            elements
-        }
-    };
+    // A lock screen owns the output; its elements (or the opaque cover) must never be reused as a
+    // desktop scene once the lock is gone.
+    let cached = WINIT_SCENE.with(|slot| slot.borrow_mut().take());
+    let (mut elements, cache_key) =
+        match crate::session_lock::screen_for(state.session_locked, state.lock_surface()) {
+            Screen::Lock(surface) => (
+                surface_elements(backend.renderer(), surface.wl_surface(), 0, 0, scene_scale),
+                None,
+            ),
+            Screen::Blank => (vec![solid_lock_cover(Rectangle::from_size(size))], None),
+            Screen::Desktop => {
+                // The host window draws a named pointer itself (see `State::sync_host_cursor`).
+                // Cursor elements stay first (topmost) and are rebuilt on every paint, exactly as
+                // the tty backend does it (see `drm/mod.rs` and `frame_pacing::SceneBuild`).
+                let cursor = if host_draws_pointer {
+                    Vec::new()
+                } else {
+                    state.cursors.elements(
+                        backend.renderer(),
+                        &state.cursor_status,
+                        state.pointer,
+                        scene_scale,
+                    )
+                };
+                let cursor_len = cursor.len();
+                // Guards for reuse: no scene change since the cached frame, unchanged output
+                // geometry/scale and pointer owner, no readback that needs freshly built elements,
+                // and a well-formed cursor slice. Anything else takes the full-build path.
+                let reuse = cached.filter(|cache| {
+                    !scene_dirty
+                        && cache.generation == generation
+                        && cache.size == size
+                        && cache.scale == scene_scale
+                        && cache.host_draws_pointer == host_draws_pointer
+                        && cache.cursor_len <= cache.elements.len()
+                        && state.dump.is_none()
+                        && state.screencopy_pending.is_empty()
+                });
+                if let Some(mut cache) = reuse {
+                    cache
+                        .elements
+                        .splice(0..cache.cursor_len, cursor)
+                        .for_each(drop);
+                    (cache.elements, Some((cursor_len, generation, scene_scale)))
+                } else {
+                    let mut elements = cursor;
+                    build_elements_into(state, backend.renderer(), &mut elements);
+                    (elements, Some((cursor_len, generation, scene_scale)))
+                }
+            }
+        };
     lap.mark(stage_timers::Stage::Elements);
     serve_screencopy(state, backend.renderer(), &elements, size);
     serve_switcher_thumbs(state, backend.renderer());
@@ -960,6 +1026,18 @@ fn render_into(
     crate::presentation_scale::presented(feedback, &state.output);
     send_frame_callbacks(state);
     lap.mark(stage_timers::Stage::Callbacks);
+    if let Some((cursor_len, generation, scale)) = cache_key {
+        WINIT_SCENE.with(|slot| {
+            *slot.borrow_mut() = Some(SceneCache {
+                generation,
+                size,
+                scale,
+                host_draws_pointer,
+                cursor_len,
+                elements,
+            });
+        });
+    }
     Ok(())
 }
 
