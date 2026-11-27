@@ -85,7 +85,7 @@ impl IconRole {
             Self::Fonts => "assets/web/breeze/settings-fonts.svg",
             Self::Hotkeys => "assets/web/breeze/settings-hotkeys.svg",
             Self::About => "assets/web/breeze/settings-about.svg",
-            Self::Search => "assets/web/breeze/edit-find.svg",
+            Self::Search => "assets/web/breeze/search-visible.svg",
             Self::Folder => "assets/web/breeze/folder-new.svg",
             Self::Note => "assets/web/sticky-note.svg",
             Self::Chevron => "assets/web/breeze/go-next.svg",
@@ -100,10 +100,10 @@ impl IconRole {
             Self::Volume => "assets/web/breeze/audio-volume-high.svg",
             Self::VolumeMuted => "assets/web/breeze/audio-volume-muted.svg",
             Self::Wifi => "assets/web/breeze/network-wireless.svg",
-            Self::Lock => "assets/web/breeze/system-lock-screen.svg",
+            Self::Lock => "assets/web/breeze/system-lock-screen-visible.svg",
             Self::Logout => "assets/web/breeze/system-log-out.svg",
             Self::Reboot => "assets/web/breeze/system-reboot.svg",
-            Self::Shutdown => "assets/web/breeze/system-shutdown.svg",
+            Self::Shutdown => "assets/web/breeze/system-shutdown-visible.svg",
             Self::Application => "assets/web/breeze/application-menu.svg",
         };
         IconSource {

@@ -133,7 +133,10 @@ pub(super) fn open_default_xft() -> Option<DefaultXft> {
                 backend: std::cell::RefCell::new(Some(backend)),
                 display,
             }),
-            Err(_) => {
+            Err(error) => {
+                eprintln!(
+                    "flamewm-render-x11: Xft font backend unavailable: {error}; using width estimate; blast_radius=works:text-layout|degraded:type-metrics"
+                );
                 XCloseDisplay(display);
                 None
             }

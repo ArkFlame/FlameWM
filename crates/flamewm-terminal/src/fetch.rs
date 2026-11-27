@@ -9,7 +9,7 @@ use std::process::Command;
 
 const BUILTIN_LOGO: &str = include_str!("../../../assets/flamefetch/logo.txt");
 const COMPACT_LOGO: &str = include_str!("../../../assets/flamefetch/compact-logo.txt");
-const IMAGE_LOGO: &[u8] = include_bytes!("../../../assets/branding/flamewm-start.svg");
+const IMAGE_LOGO: &[u8] = include_bytes!("../../../assets/web/flamewm-icon.svg");
 /// Logo raster edge in pixels; displayed as `IMAGE_COLS` x `IMAGE_ROWS` cells (about 1:2 cell aspect).
 const IMAGE_PIXELS: u32 = 256;
 const IMAGE_COLS: u32 = 24;

@@ -103,7 +103,15 @@ pub fn with_glyphs<R>(
     if matches!(*guard, FontSlot::Unloaded) {
         *guard = match load() {
             Some(font) => FontSlot::Loaded(font),
-            None => FontSlot::Missing,
+            None => {
+                static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
+                NO_FONT_LOG.call_once(|| {
+                    eprintln!(
+                        "flamewm-wayland: no system font found; skipping titlebar text; blast_radius=works:titlebar-decoration|degraded:titlebar-text"
+                    );
+                });
+                FontSlot::Missing
+            }
         };
     }
     let FontSlot::Loaded(font) = &mut *guard else {

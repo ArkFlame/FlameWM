@@ -364,7 +364,7 @@ fn widget_panels() -> String {
         "<section id=\"widget-menu\" class=\"sticky-menu context-menu\" data-action=\"widget.menu.surface\">\
 <button id=\"widget-row-configure\" class=\"menu-row\" data-action=\"widget.menu.configure\"><img src=\"assets/breeze/configure.svg\"><span>Configure Widget</span></button>\
 <button id=\"widget-row-edit\" class=\"menu-row\" data-action=\"widget.menu.edit\"><img src=\"assets/breeze/edit-rename.svg\"><span>Edit Text</span></button>\
-<button id=\"widget-row-lock\" class=\"menu-row\" data-action=\"widget.menu.lock\"><img src=\"assets/breeze/system-lock-screen.svg\"><span id=\"widget-row-lock-label\">Lock Position</span></button>\
+<button id=\"widget-row-lock\" class=\"menu-row\" data-action=\"widget.menu.lock\"><img src=\"assets/breeze/system-lock-screen-visible.svg\"><span id=\"widget-row-lock-label\">Lock Position</span></button>\
 <button id=\"widget-row-gallery\" class=\"menu-row\" data-action=\"widget.menu.gallery\"><img src=\"assets/breeze/list-add.svg\"><span>Add Widgets</span></button>\
 <button id=\"widget-row-remove\" class=\"menu-row\" data-action=\"widget.menu.remove\"><img src=\"assets/breeze/edit-delete.svg\"><span>Remove Widget</span></button>\
 </section>\n  \

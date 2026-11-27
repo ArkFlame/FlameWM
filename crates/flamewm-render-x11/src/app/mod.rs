@@ -541,6 +541,11 @@ impl X11App {
                 fonts.insert(13, font);
             }
         }
+        if fonts.is_empty() {
+            eprintln!(
+                "flamewm-render-x11: no core X font available; skipping core text; blast_radius=works:non-text-ui|degraded:core-text"
+            );
+        }
         if let Some(font) = fonts.values().next().copied() {
             unsafe { XSetFont(display, gc, (*font).fid) };
         }

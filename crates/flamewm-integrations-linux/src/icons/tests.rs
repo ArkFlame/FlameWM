@@ -70,7 +70,7 @@ fn svg_fixture_preserves_alpha_with_nonblack_pixel() {
 
 #[test]
 fn png_fixture_preserves_alpha_with_nonblack_pixel() {
-    let path = workspace_root().join("assets/web/flamewm.png");
+    let path = workspace_root().join("assets/branding/flamewm-wordmark.png");
     let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("PNG fixture");
     assert_eq!((raster.width, raster.height), (8, 8));
     assert_eq!(raster.pixels.len(), 8 * 8 * 4);

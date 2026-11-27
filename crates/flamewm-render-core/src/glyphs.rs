@@ -256,7 +256,16 @@ impl Run<'_> {
 fn with_run<R>(px: f32, f: impl FnOnce(&mut Run<'_>) -> R) -> Option<R> {
     let mut guard = FONT.lock().ok()?;
     if guard.is_none() {
-        *guard = Some(find_font().map(|font| FontCache {
+        let font = find_font();
+        if font.is_none() {
+            static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
+            NO_FONT_LOG.call_once(|| {
+                eprintln!(
+                    "flamewm: no system font found; skipping text; blast_radius=works:non-text-ui|degraded:text"
+                );
+            });
+        }
+        *guard = Some(font.map(|font| FontCache {
             font,
             glyphs: HashMap::new(),
             advances: HashMap::new(),
