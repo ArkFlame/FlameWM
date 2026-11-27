@@ -308,3 +308,6 @@ Capture residual: crop 30%, store 23%, blur 12%, gpu_wait 13%, map 10%. Next uni
 
 ## Task manager idle tick check
 `scripts/perf-clients` shows 3 ticks/2 s: the visible 1 s sampler cadence. Sampler parks with no timer when hidden (lib.rs wait_visible). No change needed.
+
+## gpu_wait check
+`gpu_wait` (~3.5 ms, 13% of capture) is the GPU finishing the scene render the capture needs; it is inherent work (profile-only split), and without the wait the same time would move into the readback. Only fewer or cheaper captured elements reduce it; no change.
