@@ -543,7 +543,7 @@ pub fn paint_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The per-pixel rule the row-span fill replaces: a pixel is skipped when the hole covers it.
     fn per_pixel_fill(

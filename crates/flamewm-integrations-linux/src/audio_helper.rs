@@ -27,6 +27,15 @@ pub const HELPER_BINARY: &str = "flamewm-audio-helper";
 const RETRY_FLOOR: std::time::Duration = std::time::Duration::from_millis(300);
 const RETRY_CAP: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Arm the bounded retry window after a failed spawn or a crashed helper, so an absent backend
+/// is not respawned in a tight loop on every subsequent request.
+fn schedule_retry(process: &mut Process) {
+    process.failures = process.failures.saturating_add(1);
+    let shift = u32::from(process.failures.min(7));
+    let delay = RETRY_FLOOR.saturating_mul(1_u32 << shift).min(RETRY_CAP);
+    process.retry_at = Some(std::time::Instant::now() + delay);
+}
+
 type SnapshotCallback = Box<dyn FnMut(AudioSnapshot) + Send>;
 
 /// One running helper. `id` lets a reader thread reap only the child it was started for.
@@ -200,10 +209,7 @@ impl Core {
                 retire(session.child);
             }
         }
-        process.failures = process.failures.saturating_add(1);
-        let shift = u32::from(process.failures.min(7));
-        let delay = RETRY_FLOOR.saturating_mul(1_u32 << shift).min(RETRY_CAP);
-        process.retry_at = Some(std::time::Instant::now() + delay);
+        schedule_retry(&mut process);
         drop(process);
         publish_unavailable(&self.on_snapshot, &self.process);
         Err(FlameError::new(
@@ -297,7 +303,7 @@ fn read_events(
     // next request. A newer session has a different id and is left alone.
     let status = {
         let mut process = lock(process);
-        if process
+        let status = if process
             .session
             .as_ref()
             .is_some_and(|session| session.id == id)
@@ -308,7 +314,12 @@ fn read_events(
                 .and_then(|session| retire(session.child))
         } else {
             None
+        };
+        // A backend that died mid-session must not be respawned at once on the next request.
+        if status.is_some_and(|status| !status.success()) {
+            schedule_retry(&mut process);
         }
+        status
     };
     // A backend that died mid-session must hide the controls; an idle exit is a normal success.
     if status.is_some_and(|status| !status.success()) {
@@ -436,6 +447,25 @@ mod tests {
         assert!(
             !Path::new(&format!("/proc/{pid}")).exists(),
             "exited helper left a zombie"
+        );
+    }
+
+    // REGRESSION: a crashed helper must arm the retry window; without it an absent backend is
+    // respawned on every following request with no delay.
+    #[test]
+    fn crashed_helper_arms_bounded_retry() {
+        let helper = AudioHelper::new(
+            PathBuf::from("/bin/sh"),
+            vec!["-c".to_owned(), "read _line; exit 3".to_owned()],
+            Box::new(|_| {}),
+        )
+        .expect("writer thread starts");
+        helper.request_snapshot().expect("queue first request");
+        wait_for(|| lock(&helper.core.process).retry_at.is_some());
+        let retry_at = lock(&helper.core.process).retry_at.expect("retry armed");
+        assert!(
+            retry_at.saturating_duration_since(std::time::Instant::now()) <= RETRY_CAP,
+            "retry window exceeded cap"
         );
     }
 

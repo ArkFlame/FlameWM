@@ -2,8 +2,9 @@
 //! needed: each decision is a pure function over the failure inputs, and every
 //! degrading stage is checked to produce a failure record.
 use super::{
-    CORE_FALLBACK_EXTENSIONS, ErrorKind, RandrQuery, StartupFault, core_fallback_fault,
-    missing_extension_fault, randr_event_fault, second_wm_fault,
+    CORE_FALLBACK_EXTENSIONS, ErrorKind, INPUT_FALLBACK_EXTENSIONS, RandrQuery, StartupFault,
+    StartupReport, connection_lost_fault, core_fallback_fault, missing_extension_fault,
+    randr_event_fault, second_wm_fault,
 };
 use crate::{empty_randr_resources, randr_resource_fault};
 
@@ -130,4 +131,72 @@ fn absent_core_fallback_extension_records_one_fault_present_records_none() {
         assert!(fault.message.contains(detail));
         assert_eq!(fault.exit_code, None);
     }
+}
+
+#[test]
+fn xinput2_absence_degrades_with_a_record() {
+    let fault = record(core_fallback_fault("XInputExtension", "no raw keys", false));
+    assert_eq!(fault.stage, "extension");
+    assert!(fault.message.starts_with("flamewm: XInputExtension absent"));
+    assert!(fault.message.contains("blast radius: no raw keys"));
+    assert_eq!(fault.exit_code, None);
+    assert_eq!(
+        core_fallback_fault("XInputExtension", "no raw keys", true),
+        None
+    );
+}
+
+#[test]
+fn shape_absence_degrades_with_a_record() {
+    let fault = record(core_fallback_fault("SHAPE", "no input shapes", false));
+    assert!(fault.message.starts_with("flamewm: SHAPE absent"));
+    assert!(fault.message.contains("blast radius: no input shapes"));
+    assert_eq!(fault.exit_code, None);
+}
+
+#[test]
+fn xkb_absence_degrades_with_a_record() {
+    let fault = record(core_fallback_fault("XKB", "no layout state", false));
+    assert!(fault.message.starts_with("flamewm: XKB absent"));
+    assert!(fault.message.contains("blast radius: no layout state"));
+    assert_eq!(fault.exit_code, None);
+}
+
+#[test]
+fn input_fallback_extensions_are_audited_once() {
+    let names: Vec<&str> = INPUT_FALLBACK_EXTENSIONS
+        .iter()
+        .map(|(_, name, _)| *name)
+        .collect();
+    assert_eq!(names, ["XInputExtension", "SHAPE", "XKB"]);
+    for &(bytes, name, detail) in INPUT_FALLBACK_EXTENSIONS {
+        assert_eq!(std::str::from_utf8(bytes).unwrap(), name);
+        assert_eq!(core_fallback_fault(name, detail, true), None);
+        assert_eq!(
+            record(core_fallback_fault(name, detail, false)).stage,
+            "extension"
+        );
+    }
+}
+
+#[test]
+fn lost_connection_is_fatal_with_a_blast_radius_record() {
+    let fault = connection_lost_fault("Broken pipe");
+    assert_eq!(fault.stage, "connection");
+    assert!(fault.message.contains("X connection lost: Broken pipe"));
+    assert!(fault.message.contains("blast radius"));
+    assert_eq!(fault.exit_code, Some(1));
+}
+
+#[test]
+fn startup_report_renders_one_message_with_every_blast_radius() {
+    let mut report = StartupReport::default();
+    assert!(report.is_empty());
+    report.push(missing_extension_fault("XInputExtension", "no raw keys"));
+    report.push(missing_extension_fault("SHAPE", "no input shapes"));
+    report.push(connection_lost_fault("reset by peer"));
+    let rendered = report.render();
+    assert!(rendered.starts_with("flamewm: startup degradation report"));
+    assert_eq!(rendered.lines().count(), 4);
+    assert_eq!(rendered.matches("blast radius").count(), 3);
 }

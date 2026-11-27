@@ -12,6 +12,11 @@
 #   2. ldd prints every NEEDED library resolved: preflight_libs returns 0 and writes nothing.
 #   3. safe mode finds a WM but no shell/xmessage: minimal mode reuses that WM and records it.
 #   4. minimal mode finds no display or WM: it records the failure and returns non-zero.
+#   5. Missing Wayland client library is classified as a nested_wayland degradation with x11 works.
+#   6. Missing GPU (EGL) library is classified as wayland_gpu_renderer with x11 works.
+#   7. Unset DISPLAY makes chain_cause report +no_display on the session_preflight cause.
+#   8. Exit codes 127 and 126 map to binary_missing and binary_not_executable.
+#   9. Bad XDG_RUNTIME_DIR, a fatal log and a DEGRADED log append the matching cause suffixes.
 #
 # Usage: bash scripts/test-wrapper-faults
 # Exit: 0 when every case passes, 1 otherwise. Prints PASS/FAIL per case plus a SUMMARY line.
@@ -72,6 +77,19 @@ if ! grep -qF 'run_safe_mode()' "$SAFE"; then
     exit 1
 fi
 
+# chain_cause maps exit codes and environment faults to a causal label. Extract it so the no-X,
+# missing-binary and bad-environment fallbacks can be asserted without running the wrapper tail.
+CAUSE="$BASE/cause.inc"
+awk '
+    /^chain_cause\(\)/ { on=1 }
+    on { print }
+    on && /^}/ { exit }
+' "$WRAPPER" >"$CAUSE" || exit 1
+if ! grep -qF 'chain_cause()' "$CAUSE"; then
+    printf 'FAIL setup: could not extract chain_cause from %s\n' "$WRAPPER"
+    exit 1
+fi
+
 # Mechanical helpers the extracted functions call. They carry no behavior under test: timing is
 # pinned and blast-radius labels are fixed tokens.
 CHAIN_START_MS=0
@@ -106,6 +124,8 @@ source "$EXTRACTED" || exit 1
 source "$MINIMAL" || exit 1
 # shellcheck source=/dev/null
 source "$SAFE" || exit 1
+# shellcheck source=/dev/null
+source "$CAUSE" || exit 1
 
 # Shadow ldd: it prints the preset FAKE_LDD_OUT file regardless of the binary argument.
 cat >"$BIN/ldd" <<'EOF'
@@ -229,6 +249,82 @@ rm -f "$MINIMAL_RECORD"
 RC=$?
 assert_case "minimal mode returns non-zero with no WM" nonzero_rc
 assert_case "minimal mode failure record present" grep -aqF 'stage=minimal status=fail' "$MINIMAL_RECORD"
+end_case
+
+# Cases 5-9 cover the fallbacks named in the wrapper contract: no Wayland backend, no X, no GPU,
+# missing binary and bad environment. They use only the extracted helpers; nothing is executed.
+start_case no-wayland-backend
+WAYLAND_OUT="$BASE/ldd-wayland.txt"
+printf '%s\n' 'libwayland-client.so.0 => not found' >"$WAYLAND_OUT"
+export FAKE_LDD_OUT="$WAYLAND_OUT"
+rm -f "$LOG"
+preflight_libs "$BIN/fake-app" >"$BASE/case5.out" 2>"$BASE/case5.err"
+RC=$?
+assert_case "non-zero return when the Wayland client library is missing" nonzero_rc
+assert_case "missing Wayland backend is recorded as nested_wayland" grep -aqF 'degraded=nested_wayland+wayland_lock' "$LOG"
+assert_case "x11 clients remain the working fallback" grep -aqF 'works:x_server+x11_clients' "$LOG"
+end_case
+
+start_case no-gpu
+GPU_OUT="$BASE/ldd-gpu.txt"
+printf '%s\n' 'libEGL.so.1 => not found' >"$GPU_OUT"
+export FAKE_LDD_OUT="$GPU_OUT"
+rm -f "$LOG"
+preflight_libs "$BIN/fake-app" >"$BASE/case6.out" 2>"$BASE/case6.err"
+RC=$?
+assert_case "non-zero return when the GPU library is missing" nonzero_rc
+assert_case "missing GPU renderer is recorded as wayland_gpu_renderer" grep -aqF 'degraded=wayland_gpu_renderer+x11_gpu_blur' "$LOG"
+assert_case "x11 clients remain the working fallback" grep -aqF 'works:x_server+x11_clients' "$LOG"
+end_case
+
+start_case no-x-display
+rm -f "$LOG"
+(
+    unset DISPLAY
+    chain_cause x11 1
+) >"$BASE/case7.out" 2>"$BASE/case7.err"
+assert_case "rc=1 maps to session_preflight" grep -aqE '^session_preflight' "$BASE/case7.out"
+assert_case "unset DISPLAY appends +no_display" grep -aqF '+no_display' "$BASE/case7.out"
+end_case
+
+start_case missing-binary
+rm -f "$LOG"
+(
+    export DISPLAY=:99
+    unset XDG_RUNTIME_DIR
+    chain_cause x11 127
+) >"$BASE/case8a.out" 2>"$BASE/case8.err"
+(
+    export DISPLAY=:99
+    unset XDG_RUNTIME_DIR
+    chain_cause x11 126
+) >"$BASE/case8b.out" 2>>"$BASE/case8.err"
+assert_case "rc=127 maps to binary_missing" grep -aqFx 'binary_missing' "$BASE/case8a.out"
+assert_case "rc=126 maps to binary_not_executable" grep -aqFx 'binary_not_executable' "$BASE/case8b.out"
+end_case
+
+start_case bad-env
+rm -f "$LOG"
+(
+    export DISPLAY=:99
+    export XDG_RUNTIME_DIR="$BASE/no-such-runtime-dir"
+    chain_cause x11 1
+) >"$BASE/case9a.out" 2>"$BASE/case9.err"
+assert_case "bad XDG_RUNTIME_DIR appends +runtime_dir" grep -aqF '+runtime_dir' "$BASE/case9a.out"
+printf 'fatal: preflight aborted\n' >"$LOG"
+(
+    export DISPLAY=:99
+    unset XDG_RUNTIME_DIR
+    chain_cause x11 1
+) >"$BASE/case9b.out" 2>>"$BASE/case9.err"
+assert_case "fatal session log appends +preflight_fatal" grep -aqF '+preflight_fatal' "$BASE/case9b.out"
+printf 'DEGRADED components detected\n' >"$LOG"
+(
+    export DISPLAY=:99
+    unset XDG_RUNTIME_DIR
+    chain_cause x11 1
+) >"$BASE/case9c.out" 2>>"$BASE/case9.err"
+assert_case "DEGRADED session log appends +degraded_components" grep -aqF '+degraded_components' "$BASE/case9c.out"
 end_case
 
 printf 'SUMMARY cases=%s passed=%s failed=%s\n' \

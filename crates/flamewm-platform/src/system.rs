@@ -141,26 +141,29 @@ impl SystemService {
     }
 
     pub fn update_audio(&mut self, update: AudioSnapshot) -> bool {
-        if update.generation < self.snapshot.audio.generation
-            || update.server_generation < self.snapshot.audio.server_generation
+        let unavailable = update.availability == ServiceAvailability::Unavailable;
+        // A fresh helper process restarts its Pulse generations at one, so an absent backend can
+        // arrive below the generations of the last live snapshot. Unavailable still wins: keeping
+        // the old snapshot would leave a muted or stale level on screen after a helper crash.
+        if !unavailable
+            && (update.generation < self.snapshot.audio.generation
+                || update.server_generation < self.snapshot.audio.server_generation)
         {
             return false;
         }
         if update.availability == ServiceAvailability::Available {
             self.pulse_backoff.reset();
         }
-        // Each failed reconnect bumps the Pulse generations while the server stays unreachable.
-        // Nothing observable changed, so that churn must not republish the snapshot on every retry.
-        let unchanged_while_unavailable = update.availability != ServiceAvailability::Available
-            && self.snapshot.audio.availability != ServiceAvailability::Available
-            && AudioSnapshot {
+        let update = if unavailable {
+            // Keep generations monotonic for later writes and let apply dedupe repeated reports.
+            AudioSnapshot {
                 generation: self.snapshot.audio.generation,
                 server_generation: self.snapshot.audio.server_generation,
-                ..update.clone()
-            } == self.snapshot.audio;
-        if unchanged_while_unavailable {
-            return false;
-        }
+                ..update
+            }
+        } else {
+            update
+        };
         self.apply(|s| &mut s.audio, update)
     }
 
@@ -359,6 +362,38 @@ mod tests {
             ..AudioSnapshot::default()
         });
         assert!(!accepted);
+    }
+
+    #[test]
+    fn backend_absent_report_clears_stale_muted_state_from_a_new_helper() {
+        let mut service = SystemService::default();
+        assert!(service.update_audio(AudioSnapshot {
+            availability: ServiceAvailability::Available,
+            generation: 4,
+            server_generation: 4,
+            muted: true,
+            volume_percent: 60,
+            ..AudioSnapshot::default()
+        }));
+        // A restarted helper reports Unavailable with generations starting over at one.
+        assert!(service.update_audio(AudioSnapshot {
+            availability: ServiceAvailability::Unavailable,
+            generation: 1,
+            server_generation: 1,
+            ..AudioSnapshot::default()
+        }));
+        assert_eq!(
+            service.snapshot().audio.availability,
+            ServiceAvailability::Unavailable
+        );
+        assert!(!service.snapshot().audio.muted);
+        assert_eq!(service.snapshot().audio.generation, 4);
+        assert!(!service.update_audio(AudioSnapshot {
+            availability: ServiceAvailability::Unavailable,
+            generation: 2,
+            server_generation: 2,
+            ..AudioSnapshot::default()
+        }));
     }
 
     #[test]

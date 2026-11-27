@@ -1,6 +1,69 @@
 use super::*;
 
 impl ProductSettings {
+    /// Clamps every numeric range checked by validate into its accepted bounds.
+    /// Used only when re-parsing live text for a write-back: a newer-version snapshot can carry
+    /// values outside this version's ranges, and falling back to defaults there would lose the
+    /// user's unknown keys. Strict file load and API validation still reject out-of-range values.
+    pub(crate) fn clamp_ranges(&mut self) {
+        self.window_outline_opacity = self.window_outline_opacity.min(100);
+        self.window_outline_width = self.window_outline_width.clamp(1, 4);
+        self.surface_outline_width = self.surface_outline_width.clamp(1, 4);
+        self.surface_outline_opacity = self.surface_outline_opacity.min(100);
+        self.surface_saturation_percent = self.surface_saturation_percent.min(200);
+        self.glass_opacity_percent = self.glass_opacity_percent.clamp(4, 100);
+        self.glass_blur_px = self.glass_blur_px.min(54);
+        self.taskbar_opacity_percent = self.taskbar_opacity_percent.min(75);
+        self.desktop_selection_fill_opacity = self.desktop_selection_fill_opacity.min(60);
+        self.desktop_entry_scale_percent = self.desktop_entry_scale_percent.clamp(50, 200);
+        self.window_snap_preview_fill_opacity = self.window_snap_preview_fill_opacity.min(60);
+        self.font_size_offset = self.font_size_offset.clamp(-2, 4);
+        self.taskbar_opacity = self.taskbar_opacity.min(100);
+        self.dock_surface_opacity = self.dock_surface_opacity.min(100);
+        self.dock_surface_outline_opacity = self.dock_surface_outline_opacity.min(100);
+        self.dock_surface_blur_percent = self.dock_surface_blur_percent.min(100);
+        self.dock_surface_outline_width = self.dock_surface_outline_width.clamp(1, 4);
+        self.dock_icon_size = self.dock_icon_size.clamp(24, 96);
+        self.taskbar_height = self.taskbar_height.clamp(34, 72);
+        self.edge_snap_threshold_px = self.edge_snap_threshold_px.clamp(4, 64);
+        self.window_margin = self.window_margin.min(32);
+        self.taskbar_floating_margin = self.taskbar_floating_margin.min(32);
+        self.taskbar_floating_radius = self.taskbar_floating_radius.min(24);
+        self.taskbar_blur_percent = self.taskbar_blur_percent.min(100);
+        self.surface_opacity = self.surface_opacity.min(100);
+        self.surface_blur_percent = self.surface_blur_percent.min(100);
+        self.blue_light_filter = self.blue_light_filter.min(100);
+        let minutes_per_day =
+            u16::try_from(flamewm_api::blue_light::MINUTES_PER_DAY).unwrap_or(u16::MAX);
+        self.night_shift_start = self
+            .night_shift_start
+            .min(minutes_per_day.saturating_sub(1));
+        self.night_shift_end = self.night_shift_end.min(minutes_per_day.saturating_sub(1));
+        self.text_scale_percent = self.text_scale_percent.clamp(100, 200);
+        self.cursor_size = match self.cursor_size {
+            0..=27 => 24,
+            28..=39 => 32,
+            40..=55 => 48,
+            _ => 64,
+        };
+        self.pointer_speed = self.pointer_speed.clamp(
+            flamewm_api::settings::POINTER_SPEED_MIN,
+            flamewm_api::settings::POINTER_SPEED_MAX,
+        );
+        self.accent_opacity = self.accent_opacity.min(100);
+        self.animation_speed = self.animation_speed.clamp(25, 200);
+        self.lock_background_blur_percent = self.lock_background_blur_percent.min(100);
+        self.lock_background_dim_percent = self.lock_background_dim_percent.min(80);
+        self.lock_timeout_minutes = self.lock_timeout_minutes.min(240);
+        self.screensaver_after_lock_minutes = self.screensaver_after_lock_minutes.min(60);
+        self.screensaver_num_ribbons = self.screensaver_num_ribbons.clamp(1, 12);
+        self.screensaver_ribbon_width_tenths = self.screensaver_ribbon_width_tenths.clamp(20, 280);
+        self.screensaver_display_off_minutes = self.screensaver_display_off_minutes.min(240);
+        for scale in self.per_output_scale.values_mut() {
+            let snapped = (*scale).clamp(100, 200);
+            *scale = snapped - (snapped - 100) % 5;
+        }
+    }
     pub fn validate(&self) -> FlameResult<()> {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
         validate_color(&self.surface_color, false, "surfaceColor")?;

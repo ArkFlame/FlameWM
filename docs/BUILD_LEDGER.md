@@ -35,3 +35,7 @@ HOUR 6 slot2 RESULT: check --tests --workspace clean; full workspace tests (incl
 ## HOUR 7 slot 1 (18:04)
 cargo check --tests --workspace (waves 6 + partial wave 7 edits)
 RESULT: cargo check --tests --workspace clean (no errors). Tests + release build deferred to next slot.
+
+## HOUR 7 slot 2 (18:32)
+cargo check --tests --workspace then cargo test --workspace --no-fail-fast (waves 6-8 batch)
+RESULT slot2: workspace check clean; full test run 177 targets ok, 1 failed (render-x11 fault_tests vs accel tests raced on global STATUS: two separate locks). Fixed by sharing TEST_SERIAL; render-x11 475 pass x3.

@@ -843,11 +843,20 @@ fn bluetooth_device_names<'a>(
 /// exists. Connected devices lead, then paired devices.
 #[must_use]
 pub fn bluetooth_row_status(bluetooth: &flamewm_api::system::BluetoothSnapshot) -> Option<String> {
-    if !bluetooth.available {
+    // One pure mapping for tray and popup. The integration already folds no-BlueZ, no-adapter
+    // and rfkill-blocked into `available`, so every absent input hides the row and arms no
+    // timer; the present/powered copy below is byte-for-byte unchanged.
+    let presence = flamewm_integrations_linux::bluetooth::classify_bluetooth(
+        bluetooth.available,
+        bluetooth.available,
+        false,
+        bluetooth.powered,
+    );
+    if !presence.tray_visible() {
         return None;
     }
-    if !bluetooth.powered {
-        return Some("Off".to_owned());
+    if presence == flamewm_integrations_linux::bluetooth::BluetoothPresence::Off {
+        return Some(presence.status_text().to_owned());
     }
     let connected =
         bluetooth_device_names(bluetooth.devices.iter().filter(|device| device.connected));

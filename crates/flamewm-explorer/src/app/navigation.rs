@@ -212,7 +212,7 @@ impl ExplorerApp {
                 return;
             }
         // Let the scan worker validate the path; stat here can block the UI on slow mounts.
-        let mut candidate=self.model.tab().clone();
+        let mut candidate=self.model.tab().clone_for_navigation();
         candidate.visit(path);
         self.scan_candidate(candidate);
         self.context=None;
@@ -240,7 +240,7 @@ impl ExplorerApp {
 
     pub(crate) fn history_navigation(&mut self, action:fn(&mut flamewm_explorer::Tab)->bool) {
         let mut candidate=self.pending_navigation.as_ref().filter(|(_,tab,_)|*tab==self.model.active)
-            .map_or_else(||self.model.tab().clone(),|(_,_,candidate)|candidate.clone());
+            .map_or_else(||self.model.tab().clone_for_navigation(),|(_,_,candidate)|candidate.clone());
         if action(&mut candidate) {self.scan_candidate(candidate);}
     }
 

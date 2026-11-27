@@ -231,6 +231,71 @@ pub(crate) fn native_unavailable_falls_back(backend: Backend, drm_compiled: bool
     backend == Backend::Native && !drm_compiled
 }
 
+/// The four native prerequisites that can be missing when the tty backend starts. Every field is an
+/// observation made by the caller; the chooser itself never touches a device, bus or environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeAvailability {
+    pub(crate) drm_device: bool,
+    pub(crate) logind_seat: bool,
+    pub(crate) drm_master: bool,
+    pub(crate) input_devices: bool,
+}
+
+impl NativeAvailability {
+    /// All prerequisites present: nothing to recover from.
+    pub(crate) const fn complete() -> Self {
+        Self {
+            drm_device: true,
+            logind_seat: true,
+            drm_master: true,
+            input_devices: true,
+        }
+    }
+
+    /// Maps the stage a native init failed at onto the prerequisite it could not obtain. The other
+    /// facts stay at their complete values: the caller only claims the gap it actually observed.
+    pub(crate) fn from_failed_stage(stage: &str) -> Self {
+        let mut facts = Self::complete();
+        match stage {
+            "seat" => facts.logind_seat = false,
+            "drm" | "outputs" => {
+                facts.drm_device = false;
+                facts.drm_master = false;
+            }
+            "libinput" => facts.input_devices = false,
+            _ => facts.drm_device = false,
+        }
+        facts
+    }
+}
+
+/// What the runner does with a native start that lost a prerequisite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeFallbackDecision {
+    /// Nothing missing: keep the tty backend that is already running.
+    KeepNative,
+    /// A recoverable hardware gap: start the nested winit window instead.
+    NestedWinit,
+    /// No logind seat means there is no session to hand back; exit with this clear code.
+    ExitWithCode(i32),
+}
+
+/// Exit code for a native start with no logind seat. Distinct from the generic startup error (1) so
+/// a session wrapper can tell "no seat" from every other failure.
+pub(crate) const EXIT_NO_SEAT: i32 = 2;
+
+/// Pure fallback chooser: availability facts in, one decision out. No I/O, no process state and no
+/// panic path, so every combination of missing resources has a defined, testable outcome.
+pub(crate) fn choose_native_fallback(facts: NativeAvailability) -> NativeFallbackDecision {
+    if facts == NativeAvailability::complete() {
+        return NativeFallbackDecision::KeepNative;
+    }
+    if !facts.logind_seat {
+        return NativeFallbackDecision::ExitWithCode(EXIT_NO_SEAT);
+    }
+    NativeFallbackDecision::NestedWinit
+}
+
 /// The `--capabilities` payload. Exactly three lines, in this order, never embellished: the
 /// packaging gate greps `drm_compiled=true` literally.
 pub(crate) fn capabilities_text() -> String {
@@ -794,18 +859,29 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // compositor holding the session. The guard owns the backend handle and finishes it on drop,
     // which also covers the error paths below.
     // A failed native init is a recoverable BackendInitError (its stages already wrote failure
-    // records); fall through to the nested window, then to a headless/minimal compositor that still
-    // serves the Wayland socket instead of exiting the session.
+    // records): a hardware gap falls through to the nested window, then to a headless/minimal
+    // compositor that still serves the socket. A missing logind seat exits with a clear code.
     let native = match backend {
         Backend::Native => match start_native(&mut state, &handle) {
             Ok(native) => Some(native),
             Err(error) => {
-                eprintln!("flamewm-wayland: {error}; falling back to nested");
-                // The pure rule selects the nested step for a native failure; the other arms keep
-                // the pre-extraction behaviour if the rule is ever widened.
-                match next_backend(BackendFallbackOutcome::NativeFailed) {
-                    NextBackend::Nested => start_nested_or_headless(&mut state, &handle),
-                    NextBackend::Keep | NextBackend::Headless => None,
+                // The facts come from the failed stage; the pure chooser decides between the nested
+                // window and a clear exit. A missing seat cannot be recovered by a session wrapper,
+                // so it exits with a distinct code instead of hiding behind a headless compositor.
+                match choose_native_fallback(NativeAvailability::from_failed_stage(&error.stage)) {
+                    NativeFallbackDecision::ExitWithCode(code) => {
+                        eprintln!(
+                            "flamewm-wayland: {error}; no logind seat, exiting with code {code}"
+                        );
+                        return Ok(code);
+                    }
+                    NativeFallbackDecision::KeepNative | NativeFallbackDecision::NestedWinit => {
+                        eprintln!("flamewm-wayland: {error}; falling back to nested");
+                        match next_backend(BackendFallbackOutcome::NativeFailed) {
+                            NextBackend::Nested => start_nested_or_headless(&mut state, &handle),
+                            NextBackend::Keep | NextBackend::Headless => None,
+                        }
+                    }
                 }
             }
         },

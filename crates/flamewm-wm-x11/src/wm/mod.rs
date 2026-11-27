@@ -378,6 +378,9 @@ fn env_u16(name: &str, default: u16, min: u16, max: u16) -> u16 {
 }
 
 fn any_conn_err(error: x11rb::errors::ConnectionError) -> AnyError {
+    let mut report = StartupReport::default();
+    report.push(connection_lost_fault(error.to_string().as_str()));
+    eprintln!("{}", report.render());
     Box::new(std::io::Error::other(error.to_string()))
 }
 

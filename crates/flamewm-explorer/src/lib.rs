@@ -182,6 +182,11 @@ pub struct Tab {
 }
 impl Tab {
     #[must_use] pub fn new(path: PathBuf) -> Self { Self { selected_paths:HashSet::new(), history: vec![path], cursor:0, entries:Vec::new(), selected:None, anchor:None, scroll:0, search:String::new(), loading:true, streaming:true, revision:0, filter_cache:RefCell::new(None) } }
+    /// Navigation candidate: history and cursor only. A full `Clone` copies the current listing
+    /// (100k `Entry` values on a large folder) before `visit` clears it again.
+    #[must_use] pub fn clone_for_navigation(&self) -> Self {
+        Self { history:self.history.clone(), cursor:self.cursor, ..Self::new(self.path().to_path_buf()) }
+    }
     /// Replaces the listing; the filtered-count cache is invalidated.
     pub fn set_entries(&mut self, items: Vec<Entry>) { self.entries=items; self.revision+=1; }
     pub fn extend_entries(&mut self, items: Vec<Entry>) { self.entries.extend(items); self.revision+=1; }

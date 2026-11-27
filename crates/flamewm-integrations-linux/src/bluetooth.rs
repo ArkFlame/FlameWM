@@ -53,6 +53,97 @@ fn is_adapter_name(adapter: &str) -> bool {
         .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// Pure presence classification for the Bluetooth tray/popup. No bus, no clock, no IO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BluetoothPresence {
+    /// BlueZ missing from D-Bus, no adapter object, or an rfkill switch blocks the radio.
+    Absent,
+    /// Adapter present and powered off.
+    Off,
+    /// Adapter present and powered on.
+    On,
+}
+
+impl BluetoothPresence {
+    /// The tray/popup row is shown only when an adapter is usable.
+    #[must_use]
+    pub fn tray_visible(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    /// `Absent` hides the row, `Off` reads "Off", `On` lets the caller show device details.
+    #[must_use]
+    pub fn status_text(self) -> &'static str {
+        match self {
+            Self::Absent => "",
+            Self::Off => "Off",
+            Self::On => "",
+        }
+    }
+
+    /// Presence is event-driven: no timer or poll is armed in any state, least of all absent.
+    #[must_use]
+    pub fn timer_armed(self) -> bool {
+        false
+    }
+}
+
+/// Maps the observable Bluetooth inputs to one tray/popup state. Pure: no D-Bus, no sysfs, no timers.
+/// Precedent: `.vendor/cosmic-epoch` applet hides when no default adapter exists;
+/// `.vendor/vela-main/bluetooth/src/rfkill.c` treats either rfkill switch as blocked.
+#[must_use]
+pub fn classify_bluetooth(
+    service_present: bool,
+    adapter_present: bool,
+    rfkill_blocked: bool,
+    powered: bool,
+) -> BluetoothPresence {
+    if !service_present || !adapter_present || rfkill_blocked {
+        BluetoothPresence::Absent
+    } else if powered {
+        BluetoothPresence::On
+    } else {
+        BluetoothPresence::Off
+    }
+}
+
+/// True when either rfkill switch is asserted (soft or hard block). Pure.
+#[must_use]
+pub fn rfkill_is_blocked(soft: bool, hard: bool) -> bool {
+    soft || hard
+}
+
+/// Reads the adapter rfkill switches from sysfs; unreadable switches mean "not blocked".
+/// Mirrors `vela_bt_adapter_switch` in `.vendor/vela-main/bluetooth/src/rfkill.c`. No polling.
+fn adapter_rfkill_blocked(adapter: &str) -> bool {
+    if !is_adapter_name(adapter) {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(format!("/sys/class/bluetooth/{adapter}")) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(index) = name.strip_prefix("rfkill") else {
+            continue;
+        };
+        if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let switch = entry.path();
+        let blocked = ["soft", "hard"].iter().any(|key| {
+            std::fs::read_to_string(switch.join(key))
+                .map(|value| value.trim() == "1")
+                .unwrap_or(false)
+        });
+        if blocked {
+            return true;
+        }
+    }
+    false
+}
+
 /// Validates a `AA:BB:CC:DD:EE:FF` address and returns its upper-case `BlueZ` path form.
 fn address_segment(address: &str) -> Option<String> {
     let bytes = address.as_bytes();
@@ -403,6 +494,7 @@ pub struct BluetoothDeviceControl {
     state: RefCell<BluetoothState>,
     dormant: UnixStream,
     _peer: UnixStream,
+    rfkill_blocked: bool,
 }
 
 impl BluetoothDeviceControl {
@@ -414,6 +506,7 @@ impl BluetoothDeviceControl {
             state: RefCell::new(BluetoothState::new(adapter_object(DEFAULT_ADAPTER))),
             dormant,
             _peer: peer,
+            rfkill_blocked: adapter_rfkill_blocked(DEFAULT_ADAPTER),
         };
         if let Err(error) = control.subscribe() {
             eprintln!("flamewm-integrations-linux: bluetooth subscribe failed: {error}");
@@ -448,7 +541,11 @@ impl BluetoothDeviceControl {
     /// Latest adapter and device state. Empty and unpowered until the first reply arrives.
     #[must_use]
     pub fn snapshot(&self) -> BluetoothSnapshot {
-        self.state.borrow().snapshot()
+        let mut snapshot = self.state.borrow().snapshot();
+        if self.rfkill_blocked {
+            snapshot.available = false;
+        }
+        snapshot
     }
 
     /// Consumes every queued reply in one bounded turn so none stays queued on the connection.
@@ -829,6 +926,7 @@ mod tests {
             state: RefCell::new(BluetoothState::new(ADAPTER.to_owned())),
             dormant,
             _peer: peer,
+            rfkill_blocked: false,
         };
         assert!(
             control
@@ -847,6 +945,7 @@ mod tests {
             state: RefCell::new(BluetoothState::new(ADAPTER.to_owned())),
             dormant,
             _peer: peer,
+            rfkill_blocked: false,
         };
         let action = flamewm_api::system::BluetoothDeviceAction::new(DeviceOp::Pair, MAC)
             .expect("valid address");
@@ -869,5 +968,50 @@ mod tests {
             Some("bluetooth request failed: Already Exists")
         );
         assert!(!is_reply(&call));
+    }
+
+    // REGRESSION: absent inputs hide the row and arm no timer; present states keep the old
+    // copy. MUTATION: treating an absent input as present shows a dead row on machines
+    // without BlueZ, an adapter or with a hard-blocked radio.
+    #[test]
+    fn classify_no_service_hides_row_and_arms_no_timer() {
+        let state = classify_bluetooth(false, true, false, true);
+        assert_eq!(state, BluetoothPresence::Absent);
+        assert!(!state.tray_visible());
+        assert_eq!(state.status_text(), "");
+        assert!(!state.timer_armed());
+    }
+
+    #[test]
+    fn classify_no_adapter_hides_row_and_arms_no_timer() {
+        let state = classify_bluetooth(true, false, false, false);
+        assert_eq!(state, BluetoothPresence::Absent);
+        assert!(!state.tray_visible());
+        assert!(!state.timer_armed());
+    }
+
+    #[test]
+    fn classify_rfkill_blocked_hides_row_and_arms_no_timer() {
+        assert!(rfkill_is_blocked(true, false));
+        assert!(rfkill_is_blocked(false, true));
+        assert!(!rfkill_is_blocked(false, false));
+        let state = classify_bluetooth(true, true, rfkill_is_blocked(false, true), true);
+        assert_eq!(state, BluetoothPresence::Absent);
+        assert!(!state.tray_visible());
+        assert!(!state.timer_armed());
+    }
+
+    #[test]
+    fn classify_present_powered_keeps_visible_state() {
+        let on = classify_bluetooth(true, true, false, true);
+        assert_eq!(on, BluetoothPresence::On);
+        assert!(on.tray_visible());
+        assert_eq!(on.status_text(), "");
+        assert!(!on.timer_armed());
+        let off = classify_bluetooth(true, true, false, false);
+        assert_eq!(off, BluetoothPresence::Off);
+        assert!(off.tray_visible());
+        assert_eq!(off.status_text(), "Off");
+        assert!(!off.timer_armed());
     }
 }

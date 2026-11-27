@@ -174,8 +174,13 @@ fn glyph_pixels(role: WindowControlRole, edge: u32, rgb: u32) -> Option<Vec<u8>>
     use std::sync::{Mutex, OnceLock};
     type Cache = Mutex<HashMap<(u8, u32, u32), Option<Vec<u8>>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
+    // Ink colours arrive from settings, so the key space is not fixed: evict before it grows without bound.
+    const CACHE_LIMIT: usize = 128;
     let key = (role as u8, edge, rgb);
     let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
+    if cache.len() >= CACHE_LIMIT {
+        cache.clear();
+    }
     cache
         .entry(key)
         .or_insert_with(|| {

@@ -5,9 +5,9 @@
 use super::helper;
 use super::*;
 
-/// Serializes status assertions inside this file. The accel unit tests in `mod.rs` share the same
-/// global status and are outside this lock.
-static STATUS_LOCK: Mutex<()> = Mutex::new(());
+/// Serializes status assertions. Shares one lock with the accel unit tests in `mod.rs`, which use the same
+/// global status.
+use super::tests::TEST_SERIAL as STATUS_LOCK;
 
 /// Helper stand-in: reports `device` on start and fails every op when `op_error` is set, as a child
 /// that died or whose reply timed out would.

@@ -5,7 +5,8 @@
 //! loop or session service is started.
 
 use super::{
-    Backend, BackendFallbackOutcome, NextBackend, append_backend_failure_record,
+    Backend, BackendFallbackOutcome, EXIT_NO_SEAT, NativeAvailability, NativeFallbackDecision,
+    NextBackend, append_backend_failure_record, choose_native_fallback,
     native_unavailable_falls_back, next_backend, select_backend,
 };
 
@@ -82,4 +83,64 @@ fn each_failure_appends_a_record() {
     assert!(lines[1].contains("fallback_taken=true"), "{}", lines[1]);
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// All 16 combinations of missing DRM device / logind seat / DRM master / input devices have a
+/// defined outcome: keep native only when nothing is missing, exit only without a seat, otherwise
+/// fall back to the nested winit window.
+#[test]
+fn every_native_availability_combination_has_a_decision() {
+    for drm_device in [false, true] {
+        for logind_seat in [false, true] {
+            for drm_master in [false, true] {
+                for input_devices in [false, true] {
+                    let facts = NativeAvailability {
+                        drm_device,
+                        logind_seat,
+                        drm_master,
+                        input_devices,
+                    };
+                    let expected = if !logind_seat {
+                        NativeFallbackDecision::ExitWithCode(EXIT_NO_SEAT)
+                    } else if drm_device && drm_master && input_devices {
+                        NativeFallbackDecision::KeepNative
+                    } else {
+                        NativeFallbackDecision::NestedWinit
+                    };
+                    assert_eq!(choose_native_fallback(facts), expected, "{facts:?}");
+                }
+            }
+        }
+    }
+}
+
+/// The exit code must be distinct from the generic startup failure code (1) and non-zero.
+#[test]
+fn missing_seat_exit_code_is_clear_and_distinct() {
+    assert_ne!(EXIT_NO_SEAT, 0);
+    assert_ne!(EXIT_NO_SEAT, 1);
+    let facts = NativeAvailability {
+        drm_device: false,
+        logind_seat: false,
+        drm_master: false,
+        input_devices: false,
+    };
+    assert_eq!(
+        choose_native_fallback(facts),
+        NativeFallbackDecision::ExitWithCode(EXIT_NO_SEAT)
+    );
+}
+
+/// A failed init stage maps onto exactly the prerequisite it could not obtain.
+#[test]
+fn failed_stage_names_the_missing_prerequisite() {
+    assert!(!NativeAvailability::from_failed_stage("seat").logind_seat);
+    let drm = NativeAvailability::from_failed_stage("drm");
+    assert!(!drm.drm_device && !drm.drm_master && drm.logind_seat && drm.input_devices);
+    assert!(!NativeAvailability::from_failed_stage("outputs").drm_device);
+    assert!(!NativeAvailability::from_failed_stage("libinput").input_devices);
+    assert_eq!(
+        choose_native_fallback(NativeAvailability::complete()),
+        NativeFallbackDecision::KeepNative
+    );
 }

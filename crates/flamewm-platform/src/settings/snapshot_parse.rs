@@ -2,6 +2,22 @@ use super::*;
 
 impl ConfigStore {
     pub fn parse_snapshot(&self, text: &str) -> FlameResult<ProductSettings> {
+        self.parse_snapshot_with(text, false)
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    /// Re-parses live text for a write-back. Numeric values outside this version's ranges are
+    /// clamped instead of discarding the snapshot (and its unknown keys); strict file load and
+    /// API validation keep rejecting out-of-range values.
+    pub fn parse_snapshot_clamped(&self, text: &str) -> FlameResult<(ProductSettings, bool)> {
+        self.parse_snapshot_with(text, true)
+    }
+
+    fn parse_snapshot_with(
+        &self,
+        text: &str,
+        clamp_ranges: bool,
+    ) -> FlameResult<(ProductSettings, bool)> {
         let mut snapshot = self.current.clone();
         let mut has_surface_key = false;
         let mut has_legacy_taskbar_surface_key = false;
@@ -135,8 +151,14 @@ impl ConfigStore {
         }
         // Files clamp an out-of-range edge-snap distance instead of rejecting the whole file.
         snapshot.edge_snap_threshold_px = snapshot.edge_snap_threshold_px.clamp(4, 64);
+        let mut clamped_any = false;
+        if clamp_ranges {
+            let before = snapshot.clone();
+            snapshot.clamp_ranges();
+            clamped_any = before != snapshot;
+        }
         snapshot.validate()?;
         migrate_legacy_acceleration(&mut snapshot, has_render_backend);
-        Ok(snapshot)
+        Ok((snapshot, clamped_any))
     }
 }

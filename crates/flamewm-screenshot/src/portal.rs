@@ -112,12 +112,122 @@ fn output_dir() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join("Pictures").join("Screenshots"))
 }
 
-/// Full-output pixels: screencopy when the compositor offers it, the X11 root otherwise.
-fn capture_full_output() -> Result<Image, String> {
-    if let Some(image) = wayland::capture_output()? {
-        return Ok(image);
+/// Backends of the full-output fallback chain, in priority order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend {
+    Portal,
+    Screencopy,
+    X11,
+}
+
+impl Backend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Portal => "portal",
+            Self::Screencopy => "screencopy",
+            Self::X11 => "x11",
+        }
     }
-    capture::capture_root()
+}
+
+/// Which backends this host may attempt. Pure data; no I/O.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Availability {
+    portal: bool,
+    screencopy: bool,
+    x11: bool,
+}
+
+/// No portal client exists here: BUS_NAME is the impl-portal backend this process serves,
+/// so there is no frontend to call. The slot stays first in the chain for a future client.
+/// No KDE/xfce/smithay precedent supplies a portal-client fallback chain, so local source rules.
+const PORTAL_CLIENT_AVAILABLE: bool = false;
+
+/// Pure chain chooser: portal, then screencopy, then x11; skip unavailable backends.
+/// No I/O, no panic: the same input always yields the same ordered chain.
+fn choose_chain(a: Availability) -> Vec<Backend> {
+    [
+        (a.portal, Backend::Portal),
+        (a.screencopy, Backend::Screencopy),
+        (a.x11, Backend::X11),
+    ]
+    .into_iter()
+    .filter_map(|(available, backend)| available.then_some(backend))
+    .collect()
+}
+
+/// The only impure step: read the environment to decide which backends may be tried.
+fn probe_availability() -> Availability {
+    let session_bus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some();
+    Availability {
+        portal: PORTAL_CLIENT_AVAILABLE && session_bus,
+        screencopy: std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        x11: std::env::var_os("DISPLAY").is_some(),
+    }
+}
+
+/// Renders one line: each backend's name and why it worked or did not.
+fn report_attempts(attempts: &[(Backend, Result<(), String>)]) -> String {
+    attempts
+        .iter()
+        .map(|(backend, outcome)| match outcome {
+            Ok(()) => format!("{}: ok", backend.as_str()),
+            Err(reason) => format!("{}: {reason}", backend.as_str()),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Full-output pixels through one ordered fallback chain, with a single consolidated report.
+/// Screencopy Ok(None) is an unavailable backend; Err is recorded, never silently replaced.
+fn capture_full_output() -> Result<Image, String> {
+    let chain = choose_chain(probe_availability());
+    let mut attempts: Vec<(Backend, Result<(), String>)> = Vec::new();
+    let mut image = None;
+
+    for backend in [Backend::Portal, Backend::Screencopy, Backend::X11] {
+        if image.is_some() {
+            attempts.push((backend, Err("skipped".into())));
+            continue;
+        }
+        if !chain.contains(&backend) {
+            let reason = if backend == Backend::Portal {
+                "unavailable (no portal client)"
+            } else {
+                "unavailable"
+            };
+            attempts.push((backend, Err(reason.into())));
+            continue;
+        }
+        let outcome = match backend {
+            Backend::Portal => Err("unavailable (no portal client)".into()),
+            Backend::Screencopy => match wayland::capture_output() {
+                Ok(Some(captured)) => {
+                    image = Some(captured);
+                    Ok(())
+                }
+                Ok(None) => Err("unavailable".into()),
+                Err(error) => Err(error),
+            },
+            Backend::X11 => match capture::capture_root() {
+                Ok(captured) => {
+                    image = Some(captured);
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            },
+        };
+        attempts.push((backend, outcome));
+    }
+
+    let report = report_attempts(&attempts);
+    match image {
+        Some(image) => {
+            eprintln!("flamewm-screenshot portal: capture chain: {report}");
+            Ok(image)
+        }
+        None => Err(format!("capture chain: {report}")),
+    }
 }
 
 /// Captures, encodes and saves one PNG; returns its `file://` URI.
@@ -308,6 +418,104 @@ mod tests {
     fn file_uri_escapes_spaces_and_keeps_slashes() {
         let uri = file_uri(Path::new("/home/a b/Pictures/x%y.png"));
         assert_eq!(uri, "file:///home/a%20b/Pictures/x%25y.png");
+    }
+
+    fn available(portal: bool, screencopy: bool, x11: bool) -> Availability {
+        Availability {
+            portal,
+            screencopy,
+            x11,
+        }
+    }
+
+    #[test]
+    fn choose_chain_uses_full_priority_order_when_all_available() {
+        assert_eq!(
+            choose_chain(available(true, true, true)),
+            vec![Backend::Portal, Backend::Screencopy, Backend::X11]
+        );
+    }
+
+    #[test]
+    fn choose_chain_skips_unavailable_portal() {
+        assert_eq!(
+            choose_chain(available(false, true, true)),
+            vec![Backend::Screencopy, Backend::X11]
+        );
+    }
+
+    #[test]
+    fn choose_chain_skips_unavailable_screencopy() {
+        assert_eq!(
+            choose_chain(available(true, false, true)),
+            vec![Backend::Portal, Backend::X11]
+        );
+    }
+
+    #[test]
+    fn choose_chain_keeps_only_x11_when_others_unavailable() {
+        assert_eq!(
+            choose_chain(available(false, false, true)),
+            vec![Backend::X11]
+        );
+    }
+
+    #[test]
+    fn choose_chain_is_empty_when_nothing_is_available() {
+        assert!(choose_chain(available(false, false, false)).is_empty());
+    }
+
+    #[test]
+    fn choose_chain_order_is_portal_then_screencopy_then_x11() {
+        for chain in [
+            choose_chain(available(true, true, true)),
+            choose_chain(available(true, false, true)),
+            choose_chain(available(false, true, true)),
+            choose_chain(available(false, false, true)),
+        ] {
+            for pair in chain.windows(2) {
+                assert!(
+                    matches!(
+                        (pair[0], pair[1]),
+                        (Backend::Portal, Backend::Screencopy)
+                            | (Backend::Portal, Backend::X11)
+                            | (Backend::Screencopy, Backend::X11)
+                    ),
+                    "{:?} is out of order",
+                    chain
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn choose_chain_is_pure() {
+        let input = available(true, true, false);
+        assert_eq!(choose_chain(input), choose_chain(input));
+    }
+
+    #[test]
+    fn backend_names_are_stable() {
+        assert_eq!(Backend::Portal.as_str(), "portal");
+        assert_eq!(Backend::Screencopy.as_str(), "screencopy");
+        assert_eq!(Backend::X11.as_str(), "x11");
+    }
+
+    #[test]
+    fn report_attempts_renders_one_line_with_every_backend() {
+        let report = report_attempts(&[
+            (
+                Backend::Portal,
+                Err("unavailable (no portal client)".into()),
+            ),
+            (Backend::Screencopy, Ok(())),
+            (Backend::X11, Err("skipped".into())),
+        ]);
+        assert_eq!(
+            report,
+            "portal: unavailable (no portal client); screencopy: ok; x11: skipped"
+        );
+        assert!(!report.contains('\n'));
     }
 
     /// Private `dbus-daemon` started for one test; killed on drop.

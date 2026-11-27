@@ -84,7 +84,10 @@ impl StatusViews {
             }
         };
         let audio_enabled = system.audio.availability == ServiceAvailability::Available;
-        let audio_icon = if system.audio.muted {
+        // A missing backend has no mute state: its fallback snapshot must not read as muted.
+        let audio_muted =
+            system.audio.availability != ServiceAvailability::Unavailable && system.audio.muted;
+        let audio_icon = if audio_muted {
             IconRole::AudioMuted
         } else {
             match system.audio.volume_percent {
@@ -111,7 +114,7 @@ impl StatusViews {
                 icon: audio_icon,
                 label: system.audio.sink_name.clone(),
                 volume_percent: system.audio.volume_percent.min(100),
-                muted: system.audio.muted,
+                muted: audio_muted,
             },
             media: MediaView {
                 visible: system.media.availability != ServiceAvailability::Unavailable,
@@ -770,6 +773,19 @@ mod tests {
         system.media.availability = ServiceAvailability::Unavailable;
         let views = StatusViews::from_snapshot(&system);
         assert!(!views.network.visible && !views.audio.visible && !views.media.visible);
+    }
+
+    #[test]
+    fn absent_backend_audio_view_never_reports_muted() {
+        let mut system = SystemSnapshot::default();
+        system.audio.availability = ServiceAvailability::Unavailable;
+        system.audio.muted = true;
+        system.audio.volume_percent = 0;
+        let audio = StatusViews::from_snapshot(&system).audio;
+        assert!(!audio.visible);
+        assert!(!audio.enabled);
+        assert!(!audio.muted);
+        assert_ne!(audio.icon, IconRole::AudioMuted);
     }
 
     #[test]

@@ -97,9 +97,74 @@ pub(crate) fn second_wm_fault(error_kind: Option<ErrorKind>) -> Option<StartupFa
     })
 }
 
+/// Optional input/frame extensions queried once at startup. Each degrades on its own;
+/// absence is reported but never fatal (xfwm4 display.c queries each independently).
+pub(crate) const INPUT_FALLBACK_EXTENSIONS: &[(&[u8], &str, &str)] = &[
+    (
+        b"XInputExtension",
+        "XInputExtension",
+        "raw escape-key, tablet and touch events are unavailable; core key events still work",
+    ),
+    (
+        b"SHAPE",
+        "SHAPE",
+        "input-shape masks for frames and snap previews are disabled",
+    ),
+    (
+        b"XKB",
+        "XKB",
+        "no XKB layout/indicator state; core keycodes and key events still work",
+    ),
+];
+
+/// One consolidated startup report: every degraded stage is collected first, then
+/// rendered once with its blast radius, so operators see a single coherent message.
+#[derive(Debug, Default)]
+pub(crate) struct StartupReport {
+    faults: Vec<StartupFault>,
+}
+
+impl StartupReport {
+    pub(crate) fn push(&mut self, fault: StartupFault) {
+        self.faults.push(fault);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.faults.is_empty()
+    }
+
+    pub(crate) fn render(&self) -> String {
+        let mut out = String::from("flamewm: startup degradation report (blast radii):");
+        for fault in &self.faults {
+            out.push_str("\n- ");
+            out.push_str(&fault.message);
+        }
+        out
+    }
+}
+
+/// Pure: the X connection is gone. Fatal, but reported through the same report
+/// path so the failure is explicit rather than a panic.
+pub(crate) fn connection_lost_fault(detail: &str) -> StartupFault {
+    StartupFault {
+        stage: "connection",
+        message: format!(
+            "flamewm: X connection lost: {detail}; blast radius: WM cannot operate; exiting cleanly"
+        ),
+        exit_code: Some(1),
+    }
+}
+
 pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError> {
     let attrs = ChangeWindowAttributesAux::new().event_mask(super::hot_corner::root_event_mask());
-    let result = conn.change_window_attributes(screen.root, &attrs)?.check();
+    let mut report = StartupReport::default();
+    let result = match conn.change_window_attributes(screen.root, &attrs) {
+        Ok(cookie) => cookie.check(),
+        Err(error) => {
+            report.push(connection_lost_fault(error.to_string().as_str()));
+            Err(ReplyError::ConnectionError(error))
+        }
+    };
     // RandR is optional: a server without it still gets a working WM. Losing this
     // selection means no live SCREEN_CHANGE/OUTPUT_CHANGE/CRTC_CHANGE notifications;
     // output geometry falls back to the root window until the next start.
@@ -127,7 +192,7 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
         })
         .flatten();
     if let Some(fault) = randr_event_fault(query, selection_error) {
-        eprintln!("{}", fault.message);
+        report.push(fault);
     }
     // RENDER/COMPOSITE/DAMAGE/XFIXES are optional. The renderer and WM already fall back to
     // the plain core-protocol path when one is absent; report each absence once so the
@@ -139,15 +204,29 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
             .and_then(|cookie| cookie.reply())
             .is_ok_and(|reply| reply.present);
         if let Some(fault) = core_fallback_fault(display_name, detail, present) {
-            eprintln!("{}", fault.message);
+            report.push(fault);
         }
     }
+    for &(name, display_name, detail) in INPUT_FALLBACK_EXTENSIONS {
+        let present = conn
+            .query_extension(name)
+            .map_err(ReplyError::from)
+            .and_then(|cookie| cookie.reply())
+            .is_ok_and(|reply| reply.present);
+        if let Some(fault) = core_fallback_fault(display_name, detail, present) {
+            report.push(fault);
+        }
+    }
+
     let selection_kind = match &result {
         Err(ReplyError::X11Error(error)) => Some(error.error_kind),
         _ => None,
     };
     if let Some(fault) = second_wm_fault(selection_kind) {
-        eprintln!("{}", fault.message);
+        report.push(fault);
+    }
+    if !report.is_empty() {
+        eprintln!("{}", report.render());
     }
     result
 }

@@ -52,9 +52,14 @@ impl SettingsWriter {
             SETTINGS_IDLE_DEBOUNCE,
             SETTINGS_MAX_DEFER,
             Box::new(move |text| {
-                let snapshot = crate::settings::ConfigStore::default()
-                    .parse_snapshot(text)
+                let (snapshot, clamped) = crate::settings::ConfigStore::default()
+                    .parse_snapshot_clamped(text)
                     .unwrap_or_default();
+                if clamped {
+                    eprintln!(
+                        "flamewm: out-of-range settings values clamped to supported ranges; unknown keys preserved"
+                    );
+                }
                 match crate::settings::persist_settings(&path, &snapshot) {
                     crate::settings::PersistOutcome::Durable => Ok(()),
                     // `persist_settings` already emitted this notice exactly once.
@@ -411,5 +416,48 @@ mod tests {
         writer.schedule("on-exit".to_owned());
         drop(writer);
         assert!(!path.exists());
+    }
+    /// A newer-version live snapshot can carry values outside this version's ranges. The save
+    /// path clamps them instead of falling back to defaults, so unknown keys survive the write.
+    #[test]
+    fn clamped_save_reparse_preserves_unknown_keys_and_newer_revision() {
+        let scratch = ScratchDir::new("clamp-unknown");
+        let path = scratch.0.join("settings.conf");
+        let writer = SettingsWriter::spawn(path.clone());
+        let live = "revision=99\naccent=#112233\ntaskbarHeight=200\nfuture.feature=keep-me\n";
+        writer.write_now(live.to_owned()).expect("clamped write");
+
+        let text = std::fs::read_to_string(&path).expect("settings written");
+        assert!(text.contains("revision=99"), "{text}");
+        assert!(text.contains("taskbarHeight=72"), "{text}");
+        assert!(text.contains("future.feature=keep-me"), "{text}");
+
+        // The clamped file reloads silently with the unknown key intact: one clean round trip.
+        let reloaded = crate::settings::ConfigStore::default()
+            .parse_snapshot(&text)
+            .expect("clamped file reloads");
+        assert_eq!(reloaded.revision, 99);
+        assert_eq!(
+            reloaded
+                .unknown_keys
+                .get("future.feature")
+                .map(String::as_str),
+            Some("keep-me")
+        );
+    }
+
+    #[test]
+    fn strict_file_load_still_rejects_out_of_range_values() {
+        let text = "revision=2\ntaskbarHeight=200\n";
+        assert!(
+            crate::settings::ConfigStore::default()
+                .parse_snapshot(text)
+                .is_err()
+        );
+        let (snapshot, clamped) = crate::settings::ConfigStore::default()
+            .parse_snapshot_clamped(text)
+            .expect("clamped reparse");
+        assert!(clamped);
+        assert_eq!(snapshot.taskbar_height, 72);
     }
 }
