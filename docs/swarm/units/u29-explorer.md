@@ -48,6 +48,13 @@ pass re-requests. The latency caps (200 ms quiet, 1 s max wait, 30 s hidden grac
 caps (256 entries / 256 KiB) need the orchestrator's build, tests and a scoped burst sample to
 confirm in runtime.
 
+On the narrow retry the live source was re-read only — no build, test, `git`, Python or sleep-loop
+command was run. `refresh.rs` still coalesces inotify bursts on the trailing edge (`QUIET` 200 ms,
+`MAX_WAIT` 1 s) and fires `notify()` once per quiet window, and `thumbs.rs` still bounds decoded
+pixels at `CACHE_CAPACITY` / `CACHE_BYTES` (256 entries / 256 KiB) with `HiddenCache` eviction. Both
+are wired through `app/navigation.rs`, `app/input.rs` and `app/projection.rs`, so no second debounce
+or second cap was added; the listed line numbers were re-confirmed against the current files.
+
 PARTIAL — all three requested tightenings are present and wired in the shared checkout: inotify
 events are coalesced on the trailing edge with a liveness cap instead of refreshing per event;
 thumbnail pixels are held in a bounded, recency-evicted cache and dropped for long-hidden windows;
