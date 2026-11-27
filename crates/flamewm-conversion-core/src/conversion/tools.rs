@@ -238,7 +238,10 @@ pub(super) fn extract_archive(source: &Path, directory: &Path) -> Result<PathBuf
     } else {
         4
     };
-    let base = &name[..name.len() - suffix_len];
+    // Checked slice: a crafted archive name must yield an error value, never a panic.
+    let base = name
+        .get(..name.len().saturating_sub(suffix_len))
+        .ok_or("archive has no usable base name")?;
     let mut destination = None;
     for attempt in 0..100u32 {
         let candidate = if attempt == 0 {

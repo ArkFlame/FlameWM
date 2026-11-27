@@ -57,7 +57,11 @@ impl GeometryMemory {
         match self.entries.iter().position(|(id, _)| id == app_id) {
             Some(index) if self.entries[index].1 == rect => return false,
             Some(index) => {
-                self.entries.remove(index);
+                // Reuse the stored id: it equals `app_id`, and remove+push still promotes this
+                // app to the newest position for eviction. No fresh String per geometry change.
+                let (id, _) = self.entries.remove(index);
+                self.entries.push((id, rect));
+                return true;
             }
             None if self.entries.len() >= GEOMETRY_CAPACITY => {
                 self.entries.remove(0);
@@ -70,15 +74,16 @@ impl GeometryMemory {
 
     #[must_use]
     pub fn serialize(&self) -> String {
-        self.entries
-            .iter()
-            .map(|(id, rect)| {
-                format!(
-                    "{id} = {} {} {} {}\n",
-                    rect.x, rect.y, rect.width, rect.height
-                )
-            })
-            .collect()
+        use std::fmt::Write;
+        let mut out = String::new();
+        for (id, rect) in &self.entries {
+            let _ = write!(
+                out,
+                "{id} = {} {} {} {}\n",
+                rect.x, rect.y, rect.width, rect.height
+            );
+        }
+        out
     }
 }
 

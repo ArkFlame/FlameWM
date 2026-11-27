@@ -1,0 +1,6 @@
+./bluetooth_agent.rs:318:    let name = ErrorName::new(name).expect("constant BlueZ error name");
+./icon_service.rs:786:                .expect("queued icon");
+./icon_service.rs:793:                    queue.high.pop_front().expect("queued icon")
+./icon_service.rs:795:                    queue.low.pop_front().expect("queued icon")
+./icon_service.rs:809:                    .expect("queued icon");
+./launcher_entry.rs:182:    let state = entries.get_mut(&key).expect("entry inserted above");

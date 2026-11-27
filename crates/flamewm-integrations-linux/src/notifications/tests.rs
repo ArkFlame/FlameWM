@@ -349,6 +349,58 @@ fn id_allocation_wraps_without_reusing_live_ids() {
 }
 
 #[test]
+fn next_deadline_coalesces_to_one_earliest_expiry_or_none() {
+    let now = Instant::now();
+    let empty: BTreeMap<u32, Notification> = BTreeMap::new();
+    assert_eq!(
+        earliest_deadline(empty.values()),
+        None,
+        "an empty list arms no timer"
+    );
+    let view = NotificationView {
+        id: 0,
+        app_name: String::new(),
+        summary: String::new(),
+        body: String::new(),
+        urgency: NotificationUrgency::Normal,
+        progress: None,
+        actions: Vec::new(),
+        default_action: false,
+        image: None,
+        icon_name: None,
+    };
+    let near = now + Duration::from_secs(3);
+    let far = now + Duration::from_secs(6);
+    let active = BTreeMap::from([
+        (
+            1,
+            Notification {
+                view: view.clone(),
+                expires_at: None,
+                resident: false,
+            },
+        ),
+        (
+            2,
+            Notification {
+                view: view.clone(),
+                expires_at: Some(far),
+                resident: false,
+            },
+        ),
+        (
+            3,
+            Notification {
+                view,
+                expires_at: Some(near),
+                resident: false,
+            },
+        ),
+    ]);
+    assert_eq!(earliest_deadline(active.values()), Some(near));
+}
+
+#[test]
 fn ui_queue_overflow_resets_to_authoritative_active_state() {
     let active = BTreeMap::from([(
         7,

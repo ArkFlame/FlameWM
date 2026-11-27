@@ -576,6 +576,9 @@ fn download_job(
                 ReadEvent::Idle => {
                     if last.elapsed() > sh.idle {
                         proc.kill();
+                        // Match `on_err`: a stalled transfer killed its ssh child, so the master
+                        // is stale and the UI's retry must re-handshake instead of reusing it.
+                        sh.pool.drop_key(&key);
                         return Err(Error::Timeout(url.host.clone()));
                     }
                 }

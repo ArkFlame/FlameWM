@@ -321,6 +321,38 @@ fn is_strut_property(atom: Atom, strut: Atom, strut_partial: Atom) -> bool {
     atom == strut || atom == strut_partial
 }
 
+/// Maximum number of XWayland start attempts in one session.
+///
+/// Smithay's XWayland calloop source disables itself after `Ready` or `Error`, so the compositor
+/// never starts a second X server after a failure. Keeping the bound here makes it testable
+/// without launching a display.
+pub(crate) const XWAYLAND_START_LIMIT: u32 = 1;
+
+/// Pure decision when the XWayland binary is missing, crashes, or exits before the WM serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct XwaylandFailureDecision {
+    /// Keep serving Wayland clients; X11 clients are simply absent.
+    pub(crate) continue_wayland_only: bool,
+    /// Emit the single `stage=xwayland status=fail` record for this session.
+    pub(crate) report_failure: bool,
+    /// Whether another XWayland start is allowed; bounded by `XWAYLAND_START_LIMIT`.
+    pub(crate) restart: bool,
+}
+
+/// Decide how a Wayland session handles an XWayland failure. Pure: no I/O and no shared state.
+///
+/// `attempts` counts start attempts already made, including the one that just failed; `reported`
+/// is true once this session has emitted its one XWayland failure record. X11 is optional, so the
+/// session stays Wayland-only, a failure is reported at most once, and a missing or crashing binary
+/// can never restart-loop past the start limit.
+pub(crate) fn xwayland_failure_decision(attempts: u32, reported: bool) -> XwaylandFailureDecision {
+    XwaylandFailureDecision {
+        continue_wayland_only: true,
+        report_failure: !reported,
+        restart: attempts.saturating_add(1) <= XWAYLAND_START_LIMIT,
+    }
+}
+
 /// Spawns `XWayland` and returns the source to insert into the loop. `Ready` starts the WM.
 pub fn spawn_xwayland(
     dh: &smithay::reexports::wayland_server::DisplayHandle,
@@ -359,15 +391,26 @@ impl State {
     /// and the content deadline watches `desktop_pending` (`xwm` absent + autostart present), so
     /// clearing the list is what actually keeps a crash from killing the VT.
     fn xwayland_unavailable(&mut self, cause: impl std::fmt::Display) {
-        crate::stage_line(
-            crate::Stage::Xwayland,
-            crate::StageStatus::Fail,
-            &crate::xwayland_unavailable_detail(&cause),
+        // One pure decision for every failure cause: report once, keep the Wayland-only session,
+        // and never restart XWayland once the start budget is spent.
+        let decision = xwayland_failure_decision(XWAYLAND_START_LIMIT, false);
+        debug_assert!(
+            !decision.restart,
+            "XWayland is not respawned after a failure"
         );
-        eprintln!(
-            "flamewm-wayland: X11 support unavailable ({cause}); continuing without X11 clients"
-        );
-        self.autostart.clear();
+        if decision.report_failure {
+            crate::stage_line(
+                crate::Stage::Xwayland,
+                crate::StageStatus::Fail,
+                &crate::xwayland_unavailable_detail(&cause),
+            );
+            eprintln!(
+                "flamewm-wayland: X11 support unavailable ({cause}); continuing without X11 clients"
+            );
+        }
+        if decision.continue_wayland_only {
+            self.autostart.clear();
+        }
     }
 
     pub fn x11_window(&self, id: WindowId) -> Option<&X11Surface> {
@@ -1158,5 +1201,36 @@ mod stacking_tests {
         let after_unmap = x11_stacking_order([5], [10], [20], []);
         assert_eq!(after_unmap, [5, 10, 20]);
         assert!(!after_unmap.contains(&30));
+    }
+}
+
+#[cfg(test)]
+mod xwayland_failure_decision_tests {
+    use super::{XWAYLAND_START_LIMIT, xwayland_failure_decision};
+
+    #[test]
+    fn missing_binary_crash_or_exit_keeps_wayland_only_with_one_report_and_no_restart() {
+        // One failed start consumed the budget; nothing has been reported yet. Every failure
+        // cause (missing binary, crash, early exit) funnels through this same decision.
+        let decision = xwayland_failure_decision(XWAYLAND_START_LIMIT, false);
+        assert!(decision.continue_wayland_only);
+        assert!(decision.report_failure);
+        assert!(!decision.restart);
+    }
+
+    #[test]
+    fn a_failure_is_never_reported_twice() {
+        let decision = xwayland_failure_decision(XWAYLAND_START_LIMIT, true);
+        assert!(!decision.report_failure);
+        assert!(decision.continue_wayland_only);
+        assert!(!decision.restart);
+    }
+
+    #[test]
+    fn restart_budget_is_bounded_for_any_attempt_count() {
+        assert!(xwayland_failure_decision(0, false).restart);
+        for attempts in [XWAYLAND_START_LIMIT, XWAYLAND_START_LIMIT + 1, u32::MAX] {
+            assert!(!xwayland_failure_decision(attempts, false).restart);
+        }
     }
 }

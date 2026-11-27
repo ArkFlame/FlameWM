@@ -1,0 +1,44 @@
+./notifications.rs:229:                eprintln!("flamewm-notifications: saving notification history failed: {error}");
+./notifications.rs:254:                eprintln!(
+./mpris.rs:217:                        eprintln!("flamewm: MPRIS subscribe failed, retrying: {error}");
+./mpris.rs:227:                eprintln!("flamewm: MPRIS session bus unavailable, retrying: {error}");
+./mpris.rs:370:                eprintln!("flamewm: MPRIS session bus lost, retrying: {error}");
+./icon_theme/walk.rs:147:                eprintln!(
+./icon_theme/walk.rs:169:                eprintln!(
+./pulse.rs:269:                eprintln!(
+./pulse.rs:887:        eprintln!(
+./background.rs:31:                eprintln!("flamewm-integrations-linux: background priority unavailable: {error}");
+./launcher_entry.rs:290:                eprintln!(
+./themes/xz.rs:914:            eprintln!("SKIP: xz CLI unavailable");
+./removable_mounts.rs:339:        eprintln!(
+./removable_mounts.rs:347:            eprintln!("{line}");
+./themes/mod.rs:75:                eprintln!(
+./themes/mod.rs:100:                    eprintln!(
+./network_manager/mod.rs:409:            eprintln!(
+./audio_helper.rs:137:                eprintln!("flamewm-integrations-linux: audio request dropped: {error}");
+./bluetooth.rs:419:            eprintln!("flamewm-integrations-linux: bluetooth subscribe failed: {error}");
+./bluetooth.rs:463:                eprintln!("flamewm-integrations-linux: {line}");
+./bluetooth.rs:468:                    eprintln!("flamewm-integrations-linux: bluetooth state: {error}");
+./themes/cursor.rs:55:        eprintln!(
+./network_manager/reply.rs:598:                    eprintln!("flamewm: NetworkManager VPN request failed: {items:?}");
+./network_manager/reply.rs:915:                    eprintln!(
+./network_manager/reply.rs:921:                    eprintln!(
+./icon_service.rs:165:            eprintln!("icon service: background thread not started: {err}");
+./icon_service.rs:425:        flamewm_debug::emit(
+./icon_service.rs:426:            flamewm_debug::ICON_SERVICE_SUMMARY,
+./icon_service.rs:427:            flamewm_debug::ICON_SERVICE_SUMMARY_COOLDOWN,
+./icon_service.rs:841:                flamewm_debug::emit(
+./icon_service.rs:842:                    flamewm_debug::ICON_RESOLVE_RESULT,
+./icon_service.rs:843:                    flamewm_debug::ICON_RESOLVE_RESULT_COOLDOWN,
+./icon_service.rs:847:                    flamewm_debug::emit(
+./icon_service.rs:848:                        flamewm_debug::ICON_FALLBACK,
+./icon_service.rs:849:                        flamewm_debug::ICON_FALLBACK_COOLDOWN,
+./icon_service.rs:931:        flamewm_debug::emit(
+./icon_service.rs:932:            flamewm_debug::ICON_FALLBACK,
+./icon_service.rs:933:            flamewm_debug::ICON_FALLBACK_COOLDOWN,
+./icon_service.rs:937:    flamewm_debug::emit(
+./icon_service.rs:938:        flamewm_debug::ICON_APPLY_SUMMARY,
+./icon_service.rs:939:        flamewm_debug::ICON_APPLY_SUMMARY_COOLDOWN,
+./icon_theme/watch.rs:72:        eprintln!(
+./icon_theme/theme_roots.rs:40:            eprintln!(
+./icon_theme/theme_roots.rs:54:            eprintln!(

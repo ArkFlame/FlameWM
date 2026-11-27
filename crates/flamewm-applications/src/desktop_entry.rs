@@ -188,10 +188,14 @@ pub(super) fn parse_desktop_entry(
     {
         return Ok(None);
     }
-    let Some(exec) = values.get("Exec") else {
+    if !values.contains_key("Exec") {
         return Ok(None);
-    };
-    let argv = tokenize_exec(exec)?;
+    }
+    // Move the parsed values into the entry instead of cloning them. `values` is
+    // dropped at the end of this function, so a clone would keep two heap copies
+    // of every field alive during the scan.
+    let exec = values.remove("Exec").unwrap_or_default();
+    let argv = tokenize_exec(&exec)?;
     if values
         .get("Name")
         .is_none_or(|value| value.trim().is_empty())
@@ -200,20 +204,20 @@ pub(super) fn parse_desktop_entry(
     }
     let app = DesktopApplication {
         id: id.clone(),
-        name: values.get("Name").cloned().unwrap_or_default(),
-        generic_name: values.get("GenericName").cloned().unwrap_or_default(),
-        comment: values.get("Comment").cloned().unwrap_or_default(),
-        startup_wm_class: values.get("StartupWMClass").cloned().unwrap_or_default(),
+        name: values.remove("Name").unwrap_or_default(),
+        generic_name: values.remove("GenericName").unwrap_or_default(),
+        comment: values.remove("Comment").unwrap_or_default(),
+        startup_wm_class: values.remove("StartupWMClass").unwrap_or_default(),
         argv,
         keywords: list_value(values.get("Keywords")),
-        icon_name: values.get("Icon").cloned().unwrap_or_default(),
+        icon_name: values.remove("Icon").unwrap_or_default(),
         categories: list_value(values.get("Categories")),
     };
     Ok(Some(DesktopEntry {
         id,
         application: app,
         path: path.to_owned(),
-        exec: exec.clone(),
+        exec,
         terminal: is_true(values.get("Terminal")),
         startup_notify: values
             .get("StartupNotify")
@@ -221,19 +225,24 @@ pub(super) fn parse_desktop_entry(
     }))
 }
 
-pub(super) fn id_stems(id: &DesktopAppId) -> Vec<String> {
+/// Borrowed stems of a desktop id (`full` and its last dotted component).
+/// Returning slices avoids allocating an owned copy for each stem: callers only
+/// need a lowercased index key, which they allocate once.
+pub(super) fn id_stems(id: &DesktopAppId) -> Vec<&str> {
     let full = id.as_str().strip_suffix(".desktop").unwrap_or(id.as_str());
-    let mut stems = vec![full.to_owned()];
+    let mut stems = vec![full];
     if let Some(last) = full.rsplit('.').next()
         && last != full
     {
-        stems.push(last.to_owned());
+        stems.push(last);
     }
     stems
 }
 
-pub(super) fn exec_basename(exec: &str) -> Option<String> {
-    let program = tokenize_exec(exec).ok()?.into_iter().next()?;
+/// Basename of an already-tokenized program (the first `argv` element).
+/// Parsing already tokenized `Exec`, so re-tokenizing here would allocate a
+/// second set of token Strings per entry only to discard all but the first.
+pub(super) fn exec_basename(program: &str) -> Option<String> {
     let trimmed = program.trim().trim_matches(|c| c == '"' || c == '\'');
     let file = trimmed.rsplit('/').next().unwrap_or(trimmed);
     let base = file.trim();

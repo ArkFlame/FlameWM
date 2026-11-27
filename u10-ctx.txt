@@ -1,0 +1,142 @@
+=== bluetooth_agent imports ===
+//! `BlueZ` pairing agent core: `org.bluez.Agent1` handlers and `org.bluez.AgentManager1`
+//! registration. No UI and no event source of its own. The caller owns the system-bus pump
+//! (`flamewm_dbus_reactor::BusPump`), registers `watch()` with the reactor and calls `on_ready`.
+//!
+//! Precedent: `.vendor/vela-main/bluetooth/src/agent.c` registers through `RegisterAgent` and then
+//! `RequestDefaultAgent`, and unregisters on teardown. Standard: the `BlueZ` agent API
+//! (`org.bluez.Agent1`, capabilities `NoInputNoOutput`, `DisplayOnly`, `KeyboardDisplay`).
+//! Choice: a decision request is queued as a `PromptKind` and its reply is deferred until a
+//! `Decision` arrives from the prompt UI, or until `PROMPT_TIMEOUT` expires it to `Rejected`
+//! (D-bt fail-fast: a pairing never hangs). Capability `KeyboardDisplay` is announced because the
+//! queue can answer PIN, passkey and confirmation prompts. Registration stays behind
+//! `BLUETOOTH_AGENT_CAN_ANSWER`, which is false until a prompt card drives `decide`.
+
+use std::collections::BTreeMap;
+use std::ffi::CString;
+use std::time::{Duration, Instant};
+
+use dbus::arg::messageitem::MessageItem;
+use dbus::strings::ErrorName;
+use dbus::{Message, MessageType, Path};
+use flamewm_api::{FlameError, FlameResult};
+use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
+
+use crate::bluetooth::{BLUEZ_SERVICE, address_from_path, device_name, device_props_message};
+
+pub const AGENT_MANAGER_IFACE: &str = "org.bluez.AgentManager1";
+pub const AGENT_MANAGER_PATH: &str = "/org/bluez";
+pub const AGENT_IFACE: &str = "org.bluez.Agent1";
+/// Exported object path for the agent callbacks; `BlueZ` calls back on the unique bus name.
+pub const AGENT_PATH: &str = "/org/flamewm/BluetoothAgent";
+pub const AGENT_CAPABILITY: &str = "KeyboardDisplay";
+pub const REJECTED_ERR: &str = "org.bluez.Error.Rejected";
+pub const REJECTED_TEXT: &str = "pairing request declined";
+pub const CANCELED_ERR: &str = "org.bluez.Error.Canceled";
+pub const CANCELED_TEXT: &str = "pairing request cancelled";
+/// Longest a prompt may stay unanswered before it is rejected (D-bt fail-fast).
+pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Prompts held at once; a call beyond this is rejected at once.
+pub const MAX_PENDING: usize = 8;
+/// `BlueZ` PIN codes are 1 to 16 characters; passkeys are 0 to 999999.
+=== ErrorName usages ===
+19:use dbus::strings::ErrorName;
+318:    let name = ErrorName::new(name).expect("constant BlueZ error name");
+=== launcher_entry imports ===
+//! Unity `com.canonical.Unity.LauncherEntry` listener. KDE, Firefox, Chromium and Telegram emit
+//! `Update(s app_uri, a{sv} properties)` on any object path. Progress is keyed by the emitting
+//! unique bus owner and `app_uri`, and is removed when that owner leaves the bus. Count and urgent
+//! properties are parsed and ignored: the taskbar renders determinate progress only.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use dbus::arg::messageitem::MessageItem;
+use dbus::{Message, MessageType};
+use flamewm_api::applications::DesktopApplication;
+use flamewm_api::panels::{PanelsSnapshot, TaskEntryKind, TaskProgress, TaskProgressEntry};
+use flamewm_api::{ErrorCode, FlameError, FlameResult};
+use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
+
+pub const LAUNCHER_ENTRY_INTERFACE: &str = "com.canonical.Unity.LauncherEntry";
+pub const LAUNCHER_ENTRY_UPDATE: &str = "Update";
+
+const DBUS_SERVICE: &str = "org.freedesktop.DBus";
+const DBUS_PATH: &str = "/org/freedesktop/DBus";
+const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
+const NAME_OWNER_CHANGED: &str = "NameOwnerChanged";
+const APP_URI_PREFIX: &str = "application://";
+const DESKTOP_SUFFIX: &str = ".desktop";
+const MAX_ENTRIES: usize = 256;
+const MAX_APP_URI_BYTES: usize = 255;
+
+/// Properties from one `Update`. `None` means the sender did not include that key, so the previous
+/// value for that entry is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LauncherUpdate {
+    pub progress: Option<u8>,
+    pub progress_visible: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LauncherState {
+    desktop_id: String,
+    progress: Option<u8>,
+    visible: bool,
+=== icon_service imports ===
+//! Bounded background icon resolution with priority-aware admission.
+//!
+//! The service owns one shared generation-scoped [`IconLookupIndex`], one
+//! shared result cache, exactly [`ICON_RESOLVE_CONCURRENCY`] workers, a
+//! priority queue with pending-dedupe, and a wake FD signalled whenever a
+//! result completes. Workers perform zero FS rescan: they fork from the
+//! base resolver and share the immutable index + theme config with fresh
+//! small private caches. No UI/X11 calls happen in workers.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{Read, Write};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::thread::{self, JoinHandle};
+
+use crate::background;
+use crate::icon_theme::IconLookupIndex;
+use crate::icons::{IconError, IconKey, IconResolver, Rgba8Raster};
+
+/// Resolution urgency. Required jobs are never discarded by the service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconPriority {
+    High,
+    Low,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IconJob {
+    pub key: IconKey,
+    pub priority: IconPriority,
+}
+
+#[derive(Clone, Debug)]
+pub struct IconResult {
+    pub key: Arc<IconKey>,
+    pub result: Result<Rgba8Raster, IconError>,
+    /// Worker completion envelope timestamp. `drain_ready`/`take_ready`
+    /// record `icon.result.wake_to_apply` from this instant to apply.
+    pub completed_at: std::time::Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IconSubmit {
+    Enqueued,
+    Coalesced,
+    DroppedLow,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IconSubmitError {
+    HighQueueFull(IconJob),
+    Stopped(IconJob),
+=== warn usages ===

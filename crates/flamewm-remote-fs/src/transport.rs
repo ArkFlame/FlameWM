@@ -122,6 +122,9 @@ impl Proc {
 
     pub fn kill(&mut self) {
         let _ = self.child.kill();
+        // Dropping `Child` does not reap: every timeout/cancel would otherwise leave a zombie
+        // until the whole process exits. Ark reaps after kill (kerfuffle/cliinterface.cpp:675).
+        let _ = self.child.wait();
     }
 
     /// Wait for exit and collect stderr. Call after stdout reached EOF or after `kill`.
@@ -319,6 +322,28 @@ pub struct SshConnector {
     pub idle: Duration,
 }
 
+impl SshConnector {
+    /// Run an `ssh -O check|exit` mux command with a hard bound. `Command::status()` has no
+    /// timeout: a master that accepts the socket but never answers would pin a worker forever.
+    /// `ConnectTimeout` only covers the TCP handshake, not this unix-socket control request.
+    fn mux_status(&self, cmd: Command) -> Option<i32> {
+        let mut proc = Proc::spawn(cmd, false).ok()?;
+        let bound = Duration::from_secs(u64::from(self.transport.connect_timeout_secs).max(1));
+        let deadline = Instant::now() + bound;
+        loop {
+            match proc.read(POLL) {
+                ReadEvent::Data(_) | ReadEvent::Idle => {}
+                ReadEvent::Eof => break,
+            }
+            if Instant::now() >= deadline {
+                proc.kill();
+                return None;
+            }
+        }
+        Some(proc.finish().0)
+    }
+}
+
 impl Connector for SshConnector {
     fn establish(&self, key: &ConnKey) -> Result<(), Error> {
         self.transport.control_dir_ensure()?;
@@ -334,19 +359,13 @@ impl Connector for SshConnector {
     }
 
     fn is_alive(&self, key: &ConnKey) -> bool {
-        let mut cmd = self.transport.ssh_command(key, Some("check"), None);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        cmd.status().is_ok_and(|s| s.success())
+        let cmd = self.transport.ssh_command(key, Some("check"), None);
+        self.mux_status(cmd).map_or(false, |status| status == 0)
     }
 
     fn close(&self, key: &ConnKey) {
-        let mut cmd = self.transport.ssh_command(key, Some("exit"), None);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let _ = cmd.status();
+        let cmd = self.transport.ssh_command(key, Some("exit"), None);
+        let _ = self.mux_status(cmd);
     }
 }
 

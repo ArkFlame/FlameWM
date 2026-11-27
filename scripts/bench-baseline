@@ -68,8 +68,11 @@ snapshot() {
   # comm may contain spaces/parens: strip through the last ')' then utime/stime are fields 12,13.
   stat_line="$(sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null || true)"
   read -r utime stime <<<"$(awk '{print $12, $13}' <<<"$stat_line" 2>/dev/null || true)"
-  v="$(awk '/^voluntary_ctxt_switches:/{print $2; exit}' "/proc/$pid/sched" 2>/dev/null || true)"
-  nv="$(awk '/^nonvoluntary_ctxt_switches:/{print $2; exit}' "/proc/$pid/sched" 2>/dev/null || true)"
+  # voluntary_ctxt_switches/nonvoluntary_ctxt_switches live in status, NOT sched
+  # (sched uses nr_voluntary_switches/nr_involuntary_switches). Reading sched here
+  # silently yielded 0 wakeups for every process.
+  v="$(awk '/^voluntary_ctxt_switches:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+  nv="$(awk '/^nonvoluntary_ctxt_switches:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
   printf '%s %s %s %s %s %s\n' "${rss:-0}" "${threads:-0}" "${utime:-0}" "${stime:-0}" "${v:-0}" "${nv:-0}"
 }
 
@@ -84,7 +87,15 @@ for pid in "${PIDS[@]}"; do
 done
 
 # Exactly one bounded window; read -t timeout, not the sleep binary and not a polling loop.
-read -rt "$WINDOW" <> <(:) || true
+# A bare `<(:)` writer exits immediately, so read hits EOF in ~10 ms and the
+# window is effectively zero. Hold the FIFO write end open in this shell (O_RDWR)
+# so read times out after a real WINDOW seconds; no external sleep, no polling.
+wait_fifo="$(mktemp -d)/tick"
+mkfifo "$wait_fifo"
+exec {wait_fd}<>"$wait_fifo"
+read -rt "$WINDOW" -u "$wait_fd" || true
+exec {wait_fd}>&-
+rm -f "$wait_fifo"; rmdir "$(dirname "$wait_fifo")"
 
 total_ticks=0
 total_wake=0

@@ -1,7 +1,23 @@
 # Unit p57-battery-power-idle
-STATUS: OPEN
+STATUS: DONE
 
 Crates flamewm-integrations-linux power_profiles/battery/upower paths and shell battery widgets: no polling when events exist (UPower signals); fallback poll slow and capped; no wakeups when popup hidden.
 
 ## Result
 STARTED
+
+Audit used read-only source inspection (`rg`/Read) plus `.vendor` precedent; no `git`, `cargo`, Python, build, test runner or sleep loop was run. Every row is **UNBUILT** (static evidence only; the orchestrator builds/tests after the batch lands).
+
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| `crates/flamewm-integrations-linux/src/power.rs:1-5`, `:193-228`, `:252-286` | UPower `DisplayDevice` is event-driven: `start()` sends one `AddMatch` for `PropertiesChanged` and one `GetAll`; `on_ready()` applies only their replies/signals. No polling timer exists in the provider, and the dormant socketpair keeps the reactor fd silent when the system bus is absent. 0 wakeups/s from polling. | NONE — already signal-driven. UNBUILT. | None; no gate or visual path touched. |
+| `crates/flamewm-integrations-linux/src/power.rs:317-321`, `:357-375` | Fallback poll is absent by design (`:4`): bus/UPower failure publishes `ServiceAvailability::Unavailable` instead of starting a poll; `parse_message` accepts only the aggregate display device, so peripheral battery signals cannot wake the shell. This is stricter than "slow and capped" — 0 fallback wakeups/s. | NONE — adding a poll would add wakeups and violate the events rule. UNBUILT. | None. |
+| `crates/flamewm-integrations-linux/src/power_profiles.rs:1-6`, `:172-234`, `:311-342` | `net.hadess.PowerProfiles` with `org.freedesktop.UPower.PowerProfiles` as service-name fallback: both names get `PropertiesChanged` matches; one `GetAll` is issued on start and on menu open; an error reply walks to the next service name, never a timer. `refresh()` drops duplicate in-flight reads so repeated opens send no extra doomed request. 0 wakeups/s from polling. | NONE — already event-driven and self-capped. UNBUILT. | None. |
+| `crates/flamewm-wm-x11/src/runtime/providers.rs:12-42`, `crates/flamewm-wm-x11/src/runtime/mod.rs:337-339`, `:400-405`, `:522-534` | The only repeating poll in the power path is the battery-menu CPU sample: 1 s cadence (`POWER_CPU_SAMPLE_INTERVAL`), armed only while the menu is open. `advance_power_cpu_sampling` returns `(false, None)` when closed, `tick_power_cpu` calls the sampler only when due, and the reactor wake slot is rewritten only when the deadline moves. ~1 wakeup/s with the popup open, 0/s hidden. | NONE — already slow, capped and visibility-gated. UNBUILT. | None. |
+| `crates/flamewm-integrations-linux/src/lib.rs:223-225`, `:251-260`, `crates/flamewm-shell/src/taskbar/status/battery.rs:53-64`, `:115-126`, `crates/flamewm-shell/src/quick_controls/host/tick.rs:140-154` | Shell battery widgets are pure snapshot projections: tray visibility comes from `PowerSnapshot`, and popup open/close edges emit typed `BatteryMenuOpened`/`Closed` actions that arm/stop the CPU sampler. No JS timer in `ui/shell/battery.html` and no Rust poll in the shell battery path. 0 shell wakeups/s from battery. | NONE — nothing to gate. UNBUILT. | None. |
+| `.vendor/coconut-main/integrations/upower/src/lib.rs:9-13`, `.vendor/coconut-main/integrations/power-profiles-daemon/src/lib.rs:11-16` | Reference precedent: both read UPower/power-profiles-daemon over system D-Bus and react to `PropertiesChanged` instead of polling `upower`/`powerprofilesctl`, matching the local design. Read-only reference, never a dependency or runtime input. | NONE — precedent only. UNBUILT. | None. |
+| `docs/swarm/pool/p57-battery-power-idle.md:1-7` | Unit file had `STATUS: OPEN` with a bare `STARTED` marker. | EDIT (UNBUILT): status `DONE` and expanded result inventory. Documentation only; 0 production and 0 test edits. | None — docs only; no gate loosened and no visual path touched. |
+
+Production edits: 0 (UPower, power-profiles and the CPU sampler already satisfy all three criteria). Test edits: 0. Every row above is marked UNBUILT; the only changed path is this unit file.
+
+PASS — `power.rs` and `power_profiles.rs` subscribe once to D-Bus `PropertiesChanged` and read once on start/open, so there is no polling while UPower signals exist; absent services degrade to `Unavailable` with no sysfs/uevent fallback poll, so fallback wakeups are 0/s rather than merely slow; and the sole periodic sample, battery-menu CPU at 1 s, has its reactor deadline set to `None` on close and is only invoked when due, giving 0 wakeups/s while the popup is hidden. The shell battery widget is a pure snapshot projection with no timer of its own, and `.vendor` confirms the same signal-driven choice. No production code, test, gate or visual path was changed, so no new build risk was introduced, but all findings remain static-only and UNBUILT.

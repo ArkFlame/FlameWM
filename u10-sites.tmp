@@ -1,0 +1,347 @@
+./bluetooth_agent.rs:318:    let name = ErrorName::new(name).expect("constant BlueZ error name");
+./bluetooth_agent.rs:629:            Message::new_method_call(BLUEZ_SERVICE, AGENT_PATH, AGENT_IFACE, member).expect("call");
+./bluetooth_agent.rs:640:        MessageItem::ObjectPath(Path::new(DEVICE).expect("device path"))
+./bluetooth_agent.rs:672:        let (id, _) = queue.prompts().next().expect("queued prompt");
+./bluetooth_agent.rs:674:        queue.take_outbox().pop().expect("reply")
+./bluetooth_agent.rs:690:        let [confirm, authorize, service, pin, passkey] = prompt_calls().try_into().expect("five");
+./bluetooth_agent.rs:729:            queue.expire(now + (PROMPT_TIMEOUT.checked_sub(Duration::from_secs(1)).unwrap())),
+./bluetooth_agent.rs:734:        let mut reply = queue.take_outbox().pop().expect("expired reply");
+./bluetooth_agent.rs:781:            panic!("full queue must reply");
+./bluetooth_agent.rs:796:                panic!("{member} must be acknowledged");
+./bluetooth_agent.rs:811:            Message::new_method_call(BLUEZ_SERVICE, DEVICE, AGENT_IFACE, "Release").expect("call");
+./bluetooth_agent.rs:818:                .expect("call");
+./bluetooth_agent.rs:885:        let message = register_message().expect("register");
+./bluetooth_agent.rs:886:        assert_eq!(message.member().expect("member").to_string(), REGISTER);
+./bluetooth_agent.rs:898:            request_default_message().expect("default"),
+./bluetooth_agent.rs:899:            unregister_message().expect("unregister"),
+./pulse.rs:740:        let mut proplist = pulse::proplist::Proplist::new().expect("proplist must allocate");
+./pulse.rs:749:            proplist.set_str(key, value).expect("set proplist key");
+./pulse.rs:794:        let mut initial_mainloop = Mainloop::new().expect("Pulse mainloop must be constructible");
+./pulse.rs:797:            .expect("Pulse mainloop must start for the callback probe");
+./pulse.rs:817:                .expect("callback probe receiver must remain available");
+./pulse.rs:827:                .expect("callback probe receiver must remain available");
+./pulse.rs:843:            panic!("Pulse callback probe timer must be created");
+./pulse.rs:857:            entered.expect("unavailable retry timer must execute its callback");
+./pulse.rs:878:        let adapter = PulseAdapter::connect(|_| {}).expect("connect to the live server");
+./bluetooth.rs:521:        MessageItem::new_dict(items).expect("a{sv}")
+./bluetooth.rs:543:            MessageItem::ObjectPath(Path::new(path.to_owned()).expect("path")),
+./bluetooth.rs:544:            MessageItem::new_dict(ifaces).expect("a{sa{sv}}"),
+./bluetooth.rs:595:        .expect("a{oa{sa{sv}}}")
+./bluetooth.rs:599:        let mut call = managed_objects_message().expect("call");
+./bluetooth.rs:601:        let mut reply = Message::new_method_return(&call).expect("return");
+./bluetooth.rs:607:        BluetoothState::from_managed_objects(ADAPTER, &[fixture()]).expect("state")
+./bluetooth.rs:612:            Message::new_signal(path, PROPERTIES_INTERFACE, "PropertiesChanged").expect("signal");
+./bluetooth.rs:614:            MessageItemArray::new(Vec::new(), Signature::new("as").expect("as")).expect("array"),
+./bluetooth.rs:623:            device_object_path(DEFAULT_ADAPTER, MAC).expect("path"),
+./bluetooth.rs:650:        let message = device_op_message(DeviceOp::Pair, DEFAULT_ADAPTER, MAC).expect("pair");
+./bluetooth.rs:664:            device_op_message(DeviceOp::SetTrusted(true), DEFAULT_ADAPTER, MAC).expect("trust");
+./bluetooth.rs:679:        let message = device_op_message(DeviceOp::Remove, DEFAULT_ADAPTER, MAC).expect("remove");
+./bluetooth.rs:691:        let list = managed_objects_message().expect("list");
+./bluetooth.rs:697:        let rule = add_match_message(MATCH_OBJECTS).expect("match");
+./bluetooth.rs:710:            parse_managed_objects(&reply_with(fixture(), 1), DEFAULT_ADAPTER).expect("parse");
+./bluetooth.rs:772:            Message::new_signal("/", OBJECT_MANAGER_INTERFACE, "InterfacesAdded").expect("added");
+./bluetooth.rs:783:            .expect("removed");
+./bluetooth.rs:785:            MessageItem::ObjectPath(Path::new(DEV_NEW.to_owned()).expect("path")),
+./bluetooth.rs:786:            MessageItem::new_array(vec![strs(DEVICE_INTERFACE)]).expect("array"),
+./bluetooth.rs:795:        let signal = Message::new_signal("/", "org.example.Other", "Ping").expect("signal");
+./bluetooth.rs:803:        assert!(!state.absorb(&reply_with(fixture(), 1)).expect("stale"));
+./bluetooth.rs:805:        assert!(state.absorb(&reply_with(fixture(), 2)).expect("fresh"));
+./bluetooth.rs:814:        let mut call = managed_objects_message().expect("call");
+./bluetooth.rs:817:        let name = ErrorName::new("org.freedesktop.DBus.Error.ServiceUnknown").expect("name");
+./bluetooth.rs:819:        assert!(state.absorb(&err).expect("absorb"));
+./bluetooth.rs:826:        let (peer, dormant) = UnixStream::pair().expect("pair");
+./bluetooth.rs:838:        assert_eq!(control.on_ready().expect("drain"), 0);
+./bluetooth.rs:844:        let (peer, dormant) = UnixStream::pair().expect("pair");
+./bluetooth.rs:852:            .expect("valid address");
+./bluetooth.rs:859:        let mut call = device_op_message(DeviceOp::Pair, DEFAULT_ADAPTER, MAC).expect("pair");
+./bluetooth.rs:861:        let ok = Message::new_method_return(&call).expect("return");
+./bluetooth.rs:864:        let name = ErrorName::new("org.bluez.Error.AlreadyExists").expect("name");
+./media_store.rs:511:            fs::create_dir_all(&path).expect("create temp dir");
+./media_store.rs:584:        fs::write(path, bytes).expect("write fixture");
+./media_store.rs:592:        path.file_name().unwrap().to_str().unwrap()
+./media_store.rs:623:        let imported = store.import(&src, MediaKind::DesktopWallpaper).unwrap();
+./media_store.rs:624:        fs::remove_file(&src).unwrap();
+./media_store.rs:633:        assert_eq!(fs::read(&imported.path).unwrap(), bytes);
+./media_store.rs:644:            .unwrap();
+./media_store.rs:654:        let avatar = store.import(&src, MediaKind::Avatar).unwrap();
+./media_store.rs:655:        let lock = store.import(&src, MediaKind::LockWallpaper).unwrap();
+./media_store.rs:673:        let imported = store.import(&src, MediaKind::Avatar).unwrap();
+./media_store.rs:675:        assert!(imported.path.to_str().unwrap().ends_with(".jpg"));
+./media_store.rs:676:        assert_eq!(fs::read(&imported.path).unwrap(), jpeg);
+./media_store.rs:680:        let imported = store.import(&src, MediaKind::Avatar).unwrap();
+./media_store.rs:682:        assert!(imported.path.to_str().unwrap().ends_with(".gif"));
+./media_store.rs:691:        let first = store.import(&src, MediaKind::DesktopWallpaper).unwrap();
+./media_store.rs:692:        let second = store.import(&src, MediaKind::DesktopWallpaper).unwrap();
+./media_store.rs:694:        assert_eq!(fs::read_dir(&store.root).unwrap().count(), 1);
+./media_store.rs:703:        let imported = store.import(&src, MediaKind::DesktopWallpaper).unwrap();
+./media_store.rs:709:        assert_eq!(fs::read(&imported.path).unwrap(), b"other content");
+./media_store.rs:718:        assert!(existing_file_matches(&path, &expected).unwrap());
+./media_store.rs:722:        assert!(!existing_file_matches(&path, &different).unwrap());
+./media_store.rs:746:        assert_eq!(fs::read(&collision).unwrap(), b"other content");
+./media_store.rs:753:        store.ensure_root().unwrap();
+./media_store.rs:757:        std::os::unix::fs::symlink(&outside, &dest).unwrap();
+./media_store.rs:763:        assert_eq!(fs::read(&outside).unwrap(), b"same bytes");
+./media_store.rs:780:        assert_eq!(fs::read_dir(&store.root).unwrap().count(), 0);
+./media_store.rs:798:        let file = File::create(&src).unwrap();
+./media_store.rs:799:        file.set_len(MAX_SOURCE_BYTES + 1).unwrap();
+./media_store.rs:818:        let imported = import_desktop(&dir, &src).unwrap();
+./media_store.rs:891:        let png = store.import(&src, MediaKind::StartIcon).unwrap();
+./media_store.rs:893:        assert!(png.path.to_str().unwrap().ends_with(".png"));
+./media_store.rs:897:        let imported = store.import(&src, MediaKind::StartIcon).unwrap();
+./media_store.rs:899:        assert!(imported.path.to_str().unwrap().ends_with(".webp"));
+./media_store.rs:900:        assert_eq!(fs::read(&imported.path).unwrap(), webp);
+./media_store.rs:904:        let imported = store.import(&src, MediaKind::StartIcon).unwrap();
+./media_store.rs:906:        assert!(imported.path.to_str().unwrap().ends_with(".jpg"));
+./media_store.rs:943:            .unwrap()
+./media_store.rs:945:            .unwrap();
+./media_store.rs:953:        let imported = store.import(&wide, MediaKind::StartIcon).unwrap();
+./media_store.rs:963:        let imported = store.import(&src, MediaKind::StartIcon).unwrap();
+./media_store.rs:965:        let stored = imported.path.to_str().unwrap().to_owned();
+./media_store.rs:990:        let imported = store.import(&src, MediaKind::LockWallpaper).unwrap();
+./media_store.rs:992:        assert!(imported.path.to_str().unwrap().ends_with(".jpg"));
+./media_store.rs:994:        assert_eq!(fs::read(&imported.path).unwrap(), jpeg);
+./media_store.rs:999:        let imported = store.import(&src, MediaKind::DesktopWallpaper).unwrap();
+./media_store.rs:1001:        assert!(imported.path.to_str().unwrap().ends_with(".gif"));
+./media_store.rs:1029:        fs::create_dir(&src).unwrap();
+./media_store.rs:1041:        std::os::unix::fs::symlink(&target, &link).unwrap();
+./media_store.rs:1044:            .unwrap();
+./media_store.rs:1045:        assert_eq!(fs::read(&imported.path).unwrap(), bytes);
+./media_store.rs:1052:        std::os::unix::fs::symlink(dir.0.join("missing.png"), &link).unwrap();
+./media_store.rs:1066:        let imported = store.import(&src, MediaKind::DesktopWallpaper).unwrap();
+./media_store.rs:1067:        let dir_mode = fs::metadata(&store.root).unwrap().permissions().mode() & 0o777;
+./media_store.rs:1068:        let file_mode = fs::metadata(&imported.path).unwrap().permissions().mode() & 0o777;
+./media_store.rs:1077:        fs::create_dir_all(&store.root).unwrap();
+./media_store.rs:1086:        store.gc(&[current.clone(), previous.clone()]).unwrap();
+./media_store.rs:1098:        fs::create_dir_all(&store.root).unwrap();
+./media_store.rs:1102:        std::os::unix::fs::symlink(&outside, &link).unwrap();
+./media_store.rs:1104:        store.gc(&[]).unwrap();
+./media_store.rs:1106:        assert_eq!(fs::read(&outside).unwrap(), b"outside");
+./polkit_agent.rs:739:            resolve_session_id(Some("7"), 4242, &fake).expect("env"),
+./polkit_agent.rs:749:            resolve_session_id(Some("  3\n"), 4242, &fake).expect("env"),
+./polkit_agent.rs:758:        assert_eq!(resolve_session_id(None, 4242, &fake).expect("logind"), "12");
+./polkit_agent.rs:766:            resolve_session_id(Some("   "), 4242, &fake).expect("logind"),
+./polkit_agent.rs:819:        assert_eq!(lookup.session_id_for_pid(4242).expect("id"), "2");
+./polkit_agent.rs:849:            resolve_session_id(Some("3"), 4242, &lookup).expect("env"),
+./polkit_agent.rs:853:            resolve_session_id(None, 4242, &lookup).expect("logind"),
+./polkit_agent.rs:892:        .expect("dict");
+./polkit_agent.rs:901:        .expect("dict");
+./polkit_agent.rs:902:        let identities = MessageItem::new_array(vec![identity(1000)]).expect("array");
+./polkit_agent.rs:915:            Message::new_method_call(":1.42", AGENT_PATH, AGENT_IFACE, method).expect("call");
+./polkit_agent.rs:924:        let msg = register_message("c1", "en_US.UTF-8").expect("register");
+./polkit_agent.rs:925:        assert_eq!(msg.member().expect("member").to_string(), REGISTER);
+./polkit_agent.rs:930:            panic!("third argument must be an object path");
+./polkit_agent.rs:937:        let req = parse_begin(&begin_items("cookie-a")).expect("begin");
+./polkit_agent.rs:1013:                parse_begin(&begin_items("f")).expect("p"),
+./polkit_agent.rs:1016:            .expect("begin");
+./polkit_agent.rs:1028:                parse_begin(&begin_items("t")).expect("p"),
+./polkit_agent.rs:1031:            .expect("begin");
+./polkit_agent.rs:1047:                parse_begin(&begin_items("d")).expect("p"),
+./polkit_agent.rs:1050:            .expect("first");
+./polkit_agent.rs:1055:                    parse_begin(&begin_items("d")).expect("p"),
+./polkit_agent.rs:1067:        let first = parse_begin(&begin_items("q1")).expect("p");
+./polkit_agent.rs:1070:            .expect("first");
+./polkit_agent.rs:1090:                parse_begin(&begin_items("c")).expect("p"),
+./polkit_agent.rs:1093:            .expect("begin");
+./polkit_agent.rs:1105:                parse_begin(&begin_items("c")).expect("p"),
+./polkit_agent.rs:1108:            .expect("begin");
+./polkit_agent.rs:1124:                parse_begin(&begin_items("e")).expect("p"),
+./polkit_agent.rs:1127:            .expect("begin");
+./polkit_helper.rs:327:                .expect("control character rejected");
+./polkit_helper.rs:336:        let mut pipe = spawn_helper(command, "alice", "cookie-1").expect("spawn");
+./polkit_helper.rs:341:            match drive(&mut pipe, &mut conv).expect("drive") {
+./polkit_helper.rs:343:                    pipe.write_line("hunter2").expect("answer");
+./polkit_helper.rs:351:        pipe.wait().expect("helper exit");
+./polkit_helper.rs:425:        let pipe = spawn_helper(command, "alice", "cookie-1").expect("spawn");
+./polkit_helper.rs:426:        let mut reactor = Reactor::new().expect("reactor");
+./polkit_helper.rs:439:                                    pipe.write_line("hunter2").expect("answer");
+./polkit_helper.rs:450:            .expect("register");
+./polkit_helper.rs:456:                .expect("dispatch");
+./notifications.rs:656:    .expect("constant notification signal identifiers are valid")
+./notifications.rs:677:        .expect("constant notification signal identifiers are valid")
+./audio_helper.rs:315:        .expect("writer thread starts");
+./audio_helper.rs:349:        pid.expect("spawned child pid")
+./audio_helper.rs:355:        helper.request_snapshot().expect("queue first request");
+./audio_helper.rs:367:        helper.request_snapshot().expect("queue first request");
+./audio_helper.rs:371:            .expect("queue respawn for volume");
+./audio_helper.rs:373:        let second = helper.child_pid().expect("respawned child");
+./audio_helper.rs:385:            .expect("spawn fake child");
+./audio_helper.rs:386:        let stdin = child.stdin.take().expect("stdin");
+./audio_helper.rs:419:        .expect("writer thread starts");
+./audio_helper.rs:422:            helper.set_volume(volume_action()).expect("request queued");
+./audio_helper.rs:440:        .expect("writer thread starts");
+./mpris.rs:804:            .expect("valid signal header")
+./mpris.rs:824:            .expect("valid property dict");
+./mpris.rs:853:                .expect("property reply applies");
+./mpris.rs:860:        let mut provider = MprisProvider::connect().expect("session bus for MPRIS pump");
+./mpris.rs:870:        provider.on_ready().expect("on_ready");
+./mpris.rs:938:        let (peer, dormant) = UnixStream::pair().expect("socketpair");
+./mpris.rs:961:                MprisProvider::connect().expect("absent session bus must not fail connect");
+./mpris.rs:968:            provider.start().expect("start is deferred while offline");
+./mpris.rs:970:            assert_eq!(provider.on_ready().expect("offline on_ready is a no-op"), 0);
+./mpris.rs:985:        let exe = std::env::current_exe().expect("test binary path");
+./mpris.rs:999:            .expect("spawn offline child");
+./notification_history.rs:439:        assert_eq!(history.entries().next().unwrap().view.summary, "2");
+./notification_history.rs:506:            .unwrap();
+./notification_history.rs:526:        let kept = history.entries().next().expect("one entry");
+./notification_history.rs:560:            .expect("newest");
+./notification_history.rs:679:        history.save_file(&path).expect("save history");
+./notification_history.rs:682:        assert_eq!(loaded.entries().next().unwrap().view.summary, "saved");
+./network_slot.rs:144:            .expect("unreachable system bus must not fail the constructor");
+./network_slot.rs:152:        slot.start().expect("start is a no-op when unavailable");
+./network_slot.rs:153:        assert!(!slot.reconcile().expect("reconcile is a no-op"));
+./network_slot.rs:154:        assert_eq!(slot.on_ready().expect("on_ready is a no-op"), 0);
+./network_slot.rs:160:        let mut slot = NetworkManagerSlot::connect_with(failing_connector).unwrap();
+./network_slot.rs:173:        let slot = NetworkManagerSlot::connect_with(failing_connector).unwrap();
+./network_slot.rs:184:                .expect("absent system bus must not fail the constructor");
+./network_slot.rs:189:            slot.start().expect("start degrades");
+./network_slot.rs:190:            assert_eq!(slot.on_ready().expect("on_ready degrades"), 0);
+./network_slot.rs:193:        let exe = std::env::current_exe().expect("test binary path");
+./network_slot.rs:207:            .expect("spawn child test process");
+./backlight.rs:273:        std::fs::create_dir_all(&dir).expect("scratch dir");
+./backlight.rs:279:        std::fs::create_dir_all(&dir).expect("device dir");
+./backlight.rs:280:        std::fs::write(dir.join("type"), kind).expect("type");
+./backlight.rs:281:        std::fs::write(dir.join("max_brightness"), max.to_string()).expect("max");
+./backlight.rs:282:        std::fs::write(dir.join("brightness"), raw.to_string()).expect("brightness");
+./backlight.rs:296:        std::fs::write(root.join("intel_backlight").join("brightness"), "36000").expect("write");
+./backlight.rs:330:                .expect("brightness"),
+./backlight.rs:346:        provider.set_percent(20, generation).expect("sysfs write");
+./backlight.rs:349:                .expect("brightness"),
+./network_manager/vpn.rs:280:        .expect("dict");
+./network_manager/vpn.rs:285:        .expect("dict")
+./network_manager/vpn.rs:338:        let message = activate_vpn_message(PROFILE_PATH).expect("settings path");
+./network_manager/vpn.rs:346:        let root = Path::new(NO_OBJECT_PATH.to_owned()).expect("path");
+./network_manager/vpn.rs:350:                MessageItem::ObjectPath(Path::new(PROFILE_PATH.to_owned()).expect("path")),
+./network_manager/vpn.rs:369:        let mut call = activate_vpn_message(PROFILE_PATH).expect("settings path");
+./network_manager/vpn.rs:373:            Path::new(ACTIVE_PATH.to_owned()).expect("path"),
+./network_manager/vpn.rs:381:            Path::new(PROFILE_PATH.to_owned()).expect("path"),
+./network_manager/vpn.rs:383:        let profile = single_object_path(&items, "lookup").expect("one object path");
+./network_manager/vpn.rs:384:        let message = activate_vpn_message(&profile).expect("settings path");
+./network_manager/vpn.rs:394:        let mut call = activate_vpn_message(PROFILE_PATH).expect("settings path");
+./network_manager/vpn.rs:397:            ErrorName::new("org.freedesktop.NetworkManager.UnknownConnection").expect("error name");
+./network_manager/vpn.rs:398:        let text = CString::new("no such profile").expect("cstring");
+./network_manager/vpn.rs:408:        let mut call = get_connection_by_uuid_message(UUID).expect("valid uuid");
+./network_manager/vpn.rs:427:        let message = get_connection_by_uuid_message(UUID).expect("valid uuid");
+./network_manager/vpn.rs:448:            Path::new(PROFILE_PATH.to_owned()).expect("path"),
+./network_manager/vpn.rs:460:            .expect("error name");
+./network_manager/vpn.rs:461:        let text = CString::new("no such profile").expect("cstring");
+./network_manager/vpn.rs:479:        let message = deactivate_vpn_message(ACTIVE_PATH).expect("active path");
+./network_manager/vpn.rs:490:                Path::new(ACTIVE_PATH.to_owned()).expect("path")
+./network_manager/vpn.rs:505:        let list = active_connections_message().expect("root list");
+./network_manager/vpn.rs:516:        let uuid = active_uuid_message(ACTIVE_PATH).expect("active path");
+./network_manager/vpn.rs:531:            Path::new(ACTIVE_PATH.to_owned()).expect("path"),
+./network_manager/vpn.rs:533:        .expect("non-empty array");
+./network_manager/vpn.rs:536:            active_paths_from_items(&reply, "lookup").expect("paths"),
+./network_manager/vpn.rs:548:            active_uuid_from_items(&reply, "uuid").expect("string"),
+./network_manager/vpn.rs:557:        let mut call = deactivate_vpn_message(ACTIVE_PATH).expect("active path");
+./network_manager/vpn.rs:564:            ErrorName::new("org.freedesktop.NetworkManager.UnknownConnection").expect("error name");
+./network_manager/vpn.rs:565:        let text = CString::new("not active").expect("cstring");
+./background.rs:52:            .expect("spawn stat reader");
+./background.rs:53:        let text = String::from_utf8(output.stdout).expect("utf8 stat");
+./background.rs:54:        let after_comm = &text[text.rfind(')').expect("comm end") + 1..];
+./background.rs:58:            .expect("nice field")
+./background.rs:60:            .expect("nice integer")
+./background.rs:66:            let before = current_thread_nice().expect("getpriority before");
+./background.rs:70:                current_thread_nice().expect("getpriority"),
+./background.rs:75:        .expect("worker thread");
+./background.rs:80:        let before = current_thread_nice().expect("getpriority before");
+./background.rs:83:            .expect("worker thread");
+./background.rs:84:        assert_eq!(current_thread_nice().expect("getpriority after"), before);
+./background.rs:91:            let once = current_thread_nice().expect("getpriority once");
+./background.rs:94:            assert_eq!(current_thread_nice().expect("getpriority twice"), once);
+./background.rs:98:        .expect("worker thread");
+./background.rs:105:            let thread_nice = current_thread_nice().expect("getpriority");
+./background.rs:110:        .expect("worker thread");
+./launcher_entry.rs:182:    let state = entries.get_mut(&key).expect("entry inserted above");
+./launcher_entry.rs:380:        MessageItem::new_dict(entries).expect("dict")
+./launcher_entry.rs:394:        .expect("valid update");
+./launcher_entry.rs:402:        let (_, update) = parse_update(&body("application://a.desktop", None, None)).unwrap();
+./launcher_entry.rs:410:            .unwrap(),
+./launcher_entry.rs:418:        let (_, high) = parse_update(&body("application://a.desktop", Some(3.0), None)).unwrap();
+./launcher_entry.rs:451:            .unwrap()
+./themes/import.rs:619:        fs::create_dir_all(&backup).expect("backup");
+./themes/import.rs:620:        fs::write(backup.join("index.theme"), b"old").expect("old theme");
+./themes/import.rs:621:        fs::create_dir_all(&dest).expect("dest");
+./themes/import.rs:622:        fs::write(dest.join("new.theme"), b"new").expect("new theme");
+./themes/import.rs:639:        fs::create_dir_all(&dir).expect("scratch dir");
+./themes/import.rs:647:            .expect("set mtime");
+./themes/import.rs:655:            std::str::from_utf8(STAGING_PREFIX).unwrap()
+./themes/import.rs:659:            std::str::from_utf8(REPLACED_PREFIX).unwrap()
+./themes/import.rs:663:            std::str::from_utf8(STAGING_PREFIX).unwrap()
+./themes/import.rs:674:            fs::create_dir_all(dir.join("keep")).expect("dir");
+./themes/import.rs:681:        sweep_stale(&icons, STALE_AGE).expect("sweep");
+./themes/import.rs:698:        fs::write(outside.join("precious"), b"keep").expect("target file");
+./themes/import.rs:701:            std::str::from_utf8(STAGING_PREFIX).unwrap()
+./themes/import.rs:703:        symlink(&outside, &link).expect("symlink");
+./themes/import.rs:706:        sweep_stale(&icons, STALE_AGE).expect("sweep");
+./themes/cursor.rs:186:        let preview = parse_xcursor_preview(&one_pixel_xcursor()).expect("valid one-pixel Xcursor");
+./themes/cursor.rs:215:        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+./themes/cursor.rs:216:        let file = fs::File::create(root.join("cursors").join("left_ptr")).expect("left_ptr");
+./themes/cursor.rs:217:        file.set_len(16 * 1024 * 1024 + 1).expect("sparse oversize");
+./themes/cursor.rs:232:        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+./themes/cursor.rs:233:        fs::write(base.join("outside"), one_pixel_xcursor()).expect("outside file");
+./themes/cursor.rs:234:        symlink(base.join("outside"), root.join("cursors").join("left_ptr")).expect("symlink");
+./themes/cursor.rs:248:        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+./themes/cursor.rs:249:        fs::write(root.join("cursors").join("default"), one_pixel_xcursor()).expect("default");
+./themes/cursor.rs:250:        symlink("default", root.join("cursors").join("left_ptr")).expect("symlink");
+./themes/cursor.rs:251:        let preview = load_left_ptr_preview(&root).expect("in-root symlink previews");
+./themes/xz.rs:996:            let got = decode(&enc).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+./themes/xz.rs:1006:        assert_eq!(decode(&enc).unwrap().len(), 0);
+./themes/xz.rs:1072:        assert_eq!(decode(&at_cap).unwrap(), input);
+./themes/xz.rs:1115:            .unwrap();
+./portal_file_chooser.rs:441:                .expect("local wallpaper URI")
+./portal_file_chooser.rs:447:                .expect("localhost URI")
+./portal_file_chooser.rs:470:        let MessageItem::Dict(options) = wallpaper_options("test_token").expect("portal options")
+./portal_file_chooser.rs:472:            panic!("portal options must be a dictionary");
+./portal_file_chooser.rs:497:                .expect("empty results");
+./portal_file_chooser.rs:510:            .expect("empty results");
+./portal_file_chooser.rs:524:                .expect("gz archive")
+./portal_file_chooser.rs:536:                .expect("folder")
+./portal_file_chooser.rs:559:            theme_source_options("tok", false).expect("archive options")
+./portal_file_chooser.rs:561:            panic!("archive options must be a dictionary");
+./portal_file_chooser.rs:567:        let MessageItem::Dict(folder) = theme_source_options("tok", true).expect("folder options")
+./portal_file_chooser.rs:569:            panic!("folder options must be a dictionary");
+./portal_file_chooser.rs:581:            .expect("valid portal response signal");
+./portal_file_chooser.rs:586:            Message::new_signal("/request/1", "org.example.Other", RESPONSE).expect("valid signal");
+./portal_file_chooser.rs:590:            Message::new_signal("/request/1", REQUEST_INTERFACE, "Other").expect("valid signal");
+./audio_protocol.rs:429:                assert_eq!(parse_request(&line).expect("parse"), request, "{line}");
+./audio_protocol.rs:457:            if let Some(snapshot) = decoder.push_line(line).expect("decode") {
+./audio_protocol.rs:461:        assert_eq!(decoded.expect("completed snapshot"), original);
+./audio_protocol.rs:474:                .expect("header")
+./audio_protocol.rs:492:            assert_eq!(unescape(&escaped).expect("unescape"), text);
+./audio_protocol.rs:500:        assert_eq!(decode_optional("-").expect("none"), None);
+./audio_protocol.rs:501:        assert_eq!(decode_optional("=").expect("empty"), Some(String::new()));
+./job_view.rs:722:        let MessageItem::Dict(_) = update.as_ref().unwrap() else {
+./job_view.rs:723:            panic!("request update should be a dict");
+./job_view.rs:730:                &[update.unwrap()]
+./job_view.rs:746:                        .unwrap()
+./job_view.rs:791:        let first = allocate_job_id(&jobs, &mut 1).unwrap();
+./job_view.rs:800:                .unwrap()
+./power.rs:423:        let ticks = parse_cpu_ticks("cpu  100 0 50 800 20 5 5 0 0 0").expect("cpu line");
+./power.rs:505:        let mut provider = PowerProvider::connect().expect("provider");
+./power.rs:514:        let mut provider = PowerProvider::connect().expect("provider");
+./power.rs:524:            dormant: UnixStream::pair().expect("pair").0,
+./power.rs:525:            _peer: UnixStream::pair().expect("pair").0,
+./power.rs:546:        .expect("dict")
+./power_profiles.rs:380:        MessageItem::new_dict(pairs).expect("dict")
+./power_profiles.rs:389:        variant(MessageItem::new_array(entries).expect("array"))
+./power_profiles.rs:427:        let property = variant(MessageItem::new_array(entries).expect("array"));
+./power_profiles.rs:445:            panic!("dict");
+./power_profiles.rs:470:        let payload = changed_properties(&items).expect("interface matches");
+./power_profiles.rs:506:            dormant: UnixStream::pair().expect("pair").1,
+./power_profiles.rs:507:            _peer: UnixStream::pair().expect("pair").0,
+./icon_service.rs:786:                .expect("queued icon");
+./icon_service.rs:793:                    queue.high.pop_front().expect("queued icon")
+./icon_service.rs:795:                    queue.low.pop_front().expect("queued icon")
+./icon_service.rs:809:                    .expect("queued icon");
+./icon_service.rs:1076:        let start = src.find("fn worker_loop").expect("worker_loop");
+./icon_service.rs:1078:        let end = tail.find("\nfn emit_apply").expect("worker end");
+./icon_service.rs:1094:        let result = service.take_ready().expect("one completed result");
+./icon_service.rs:1139:        service.take_ready().expect("old-generation job completes");
+./icon_service.rs:1181:        std::fs::create_dir_all(&root).expect("watch root");
+./icon_service.rs:1256:            .expect("wake pipe")
+./icon_service.rs:1258:            .expect("clone wake reader");
+./icon_service.rs:1265:            .expect("wake pipe readable after publish");
+./icon_service.rs:1359:            let cache = service.result_cache.lock().expect("cache");
+./icon_service.rs:1371:        let cache = small.result_cache.lock().expect("cache");
+./icon_service.rs:1405:            let _guard = shared.queue.lock().expect("fresh queue lock");
+./icon_service.rs:1406:            panic!("poison the icon queue");

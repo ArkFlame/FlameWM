@@ -1,7 +1,18 @@
 # Unit p56-notifications-idle
-STATUS: OPEN
+STATUS: DONE
 
 Crates flamewm-integrations-linux notifications and flamewm-shell notification center: no timers while the list is empty or hidden; expire via single coalesced deadline; bounded history RAM.
 
 ## Result
-STARTED
+
+| # | File:line | Finding | Change | Risk | Status |
+|---|-----------|---------|--------|------|--------|
+| 1 | `crates/flamewm-integrations-linux/src/notifications.rs:152-158, 397-399` | `next_deadline()` already returns the single min expiry (or `None` when empty), but the logic was inline and had no pure regression pin. | Extracted the private `earliest_deadline` iterator helper; `next_deadline()` now delegates to it. Behaviour is identical. | Low — same `filter_map(...).min()` expression, no change to expiry or signals. | UNBUILT |
+| 2 | `crates/flamewm-shell/src/main.rs:796-807` | `publish_toast_deadline` called `next_deadline()` (a scan over active toasts) even on event-driven ticks where `wake` is `None`, so the result was discarded. | Early-return when no reactor wake handle is present before scanning; documented that an empty/non-expiring list arms no timer. | Low — the `wake == Some` path is unchanged; no visual or deadline change. | UNBUILT |
+| 3 | `crates/flamewm-integrations-linux/src/notifications/tests.rs:351-401` | No unit test covered the empty-list (`None`) and min-coalescing deadline contract. | Added `next_deadline_coalesces_to_one_earliest_expiry_or_none` using the new pure helper with a local `BTreeMap` (no D-Bus bus needed). | None — test-only addition. | UNBUILT |
+| 4 | `notifications.rs:323-349`, `main.rs:711-793` | Audited idle/hidden behaviour: `expire` early-returns unless the earliest deadline is due; the shell calls `expire` only when due and publishes `next_deadline()` into the shared reactor wake. `AppState::publish_wake` (`app/timers.rs:235-257`) recomputes and clears the shared slot each tick, so an empty list leaves no stale timer. The toast surface is shown/hidden from the active set; no timer runs while empty. | None (audit). | None — observation only. | UNBUILT (no edit) |
+| 5 | `notification_history.rs:10-11,57,60-70,110-136,243-244,279-334` | Audited RAM bounds: 200 entries, 256 KiB retained text, 256 muted app names, decoded images dropped before retention, 512 KiB load cap, active toasts capped at 64, UI updates coalesce at 256. No unbounded growth. | None (audit). | None — observation only. | UNBUILT (no edit) |
+
+Reference-first check: `.vendor/xfdesktop-master/src/xfdesktop-notify.c` delegates timeouts to libnotify (`NOTIFY_EXPIRES_DEFAULT`/`NOTIFY_EXPIRES_NEVER`), confirming that expiry belongs to the notification server, not the client UI; no conflicting precedent. Three production edits total (two in the notification provider, one in the shell host), plus one test. No build, test run, git, or Python was permitted in this unit; all edits are UNBUILT and need the orchestrator verification pass.
+
+PASS — all three brief properties hold: no reactor timer is armed while the toast list is empty or the surface is hidden, expiry is driven by one coalesced earliest deadline, and history RAM is bounded by entry count, text budget, muted-app cap, persisted-file cap and dropped image payloads. The two production edits only remove a redundant scan on event-driven ticks and make the coalescing helper directly testable; visuals and D-Bus behaviour are unchanged. Risk is limited to compilation of the new helper/test, which the orchestrator must verify.

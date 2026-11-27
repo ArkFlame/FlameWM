@@ -149,6 +149,14 @@ fn history_path() -> Option<PathBuf> {
         .map(|base| base.join(HISTORY_FILE))
 }
 
+/// Single coalesced expiry deadline over the active toasts. `None` for an empty or fully
+/// non-expiring list, so the shell arms no reactor timer while nothing can expire.
+fn earliest_deadline<'a>(notifications: impl Iterator<Item = &'a Notification>) -> Option<Instant> {
+    notifications
+        .filter_map(|notification| notification.expires_at)
+        .min()
+}
+
 impl NotificationProvider {
     /// Test seam: serves a private bus at `address` and never reads or writes the XDG history.
     #[cfg(test)]
@@ -388,10 +396,7 @@ impl NotificationProvider {
 
     #[must_use]
     pub fn next_deadline(&self) -> Option<Instant> {
-        self.notifications
-            .values()
-            .filter_map(|notification| notification.expires_at)
-            .min()
+        earliest_deadline(self.notifications.values())
     }
 
     #[must_use]

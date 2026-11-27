@@ -234,9 +234,16 @@ pub fn persist_notice(path: &Path, latch: NoticeLatch) -> io::Result<()> {
     }
     let temp = PathBuf::from(format!("{}.tmp", path.display()));
     let mut file = File::create(&temp)?;
-    io::Write::write_all(&mut file, latch.serialize().as_bytes())?;
-    file.sync_all()?;
-    fs::rename(&temp, path)?;
+    let written = (|| {
+        io::Write::write_all(&mut file, latch.serialize().as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temp, path)
+    })();
+    // A disk-full write or failed rename leaves a half-written latch; never keep that partial.
+    if written.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    written?;
     if let Some(parent) = path.parent()
         && let Ok(directory) = File::open(parent)
     {
@@ -303,6 +310,14 @@ fn copy_then_commit(
 /// Moves `dir/name` into `dir/<category>/`, creating the folder when missing and reusing it when
 /// present. Never replaces an existing entry (`name (1).ext` on clashes) and returns the final path.
 pub fn move_into_category(dir: &Path, name: &str, category: Category) -> io::Result<PathBuf> {
+    // Only finished, plain download names may move: reject path-like/URL text,
+    // hidden names and still-growing partial files before touching the filesystem.
+    if !is_candidate_name(name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a finished download name",
+        ));
+    }
     let source = dir.join(name);
     let folder = dir.join(category.folder_name());
     match fs::symlink_metadata(&folder) {

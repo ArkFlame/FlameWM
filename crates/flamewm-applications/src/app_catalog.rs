@@ -98,7 +98,12 @@ impl ApplicationCatalog {
                     .entry(stem.to_ascii_lowercase())
                     .or_insert(index);
             }
-            if let Some(base) = exec_basename(&entry.exec) {
+            if let Some(base) = entry
+                .application
+                .argv
+                .first()
+                .and_then(|program| exec_basename(program))
+            {
                 self.by_exec
                     .entry(base.to_ascii_lowercase())
                     .or_insert(index);

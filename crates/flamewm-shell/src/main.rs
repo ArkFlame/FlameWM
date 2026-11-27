@@ -794,13 +794,16 @@ impl NotificationHost {
     }
 
     /// Publishes the earliest toast expiry as the reactor wake, keeping any earlier deadline.
+    /// An empty, non-expiring list publishes nothing, so no timer is armed while idle or hidden.
     fn publish_toast_deadline(&self, wake: Option<&flamewm_reactor::WakeDeadline>) {
+        // Event-driven ticks carry no reactor wake handle; skip the deadline scan entirely.
+        let Some(wake) = wake else {
+            return;
+        };
         let Some(deadline) = self.provider.next_deadline() else {
             return;
         };
-        if let Some(wake) = wake {
-            wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
-        }
+        wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
     }
 }
 
