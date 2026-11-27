@@ -137,17 +137,6 @@ pub(crate) fn set_start_header_ink(color: UiColor) {
     START_HEADER_ARGB.store(packed, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Section-letter ink for Start headers.
-pub(crate) fn start_header_ink() -> UiColor {
-    let packed = START_HEADER_ARGB.load(std::sync::atomic::Ordering::Relaxed);
-    UiColor {
-        a: (packed >> 24) as u8,
-        r: (packed >> 16) as u8,
-        g: (packed >> 8) as u8,
-        b: packed as u8,
-    }
-}
-
 pub(crate) fn task_accent() -> UiColor {
     let packed = TASK_ACCENT_ARGB.load(std::sync::atomic::Ordering::Relaxed);
     UiColor {

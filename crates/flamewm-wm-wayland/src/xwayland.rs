@@ -345,17 +345,31 @@ pub fn spawn_xwayland(
                 display_number,
             } => match X11Wm::start_wm(wm_handle.clone(), x11_socket, wm_client.clone()) {
                 Ok(wm) => state.xwayland_ready(wm, display_number),
-                Err(error) => {
-                    eprintln!("flamewm-wayland: X11 window manager failed to start: {error}");
-                }
+                Err(error) => state.xwayland_unavailable(error),
             },
-            XWaylandEvent::Error => eprintln!("flamewm-wayland: XWayland failed to start"),
+            XWaylandEvent::Error => state.xwayland_unavailable("XWayland exited before ready"),
         }
     })?;
     Ok(client)
 }
 
 impl State {
+    /// X11 is optional: one failure record, an explicit autostart skip, and a session that keeps
+    /// serving Wayland clients. Autostart lives in `xwayland_ready`, which can never run after this,
+    /// and the content deadline watches `desktop_pending` (`xwm` absent + autostart present), so
+    /// clearing the list is what actually keeps a crash from killing the VT.
+    fn xwayland_unavailable(&mut self, cause: impl std::fmt::Display) {
+        crate::stage_line(
+            crate::Stage::Xwayland,
+            crate::StageStatus::Fail,
+            &crate::xwayland_unavailable_detail(&cause),
+        );
+        eprintln!(
+            "flamewm-wayland: X11 support unavailable ({cause}); continuing without X11 clients"
+        );
+        self.autostart.clear();
+    }
+
     pub fn x11_window(&self, id: WindowId) -> Option<&X11Surface> {
         self.x11
             .iter()

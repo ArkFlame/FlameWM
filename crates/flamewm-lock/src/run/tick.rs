@@ -79,6 +79,9 @@ impl LockLoop {
         if self.unlocked {
             self.frame_pacer.set_running(false);
             self.destroy_surfaces(runtime)?;
+            // The surfaces and their copied pixels are gone; release the decoded source rasters
+            // so the lock process does not keep them alive in its static caches after unlock.
+            crate::document::release_wallpaper_caches();
             return Ok(());
         }
         self.settle_display();

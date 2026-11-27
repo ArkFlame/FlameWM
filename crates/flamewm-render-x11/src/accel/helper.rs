@@ -72,7 +72,7 @@ impl RemoteGpu {
             request: Vec::new(),
             reply: Vec::new(),
         };
-        read_message(&mut remote.stdout, &mut remote.reply)?;
+        read_reply_with_deadline(&mut remote.child, &mut remote.stdout, &mut remote.reply)?;
         remote.device = String::from_utf8_lossy(reply_payload(&remote.reply)?).into_owned();
         Ok(remote)
     }
@@ -80,8 +80,37 @@ impl RemoteGpu {
     /// Sends `self.request` and reads the reply into `self.reply`.
     fn exchange(&mut self) -> Result<(), String> {
         write_message(&mut self.stdin, &self.request)?;
-        read_message(&mut self.stdout, &mut self.reply)
+        read_reply_with_deadline(&mut self.child, &mut self.stdout, &mut self.reply)
     }
+}
+
+/// Reads one helper reply with a deadline. A hung child must not block the paint thread forever:
+/// the blocking read runs on a scoped thread, and when no reply arrives before the deadline the
+/// child is killed, which closes the pipe so the reader unwinds too. The caller turns the timeout
+/// error into `FallbackReason::DeviceLost` and paints the frame on the CPU raster.
+fn read_reply_with_deadline(
+    child: &mut Child,
+    stdout: &mut ChildStdout,
+    reply: &mut Vec<u8>,
+) -> Result<(), String> {
+    const REPLY_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let outcome = read_message(stdout, reply);
+            let _ = tx.send(outcome);
+        });
+        match rx.recv_timeout(REPLY_DEADLINE) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                Err("helper reply timed out".to_owned())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("helper reply reader disconnected".to_owned())
+            }
+        }
+    })
 }
 
 impl Drop for RemoteGpu {

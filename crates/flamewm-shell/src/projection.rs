@@ -74,7 +74,7 @@ pub(crate) use panel::{
     taskbar_is_vertical, tray_any_visible, workspace_pager_visible, TASK_ATTENTION,
     TASK_NOT_RESPONDING,
 };
-pub(crate) use panel::{set_start_header_ink, start_header_ink};
+pub(crate) use panel::set_start_header_ink;
 pub use polkit::project_polkit;
 pub use start::{
     next_selectable_slot, project_start, project_start_error, start_application_for_slot,

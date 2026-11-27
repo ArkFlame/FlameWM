@@ -295,6 +295,15 @@ impl WallpaperLoader {
             }
             LoadResult::Failure(message) => {
                 self.state.generation = generation;
+                // A first load that cannot decode must never leave the default black
+                // watermark on screen: paint the theme's solid fallback instead. A wallpaper
+                // already presented stays in place, so a transient failure does not blank it.
+                if matches!(
+                    self.state.presentation,
+                    WallpaperPresentation::DefaultBlackWatermark
+                ) {
+                    self.state.presentation = WallpaperPresentation::Solid(DEFAULT_SOLID);
+                }
                 self.state.diagnostic = Some(WallpaperDiagnostic {
                     generation,
                     path: request.path,

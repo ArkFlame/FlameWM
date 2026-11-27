@@ -191,14 +191,36 @@ fn crop_runtime_image(
     })
 }
 
-/// The built-in wallpaper, decoded once per process. Every output crops from the same pixels, and
-/// re-showing the lock after DPMS or a suspend reuses them, so the WebP decode no longer repeats
-/// per output and per lock show.
-fn builtin_background() -> Option<&'static RgbaImage> {
-    static CACHE: OnceLock<Option<RgbaImage>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok())
-        .as_ref()
+/// Built-in wallpaper pixels, shared by every output while the lock is shown. Held behind a mutex
+/// so the decoded raster can be dropped on unlock instead of living for the whole process.
+static BUILTIN_CACHE: OnceLock<std::sync::Mutex<Option<std::sync::Arc<RgbaImage>>>> =
+    OnceLock::new();
+
+/// The built-in wallpaper, decoded once while the lock is shown. Every output crops from the same
+/// pixels, and re-showing the lock after DPMS or a suspend reuses them; the raster is released once
+/// the lock surfaces are gone, so the process does not retain it after unlock.
+fn builtin_background() -> Option<std::sync::Arc<RgbaImage>> {
+    let mut cache = BUILTIN_CACHE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.is_none() {
+        *cache = Some(std::sync::Arc::new(
+            decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok()?,
+        ));
+    }
+    cache.clone()
+}
+
+/// Drops the process-local wallpaper rasters after unlock. A later lock show decodes the same
+/// bytes again, so every presented pixel is unchanged.
+pub fn release_wallpaper_caches() {
+    if let Some(cache) = BUILTIN_CACHE.get()
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = None;
+    }
+    flamewm_image_core::decode_cache::release_shared_raster();
 }
 
 /// Reads and cover-scales the configured background image to the screen, or the
@@ -222,7 +244,7 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         }
         (LockBackgroundMode::Default, _) => Some(RuntimeImage::from_rgba(
             BUILTIN_BACKGROUND_SOURCE.to_string(),
-            cover_rgba(builtin_background()?, width, height)?,
+            cover_rgba(&builtin_background()?, width, height)?,
         )),
         // Solid colour, or a custom mode without a saved path: the caller paints the colour.
         _ => None,

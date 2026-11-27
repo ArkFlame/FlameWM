@@ -105,17 +105,59 @@ chain_cause() {
 chain_works() { case "$1" in
     x11) printf 'x_server+x11_clients' ;;
     safe) printf 'shell+diagnostics' ;;
+    minimal) printf 'x_server+x11_clients' ;;
 esac; }
 chain_degraded() { case "$1" in
     x11) printf 'wayland_native+compositor+kms_presentation' ;;
     safe) printf 'gui+shell+desktop+compositor' ;;
+    minimal) printf 'shell+desktop+compositor' ;;
 esac; }
 
+# Last-resort minimal mode: only a window manager, with no shell, terminal or desktop components.
+# Reached when the full session and the safe-mode shell/desktop have both failed, so the user is
+# never left at a black greeter. An already-running safe-mode WM is reused when its pid is passed.
+run_minimal_mode() { # [existing-wm-pid]
+    local candidate pid="${1:-}" rc=1
+    local -a children=()
+    if [[ -z "$pid" ]]; then
+        if [[ -z "${DISPLAY:-}" ]]; then
+            for candidate in /tmp/.X11-unix/X*; do
+                [[ -S "$candidate" ]] || continue
+                export DISPLAY=":${candidate##*X}"
+                break
+            done
+        fi
+        if [[ -z "${DISPLAY:-}" ]] && command -v Xvfb >/dev/null 2>&1; then
+            Xvfb :99 -screen 0 1024x768x24 >/dev/null 2>&1 &
+            children+=($!)
+            export DISPLAY=:99
+        fi
+        if [[ -n "${DISPLAY:-}" ]]; then
+            for candidate in ${FLAMEWM_SAFE_WM:-} openbox fluxbox xfwm4 icewm matchbox-window-manager twm; do
+                [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1 \
+                    && { "$candidate" >/dev/null 2>&1 & pid=$!; children+=($pid); break; }
+            done
+        fi
+    fi
+    if [[ -n "$pid" ]]; then
+        chain_record minimal ok shell_desktop_failed 0 "$(chain_works minimal)" \
+            "$(chain_degraded minimal)" "wm_pid=$pid"
+        wait "$pid"; rc=$?
+    else
+        chain_record minimal fail no_wm 1 "$(chain_works minimal)" "$(chain_degraded minimal)" \
+            "no_display_or_wm"
+    fi
+    if (( ${#children[@]} > 0 )); then
+        for candidate in "${children[@]}"; do kill -TERM "$candidate" 2>/dev/null || :; done
+    fi
+    return "$rc"
+}
+
 # Minimal safe mode: one usable display, a light window manager if one is installed, and one
-# terminal (or xmessage). With no X server and no Xvfb, drop to a recovery shell on the VT so the
-# user is never returned to a black greeter screen with no way to diagnose the failure.
+# terminal (or xmessage). When the shell/desktop fails after the full session already failed,
+# minimal mode keeps the WM alone alive before any VT recovery shell is attempted.
 run_safe_mode() {
-    local candidate child pid rc=0
+    local candidate child pid wm_pid="" rc=0
     local -a children=()
     if [[ -z "${DISPLAY:-}" ]]; then
         for candidate in /tmp/.X11-unix/X*; do
@@ -131,7 +173,7 @@ run_safe_mode() {
     if [[ -n "${DISPLAY:-}" ]]; then
         for candidate in ${FLAMEWM_SAFE_WM:-} openbox fluxbox xfwm4 icewm matchbox-window-manager twm; do
             [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1 \
-                && { "$candidate" >/dev/null 2>&1 & children+=($!); break; }
+                && { "$candidate" >/dev/null 2>&1 & wm_pid=$!; children+=($wm_pid); break; }
         done
         for candidate in ${FLAMEWM_SAFE_TERMINAL:-} xterm x-terminal-emulator alacritty xfce4-terminal konsole; do
             [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1 \
@@ -147,11 +189,17 @@ run_safe_mode() {
     fi
     if (( rc == 0 )); then
         wait "$child"; rc=$?
-    else
-        printf 'FlameWM safe mode: no usable X display; starting a recovery shell.\n' >&2
-        printf 'FlameWM safe mode: no usable X display; see ~/.cache/flamewm/session-chain.log\n' \
-            >/dev/tty 2>/dev/null || :
-        if [[ -t 0 ]]; then /bin/sh -i; rc=0; fi
+    fi
+    if (( rc != 0 )); then
+        # Full session and safe-mode shell/desktop both failed: keep only the WM running.
+        # Reuse the safe-mode WM when one was started so no second WM is spawned.
+        run_minimal_mode "$wm_pid"; rc=$?
+        if (( rc != 0 )); then
+            printf 'FlameWM safe mode: no usable X display; starting a recovery shell.\n' >&2
+            printf 'FlameWM safe mode: no usable X display; see ~/.cache/flamewm/session-chain.log\n' \
+                >/dev/tty 2>/dev/null || :
+            if [[ -t 0 ]]; then /bin/sh -i; rc=0; fi
+        fi
     fi
     if (( ${#children[@]} > 0 )); then
         for pid in "${children[@]}"; do kill -TERM "$pid" 2>/dev/null || :; done
@@ -201,6 +249,11 @@ chain_supervisor() {
 
 if [[ "${FLAMEWM_SESSION_ATTEMPT:-}" == safe ]]; then
     run_safe_mode
+    exit $?
+fi
+# Explicit last-resort entry: WM only, no shell or desktop components.
+if [[ "${FLAMEWM_SESSION_ATTEMPT:-}" == minimal ]]; then
+    run_minimal_mode
     exit $?
 fi
 CHAIN_WANTED=0

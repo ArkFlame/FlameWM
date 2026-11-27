@@ -1195,6 +1195,13 @@ pub fn run() -> Result<(), String> {
                     continue;
                 }
                 let snapshot = sampler.collect();
+                // The hide can also land *during* the walk, after the flag check above. A sample
+                // completed once the window is obscured must not write the wake socket: that is
+                // the one residual reactor tick a hidden window could still cause. Drop it; the
+                // next visible sample refreshes the table and the graphs gain no hidden point.
+                if worker_hidden.load(Ordering::Relaxed) {
+                    continue;
+                }
                 if sender.try_send(snapshot).is_ok() {
                     match writer.write(&[1]) {
                         Ok(_) => (),

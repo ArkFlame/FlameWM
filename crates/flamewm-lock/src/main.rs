@@ -98,7 +98,12 @@ fn present_x11(username: &str) -> ExitCode {
         }
     };
     let settings = session::load_settings();
-    match flamewm_lock::run::run(session, &settings, username) {
+    let result = flamewm_lock::run::run(session, &settings, username);
+    // The X11 lock surfaces are gone on either outcome. Release the decoded wallpaper held in
+    // the process-local cache now instead of leaving it resident until process exit; a later
+    // lock show re-reads the same on-disk entry, so the pixels are unchanged.
+    flamewm_image_core::decode_cache::release_shared_raster();
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("flamewm-lock: {error}");
@@ -132,6 +137,9 @@ fn present_wayland(username: &str) -> ExitCode {
     let backgrounds: Rc<RefCell<Option<(u32, u32, flamewm_ui_document::RuntimeImage)>>> =
         Rc::new(RefCell::new(None));
     let stale = Rc::clone(&backgrounds);
+    // A second handle survives the frame closure so the cache can be emptied on unlock, before
+    // this function returns, rather than at process teardown.
+    let cache = Rc::clone(&backgrounds);
     let load = move || {
         let loaded = session::load_settings();
         *shared.borrow_mut() = loaded.clone();

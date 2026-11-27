@@ -28,6 +28,41 @@ pub(crate) fn missing_extension_fault(extension: &str, detail: &str) -> StartupF
     }
 }
 
+/// Optional rendering extensions queried once at startup. Each absent extension already
+/// degrades to the plain core-protocol path in the renderer/WM; the audit here makes that
+/// degradation observable as exactly one failure record per extension.
+pub(crate) const CORE_FALLBACK_EXTENSIONS: &[(&[u8], &str, &str)] = &[
+    (
+        b"RENDER",
+        "RENDER",
+        "XRender text and image drawing falls back to core X",
+    ),
+    (
+        b"COMPOSITE",
+        "COMPOSITE",
+        "frames are not redirected; core painting is used",
+    ),
+    (
+        b"DAMAGE",
+        "DAMAGE",
+        "window-transition damage tracking is disabled",
+    ),
+    (
+        b"XFIXES",
+        "XFIXES",
+        "cursor and selection updates use core X where possible",
+    ),
+];
+
+/// Pure reduction of one optional-extension query to a single failure record.
+pub(crate) fn core_fallback_fault(
+    name: &str,
+    detail: &str,
+    present: bool,
+) -> Option<StartupFault> {
+    (!present).then(|| missing_extension_fault(name, detail))
+}
+
 /// Pure: resolve the RandR event stage to live events or a root-geometry fallback,
 /// recording the reason whenever it degrades.
 pub(crate) fn randr_event_fault(
@@ -97,6 +132,19 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
         .flatten();
     if let Some(fault) = randr_event_fault(query, selection_error) {
         eprintln!("{}", fault.message);
+    }
+    // RENDER/COMPOSITE/DAMAGE/XFIXES are optional. The renderer and WM already fall back to
+    // the plain core-protocol path when one is absent; report each absence once so the
+    // degraded session is observable rather than silent.
+    for &(name, display_name, detail) in CORE_FALLBACK_EXTENSIONS {
+        let present = conn
+            .query_extension(name)
+            .map_err(ReplyError::from)
+            .and_then(|cookie| cookie.reply())
+            .is_ok_and(|reply| reply.present);
+        if let Some(fault) = core_fallback_fault(display_name, detail, present) {
+            eprintln!("{}", fault.message);
+        }
     }
     let selection_kind = match &result {
         Err(ReplyError::X11Error(error)) => Some(error.error_kind),

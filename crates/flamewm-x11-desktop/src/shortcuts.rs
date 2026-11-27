@@ -370,9 +370,9 @@ impl ShortcutGrabs {
     }
 
     /// Ungrabs the active set, grabs the staged set, and then makes it active.
-    /// A failed optional grab is logged and skipped. On a failed required grab
-    /// the partial grabs are released, the previous set is re-grabbed, and the
-    /// error is returned.
+    /// A grab already held by another client is logged once and that binding is
+    /// skipped, even when it is not optional. Other failures on a required grab
+    /// release the partial grabs, re-grab the previous set, and return the error.
     pub fn commit(&mut self, backend: &mut dyn GrabBackend) -> FlameResult<()> {
         let next = self.staged.take().ok_or_else(|| {
             FlameError::new(ErrorCode::InvalidArgument, "no shortcut set is staged")
@@ -392,9 +392,9 @@ impl ShortcutGrabs {
             }
             match backend.grab(entry.grab) {
                 Ok(()) => granted.push(entry),
-                Err(error) if entry.optional => {
+                Err(error) if entry.optional || error.code == ErrorCode::Conflict => {
                     eprintln!(
-                        "flamewm: optional shortcut for {} was not grabbed: {}",
+                        "flamewm: shortcut for {} was not grabbed: {}",
                         entry.action, error.message
                     );
                     // A binding is all-or-nothing across its NumLock/CapsLock variants.
@@ -761,29 +761,39 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_grab_rolls_back_to_previous_set() {
+    fn required_grab_conflict_degrades_that_binding_and_commits_the_rest() {
         let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
-        let previous = grabs.active().to_vec();
-        let held_before = backend.held.clone();
 
-        // The second grab of the new set collides with another client.
+        // `WorkspaceLeft` collides with another client on its first variant.
         backend.fail_on = Some(base_grab(113, MOD_CONTROL | MOD_SUPER));
         grabs
-            .prepare(&desired(&[("WorkspaceLeft", "Ctrl+Super+Left")]), &lookup)
+            .prepare(
+                &desired(&[
+                    ("WorkspaceLeft", "Ctrl+Super+Left"),
+                    ("WorkspaceRight", "Ctrl+Super+Right"),
+                ]),
+                &lookup,
+            )
             .unwrap();
-        let error = grabs
+        grabs
             .commit(&mut backend)
-            .expect_err("BadAccess must surface as conflict");
-        assert_eq!(error.code, ErrorCode::Conflict);
-        assert_eq!(grabs.active(), previous.as_slice(), "active set restored");
-        assert_eq!(backend.held, held_before, "server grabs restored");
+            .expect("a conflict must not fail the commit");
 
-        grabs.rollback(&mut backend);
-        assert!(!grabs.has_staged());
-        assert_eq!(backend.held, held_before);
+        // Every NumLock/CapsLock variant of the conflicted binding is skipped.
+        assert!(
+            !backend.held.iter().any(|grab| grab.keycode == 113),
+            "all variants of the conflicted binding are released"
+        );
+        assert!(backend
+            .held
+            .contains(&base_grab(114, MOD_CONTROL | MOD_SUPER)));
+        assert_eq!(grabs.action_for_key(113, MOD_CONTROL | MOD_SUPER), None);
+        assert_eq!(
+            grabs.action_for_key(114, MOD_CONTROL | MOD_SUPER),
+            Some("WorkspaceRight")
+        );
     }
 
     #[test]

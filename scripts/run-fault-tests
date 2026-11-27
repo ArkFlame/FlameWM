@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Run every fault-injection test suite added in this session.
+#
+# Inventory method: `rg -l 'fault' crates --glob '*tests*.rs'` finds candidates, but that bare
+# substring also matches "default" (88 files), so the CASES list below is curated to the real
+# fault-injection modules. Two curated files have no "fault" in the name:
+# backend_fallback_tests.rs (unit u36c) injects DRM and nested-init failures, and load_tests.rs
+# (unit u34) injects a corrupt or missing settings file on the quarantine path. The shell-level
+# fault test scripts/test-wrapper-faults is included as the final case; it already exists and was
+# not edited by this unit.
+#
+# This file only defines the runs. The orchestrator invokes the default mode after the batch lands;
+# workers in the shared checkout must use --list only, which runs no build, cargo test or git.
+#
+# Usage:
+#   bash scripts/run-fault-tests --list   # print the inventory, run nothing
+#   bash scripts/run-fault-tests          # run each cargo suite, then the wrapper fault test
+#
+# Exit: 0 when all cases pass, 1 on any failure or missing module. Cargo runs are serialized and
+# capped at two build jobs and two test threads, matching the shared harness contract.
+set -uo pipefail
+
+SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd -- "$SELF_DIR/.." && pwd)
+cd "$ROOT" || exit 1
+
+export CARGO_BUILD_JOBS=2
+export RUST_TEST_THREADS=2
+
+# package | cargo test filter | source path | extra cargo args
+CASES=(
+  'flamewm-render-x11|fault_tests|crates/flamewm-render-x11/src/accel/fault_tests.rs|'
+  'flamewm-platform|load_tests|crates/flamewm-platform/src/settings/load_tests.rs|'
+  'flamewm-wm-x11|startup_fault_tests|crates/flamewm-wm-x11/src/wm/startup_fault_tests.rs|'
+  'flamewm-wm-wayland|backend_fallback_tests|crates/flamewm-wm-wayland/src/backend_fallback_tests.rs|'
+  'flamewm-wm-wayland|backend_fallback_tests|crates/flamewm-wm-wayland/src/backend_fallback_tests.rs|--features drm'
+)
+WRAPPER_TEST="$ROOT/scripts/test-wrapper-faults"
+
+case "${1:-}" in
+  --list) list_mode=1 ;;
+  '')     list_mode=0 ;;
+  *) printf 'Usage: %s [--list]\n' "$0" >&2; exit 2 ;;
+esac
+
+printf 'FAULT TEST INVENTORY (root=%s)\n' "$ROOT"
+index=0
+for entry in "${CASES[@]}"; do
+  IFS='|' read -r pkg filter path extra <<<"$entry"
+  if [ ! -f "$path" ]; then
+    printf 'MISSING fault module: %s\n' "$path" >&2
+    exit 1
+  fi
+  index=$((index + 1))
+  printf '  [%d] cargo test -p %s%s -- %s   (%s)\n' \
+    "$index" "$pkg" "${extra:+ $extra}" "$filter" "$path"
+done
+printf '  [%d] bash scripts/test-wrapper-faults\n' "$((index + 1))"
+
+if [ "$list_mode" -eq 1 ]; then
+  exit 0
+fi
+
+failed=0
+for entry in "${CASES[@]}"; do
+  IFS='|' read -r pkg filter path extra <<<"$entry"
+  printf '\n== cargo test -p %s%s -- %s ==\n' "$pkg" "${extra:+ $extra}" "$filter"
+  if [ -n "$extra" ]; then
+    # $extra is a curated, fixed feature flag, not user input.
+    cargo test -p "$pkg" $extra -- "$filter" || failed=$((failed + 1))
+  else
+    cargo test -p "$pkg" -- "$filter" || failed=$((failed + 1))
+  fi
+done
+
+printf '\n== bash scripts/test-wrapper-faults ==\n'
+bash "$WRAPPER_TEST" || failed=$((failed + 1))
+
+printf 'SUMMARY fault suites=%d failed=%d\n' "$(( ${#CASES[@]} + 1 ))" "$failed"
+[ "$failed" -eq 0 ]

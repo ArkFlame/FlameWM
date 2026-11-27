@@ -5,7 +5,7 @@
 //! fallback.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::network_manager::{item_string, item_strings, item_u32, unwrap_variant};

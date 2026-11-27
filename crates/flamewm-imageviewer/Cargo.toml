@@ -15,6 +15,7 @@ flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+imagesize = "=0.15.0"
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }

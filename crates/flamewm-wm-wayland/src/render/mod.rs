@@ -841,7 +841,7 @@ fn render_into(
     // A lock screen owns the output; its elements (or the opaque cover) must never be reused as a
     // desktop scene once the lock is gone.
     let cached = WINIT_SCENE.with(|slot| slot.borrow_mut().take());
-    let (mut elements, cache_key) =
+    let (elements, cache_key) =
         match crate::session_lock::screen_for(state.session_locked, state.lock_surface()) {
             Screen::Lock(surface) => (
                 surface_elements(backend.renderer(), surface.wl_surface(), 0, 0, scene_scale),

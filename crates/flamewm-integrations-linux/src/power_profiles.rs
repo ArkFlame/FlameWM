@@ -207,7 +207,13 @@ impl PowerProfilesProvider {
     }
 
     /// Requests one `GetAll` from the current service. Called on start and when the menu opens.
+    /// A second call while a read is in flight is dropped: every menu open would otherwise send
+    /// another doomed request when the service is absent, and the older error reply would no
+    /// longer match `pending_get_all`, so fallback would be skipped.
     pub fn refresh(&mut self) {
+        if self.pending_get_all.is_some() {
+            return;
+        }
         let Some(pump) = self.pump.as_ref() else {
             return;
         };

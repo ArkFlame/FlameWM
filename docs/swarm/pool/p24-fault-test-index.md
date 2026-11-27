@@ -1,4 +1,15 @@
 # Unit p24-fault-test-index
-STATUS: OPEN
+STATUS: PARTIAL
 
 Write scripts/run-fault-tests (bash, no builds executed by you): a documented script listing and running with cargo test (for the orchestrator to use later) every fault-injection test module added this session (rg -l 'fault' crates --glob '*tests*.rs'), plus scripts/test-wrapper-faults. Document in docs/FAULT_TESTS.md.
+
+## Result
+STARTED
+
+| file:line | finding | change | risk / state |
+| --- | --- | --- | --- |
+| `scripts/run-fault-tests:1` (new) | `rg -l 'fault' crates --glob '*tests*.rs'` returns 88 files because the substring also occurs inside `default`; only three Rust modules are real fault-injection suites, plus one shell suite. A fourth module (`backend_fallback_tests.rs`, u36c) injects faults despite having no `fault` in its name. | Added a documented bash inventory/runner with `--list` mode, curated cases, sequential `cargo test -p <package> -- <filter>` calls (plus a `--features drm` variant for Wayland), the existing wrapper fault test as the final case, and `CARGO_BUILD_JOBS=2` / `RUST_TEST_THREADS=2`. | UNBUILT — no cargo test was run; shell permission was denied after the restart, so even `bash -n` and `--list` remain unrun. Filters are substring matches, so a renamed module needs an update here. |
+| `docs/FAULT_TESTS.md:1` (new) | No central fault-test index existed; u09c, u45, u36c and u15b documented their suites separately. | Added the inventory table (module file:line, package, cargo filter, injected fault, owning unit), run commands, evidence/precedent and risks; corrected the verification paragraph to state the shell denial instead of claiming checks that did not run. | UNBUILT — documents commands that were not executed here; the `--features drm` case may need DRM dev libraries on the orchestrator host. |
+| `scripts/test-wrapper-faults:14` (read, not edited) | Existing u15b shell fault test covers the missing-library `ldd` preflight and the all-resolved case; it exits non-zero on failure. | No change; wired in as the final case of the new runner. | UNBUILT in this unit (u15b verified it at script level); no shell command was available here. |
+
+PARTIAL — both requested deliverables were written by static reading only: a documented `scripts/run-fault-tests` inventory/runner and `docs/FAULT_TESTS.md`, with `scripts/test-wrapper-faults` reused unchanged. The three Rust suites (`accel/fault_tests.rs`, `wm/startup_fault_tests.rs`, `backend_fallback_tests.rs`) were identified from their `mod` declarations and owning units, and the bare `rg` inventory was curated because `fault` also matches `default`. Every edit is UNBUILT: no `git`, `cargo`, Python, build or test ran here, and shell permission was denied after the restart, so `bash -n` and `--list` remain unrun too. The orchestrator must run the runner after the batch lands.

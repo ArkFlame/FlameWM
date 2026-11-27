@@ -70,7 +70,11 @@ impl WidgetState {
         self.sample_due = sampling.then(|| self.sample_due.unwrap_or(now));
         self.due = self.tick_rate().map(|rate| {
             let epoch_ms = (flamewm_api::clock::unix_nanos() / 1_000_000) as u64;
-            now + Duration::from_millis(
+            // Anchor the monotonic deadline after the wall-clock read. Reading it first can put
+            // the deadline a few microseconds before the displayed boundary, so the tick paints
+            // the previous value and stays stale until the following minute or second.
+            let clock_now = Instant::now();
+            clock_now + Duration::from_millis(
                 wall_clock_delay_ms(epoch_ms, rate == TickRate::Second).max(1),
             )
         });

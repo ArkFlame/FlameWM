@@ -612,6 +612,13 @@ pub fn blend_cursor<C: Connection>(conn: &C, image: &mut Image, root_rect: Rect)
         .map_err(|e| format!("XFixes cursor unavailable: {e}"))?
         .reply()
         .map_err(|e| format!("XFixes cursor unavailable: {e}"))?;
+    // A short or corrupt XFixes reply must be an error, never an out-of-bounds index.
+    let expected = (cursor.width as usize)
+        .checked_mul(cursor.height as usize)
+        .ok_or("cursor image size overflow")?;
+    if cursor.cursor_image.len() < expected {
+        return Err("short XFixes cursor image reply".into());
+    }
     let left = i32::from(cursor.x) - i32::from(cursor.xhot) - root_rect.x;
     let top = i32::from(cursor.y) - i32::from(cursor.yhot) - root_rect.y;
     for sy in 0..u32::from(cursor.height) {

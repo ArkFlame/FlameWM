@@ -69,6 +69,58 @@ pub enum Reply {
     },
 }
 
+/// Pixel count advertised by a container header, read without decoding pixels. `None` means the
+/// header is absent or malformed; the post-decode cap still applies in that case.
+fn declared_pixels(bytes: &[u8], format: ImageSourceFormat) -> Option<u64> {
+    match format {
+        ImageSourceFormat::Png => {
+            // Signature, IHDR length and tag, then width and height as big-endian u32.
+            let ihdr = bytes.get(16..24)?;
+            let width = u32::from_be_bytes(ihdr[..4].try_into().ok()?);
+            let height = u32::from_be_bytes(ihdr[4..].try_into().ok()?);
+            Some(u64::from(width) * u64::from(height))
+        }
+        ImageSourceFormat::Gif => {
+            // "GIF87a"/"GIF89a", then the logical screen as two little-endian u16.
+            let screen = bytes.get(6..10)?;
+            let width = u16::from_le_bytes([screen[0], screen[1]]);
+            let height = u16::from_le_bytes([screen[2], screen[3]]);
+            Some(u64::from(width) * u64::from(height))
+        }
+        ImageSourceFormat::Jpeg => {
+            // Walk segments to the first frame header rather than trusting an earlier marker.
+            let mut pos = 2usize;
+            while bytes.get(pos) == Some(&0xff) {
+                while bytes.get(pos) == Some(&0xff) {
+                    pos += 1;
+                }
+                let marker = *bytes.get(pos + 1)?;
+                match marker {
+                    0xc0 | 0xc1 => {
+                        let frame = bytes.get(pos + 5..pos + 9)?;
+                        let height = u16::from_be_bytes([frame[0], frame[1]]);
+                        let width = u16::from_be_bytes([frame[2], frame[3]]);
+                        return Some(u64::from(width) * u64::from(height));
+                    }
+                    0x01 | 0xd0..=0xd9 => pos += 2,
+                    _ => {
+                        let length = usize::from(u16::from_be_bytes([
+                            *bytes.get(pos + 2)?,
+                            *bytes.get(pos + 3)?,
+                        ]));
+                        if length < 2 {
+                            return None;
+                        }
+                        pos = pos.checked_add(2)?.checked_add(length)?;
+                    }
+                }
+            }
+            None
+        }
+        ImageSourceFormat::Ppm | ImageSourceFormat::Svg | ImageSourceFormat::Webp => None,
+    }
+}
+
 /// Reads and decodes one image file. Format comes from the magic bytes, then the extension.
 pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
     let meta = fs::metadata(path).map_err(|error| error.to_string())?;
@@ -85,6 +137,10 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
     let format = ImageSourceFormat::from_magic(&bytes)
         .or_else(|| ImageSourceFormat::from_extension(path))
         .ok_or("unsupported image format")?;
+    // Decoders allocate directly from header dimensions: reject a bomb before it allocates.
+    if declared_pixels(&bytes, format).is_some_and(|pixels| pixels > MAX_PIXELS) {
+        return Err("image has too many pixels to show".into());
+    }
     let image = decode_bytes(&bytes, format)?;
     if u64::from(image.width) * u64::from(image.height) > MAX_PIXELS {
         return Err("image has too many pixels to show".into());

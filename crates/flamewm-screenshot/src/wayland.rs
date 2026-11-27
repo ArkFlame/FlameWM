@@ -72,6 +72,7 @@ fn xrgb_to_rgba(src: &[u8], width: u32, height: u32, y_invert: bool) -> Option<V
 #[derive(Default)]
 struct Frame {
     format: Option<(u32, u32, u32)>,
+    buffer_seen: bool,
     buffer_done: bool,
     y_invert: bool,
     ready: bool,
@@ -300,6 +301,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Client {
                 height,
                 stride,
             } => {
+                frame.buffer_seen = true;
                 if matches!(format, WEnum::Value(Format::Xrgb8888 | Format::Argb8888)) {
                     frame.format = Some((width, height, stride));
                 }
