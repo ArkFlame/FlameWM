@@ -1,4 +1,4 @@
-# u162 GPU-side downscale of the backdrop capture (open, needs real-GPU measurement)
+# u162 GPU-side downscale of the backdrop capture (done, see Result)
 
 Area: compositor backdrop capture, `read_reduced` (render/backdrop.rs). `map` is ~12 ms of a ~35 ms capture in the nested harness.
 
