@@ -258,3 +258,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 ## Lock scan (compositor, explorer): nothing ranked
 - Listed every non-test `.lock()` site. Compositor locks guard small in-memory state (font glyph cache: one rasterize per cache miss, bounded by `CACHE_LIMIT`; control queues; surface data). Explorer `chunk_for_device` releases its map lock before the sysfs read; thumbnail/search/journal locks wrap map updates only.
 - No lock held across disk, network or a blocking call found. No change.
+
+## Hidden-window scout (task manager, shell): nothing ranked
+- Task manager: the sampler parks on `SampleGate` while hidden (no timer, no /proc walk), wakes at once on show, sleeps on the action channel between 1 s samples. Already optimal.
+- Shell: periodic work is all slow (usage 300 s, weather 30 min, heap trim 10 min, reproject 60 s) or short-lived animation (launch feedback 50/250 ms polling only while a launch indicator is live, OSD hold/fade). No always-on short timer found.
+- No change.
