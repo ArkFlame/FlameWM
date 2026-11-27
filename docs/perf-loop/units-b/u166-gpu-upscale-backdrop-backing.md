@@ -7,3 +7,7 @@ Risk: medium (new draw path through DockBacking); measure with the drag probe (F
 
 ## Scoping note (after reading the consumer)
 The backing is consumed as `Elem::Memory(MemoryRenderBufferRenderElement)` (`dock_backdrop.rs` `backing_element`, `titlebar.rs` parts/strip). A GPU-upscaled backing needs a new `Elem` variant that draws a low-res texture with a rounded-corner alpha mask (shader or cached mask texture), damage/commit handling for it, and a frame-diff against the CPU result. That is a multi-file change touching the element enum, so it is not a safe single slice. Split: (a) u166a add a texture element with mask behind a flag and diff it; (b) u166b switch dock/titlebar to it and delete crop/store. Only worth it during moves/drags (the capture only runs then), so rank it below idle-wakeup and RAM work unless drag latency is the complaint.
+
+## Building blocks found (for whoever implements u166a)
+- `MemoryRenderBufferRenderElement::from_buffer(renderer, loc, buffer, alpha, src, size, kind)` takes `src` and `size`: a low-res (sw x sh) blurred buffer drawn with `size = (w, h)` is upscaled by the GPU filter, so `crop_capture` and the full-size store disappear.
+- Silhouette: `clip.rs` `RoundedSurfaceElement` already owns a `GlesTexProgram` with a `corner_radius` uniform, but it wraps `WaylandSurfaceRenderElement`. u166a = the same wrapper around the memory element (or a generalised element), with the dock's outline (`rounded_coverage`) and the window mask (`client_mask_coverage`) expressed as uniforms. Premultiply must match `premultiply_pixel`.
