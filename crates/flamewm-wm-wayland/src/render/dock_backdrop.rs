@@ -73,6 +73,8 @@ pub(super) struct DockBacking {
     pub(super) captured_at: Instant,
     /// Consecutive frames this capture was reused while its window moved.
     pub(super) reused: std::cell::Cell<u8>,
+    /// Wall time the capture took; a content-only refresh waits a multiple of it (see `refresh_due`).
+    pub(super) cost: std::time::Duration,
 }
 
 /// Dock material from the committed settings, packed as `opacity << 8 | blur`. The default is
@@ -117,6 +119,20 @@ fn reuse_while_moving(cached: &DockBacking, wanted: &BackdropKey, now: Instant) 
         && (now.saturating_duration_since(cached.captured_at)
             < std::time::Duration::from_millis(50)
             || cached.reused.get() < MAX_STALE_FRAMES)
+}
+
+/// A capture whose window did not move but whose scene beneath changed (a terminal printing, a
+/// video) is refreshed at most once per `CONTENT_REFRESH_FACTOR` x its own capture cost, so capture
+/// work stays under about a third of wall time at any speed (a CPU-blurred capture is the most
+/// expensive stage of a frame). The caller requests another frame while it waits, so the latest
+/// scene is always captured once the interval has passed.
+const CONTENT_REFRESH_FACTOR: u32 = 2;
+/// Longest wait however slow a capture was.
+const CONTENT_REFRESH_CAP: std::time::Duration = std::time::Duration::from_millis(250);
+
+fn refresh_due(captured_at: Instant, cost: std::time::Duration, now: Instant) -> bool {
+    let wait = (cost * CONTENT_REFRESH_FACTOR).min(CONTENT_REFRESH_CAP);
+    now.saturating_duration_since(captured_at) >= wait
 }
 
 /// Coverage (0..=255) of pixel `(x, y)` inside a `w` x `h` rounded rectangle of corner `radius`,
@@ -278,6 +294,7 @@ fn capture_dock(
     scale: f64,
 ) -> Result<DockBacking, Box<dyn Error>> {
     CAPTURES.fetch_add(1, Ordering::Relaxed);
+    let started = Instant::now();
     let mut clock = PhaseClock::start();
     let dims = (region.size.w.max(1) as usize, region.size.h.max(1) as usize);
     let target_size = Size::<i32, Physical>::from((dims.0 as i32, dims.1 as i32));
@@ -359,6 +376,7 @@ fn capture_dock(
         key,
         buffer,
         captured_at: Instant::now(),
+        cost: started.elapsed(),
         reused: std::cell::Cell::new(0),
     })
 }
@@ -521,6 +539,12 @@ pub(crate) fn refresh_dock_backdrops(
                 live.push(site.site);
                 continue;
             }
+            // Same window, only the scene beneath changed: refresh within the capture-cost budget.
+            if same_fields && !refresh_due(backing.captured_at, backing.cost, Instant::now()) {
+                state.request_redraw();
+                live.push(site.site);
+                continue;
+            }
             let wanted = BackdropKey {
                 site: site.site,
                 rect: site.rect,
@@ -664,6 +688,7 @@ mod tests {
                 None,
             ),
             captured_at: now,
+            cost: std::time::Duration::ZERO,
             reused: std::cell::Cell::new(0),
         };
         let mut wanted = cached.clone();
@@ -726,6 +751,36 @@ mod tests {
             &dock_backing,
             &wanted,
             now + std::time::Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn content_refresh_waits_twice_the_capture_cost_up_to_the_cap() {
+        let at = Instant::now();
+        let cost = std::time::Duration::from_millis(30);
+        assert!(!refresh_due(
+            at,
+            cost,
+            at + std::time::Duration::from_millis(59)
+        ));
+        assert!(refresh_due(
+            at,
+            cost,
+            at + std::time::Duration::from_millis(60)
+        ));
+        // A slow capture never waits past the cap.
+        let slow = std::time::Duration::from_secs(2);
+        assert!(refresh_due(
+            at,
+            slow,
+            at + std::time::Duration::from_millis(250)
+        ));
+        // A free capture (cost 0) refreshes at once; a backwards clock never counts as due.
+        assert!(refresh_due(at, std::time::Duration::ZERO, at));
+        assert!(!refresh_due(
+            at + std::time::Duration::from_secs(1),
+            cost,
+            at
         ));
     }
 
