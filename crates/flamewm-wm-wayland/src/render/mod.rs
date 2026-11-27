@@ -836,7 +836,22 @@ fn render_into(
     // A refusal from any other driver is latched on its first answer and repainted in full.
     // The first frame is never queried: before its first submit the nested EGL surface is not
     // yet bound and presented, so the query answers EGL_BAD_SURFACE and latches a full repaint.
-    let age = if buffer_age_probe_allowed(
+    // Cursor-only motion is the one case where a real swapchain age is not needed: the scene is
+    // unchanged, so the frame on screen differs from the next one only in the old and new cursor
+    // rectangles. Smithay's tracker computes exactly those from the moved element (its previous
+    // geometry plus its current one) when age is 1, with no stale older frames added. This is used
+    // only after a post-present query proved the surface can swap with damage; without that proof
+    // a partial draw would present an undrawn back buffer, so age 0 stays mandatory.
+    let filter = state.colour_filter;
+    let zoom = state.zoom_level;
+    // The composite pass serves both the colour filter and the magnifier; the default (no filter,
+    // zoom 1) draws the window tracker path unchanged.
+    let composite = filter != ColourFilter::None || zoom > ZOOM_LEVEL_MIN;
+    let damage_swap = WINIT_DAMAGE_SWAP.load(std::sync::atomic::Ordering::Relaxed);
+    let cursor_only_inputs =
+        !scene_dirty && state.dump.is_none() && !state.session_locked && !composite;
+    let cursor_only = cursor_only_inputs && damage_swap;
+    let fallback_age = if buffer_age_probe_allowed(
         FIRST_FRAME_SUBMITTED.load(std::sync::atomic::Ordering::Relaxed),
         BUFFER_AGE_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
     ) {
@@ -847,13 +862,9 @@ fn render_into(
     } else {
         0
     };
+    let age = frame_age(cursor_only_inputs, damage_swap, fallback_age);
     // A retained texture + full blit was measured slower than direct window damage under llvmpipe
     // (marquee 142% vs 89% CPU, one run each), so the window path stays the only one.
-    let filter = state.colour_filter;
-    let zoom = state.zoom_level;
-    // The composite pass serves both the colour filter and the magnifier; the default (no filter,
-    // zoom 1) draws the window tracker path unchanged.
-    let composite = filter != ColourFilter::None || zoom > ZOOM_LEVEL_MIN;
     if composite && state.colour_program.is_none() {
         state.colour_program = Some(match crate::colour_pass::compile(backend.renderer()) {
             Ok(program) => Ok(program),
@@ -928,7 +939,18 @@ fn render_into(
             state
                 .damage
                 .render_output(renderer, &mut framebuffer, age, &elements, CLEAR)?;
-        result.damage.cloned()
+        let mut damage = result.damage.cloned();
+        if cursor_only && damage.is_none() {
+            // A repeated motion at the same pixel produces no element damage, so smithay skipped
+            // the draw. Repeating with age 0 forces a full draw and full damage, so the swap can
+            // never present an undrawn back buffer. Pixels and downstream callbacks stay identical.
+            damage = state
+                .damage
+                .render_output(renderer, &mut framebuffer, 0, &elements, CLEAR)?
+                .damage
+                .cloned();
+        }
+        damage
     };
     let feedback = crate::presentation_scale::collect_feedback(state, &state.output);
     lap.mark(stage_timers::Stage::Draw);

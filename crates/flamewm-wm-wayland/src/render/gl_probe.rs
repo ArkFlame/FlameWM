@@ -25,8 +25,7 @@ pub(super) static WINIT_DAMAGE_SWAP: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Guards the post-present probe so a driver that refuses the query is never asked twice.
-static WINIT_PROBE_DONE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static WINIT_PROBE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Record the single post-present buffer-age answer. Later frames read [`WINIT_DAMAGE_SWAP`]
 /// directly, so the EGL query is never repeated on a driver that refused it.
@@ -43,6 +42,22 @@ pub(super) fn note_winit_buffer_age(age: Option<usize>) {
 /// Whether the buffer-age query may run: only once a frame was submitted and no driver refused it.
 pub(crate) const fn buffer_age_probe_allowed(first_frame_submitted: bool, refused: bool) -> bool {
     first_frame_submitted && !refused
+}
+
+/// Age handed to the damage tracker for one nested frame. A cursor-only frame (no scene rebuild,
+/// no dump, no lock, no colour/magnifier composite) on a damage-capable swap uses 1, which makes
+/// smithay report the moved cursor's old and new rectangles only. Every other frame keeps the
+/// caller's real or fallback age.
+pub(crate) const fn frame_age(
+    cursor_only_inputs: bool,
+    damage_swap: bool,
+    fallback_age: usize,
+) -> usize {
+    if cursor_only_inputs && damage_swap {
+        1
+    } else {
+        fallback_age
+    }
 }
 
 /// Whether the buffer-age probe is skipped from the start: a software renderer never answers it.

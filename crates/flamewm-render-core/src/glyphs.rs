@@ -180,7 +180,15 @@ fn find_font() -> Option<Font> {
             }
         }
     }
-    None
+
+    // Last resort: a small permissively licensed font shipped with the binary. The bytes are
+    // referenced only on this failure path, so a machine with system fonts never faults them
+    // into RAM; keeping the include_bytes! here avoids an eagerly used static as well.
+    Font::from_bytes(
+        include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf"),
+        FontSettings::default(),
+    )
+    .ok()
 }
 
 /// One font at one pixel size: the only source of glyph advances and kerning.

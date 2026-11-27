@@ -1,4 +1,6 @@
-use super::{buffer_age_probe_allowed, buffer_age_unsupported, is_software_renderer};
+use super::{
+    buffer_age_probe_allowed, buffer_age_unsupported, frame_age, is_software_renderer,
+};
 
 #[test]
 fn buffer_age_is_not_queried_before_first_submit() {
