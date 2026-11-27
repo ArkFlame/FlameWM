@@ -70,11 +70,14 @@ struct NotificationHost {
     active_dirty: bool,
     /// Set when an outside press closed the centre; consumes the same click's opener release.
     closed_by_press: Option<Instant>,
-    /// Loads toast icons by theme name; spawned on the first named icon.
+    /// Loads toast icons by theme name; spawned at connect so its wake fd can be registered.
     icons: Option<IconLoader>,
     icon_root: PathBuf,
     /// When the outstanding icon request for the visible toast was made; `None` when none is.
     icon_wait: Option<Instant>,
+    /// True when the loader's wake fd is registered on the reactor, so icon arrival wakes the
+    /// tick instead of a short poll. A loader spawned later has no registered source.
+    icon_event_wake: bool,
 }
 
 /// How long a toast waits for its named icon before keeping the fallback glyph.
@@ -163,6 +166,9 @@ impl NotificationHost {
             .saturating_sub(NOTIFICATION_CENTER_CLEARANCE);
         let center_document = decode_document(NOTIFICATION_CENTER_ARTIFACT)
             .map_err(|error| format!("decode notification center UI: {error:?}"))?;
+        // Spawn the named-icon loader here so its wake fd can be registered with the reactor
+        // alongside the other fd sources. It stays idle until a toast asks for an icon.
+        let icons = IconLoader::spawn(icon_root.clone(), String::new());
         let center = runtime
             .create_surface(
                 UiTemplate::new(center_document),
@@ -190,7 +196,8 @@ impl NotificationHost {
             center_focus: None,
             active_dirty: true,
             closed_by_press: None,
-            icons: None,
+            icon_event_wake: icons.is_some(),
+            icons,
             icon_root,
             icon_wait: None,
         }))
@@ -198,6 +205,18 @@ impl NotificationHost {
 
     fn watch(&self) -> BusWatch {
         self.provider.watch()
+    }
+
+    /// Wake fd of the toast icon worker, registered on the shell reactor so a finished
+    /// raster wakes the tick that applies it (no periodic poll while the icon is pending).
+    fn icon_wake_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        self.icons.as_ref().map(IconLoader::wake_fd)
+    }
+
+    /// Drains icon wake bytes in the fd callback. False means the worker is gone and the
+    /// source must be unregistered so an EOF-readable fd cannot spin the reactor.
+    fn drain_icon_wake(&self) -> bool {
+        self.icons.as_ref().is_some_and(IconLoader::wake_drain)
     }
 
     fn on_ready(&mut self) -> Result<(), String> {
@@ -541,7 +560,10 @@ impl NotificationHost {
             return self.set_icon(runtime, None);
         };
         if self.icons.is_none() {
+            // Startup spawn failed: a late loader has no registered fd, so keep the bounded
+            // poll for this instance instead of waiting on a wake that will never come.
             self.icons = IconLoader::spawn(self.icon_root.clone(), String::new());
+            self.icon_event_wake = false;
         }
         let Some(loader) = self.icons.as_mut() else {
             return self.set_icon(runtime, None);
@@ -556,8 +578,9 @@ impl NotificationHost {
         self.set_icon(runtime, None)
     }
 
-    /// Applies a finished named icon when it belongs to the visible toast. While a request is
-    /// outstanding, the reactor is woken again shortly to collect it.
+    /// Applies a finished named icon when it belongs to the visible toast. With a registered
+    /// wake fd, the icon's arrival schedules the tick that collects it; unregistered loaders
+    /// keep the bounded short poll.
     fn poll_icon(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -605,7 +628,13 @@ impl NotificationHost {
             // keep the fallback glyph instead of waking for as long as the toast is visible.
             self.icon_wait = None;
             Ok(())
+        } else if self.icon_event_wake {
+            // The icon worker's fd is registered on the reactor: its wake byte triggers the
+            // tick that collects the raster, so no timer runs while the icon is in flight.
+            Ok(())
         } else {
+            // A loader spawned after startup has no registered fd: keep the bounded 15 ms
+            // poll until the icon arrives or ICON_WAIT_LIMIT expires.
             if let Some(wake) = wake {
                 let deadline = Instant::now() + Duration::from_millis(15);
                 wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
@@ -1154,6 +1183,26 @@ fn execute() -> Result<(), String> {
                 }
             })
             .map_err(|error| format!("register icon result source: {error}"))?;
+    }
+    // Toast named icons use their own loader; its completion fd now wakes the tick that
+    // applies the raster, instead of re-arming a 15 ms timer for the visible toast.
+    if let Some(host) = notifications.as_ref() {
+        if let Some(toast_icon_fd) = host.borrow().icon_wake_fd() {
+            let toast_state = Rc::clone(host);
+            reactor
+                .register_raw_fd_with_action(
+                    toast_icon_fd,
+                    calloop::Interest::READ,
+                    move |_, _| {
+                        if toast_state.borrow().drain_icon_wake() {
+                            flamewm_reactor::FdAction::Continue
+                        } else {
+                            flamewm_reactor::FdAction::Remove
+                        }
+                    },
+                )
+                .map_err(|error| format!("register toast icon result source: {error}"))?;
+        }
     }
     if flamewm_profiler::enabled() {
         reactor

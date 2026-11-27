@@ -116,6 +116,10 @@ mod transient;
 mod virtual_output;
 mod xwayland;
 
+// Fault-injection tests for the backend fallback decision; the file exists before this declaration.
+#[cfg(test)]
+mod backend_fallback_tests;
+
 use std::cell::RefCell;
 use std::env;
 use std::error::Error;
@@ -180,6 +184,42 @@ pub(crate) fn select_backend(explicit: Option<&str>) -> Backend {
         Some("winit" | "nested") => Backend::Nested,
         Some(_unknown) => Backend::default(),
         None => Backend::default(),
+    }
+}
+
+/// Outcome of a backend init attempt in the native → nested → headless fallback chain. The step is
+/// part of the variant so the fallback rule is a pure mapping, not a read of process state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackendFallbackOutcome {
+    /// Native (tty) init succeeded; no fallback is needed.
+    NativeOk,
+    /// Native init failed; the nested backend is the next step.
+    NativeFailed,
+    /// Nested (winit) init succeeded after a native failure.
+    NestedOk,
+    /// Nested init failed after a native failure; only the headless step is left.
+    NestedFailed,
+}
+
+/// The step the compositor runner takes after a backend init outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NextBackend {
+    /// Keep the backend that is already running; start nothing else.
+    Keep,
+    /// Attempt the nested winit backend.
+    Nested,
+    /// Keep the Wayland socket alive with no rendering backend.
+    Headless,
+}
+
+/// Pure fallback rule: an init outcome in, the next backend out. It does no I/O and mutates no
+/// state; the caller starts the returned backend and appends the record for the stage that failed.
+pub(crate) fn next_backend(outcome: BackendFallbackOutcome) -> NextBackend {
+    match outcome {
+        BackendFallbackOutcome::NativeOk => NextBackend::Keep,
+        BackendFallbackOutcome::NativeFailed => NextBackend::Nested,
+        BackendFallbackOutcome::NestedOk => NextBackend::Keep,
+        BackendFallbackOutcome::NestedFailed => NextBackend::Headless,
     }
 }
 
@@ -381,9 +421,12 @@ fn backend_failure_log_path() -> PathBuf {
     )
 }
 
-/// Appends one typed failure record for a backend init stage. `still_works` names what survives the
-/// fallback and `degraded` names what the failed stage took away; both are stable subsystem ids.
-pub(crate) fn record_backend_failure(
+/// Appends one typed failure record for a backend init stage to the injected path. `still_works`
+/// names what survives the fallback and `degraded` names what the failed stage took away; both are
+/// stable subsystem ids. Taking the path as an argument keeps the write testable without touching
+/// the session environment.
+fn append_backend_failure_record(
+    path: &std::path::Path,
     stage: &str,
     cause: impl std::fmt::Display,
     fallback_taken: bool,
@@ -401,9 +444,18 @@ pub(crate) fn record_backend_failure(
         ),
         fallback_taken,
     );
-    if let Err(error) = append_record(&backend_failure_log_path(), &record) {
+    if let Err(error) = append_record(path, &record) {
         eprintln!("flamewm-wayland: failure record write failed: {error}");
     }
+}
+
+/// Production entry point: append the record to the same session log the panic hook uses.
+pub(crate) fn record_backend_failure(
+    stage: &str,
+    cause: impl std::fmt::Display,
+    fallback_taken: bool,
+) {
+    append_backend_failure_record(&backend_failure_log_path(), stage, cause, fallback_taken);
 }
 
 /// Emits one structured startup line (see [`stage_text`]). Every hard failure of a backend init
@@ -720,7 +772,12 @@ fn run() -> Result<i32, Box<dyn Error>> {
             Ok(native) => Some(native),
             Err(error) => {
                 eprintln!("flamewm-wayland: {error}; falling back to nested");
-                start_nested_or_headless(&mut state, &handle)
+                // The pure rule selects the nested step for a native failure; the other arms keep
+                // the pre-extraction behaviour if the rule is ever widened.
+                match next_backend(BackendFallbackOutcome::NativeFailed) {
+                    NextBackend::Nested => start_nested_or_headless(&mut state, &handle),
+                    NextBackend::Keep | NextBackend::Headless => None,
+                }
             }
         },
         Backend::Nested => start_nested_or_headless(&mut state, &handle),
@@ -1031,17 +1088,21 @@ fn start_nested_or_headless(
             eprintln!(
                 "flamewm-wayland: nested backend unavailable ({error}); continuing headless/minimal"
             );
-            // `init_winit` installs the renderer before it registers the source, so a late failure
-            // can leave a half-started window behind. Drop it before the socket-only run.
-            state.backend = None;
-            for (stage, detail) in [
-                (Stage::Seat, "headless_fallback"),
-                (Stage::Drm, "headless_fallback"),
-                (Stage::Outputs, "headless_no_output"),
-                (Stage::Libinput, "headless_no_input"),
-            ] {
-                if !stage_reported(stage) {
-                    stage_line(stage, StageStatus::Skip, detail);
+            // The pure rule turns the second failed attempt into the headless step; the other arm
+            // keeps the pre-extraction behaviour if the rule is ever widened.
+            if next_backend(BackendFallbackOutcome::NestedFailed) == NextBackend::Headless {
+                // `init_winit` installs the renderer before it registers the source, so a late
+                // failure can leave a half-started window behind. Drop it before the socket-only run.
+                state.backend = None;
+                for (stage, detail) in [
+                    (Stage::Seat, "headless_fallback"),
+                    (Stage::Drm, "headless_fallback"),
+                    (Stage::Outputs, "headless_no_output"),
+                    (Stage::Libinput, "headless_no_input"),
+                ] {
+                    if !stage_reported(stage) {
+                        stage_line(stage, StageStatus::Skip, detail);
+                    }
                 }
             }
             None
