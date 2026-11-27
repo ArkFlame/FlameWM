@@ -249,7 +249,7 @@ use validate::*;
 #[cfg(test)]
 pub(crate) use load::LoadOutcome;
 pub(crate) use load::load_settings;
-pub(crate) use persist::{PersistOutcome, persist_settings};
+pub(crate) use persist::{PersistOutcome, cleanup_own_temps, persist_settings};
 
 #[cfg(test)]
 mod tests;

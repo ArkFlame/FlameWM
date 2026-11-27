@@ -89,6 +89,8 @@ impl<E: EnginePorts> PlatformHost<E> {
         let epoch_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
+        // Before the writer thread exists: drop temp files an earlier interrupted write of this pid left.
+        crate::settings::cleanup_own_temps(&path, std::process::id());
         let loaded = crate::settings::load_settings(&path, epoch_secs);
         // One notice per quarantine event. `load_settings` already printed its single `flamewm:`
         // line; the returned text is recorded once as the user notice in the shared session log.
