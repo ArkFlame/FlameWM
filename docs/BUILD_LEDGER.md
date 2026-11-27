@@ -45,3 +45,6 @@ cargo build --release -p flamewm-wm-wayland -p flamewm-shell -p flamewm-desktop 
 RESULT slot3: release build exit=0 (wayland, shell, desktop, audio-helper, render-x11)
 
 ## HOUR 8 slot 1 (19:38): release build -p flamewm-shell -p flamewm-desktop (icon resolver lazy fix R1); pool stopped by provider limit, no workers running.
+
+## HOUR 8 slot 2 (20:36): fast-profile build of base commit 408c614e in worktree /run/media/linsaftw/SDD/work/base-408c614e (-p flamewm-shell -p flamewm-desktop -p flamewm-wm-wayland), true baseline for R1-R5 RSS comparison.
+Slot 2 note: first attempt failed instantly (bad -p flamewm-gpu-helper); rerun without it, same slot.

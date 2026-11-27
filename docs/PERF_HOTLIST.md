@@ -89,3 +89,13 @@ Real targets:
 - R6 extra bold font parse (`IBMPlexSans-Bold`) in the shell: find which text asks for weight 700 and whether the regular face can serve it. Unit p90.
 - R7 usage worker starts at launch and reads provider credentials even when the usage tray is not shown. Unit p91.
 - Process lesson: a baseline binary must be built from a known commit; record the commit hash in the ledger next to every sample.
+
+## TRUE COMPARISON (base 408c614e fast profile vs HEAD 5da9da99-era release, nested, 40 s, real HOME)
+| process | metric | base | HEAD | delta |
+|---|---|---|---|---|
+| shell | [heap] | 7116 kB | 8920 kB | +1.8 MB (catalog warm-up; p89 removes by_id + shrinks vecs, UNBUILT) |
+| shell | total Rss | 23088 kB | 24120 kB | +1.0 MB |
+| desktop | [heap] | 11652 kB | 11900 kB | +0.25 MB |
+| desktop | [anon] | 3592 kB | 3600 kB | +0 |
+| desktop | total Rss | 31320 kB | 30440 kB | -0.9 MB |
+Conclusion: the desktop "+5.7 MB regression" (R5, p87) is NOT real; the shell carries about +1.8 MB heap from the app-catalog warm-up. Profiles differ (fast vs release), so only [heap]/[anon] are compared.
