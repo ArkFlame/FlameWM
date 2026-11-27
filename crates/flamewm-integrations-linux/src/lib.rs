@@ -9,12 +9,12 @@ extern crate pulse as libpulse_binding;
 // This crate has no `tracing` dependency, so `tracing::warn!` call sites resolve here.
 // The macro emits the same one-line diagnostic the rest of the crate already prints.
 pub(crate) mod tracing {
-    macro_rules! warn {
+    macro_rules! flame_warn {
         ($($arg:tt)*) => {
             eprintln!("flamewm: {}", format_args!($($arg)*))
         };
     }
-    pub(crate) use warn;
+    pub(crate) use flame_warn as warn;
 }
 
 pub mod audio_helper;
