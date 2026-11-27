@@ -31,3 +31,8 @@ Read competitors in `.vendor/` before inventing: kwin-master, xfwm4-master, icew
 
 ## Rules
 Judge by the running desktop and frames you read, not green scripts. A failed attempt means change method. One owner per file; re-read before edit. Board line per unit: status, files, scoped before/after, frame path, next units. After every batch write the next hottest and least reliable areas as units and launch them.
+
+## Cadence (user order 2026-11-27)
+- Run a MASSIVE number of OpenCode workers (pool as full as the provider allows) on fixes and improvements; land their edits in batches, never one by one.
+- Build/test windows are 30 to 60 minutes apart at minimum (never every 5 minutes), still within the 2 per hour cap.
+- BUILD TIME: stop launching workers, wait for every running worker to finish (wait_any), then build/test, fix stacked errors, and only then resume launching.
