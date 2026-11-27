@@ -29,3 +29,5 @@ HOUR 5 slot 2: tests render-core/wm-wayland/shell/desktop/lock/terminal ran, 517
 | 2026-11-27T17:04-03:00 | cargo check --tests --workspace (waves 2-4, pool drained) | hour 6 slot 1 |
 HOUR 6 slot1: workspace check --tests: 2 worker errors (tray retain arity, explorer Option clone) fixed, now clean. Tests next.
 HOUR 6 slot1 RESULT: workspace (excl flamewm-wm) tests all pass after: tray retain arity, explorer Option clone, reactor test typo (from_secs->from_millis), render-compiler settings pin re-pinned for eba95409. Waves 2-4 now built+tested (type-check + unit tests). Not yet: release build, flamewm-wm tests, frames, baseline.
+| 2026-11-27T17:27-03:00 | check --tests --workspace + test -p flamewm-wm (waves 5, pool drained) | hour 6 slot 2 |
+HOUR 6 slot2 RESULT: check --tests --workspace clean; full workspace tests (incl flamewm-wm) pass except render-x11 accel status test (global STATUS race, fixed with TEST_SERIAL lock, 3x green). Waves 2-5 built+tested. Pending: release build, baseline, frames, nested smoke.

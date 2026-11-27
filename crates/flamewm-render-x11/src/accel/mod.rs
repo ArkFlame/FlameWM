@@ -543,6 +543,7 @@ pub fn paint_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The per-pixel rule the row-span fill replaces: a pixel is skipped when the hole covers it.
     fn per_pixel_fill(
@@ -588,6 +589,9 @@ mod tests {
 
     #[test]
     fn row_span_fill_matches_the_per_pixel_rule_with_holes_and_edges() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (64_u32, 48_u32);
         let frame: Vec<u8> = (0..width * height * 4)
             .map(|i| (i * 7 % 251) as u8)
@@ -665,6 +669,9 @@ mod tests {
 
     #[test]
     fn env_override_wins_only_for_zero_or_one_and_software_gl_is_detected() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use RenderAcceleration::{Cpu, Gpu};
         assert_eq!(resolve_env_override(Some("0"), Gpu), Cpu);
         assert_eq!(resolve_env_override(Some(" 1 "), Cpu), Gpu);
@@ -681,6 +688,9 @@ mod tests {
 
     #[test]
     fn cpu_request_never_touches_the_gpu_slot_or_initialises_a_backend() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_render_acceleration(RenderAcceleration::Cpu);
         let before = INIT_CALLS.with(Cell::get);
         let mut frame = vec![9_u8; 64 * 64 * 4];
@@ -692,6 +702,9 @@ mod tests {
 
     #[test]
     fn stale_generation_releases_this_threads_slot() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         GPU.with(|cell| cell.borrow_mut().slot = GpuSlot::Failed);
         GENERATION.fetch_add(1, Ordering::Relaxed);
         release_if_stale();
@@ -704,6 +717,9 @@ mod tests {
 
     #[test]
     fn generation_bump_makes_a_cpu_thread_release_its_slot_on_the_next_release() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         GPU.with(|cell| cell.borrow_mut().slot = GpuSlot::Failed);
         let before = GENERATION.load(Ordering::Relaxed);
         // Bumps directly: a real set would flip the process-wide request under parallel tests.
@@ -719,6 +735,9 @@ mod tests {
 
     #[test]
     fn accel_status_shim_reports_the_recorded_fallback_text() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         record_fallback(FallbackReason::SoftwareDevice("llvmpipe".to_owned()));
         let shim = render_acceleration_status();
         assert_eq!(
@@ -742,6 +761,9 @@ mod tests {
 
     #[test]
     fn cpu_setting_never_runs_the_gpu_batch_and_leaves_tiny_and_empty_frames_untouched() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_render_acceleration(RenderAcceleration::Cpu);
         let mut tiny = vec![7_u8; 2 * 2 * 4];
         assert!(!try_gpu_batch(&mut tiny, 2, 2, &[]));
@@ -768,6 +790,9 @@ mod tests {
 
     #[test]
     fn cpu_backend_output_matches_the_image_core_blur() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (96_u32, 80_u32);
         let source = frame(width, height, 0);
         let mut expected = source.clone();
@@ -782,6 +807,9 @@ mod tests {
 
     #[test]
     fn cpu_fill_is_hard_edged_and_composites_source_over() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (16_u32, 16_u32);
         let mut pixels = vec![0_u8; (width * height * 4) as usize];
         for pixel in pixels.as_chunks_mut::<4>().0.iter_mut() {
@@ -809,6 +837,9 @@ mod tests {
 
     #[test]
     fn cpu_stroke_paints_the_ring_and_keeps_the_interior() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (16_u32, 16_u32);
         let mut pixels = vec![40_u8; (width * height * 4) as usize];
         let rect = RoundedRect {
@@ -829,6 +860,9 @@ mod tests {
 
     #[test]
     fn translucent_fill_uses_the_documented_source_over_formula() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut pixels = [0, 0, 255, 255].repeat(4);
         fill_rounded_rect(
             &mut pixels,
@@ -851,6 +885,9 @@ mod tests {
 
     #[test]
     fn failing_gpu_backend_leaves_pixels_for_the_cpu_fallback() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         struct FailingGpu;
         impl PixelBackend for FailingGpu {
             fn blur_rgba(&mut self, _: &mut [u8], _: u32, _: u32, _: f32) -> Result<(), String> {
@@ -963,6 +1000,9 @@ mod tests {
 
     #[test]
     fn cpu_batch_is_byte_identical_to_sequential_single_ops() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (160_u32, 120_u32);
         let source = frame(width, height, 21);
         let ops = batch_ops(true);
@@ -978,6 +1018,9 @@ mod tests {
 
     #[test]
     fn batch_error_after_a_successful_op_leaves_the_frame_untouched() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         /// Fills on the CPU and fails every blur, so the first op succeeds before the failure.
         struct FailsOnBlur;
         impl PixelBackend for FailsOnBlur {
@@ -1012,6 +1055,9 @@ mod tests {
 
     #[test]
     fn gpu_batch_matches_gpu_single_ops_and_the_cpu_blur() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut gpu) = gles::GpuBlur::new() else {
             eprintln!("skipping GPU batch check: no GPU");
             return;
@@ -1122,6 +1168,9 @@ mod tests {
 
     #[test]
     fn gpu_blend_ops_match_the_cpu_within_the_measured_tolerance() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some((max, mean)) = blend_difference() else {
             eprintln!("skipping GPU blend check: no GPU");
             return;
@@ -1136,6 +1185,9 @@ mod tests {
 
     #[test]
     fn gpu_full_frame_image_over_a_transparent_frame_matches_the_cpu() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut gpu) = gles::GpuBlur::new() else {
             return;
         };
@@ -1167,6 +1219,9 @@ mod tests {
 
     #[test]
     fn gpu_translucent_fill_over_a_transparent_frame_matches_the_cpu() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut gpu) = gles::GpuBlur::new() else {
             return;
         };
@@ -1206,6 +1261,9 @@ mod tests {
 
     #[test]
     fn gaussian_weights_are_normalized_and_bounded() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for sigma in [0.3_f32, 1.0, 3.0, 6.0, 40.0] {
             let weights = gles::gaussian_weights(sigma);
             let total = weights[0] + 2.0 * weights[1..].iter().sum::<f32>();
@@ -1220,6 +1278,9 @@ mod tests {
 
     #[test]
     fn gpu_blur_matches_the_cpu_blur_when_a_gpu_is_present() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (160_u32, 120_u32);
         let source: Vec<u8> = (0..width * height)
             .flat_map(|index| {
@@ -1333,6 +1394,9 @@ mod tests {
 
     #[test]
     fn gpu_rounded_fill_and_stroke_match_the_xrender_aa_reference() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut context) = gles::GpuBlur::new() else {
             eprintln!("skipping GPU fill comparison: no GPU");
             return;
@@ -1380,6 +1444,9 @@ mod tests {
 
     #[test]
     fn gles_errors_leave_the_frame_untouched() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut context) = gles::GpuBlur::new() else {
             eprintln!("skipping GLES error check: no GPU");
             return;
@@ -1465,6 +1532,9 @@ mod tests {
 
     #[test]
     fn cpu_backdrop_blur_op_matches_the_cpu_node_backdrop_words_exactly() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_render_acceleration(RenderAcceleration::Cpu);
         let (width, height) = (96_u32, 80_u32);
         let source = frame(width, height, 3);
@@ -1513,6 +1583,9 @@ mod tests {
 
     #[test]
     fn gpu_backdrop_op_matches_the_cpu_node_backdrop_within_the_blur_tolerance() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut gpu) = gles::GpuBlur::new() else {
             eprintln!("skipping GPU backdrop check: no GPU");
             return;
@@ -1575,6 +1648,9 @@ mod tests {
 
     #[test]
     fn cpu_clipped_fill_equals_the_unclipped_fill_inside_the_clip_and_keeps_the_frame_outside() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (width, height) = (64_u32, 48_u32);
         let source = frame(width, height, 5);
         let mut full = source.clone();
@@ -1621,6 +1697,9 @@ mod tests {
 
     #[test]
     fn gpu_clipped_fill_matches_the_xrender_reference_and_leaves_the_frame_outside_the_clip() {
+        let _serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(mut gpu) = gles::GpuBlur::new() else {
             eprintln!("skipping GPU clipped fill check: no GPU");
             return;
