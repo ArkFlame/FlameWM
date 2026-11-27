@@ -377,7 +377,7 @@ impl WatcherState {
             .retain(|_, pending| registry.get(pending.key()).is_some());
         self.layouts.retain(|key, _| registry.get(key).is_some());
         self.iconless_reported
-            .retain(|key, _| registry.get(key).is_some());
+            .retain(|key| registry.get(key).is_some());
     }
 
     fn request_props(&mut self, pump: &BusPump, key: &ItemKey) {

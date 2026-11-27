@@ -664,7 +664,7 @@ mod wake_tests {
             anchor + Duration::from_millis(200)
         );
         // A long suspend jumps to the next boundary instead of replaying missed periods.
-        let resumed = anchor + Duration::from_secs(1_050);
+        let resumed = anchor + Duration::from_millis(1_050);
         assert_eq!(
             next_repeat_deadline(anchor, step, resumed),
             anchor + Duration::from_millis(1_100)

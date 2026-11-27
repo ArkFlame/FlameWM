@@ -49,7 +49,7 @@ impl ExplorerApp {
         self.hidden.set_hidden(obscured,Instant::now());
         if !obscured {return;}
         if self.hidden_timer.is_none() {
-            let events=self.events.clone();
+            let events=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?)));
             self.hidden_timer=Some(spawn_frame_ticker(thumbs::HIDDEN_CACHE_GRACE,move||{
                 if let Some((tx,wake))=&events
                     && tx.send(WorkerResult::HiddenCacheDue).is_ok()

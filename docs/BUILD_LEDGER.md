@@ -26,3 +26,6 @@ OPEN (from hour 4 warnings): platform/src/storage.rs quarantine_and_report + qua
 HOUR 5 slot 1: platform/session-core/wm-x11/integrations-linux tests ran; platform had 5 fails (corrupt_name './' prefix; cleanup_own_temps racing parallel tests) fixed, 415/415 x2.
 | 2026-11-27T16:12-03:00 | cargo test wm-wayland shell desktop lock terminal | hour 5 slot 2 |
 HOUR 5 slot 2: tests render-core/wm-wayland/shell/desktop/lock/terminal ran, 517+ pass. Fixed worker compile errors (glyph_bytes init, lock Arc deref); regenerated stale layout golden for usage + notification-center (stale since eba95409). Pool idle on 429 until ~16:25.
+| 2026-11-27T17:04-03:00 | cargo check --tests --workspace (waves 2-4, pool drained) | hour 6 slot 1 |
+HOUR 6 slot1: workspace check --tests: 2 worker errors (tray retain arity, explorer Option clone) fixed, now clean. Tests next.
+HOUR 6 slot1 RESULT: workspace (excl flamewm-wm) tests all pass after: tray retain arity, explorer Option clone, reactor test typo (from_secs->from_millis), render-compiler settings pin re-pinned for eba95409. Waves 2-4 now built+tested (type-check + unit tests). Not yet: release build, flamewm-wm tests, frames, baseline.
