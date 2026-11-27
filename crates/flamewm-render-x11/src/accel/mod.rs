@@ -209,7 +209,7 @@ fn resolve_env_override(value: Option<&str>, mode: RenderAcceleration) -> Render
     }
 }
 
-/// Software GL drivers (Mesa llvmpipe/softpipe, swrast) are slower than the CPU path.
+/// Software GL drivers (llvmpipe/softpipe/swrast) are the second fallback stage, not a hard stop.
 fn is_software_renderer(renderer: &str) -> bool {
     let lower = renderer.to_ascii_lowercase();
     ["llvmpipe", "softpipe", "swrast"]
@@ -344,6 +344,64 @@ fn record_fallback(reason: FallbackReason) {
     }
 }
 
+/// Emits one failure record for a GPU init stage: the stage that failed, the concrete cause and
+/// what still works afterwards. Kept as a single line so each stage is greppable in the log.
+fn gpu_failure_record(stage: &str, cause: &str, blast_radius: &str) {
+    eprintln!(
+        "FLAMEWM-GPU-FALLBACK stage={stage} status=fail cause={cause} blast_radius={blast_radius}"
+    );
+}
+
+/// Records a usable software-GL device: the GPU path is active, but the fallback reason records
+/// why it is not hardware acceleration.
+fn record_software(kind: RenderBackend, device: &str) {
+    if let Ok(mut status) = STATUS.lock() {
+        status.active = kind;
+        status.device = Some(device.to_owned());
+        status.fallback = Some(FallbackReason::SoftwareDevice(device.to_owned()));
+    }
+}
+
+/// Opens a GPU device through the fallback chain: hardware GL, then software GL (llvmpipe on the
+/// child), then `Failed` so the caller runs the CPU raster. Every failed stage emits one failure
+/// record; the first usable device is kept, with software devices marked as degraded.
+fn open_gpu() -> GpuSlot {
+    match helper::RemoteGpu::spawn(helper::GpuMode::Hardware) {
+        Ok(gpu) if !is_software_renderer(gpu.device()) => {
+            eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.device());
+            record_ready(gpu.kind(), gpu.device());
+            return GpuSlot::Ready(Box::new(gpu));
+        }
+        Ok(gpu) => {
+            // A hardware request that resolves to llvmpipe has already reached the software-GL
+            // stage; keep that device instead of launching a second software child for it.
+            gpu_failure_record(
+                "hardware-gl",
+                &format!("software renderer {}", gpu.device()),
+                "works:gpu-raster|degraded:hardware-accel",
+            );
+            record_software(gpu.kind(), gpu.device());
+            return GpuSlot::Ready(Box::new(gpu));
+        }
+        Err(error) => gpu_failure_record(
+            "hardware-gl",
+            &error,
+            "works:render|degraded:next=software-gl",
+        ),
+    }
+    match helper::RemoteGpu::spawn(helper::GpuMode::Software) {
+        Ok(gpu) => {
+            record_software(gpu.kind(), gpu.device());
+            GpuSlot::Ready(Box::new(gpu))
+        }
+        Err(error) => {
+            gpu_failure_record("software-gl", &error, "works:render|degraded:cpu-raster");
+            record_fallback(FallbackReason::InitFailed(error));
+            GpuSlot::Failed
+        }
+    }
+}
+
 /// Runs one pixel operation on the GPU when `renderAcceleration` is `gpu` and the GPU is healthy.
 /// `false` means the operation did not run on the GPU and the caller must run it on the CPU; the
 /// GPU contract leaves the frame untouched on error, so the CPU sees the original pixels.
@@ -358,28 +416,7 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
         if matches!(*slot, GpuSlot::Untried) {
             #[cfg(test)]
             INIT_CALLS.with(|calls| calls.set(calls.get() + 1));
-            *slot = match helper::RemoteGpu::spawn() {
-                Ok(gpu) if is_software_renderer(gpu.device()) => {
-                    let reason = FallbackReason::SoftwareDevice(gpu.device().to_owned());
-                    eprintln!(
-                        "flamewm-render-x11: GPU acceleration unavailable, using CPU: {reason}"
-                    );
-                    record_fallback(reason);
-                    GpuSlot::Failed
-                }
-                Ok(gpu) => {
-                    eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.device());
-                    record_ready(gpu.kind(), gpu.device());
-                    GpuSlot::Ready(Box::new(gpu))
-                }
-                Err(error) => {
-                    eprintln!(
-                        "flamewm-render-x11: GPU acceleration unavailable, using CPU: {error}"
-                    );
-                    record_fallback(FallbackReason::InitFailed(error));
-                    GpuSlot::Failed
-                }
-            };
+            *slot = open_gpu();
         }
         let GpuSlot::Ready(gpu) = &mut *slot else {
             return false;

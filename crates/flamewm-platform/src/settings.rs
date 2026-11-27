@@ -236,6 +236,8 @@ fn invalid_owned<T>(message: String) -> FlameResult<T> {
 }
 
 pub mod icon_theme;
+mod load;
+mod persist;
 mod product_validate;
 mod render_backend_migrate;
 use render_backend_migrate::migrate_legacy_acceleration;
@@ -243,6 +245,9 @@ mod snapshot_parse;
 mod snapshot_serialize;
 mod validate;
 use validate::*;
+
+pub(crate) use load::{LoadOutcome, load_settings};
+pub(crate) use persist::{PersistOutcome, cleanup_own_temps, persist_settings};
 
 #[cfg(test)]
 mod tests;

@@ -6,8 +6,9 @@ tests, so nothing in this unit has been compiled or executed).
 ## Ownership and route
 
 - Edits: `crates/flamewm-platform/src/settings/load.rs`,
-  `crates/flamewm-platform/src/settings/persist.rs`, this log.
-- File IO only. `product.rs`, `stable.rs` key tables, `settings.rs`, `host.rs`, `storage.rs` and
+  `crates/flamewm-platform/src/settings/persist.rs`, `crates/flamewm-platform/src/settings.rs`
+  (module declarations and `pub(crate)` re-exports), this log.
+- File IO only. `product.rs`, `stable.rs` key tables, `host.rs`, `storage.rs` and
   `services/settings_persist.rs` are untouched.
 - Route evidence: `flamewm-source-first` (source/callers/owners read first) and
   `flamewm-rust-systems` (ownership, atomicity, failure paths). `AGENTS.md`, `scripts/version`,
@@ -54,9 +55,11 @@ tests, so nothing in this unit has been compiled or executed).
 
 ## Integration required by the owning worker
 
-`settings.rs` must declare `mod load;` and `mod persist;` (the units are `pub(crate)` children of
-`settings`), and the callers in `host.rs` / `services/settings_persist.rs` must delegate to
-`load_settings` and `persist_settings`. Those files are outside this unit's ownership.
+`settings.rs` now declares `mod load;` and `mod persist;` and re-exports `LoadOutcome`,
+`load_settings`, `PersistOutcome`, `persist_settings` and `cleanup_own_temps` as `pub(crate)`, so the
+units are reachable through `crate::settings::*`. The callers in `host.rs` /
+`services/settings_persist.rs` must still delegate to `load_settings` and `persist_settings`; those
+files are outside this unit's ownership.
 
 ## Verification
 

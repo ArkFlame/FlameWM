@@ -73,7 +73,9 @@ and are listed separately for completeness.
 | `crates/flamewm-shell/src/main.rs:1528` | test-only `expect("notification template")` | No production change; keep as a strict test fixture. |
 | `crates/flamewm-wm-wayland/src/probe.rs:542`, `:562` | test-only `expect` | No production change. |
 | `crates/flamewm-wm-wayland/src/startup.rs:297`, `:366`, `:369` | test-only `unwrap`/`expect` | No production change. |
+| `crates/flamewm-wm-wayland/src/main.rs:475` | `fn exit(&self, _span: &tracing::span::Id) {}` | Excluded: a `tracing::Subscriber` trait method, not a process exit. |
 
+A sweep of `process::exit(` over both crates found only the six production sites listed above.
 Process entry for both binaries should call `install_panic_hook(session_log_path(...))` once before
 subsystem threads start, so escaped panics are recorded with the subsystem name that `guard` set.
 

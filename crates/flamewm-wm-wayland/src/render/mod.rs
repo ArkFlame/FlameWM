@@ -377,10 +377,11 @@ fn frame_reaches_output(frame: Rect, scale: f64, visible: Rectangle<i32, Physica
 /// rounded, antialiased and translucent chrome, so a buffer that claims its whole rect would
 /// wrongly hide a window behind a glass bar. Solid bodies and client surfaces report their true
 /// opaque regions, which is exactly what the renderer may rely on.
+/// Bounded so a frame with many windows cannot grow the list without limit; a scene past the cap
+/// simply keeps building the lowest windows, which is only a missed optimisation.
+pub(super) const MAX_OCCLUDERS: usize = 64;
+
 fn collect_occluders(elements: &[Elem], scale: f64, occluders: &mut Vec<Rectangle<i32, Physical>>) {
-    /// Bounded so a frame with many windows cannot grow the list without limit; a scene past the
-    /// cap simply keeps building the lowest windows, which is only a missed optimisation.
-    const MAX_OCCLUDERS: usize = 64;
     for element in elements {
         if occluders.len() >= MAX_OCCLUDERS {
             return;
@@ -505,7 +506,9 @@ fn scene_elements_into(
     let visible = client_backdrop_rect(state.output_rect(), scale);
     // Opaque areas already drawn in front of the current item. The traversal is front to back, so
     // a window whose frame fits inside one of these is fully hidden and needs no element work.
-    let mut occluders: Vec<Rectangle<i32, Physical>> = Vec::new();
+    // One allocation per painted frame instead of the seven a growing `Vec::new()` needs to
+    // reach the cap; the list is rebuilt each frame but never exceeds `MAX_OCCLUDERS`.
+    let mut occluders: Vec<Rectangle<i32, Physical>> = Vec::with_capacity(MAX_OCCLUDERS);
     for item in items {
         match item {
             SceneItem::Layer { surface, .. } => {
@@ -661,11 +664,10 @@ fn scene_elements_into(
                     };
                     // Pressed only while the pointer is still on the control that was pressed.
                     let pressed = match state.pressed_hit {
-                        Some(hit)
-                            if state.model.hit(state.pointer.x, state.pointer.y) == Some(hit) =>
-                        {
-                            hovered
-                        }
+                        // `hovered_button` already hit-tested the same immutable `state` and pointer
+                        // at the top of this traversal. Re-testing per decorated window was pure
+                        // duplicate work on every painted frame, and input is untouched in between.
+                        Some(hit) if hovered_button == Some(hit) => hovered,
                         _ => None,
                     };
                     let title = state.window_title(id);

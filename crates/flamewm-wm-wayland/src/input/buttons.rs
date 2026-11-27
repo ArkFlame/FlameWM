@@ -79,10 +79,9 @@ impl State {
                 let time_ms = event.time_msec();
                 let (px, py) = pointer;
                 let location = self.pointer;
-                let dx = (location.x - pointer.0).round() as i32;
-                let dy = (location.y - pointer.1).round() as i32;
+                let (dx, dy) = grab_delta(pointer, (location.x, location.y));
                 let moved = move_activated(dx, dy);
-                self.snap_preview.hide();
+                let ring_hidden = self.snap_preview.hide();
                 if moved {
                     let candidate = clamp_move_candidate(
                         move_candidate(
@@ -120,6 +119,10 @@ impl State {
                 } else {
                     self.last_title_click = None;
                 }
+                // Hiding the ring drops its buffers; the commit above also has no paint of its own.
+                if release_needs_paint(ring_hidden, moved) {
+                    self.request_paint();
+                }
             } else if let Some(Grab::Resize {
                 id,
                 pointer,
@@ -131,10 +134,13 @@ impl State {
                 // in one configure, so the content updates the instant the button is released.
                 self.last_title_click = None;
                 if !self.show_content_while_dragging {
-                    let dx = (self.pointer.x - pointer.0).round() as i32;
-                    let dy = (self.pointer.y - pointer.1).round() as i32;
+                    let (dx, dy) = grab_delta(pointer, (self.pointer.x, self.pointer.y));
                     self.model.set_rect(id, edge.resized(start, dx, dy));
                     self.apply_geometry(id);
+                    // The configure went out now; the paint-side flush must not repeat it.
+                    if self.pending_configure == Some(id) {
+                        self.pending_configure = None;
+                    }
                 }
                 self.snap_preview.hide();
                 self.request_paint();

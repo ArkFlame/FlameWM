@@ -148,7 +148,9 @@ impl State {
         let resolved = resolved.filter(|_| clamped == location);
         let location = clamped;
         self.pointer = location;
-        if let Some(grab) = self.grab {
+        if let Some(grab) = self.grab
+            && grab_motion_needs_work(grab_anchor(grab), previous, location)
+        {
             match grab {
                 Grab::Move {
                     id,
@@ -161,8 +163,7 @@ impl State {
                     anchor_y,
                     ..
                 } => {
-                    let dx = (location.x - pointer.0).round() as i32;
-                    let dy = (location.y - pointer.1).round() as i32;
+                    let (dx, dy) = grab_delta(pointer, (location.x, location.y));
                     let activated = move_activated(dx, dy);
                     let titlebars = self.model.titlebars();
                     let floating = clamp_move_candidate(
@@ -229,10 +230,14 @@ impl State {
                     start,
                     edge,
                 } => {
-                    let dx = (location.x - pointer.0).round() as i32;
-                    let dy = (location.y - pointer.1).round() as i32;
+                    let (dx, dy) = grab_delta(pointer, (location.x, location.y));
                     let rect = edge.resized(start, dx, dy);
                     if self.show_content_while_dragging {
+                        // A runtime `showContentWhileDragging` toggle can leave an outline ring
+                        // from the previous mode on screen; the live path never draws one.
+                        if self.snap_preview.hide() {
+                            self.request_paint();
+                        }
                         // Live mode: sub-step pointer motion leaves the rectangle unchanged (no
                         // configure); a real change is flushed once on the next paint.
                         let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
@@ -616,6 +621,40 @@ pub(super) fn relative_delta(
     raw_next - raw_previous
 }
 
+/// Integer key of a grab position. Everything a grab derives from the pointer rounds it either as
+/// an offset from the grab anchor (the move/resize rect) or as an absolute point (snap target and
+/// restore geometry). A motion that changes none of these four values cannot change the ring, the
+/// rectangle or the snap target.
+pub(super) fn grab_position_key(
+    anchor: (f64, f64),
+    pointer: Point<f64, Logical>,
+) -> (i32, i32, i32, i32) {
+    (
+        (pointer.x - anchor.0).round() as i32,
+        (pointer.y - anchor.1).round() as i32,
+        pointer.x.round() as i32,
+        pointer.y.round() as i32,
+    )
+}
+
+/// Whether a grab motion crossed a pixel boundary and must recompute geometry. Sub-pixel and
+/// duplicate events inside one frame reuse the last result instead of repeating the output and
+/// work-area lookups on every event.
+pub(super) fn grab_motion_needs_work(
+    anchor: (f64, f64),
+    previous: Point<f64, Logical>,
+    current: Point<f64, Logical>,
+) -> bool {
+    grab_position_key(anchor, previous) != grab_position_key(anchor, current)
+}
+
+/// The pointer that anchored a move or resize grab; the key above is measured from it.
+pub(super) fn grab_anchor(grab: Grab) -> (f64, f64) {
+    match grab {
+        Grab::Move { pointer, .. } | Grab::Resize { pointer, .. } => pointer,
+    }
+}
+
 /// Surface-local region test; the protocol region is in integer surface coordinates.
 fn region_hit(
     region: &smithay::wayland::compositor::RegionAttributes,
@@ -675,5 +714,34 @@ mod pointer_constraint_tests {
         let b = Point::<f64, Logical>::from((103.5, 37.0));
         assert_eq!(relative_delta(a, b), Point::from((3.5, -3.0)));
         assert_eq!(relative_delta(b, b), Point::from((0.0, 0.0)));
+    }
+
+    #[test]
+    fn grab_key_uses_rounded_offset_and_absolute_point() {
+        let anchor = (10.2, 20.2);
+        let p = Point::<f64, Logical>::from((30.6, 41.2));
+        assert_eq!(grab_position_key(anchor, p), (20, 21, 31, 41));
+    }
+
+    #[test]
+    fn subpixel_grab_motion_is_coalesced() {
+        let anchor = (10.0, 20.0);
+        let a = Point::<f64, Logical>::from((30.2, 41.3));
+        let b = Point::<f64, Logical>::from((30.49, 41.49));
+        assert!(!grab_motion_needs_work(anchor, a, b));
+        assert!(!grab_motion_needs_work(anchor, a, a));
+    }
+
+    #[test]
+    fn grab_motion_crossing_any_rounded_boundary_is_processed() {
+        let a = Point::<f64, Logical>::from((30.2, 41.3));
+        // Offset delta crosses 20 -> 21.
+        let anchor = (10.0, 20.0);
+        let by_offset = Point::<f64, Logical>::from((30.6, 41.3));
+        assert!(grab_motion_needs_work(anchor, a, by_offset));
+        // Absolute point crosses 30 -> 31 while the offset step stays 31.
+        let shifted_anchor = (-0.4, 20.0);
+        let by_point = Point::<f64, Logical>::from((30.6, 41.3));
+        assert!(grab_motion_needs_work(shifted_anchor, a, by_point));
     }
 }

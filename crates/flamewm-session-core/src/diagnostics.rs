@@ -9,6 +9,14 @@ use std::path::{Path, PathBuf};
 
 use crate::{ChildExit, ProcessPlan, SessionRole};
 
+/// Failure reports, panic boundaries and crash-loop-limited restarts. Re-exported here so other
+/// crates can use the stable `flamewm_session_core::diagnostics::FailureRecord` path.
+pub mod failure;
+pub use failure::{
+    BlastRadius, FailureCode, FailureRecord, RestartDecision, RestartPolicy, append_record, guard,
+    install_panic_hook, unix_seconds_now,
+};
+
 /// Severity ordered from least to most serious.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {

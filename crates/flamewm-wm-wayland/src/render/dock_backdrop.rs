@@ -434,7 +434,7 @@ pub(crate) fn refresh_dock_backdrops(
                 scene_order[..index].iter().cloned(),
                 true,
             );
-            let mut occluders = Vec::new();
+            let mut occluders = Vec::with_capacity(MAX_OCCLUDERS);
             collect_occluders(&front, scale, &mut occluders);
             let client = client_backdrop_rect(managed.rect, scale);
             if occluders.iter().any(|outer| covers(*outer, client)) {

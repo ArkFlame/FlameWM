@@ -553,6 +553,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     chrome_deferred: Option<Window>,
     /// When the titlebar was last painted by the paced path.
     chrome_paint_at: Option<std::time::Instant>,
+    /// Last native configure of a live interactive resize; paced to one per frame.
+    resize_configure_at: Option<std::time::Instant>,
 }
 
 #[macro_use]

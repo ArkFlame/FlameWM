@@ -37,6 +37,22 @@ pub(super) const fn needs_scene_rebuild(ring_changed: bool, rect_changed: bool) 
     ring_changed || rect_changed
 }
 
+/// Rounded delta a move or resize grab applies from its origin to the current pointer sample.
+/// Geometry only ever sees this integer step, so a high-rate burst collapses to its last sample
+/// without changing the result.
+pub(super) fn grab_delta(origin: (f64, f64), latest: (f64, f64)) -> (i32, i32) {
+    (
+        (latest.0 - origin.0).round() as i32,
+        (latest.1 - origin.1).round() as i32,
+    )
+}
+
+/// Whether a grab release owes a repaint. Hiding the ring changes the scene even when no geometry
+/// committed; an outline-mode commit has never been drawn live and must be shown at release.
+pub(super) const fn release_needs_paint(ring_hidden: bool, geometry_committed: bool) -> bool {
+    ring_hidden || geometry_committed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +107,25 @@ mod tests {
         assert!(needs_scene_rebuild(false, true));
         assert!(needs_scene_rebuild(true, true));
         assert!(!needs_scene_rebuild(false, false));
+    }
+
+    #[test]
+    fn grab_delta_uses_the_latest_rounded_sample() {
+        assert_eq!(grab_delta((100.0, 50.0), (112.4, 47.6)), (12, -2));
+        assert_eq!(grab_delta((100.0, 50.0), (112.5, 47.5)), (13, -3));
+        // Sub-pixel samples inside one frame round to the same geometry step.
+        assert_eq!(
+            grab_delta((100.0, 50.0), (110.1, 51.9)),
+            grab_delta((100.0, 50.0), (110.4, 51.6))
+        );
+        assert_eq!(grab_delta((100.0, 50.0), (100.0, 50.0)), (0, 0));
+    }
+
+    #[test]
+    fn release_repaints_for_hidden_ring_or_committed_geometry() {
+        assert!(release_needs_paint(true, false));
+        assert!(release_needs_paint(false, true));
+        assert!(release_needs_paint(true, true));
+        assert!(!release_needs_paint(false, false));
     }
 }

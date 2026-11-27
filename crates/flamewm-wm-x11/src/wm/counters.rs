@@ -37,6 +37,8 @@ pub(super) struct ResizeCounterSet {
     pub(super) received: TotalledCounter,
     pub(super) coalesced: TotalledCounter,
     pub(super) committed: TotalledCounter,
+    /// Live-resize configures suppressed by the frame cadence.
+    pub(super) throttled: TotalledCounter,
     pub(super) max_batch: std::sync::atomic::AtomicU64,
 }
 
@@ -47,6 +49,7 @@ pub(super) fn resize_counters() -> &'static ResizeCounterSet {
         received: TotalledCounter::new("wm.resize.received"),
         coalesced: TotalledCounter::new("wm.resize.coalesced"),
         committed: TotalledCounter::new("wm.resize.commit"),
+        throttled: TotalledCounter::new("wm.resize.throttled"),
         max_batch: std::sync::atomic::AtomicU64::new(0),
     })
 }
@@ -64,11 +67,16 @@ impl ResizeCounterSet {
         self.committed.add(value);
     }
 
-    pub(super) fn snapshot(&self) -> (u64, u64, u64) {
+    pub(super) fn record_configure_throttled(&self, value: u64) {
+        self.throttled.add(value);
+    }
+
+    pub(super) fn snapshot(&self) -> (u64, u64, u64, u64) {
         (
             self.received.load(),
             self.coalesced.load(),
             self.committed.load(),
+            self.throttled.load(),
         )
     }
 
@@ -87,9 +95,11 @@ pub(super) fn emit_resize_summary() {
         flamewm_debug::WM_RESIZE_SUMMARY_COOLDOWN,
         || {
             let counters = resize_counters();
-            let (received, coalesced, committed) = counters.snapshot();
+            let (received, coalesced, committed, throttled) = counters.snapshot();
             let max = counters.max_batch();
-            format!("received={received} coalesced={coalesced} commit={committed} max_batch={max}")
+            format!(
+                "received={received} coalesced={coalesced} commit={committed} throttled={throttled} max_batch={max}"
+            )
         },
     );
 }

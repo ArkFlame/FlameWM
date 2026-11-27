@@ -194,8 +194,8 @@ chain_cause() {
     if [[ -n "$CHAIN_CACHE_DIR" && -f "$clog" ]]; then
         grep -aqF 'stage=runtime status=fail' "$clog" && cause+="+runtime_dir"
         grep -aqF 'dbus_session_bus=absent' "$clog" && cause+="+dbus_absent"
-        grep -aqF 'stage=socket fail' "$clog" && cause+="+socket_not_detected"
-        grep -aqF 'stage=presented fail' "$clog" && cause+="+no_first_frame"
+        grep -aqF 'stage=socket status=fail' "$clog" && cause+="+socket_not_detected"
+        grep -aqF 'stage=presented status=fail' "$clog" && cause+="+no_first_frame"
     fi
     if [[ -n "${XDG_RUNTIME_DIR:-}" && -e "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" \
         && ! -S "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" ]]; then
@@ -230,7 +230,8 @@ chain_supervisor() {
         env FLAMEWM_SESSION_ATTEMPT=safe "$CHAIN_BINDIR/flamewm-session-wrapper" & CHAIN_CHILD=$!
         chain_wait "$CHAIN_CHILD"; rc=$?
         CHAIN_CHILD=""
-        chain_clear_guard
+        # Keep counting while safe mode fails too; only a stage that actually came up clears the loop.
+        if (( rc == 0 || rc == 129 || rc == 130 || rc == 143 )); then chain_clear_guard; fi
         return "$rc"
     fi
     # A crashed run can leave a regular file at our private socket name; the bounded wait in each

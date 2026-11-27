@@ -168,7 +168,8 @@ chain_supervisor() {
         chain_record guard fail crash_loop 0 "$(chain_works safe)" "$(chain_degraded safe)" \
             "attempts=$CHAIN_ATTEMPTS"
         run_safe_mode; rc=$?
-        chain_clear_guard
+        # Keep counting while safe mode fails too; only a stage that actually came up clears the loop.
+        if (( rc == 0 || rc == 129 || rc == 130 || rc == 143 )); then chain_clear_guard; fi
         return "$rc"
     fi
     for stage in x11 safe; do

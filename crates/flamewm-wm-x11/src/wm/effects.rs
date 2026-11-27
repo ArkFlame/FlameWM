@@ -1,5 +1,21 @@
 use super::*;
 
+/// Native configure cadence for live interactive resize (~60 Hz). Outline mode
+/// configures nothing during a drag; when content-while-dragging is on, only one
+/// configure batch per interval reaches X and the rest coalesce into the next
+/// motion or the always-unthrottled release.
+pub(super) const RESIZE_CONFIGURE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(16);
+
+/// Pure pacing decision: due when no configure ran yet or the interval elapsed.
+#[must_use]
+pub(crate) fn resize_configure_due(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    last.is_none_or(|last| now.saturating_duration_since(last) >= RESIZE_CONFIGURE_INTERVAL)
+}
+
 impl<C: Connection> Wm<'_, C> {
     pub(super) fn execute_effects(
         &mut self,
@@ -36,8 +52,43 @@ impl<C: Connection> Wm<'_, C> {
                 return Ok(());
             }
         }
+        // Live resize emits a full configure batch per motion. Frame-pace native
+        // work: one batch per interval; skipped batches leave the native frame at
+        // the last configured rect and are superseded by the next motion or the
+        // final release configure. Outline mode has no batch to suppress.
+        let now = std::time::Instant::now();
+        let live_resize = !commit.ungrab
+            && crate::live_settings::show_content_while_dragging()
+            && matches!(self.session_of(client), InteractionSession::Resize(_));
+        let has_configure = commit.effects.iter().any(|effect| {
+            matches!(
+                *effect,
+                FrameEffect::ConfigureFrameRoot { .. } | FrameEffect::ConfigureClientLocal { .. }
+            )
+        });
+        let paced =
+            live_resize && has_configure && !resize_configure_due(self.resize_configure_at, now);
+        if commit.ungrab {
+            self.resize_configure_at = None;
+        }
+        if paced {
+            resize_counters().record_configure_throttled(1);
+        }
         let result: Result<(), ReplyError> = (|| {
             for effect in &commit.effects {
+                if paced
+                    && matches!(
+                        *effect,
+                        FrameEffect::ConfigureFrameRoot { .. }
+                            | FrameEffect::ConfigureClientLocal { .. }
+                            | FrameEffect::NotifyClientRoot { .. }
+                            | FrameEffect::LayoutInput
+                            | FrameEffect::PaintChrome
+                            | FrameEffect::ApplyShape
+                    )
+                {
+                    continue;
+                }
                 match *effect {
                     // PointerCommit owns the single native grab transaction.
                     FrameEffect::Grab { .. } => {}
@@ -82,6 +133,9 @@ impl<C: Connection> Wm<'_, C> {
                             &result,
                         );
                         result?;
+                        if live_resize {
+                            self.resize_configure_at = Some(now);
+                        }
                         self.commit_frame_rect(client, x, y, w, h);
                         self.set_frame_extents(client)?;
                     }
@@ -452,5 +506,24 @@ impl<C: Connection> Wm<'_, C> {
             self.publish_window_state(client)?;
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod resize_configure_pacing_tests {
+    use super::*;
+
+    #[test]
+    fn first_live_configure_is_due() {
+        assert!(resize_configure_due(None, std::time::Instant::now()));
+    }
+
+    #[test]
+    fn configures_inside_frame_interval_are_suppressed() {
+        let now = std::time::Instant::now();
+        let last = now - std::time::Duration::from_millis(5);
+        assert!(!resize_configure_due(Some(last), now));
+        let later = now + std::time::Duration::from_millis(17);
+        assert!(resize_configure_due(Some(last), later));
     }
 }

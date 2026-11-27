@@ -15,6 +15,14 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 const ENV_HELPER: &str = "FLAMEWM_GPU_HELPER";
 const HELPER_NAME: &str = "flamewm-gpu-helper";
 
+/// Which GL device the helper child opens. `Software` asks Mesa for an llvmpipe context and is the
+/// second stage of the fallback chain when hardware GL cannot start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GpuMode {
+    Hardware,
+    Software,
+}
+
 const TAG_FILL: u8 = 0;
 const TAG_BLUR: u8 = 1;
 const TAG_MASK: u8 = 2;
@@ -35,12 +43,23 @@ pub(super) struct RemoteGpu {
 }
 
 impl RemoteGpu {
-    pub(super) fn spawn() -> Result<Self, String> {
+    pub(super) fn spawn(mode: GpuMode) -> Result<Self, String> {
         let program = helper_path()?;
-        let mut child = Command::new(&program)
+        let mut command = Command::new(&program);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        if mode == GpuMode::Software {
+            // Software GL is requested on the child only: the parent never loads a GL driver and
+            // its environment stays untouched, so a later hardware attempt is still possible.
+            command
+                .env("LIBGL_ALWAYS_SOFTWARE", "1")
+                .env("MESA_LOADER_DRIVER_OVERRIDE", "llvmpipe")
+                .env("GALLIUM_DRIVER", "llvmpipe")
+                .env("EGL_PLATFORM", "surfaceless");
+        }
+        let mut child = command
             .spawn()
             .map_err(|error| format!("failed to start {}: {error}", program.display()))?;
         let stdin = child.stdin.take().ok_or("helper stdin is missing")?;
@@ -138,8 +157,11 @@ pub fn serve_gpu_helper() -> Result<(), String> {
     let mut gpu = match gles::GpuBlur::new() {
         Ok(gpu) => gpu,
         Err(error) => {
+            // The first reply carries the failure reason; returning Ok exits this helper cleanly so
+            // no child abort reaches the parent. The parent degrades through software GL to CPU.
             write_message(&mut output, &reply_error(&error))?;
-            return Err(error);
+            eprintln!("flamewm-gpu-helper: GL init failed: {error}");
+            return Ok(());
         }
     };
     // One message buffer, one frame buffer and one reply buffer for the life of the helper: a

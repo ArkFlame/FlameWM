@@ -156,6 +156,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             mouse_workspace_cooldowns: MouseWorkspaceCooldowns::default(),
             chrome_deferred: None,
             chrome_paint_at: None,
+            resize_configure_at: None,
         })
     }
 }
