@@ -38,3 +38,32 @@ crates/flamewm-wm-x11/src/frame/geometry_shape.rs:642:            let (_, start,
 crates/flamewm-wm-x11/src/frame/geometry_shape.rs:645:                i32::try_from(start).unwrap(),
 crates/flamewm-wm-x11/src/frame/geometry_shape.rs:650:                i32::try_from(end).unwrap(),
 crates/flamewm-wm-x11/src/frame/geometry_shape.rs:663:        let first = usize::try_from(u32::from(titlebar)).unwrap();
+
+## Step 2 — startup-path audit (narrow retry)
+
+Scope: `crates/flamewm-wm-x11/src`, production paths. Every `expect(`/`unwrap(` hit in the
+Step 1 list resolves to a `#[cfg(test)] mod tests` block (blue_light.rs:306,
+switcher_thumb_x11.rs:76, geometry_shape.rs:306, outline_tune.rs:148,
+window_config.rs:191, output_scale.rs:156, lib.rs:1136+) or to an internal
+invariant assert (wm/controllers.rs:54, wm/chrome_runtime.rs:101). None are on
+X11 startup. The five startup categories below already degrade gracefully;
+there is no remaining hard-fail to convert, so no code file was changed.
+
+| # | category | site | failure record / blast radius | action |
+|---|----------|------|-------------------------------|--------|
+| 1 | RandR extension query + event selection | wm/construct.rs:10-33 | `query_extension` and `randr_select_input` use `match` / `if let Err`; prints "RandR ... blast radius: no live output hotplug/CRTC change notifications, root geometry is used" | already log-and-continue; no change |
+| 2 | RandR screen-resource load | lib.rs:953-970 | `randr_get_screen_resources_current` uses `match`; prints "RandR screen resources unavailable ...; blast radius: no per-output geometry/modes, falling back to root geometry" | already log-and-continue; no change |
+| 3 | Composite / XInput extension query | wm/mod.rs:818-837, wm/raw_keys.rs:308 | Composite query uses `.ok()` chains with an "automatic frame redirect unavailable" fallback; XInput `?` is wrapped by the `select_raw_keys` guard in wm/event_loop.rs:80-82 which prints "raw escape-key feed unavailable" | already log-and-continue; no change |
+| 4 | atom / cursor / theme load | atoms.rs:78-150, wm/construct.rs:51,77-87 | 61 `InternAtom` replies are propagated as a required invariant; renderer open uses `.ok()` and cursor define uses `let _ =`, so a missing theme never aborts startup | no safe standalone conversion: the atom set is a required fixed struct, not an optional capability |
+| 5 | selection owner (`_NET_WM_CM_S<n>`) | wm/mod.rs:828-836 | `get_selection_owner` is an `.ok()` chain; failure degrades to "no automatic frame redirect", frames stay unredirected | already log-and-continue; no change |
+
+UNBUILT — no cargo, build, or test was run in this unit (unit rules forbid it).
+No code file was edited; `wm/pointer.rs` and `wm/counters.rs` were not touched.
+
+PARTIAL — Step 1 is complete and the Step 2 audit covers all five requested
+startup categories, but zero conversions were made: each category is already
+log-and-continue with a one-line blast-radius record, and the only remaining
+startup `?` calls are required invariants (atom set, root event-mask ownership)
+or are already wrapped by a logging guard. Converting those would change
+correct behavior, so the safe scope for this retry is empty; changes are
+UNBUILT and need orchestrator verification.

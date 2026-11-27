@@ -161,7 +161,7 @@ impl Cursors {
             if let Some(named) = self.named.get(&wanted).and_then(Option::as_ref) {
                 return named;
             }
-            // A missing or undecodable theme icon already logged above; the builtin arrow covers it.
+            // Report the degraded outcome; the theme lookup failure itself is logged above.
             eprintln!(
                 "flamewm-wayland: cursor '{}' fell through to the builtin arrow",
                 wanted.name()

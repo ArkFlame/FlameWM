@@ -952,12 +952,22 @@ fn single_output_root_geometry(
 
 impl DisplayPort for X11Desktop {
     fn display_snapshot(&self) -> FlameResult<DisplaySnapshot> {
-        let resources = self
+        // RandR is optional: without it the WM must still start. Blast radius: no
+        // per-output modes or hotplug geometry; the existing root-output fallback below
+        // supplies a single connected output so panels and geometry still work.
+        let (config_timestamp, output_ids) = match self
             .conn
             .randr_get_screen_resources_current(self.root)
-            .map_err(FlameError::io)?
-            .reply()
-            .map_err(FlameError::io)?;
+            .and_then(|cookie| cookie.reply())
+        {
+            Ok(resources) => (resources.config_timestamp, resources.outputs),
+            Err(error) => {
+                eprintln!(
+                    "flamewm: RandR screen resources unavailable: {error}; blast radius: no per-output geometry/modes, falling back to root geometry"
+                );
+                (0, Vec::new())
+            }
+        };
         // Stable physical output identity: never infer primary from RandR
         // resource enumeration order (it can change after hotplug/rotation).
         let primary_output = self
@@ -968,12 +978,12 @@ impl DisplayPort for X11Desktop {
             .map_or(0, |reply| reply.output);
         // A multi-output server can have connected but disabled CRTCs. Only a
         // genuinely single RandR output may use Xephyr's CRTC=0 fallback.
-        let single_randr_output = resources.outputs.len() == 1;
+        let single_randr_output = output_ids.len() == 1;
         let mut outputs = Vec::new();
-        for output in resources.outputs {
+        for output in output_ids {
             let info = self
                 .conn
-                .randr_get_output_info(output, resources.config_timestamp)
+                .randr_get_output_info(output, config_timestamp)
                 .map_err(FlameError::io)?
                 .reply()
                 .map_err(FlameError::io)?;
@@ -988,7 +998,7 @@ impl DisplayPort for X11Desktop {
             let (geometry, current_mode) = if crtc != 0 {
                 let c = self
                     .conn
-                    .randr_get_crtc_info(crtc, resources.config_timestamp)
+                    .randr_get_crtc_info(crtc, config_timestamp)
                     .map_err(FlameError::io)?
                     .reply()
                     .map_err(FlameError::io)?;
@@ -1061,7 +1071,7 @@ impl DisplayPort for X11Desktop {
             }
         }
         Ok(DisplaySnapshot {
-            generation: u64::from(resources.config_timestamp),
+            generation: u64::from(config_timestamp),
             outputs,
             pending: None,
         })

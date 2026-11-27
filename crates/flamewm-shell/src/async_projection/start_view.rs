@@ -85,7 +85,8 @@ pub fn project_start_unified(
     bump_start_view_epoch();
     // Rows, not bare apps: All Programs interleaves letter headers, and every slot index maps
     // to one row so headers keep their place in scrolling and slot numbering.
-    let rows = crate::projection::start_program_rows(model, category, query);
+    // One query pass supplies both the row slots and the rail/count results.
+    let (rows, results) = crate::projection::start_program_rows_and_results(model, category, query);
     document.visible("start-applications", !rows.is_empty())?;
     // Clamp here so the rows painted always match `start_scroll_rows` for slot mapping.
     let scroll_rows = crate::projection::start_scroll_step(
@@ -102,7 +103,12 @@ pub fn project_start_unified(
         scroll_px,
     );
     let window = rows.get(first..last.min(rows.len())).unwrap_or_default();
-    let (mut button_id, mut label_id, mut icon_id) = (String::new(), String::new(), String::new());
+    let id_capacity = "start-app-slot-".len() + 2;
+    let (mut button_id, mut label_id, mut icon_id) = (
+        String::with_capacity(id_capacity),
+        String::with_capacity(id_capacity + "-label".len()),
+        String::with_capacity(id_capacity + "-icon".len()),
+    );
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
         button_id.clear();
@@ -115,7 +121,8 @@ pub fn project_start_unified(
             // Header: letter as the row label, no icon. Slot nodes are reused, so no new ids are
             // needed; the click path maps header rows to no application.
             Some(ProgramRow::Header(letter)) => {
-                document.text_ref(&label_id, &letter.to_string())?;
+                let mut letter_buf = [0u8; 4];
+                document.text_ref(&label_id, letter.encode_utf8(&mut letter_buf))?;
                 document.visible(&button_id, true)?;
                 document.visible(&icon_id, false)?;
                 // Heading style: smaller bold accent letter (the hover fill is cleared by the highlight pass).
@@ -155,7 +162,7 @@ pub fn project_start_unified(
                 )?;
             }
             None => {
-                document.text(&label_id, String::new())?;
+                document.text_ref(&label_id, "")?;
                 document.visible(&button_id, false)?;
                 document.visible(&icon_id, false)?;
             }
@@ -195,7 +202,9 @@ pub fn project_start_unified(
     document.visible("start-session-shutdown", show_session && session.shutdown)?;
     // Category rail + search label live in the same unified document, so
     // one intrinsic union covers the whole Start surface.
-    crate::projection::project_start(document, model, category, query, session)?;
+    crate::projection::project_start_with_results(
+        document, model, category, query, session, &results,
+    )?;
     Ok(())
 }
 
@@ -206,13 +215,16 @@ pub fn project_start_highlight(
     highlighted: Option<usize>,
 ) -> Result<(), String> {
     let accent = crate::projection::task_accent();
+    let mut slot_id = String::with_capacity("start-app-slot-".len() + 2);
     for index in 0..START_APP_SLOT_COUNT {
         let color = if Some(index) == highlighted {
             UiColor { a: 0x38, ..accent }
         } else {
             UiColor { a: 0, ..accent }
         };
-        document.background(&format!("start-app-slot-{}", index + 1), color)?;
+        slot_id.clear();
+        let _ = write!(&mut slot_id, "start-app-slot-{}", index + 1);
+        document.background(&slot_id, color)?;
     }
     Ok(())
 }

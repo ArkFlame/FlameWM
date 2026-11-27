@@ -2,7 +2,7 @@
 
 use super::*;
 use flamewm_shell_core::start_menu::StartView;
-use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// The single Start result owner: every projection and click path reads this.
 /// A non-empty query searches ALL categories (the category rail is hidden);
@@ -16,17 +16,18 @@ pub fn start_visible_results<'a>(
     if !query.trim().is_empty() {
         return model.query_view(query);
     }
-    let base = model.results_view();
+    let mut base = model.results_view();
     match category {
         StartCategory::All => base,
         StartCategory::Power => Vec::new(),
         StartCategory::Favorites => {
             model.category_view(flamewm_shell_core::start_menu::StartCategory::Favorites)
         }
-        _ => base
-            .into_iter()
-            .filter(|application| application_matches_category(application, category))
-            .collect(),
+        _ => {
+            // Retain in place: the filtered view used to be a second Vec over `base`.
+            base.retain(|application| application_matches_category(application, category));
+            base
+        }
     }
 }
 
@@ -37,6 +38,20 @@ pub fn project_start(
     query: &str,
     session: &SessionCapabilities,
 ) -> Result<(), String> {
+    let results = start_visible_results(model, category, query);
+    project_start_with_results(document, model, category, query, session, &results)
+}
+
+/// Same projection as [`project_start`], with the visible results supplied by the caller. A
+/// Start projection therefore filters the application set once for rows, rail state and count.
+pub(crate) fn project_start_with_results(
+    document: &mut impl UiDocumentAccess,
+    model: &StartModel,
+    category: StartCategory,
+    query: &str,
+    session: &SessionCapabilities,
+    results: &[&DesktopApplication],
+) -> Result<(), String> {
     // Search mode hides the whole category rail (incl. Power) and searches all.
     let searching = !query.trim().is_empty();
     // All Programs replaces the category rail with one alphabetical list.
@@ -44,27 +59,46 @@ pub fn project_start(
     document.visible("start-categories", !searching && categories_shown)?;
     project_start_view_toggle(document, model)?;
     // A search ignores the category, so one query serves every rail check and the count.
-    let results = start_visible_results(model, category, query);
-    for (name, value) in PRESENTATION_CATEGORIES {
+    // Non-search rail checks used to build one filtered Vec per bucket and recompute each
+    // application's bucket for every bucket; one pass over the applications serves all nine.
+    let mut bucket_present = [false; PRESENTATION_CATEGORIES.len()];
+    if !searching {
+        let mut rail_buckets = [None; PRESENTATION_CATEGORIES.len()];
+        for (slot, (_, value)) in PRESENTATION_CATEGORIES.iter().enumerate() {
+            rail_buckets[slot] = category_bucket(*value);
+        }
+        for application in model.applications() {
+            let bucket = bucket_for_application(application);
+            for (slot, rail_bucket) in rail_buckets.iter().enumerate() {
+                if *rail_bucket == Some(bucket) {
+                    bucket_present[slot] = true;
+                }
+            }
+        }
+    }
+    let mut category_node = String::with_capacity("start-category-".len() + 16);
+    for (slot, (name, value)) in PRESENTATION_CATEGORIES.iter().enumerate() {
         let visible = match value {
             StartCategory::Power => session_available(*session),
             // The Favorites entry exists only while at least one application is starred.
             StartCategory::Favorites => !model.favorites().is_empty(),
-            _ if value == category => true,
+            _ if *value == category => true,
             _ if searching => !results.is_empty(),
-            _ => !start_visible_results(model, value, query).is_empty(),
+            _ => bucket_present[slot],
         };
-        document.visible(&format!("start-category-{name}"), visible)?;
+        category_node.clear();
+        category_node.push_str("start-category-");
+        category_node.push_str(name);
+        document.visible(&category_node, visible)?;
     }
     let count = results.len();
-    document.text(
-        "start-search-label",
-        if query.trim().is_empty() {
-            "Search applications".to_owned()
-        } else {
-            format!("{query} ({count})")
-        },
-    )?;
+    if searching {
+        let mut label = String::with_capacity(query.len() + 8);
+        let _ = write!(&mut label, "{query} ({count})");
+        document.text_ref("start-search-label", &label)?;
+    } else {
+        document.text_ref("start-search-label", "Search applications")?;
+    }
     Ok(())
 }
 
@@ -154,26 +188,34 @@ pub fn next_selectable_slot(
     }
 }
 
+/// Session rows pinned at the bottom of All Programs (Suspend, Reboot, Shutdown).
+const SESSION_ROW_COUNT: usize = 3;
+
 /// All Programs rows: letter headers (`#` first, then letters), each bucket in (name, id) order.
 fn all_programs_rows<'a>(
     applications: &'a [DesktopApplication],
     order: &[usize],
 ) -> Vec<ProgramRow<'a>> {
-    let mut buckets: BTreeMap<char, Vec<usize>> = BTreeMap::new();
-    for &index in order {
-        buckets
-            .entry(program_bucket(&applications[index].name))
-            .or_default()
-            .push(index);
-    }
-    let mut rows = Vec::with_capacity(order.len() + buckets.len());
-    for (letter, indices) in buckets {
-        rows.push(ProgramRow::Header(letter));
-        rows.extend(
-            indices
-                .into_iter()
-                .map(|index| ProgramRow::App(&applications[index])),
-        );
+    // A stable sort by bucket key keeps the (name, id) order within a letter and the key order
+    // across letters, while replacing a map node and a Vec per letter with one indexed Vec.
+    let mut keyed: Vec<(char, usize)> = order
+        .iter()
+        .map(|&index| (program_bucket(&applications[index].name), index))
+        .collect();
+    keyed.sort_by_key(|&(letter, _)| letter);
+    let headers = keyed
+        .windows(2)
+        .filter(|pair| pair[0].0 != pair[1].0)
+        .count()
+        + usize::from(!keyed.is_empty());
+    let mut rows = Vec::with_capacity(keyed.len() + headers + SESSION_ROW_COUNT);
+    let mut current = None;
+    for (letter, index) in keyed {
+        if current != Some(letter) {
+            rows.push(ProgramRow::Header(letter));
+            current = Some(letter);
+        }
+        rows.push(ProgramRow::App(&applications[index]));
     }
     rows.extend([
         ProgramRow::Session(flamewm_api::session::SessionAction::Suspend),
@@ -199,6 +241,27 @@ pub fn start_program_rows<'a>(
         .into_iter()
         .map(ProgramRow::App)
         .collect()
+}
+
+/// Rows and the app-only results in one pass, for projections that need both. The Start view
+/// projection uses this so a scroll or a keystroke does not filter the list twice.
+#[must_use]
+pub(crate) fn start_program_rows_and_results<'a>(
+    model: &'a StartModel,
+    category: StartCategory,
+    query: &str,
+) -> (Vec<ProgramRow<'a>>, Vec<&'a DesktopApplication>) {
+    if model.view == StartView::AllPrograms && query.trim().is_empty() {
+        // All Programs hides the rail, so the projected document never reads results here;
+        // skip building the full application view that would be immediately discarded.
+        return (
+            all_programs_rows(model.applications(), model.sorted_order()),
+            Vec::new(),
+        );
+    }
+    let results = start_visible_results(model, category, query);
+    let rows = results.iter().copied().map(ProgramRow::App).collect();
+    (rows, results)
 }
 
 /// Per-slot selectability for the window of `count` rows starting at `first`: `false` for headers.
@@ -257,12 +320,12 @@ pub fn project_start_view_toggle(
     model: &StartModel,
 ) -> Result<(), String> {
     let all_programs = model.view == flamewm_shell_core::start_menu::StartView::AllPrograms;
-    document.text(
+    document.text_ref(
         START_VIEW_TOGGLE_LABEL,
         if all_programs {
-            "Categories".to_owned()
+            "Categories"
         } else {
-            "All Programs".to_owned()
+            "All Programs"
         },
     )?;
     document.visible(START_VIEW_CHEVRON_LEFT, all_programs)?;
@@ -284,20 +347,27 @@ pub fn start_scroll_step(offset: usize, delta: isize, max: usize) -> usize {
     offset.saturating_add_signed(delta).min(max)
 }
 
+/// Presentation bucket of a rail category. `None` means the category has no bucket: All and
+/// Favorites/Power are decided by the model or the session, not by an application's categories.
+fn category_bucket(category: StartCategory) -> Option<StartBucket> {
+    match category {
+        StartCategory::All | StartCategory::Power | StartCategory::Favorites => None,
+        StartCategory::Development => Some(StartBucket::Development),
+        StartCategory::Games => Some(StartBucket::Games),
+        StartCategory::Graphics => Some(StartBucket::Graphics),
+        StartCategory::Internet => Some(StartBucket::Internet),
+        StartCategory::Multimedia => Some(StartBucket::Multimedia),
+        StartCategory::System => Some(StartBucket::System),
+        StartCategory::Utilities => Some(StartBucket::Utilities),
+    }
+}
+
 fn application_matches_category(application: &DesktopApplication, category: StartCategory) -> bool {
-    let bucket = match category {
-        StartCategory::All => return true,
+    match category_bucket(category) {
+        None => category == StartCategory::All,
         // Favorites membership comes from the model, not the presentation bucket.
-        StartCategory::Power | StartCategory::Favorites => return false,
-        StartCategory::Development => StartBucket::Development,
-        StartCategory::Games => StartBucket::Games,
-        StartCategory::Graphics => StartBucket::Graphics,
-        StartCategory::Internet => StartBucket::Internet,
-        StartCategory::Multimedia => StartBucket::Multimedia,
-        StartCategory::System => StartBucket::System,
-        StartCategory::Utilities => StartBucket::Utilities,
-    };
-    bucket_for_application(application) == bucket
+        Some(bucket) => bucket_for_application(application) == bucket,
+    }
 }
 
 #[cfg(test)]

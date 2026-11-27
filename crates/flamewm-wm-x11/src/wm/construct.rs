@@ -4,13 +4,33 @@ use super::*;
 pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError> {
     let attrs = ChangeWindowAttributesAux::new().event_mask(super::hot_corner::root_event_mask());
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
-    conn.randr_select_input(
-        screen.root,
-        randr::NotifyMask::SCREEN_CHANGE
-            | randr::NotifyMask::OUTPUT_CHANGE
-            | randr::NotifyMask::CRTC_CHANGE,
-    )?
-    .check()?;
+    // RandR is optional: a server without it still gets a working WM. Losing this
+    // selection means no live SCREEN_CHANGE/OUTPUT_CHANGE/CRTC_CHANGE notifications;
+    // output geometry falls back to the root window until the next start.
+    match conn
+        .query_extension(b"RANDR")
+        .and_then(|cookie| cookie.reply())
+    {
+        Ok(reply) if reply.present => {
+            let selection = conn.randr_select_input(
+                screen.root,
+                randr::NotifyMask::SCREEN_CHANGE
+                    | randr::NotifyMask::OUTPUT_CHANGE
+                    | randr::NotifyMask::CRTC_CHANGE,
+            );
+            if let Err(error) = selection.and_then(|cookie| cookie.check()) {
+                eprintln!(
+                    "flamewm: RandR event selection failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used until restart"
+                );
+            }
+        }
+        Ok(_) => eprintln!(
+            "flamewm: RandR absent; blast radius: no live output hotplug/CRTC change notifications, root geometry is used"
+        ),
+        Err(error) => eprintln!(
+            "flamewm: RandR query failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used"
+        ),
+    }
     if let Err(ReplyError::X11Error(ref error)) = result
         && error.error_kind == ErrorKind::Access
     {

@@ -79,12 +79,7 @@ impl ShellLoop {
             });
             // Cache at the drawn request edge, never the source raster's own
             // (possibly larger) dimensions; the node paints at res.width x res.height.
-            async_projection::note_icon_result(
-                &res.name,
-                res.width,
-                res.height,
-                image.clone(),
-            );
+            async_projection::note_icon_result(&res.name, res.width, res.height, image.clone());
             let surface = match res.target {
                 IconTarget::StartSlot(_) if !self.start_open => {
                     continue;

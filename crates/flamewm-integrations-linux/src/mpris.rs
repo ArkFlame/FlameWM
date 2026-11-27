@@ -113,10 +113,15 @@ pub struct MprisProvider {
 
 const RECONNECT_INITIAL_MS: u64 = 1_000;
 const RECONNECT_MAX_MS: u64 = 30_000;
+/// Fast attempts before an absent session bus is treated as idle.
+const FAST_ATTEMPTS: u8 = 7;
+/// Idle retry interval once the fast budget is spent; a bus appearing later is still picked up.
+const IDLE_RETRY_MS: u64 = 120_000;
 
-/// Bounded reconnect schedule for the optional session bus. Delegates to the shared
-/// `flamewm-integrations-core` exponential helper; once its attempt budget is spent the delay
-/// stays at the cap, so a bus that appears hours later is still picked up.
+/// Two-stage reconnect schedule for the optional session bus. Delegates to the shared
+/// `flamewm-integrations-core` exponential helper for the initial fast attempts, then uses a long
+/// idle interval so an absent bus costs one wake every two minutes instead of one every 30 s.
+/// `reset()` restores the fast schedule after any successful connect.
 #[derive(Debug)]
 struct ReconnectBackoff {
     attempts: u8,
@@ -135,11 +140,11 @@ impl ReconnectBackoff {
         let ms = next_reconnect_delay_ms(
             RECONNECT_INITIAL_MS,
             RECONNECT_MAX_MS,
-            u8::MAX,
+            FAST_ATTEMPTS,
             &mut self.attempts,
             &mut self.pending,
         )
-        .unwrap_or(RECONNECT_MAX_MS);
+        .unwrap_or(IDLE_RETRY_MS);
         Duration::from_millis(ms)
     }
 
@@ -897,14 +902,18 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_backoff_never_exceeds_cap_after_budget_is_spent() {
+    fn reconnect_backoff_lengthens_to_idle_interval_after_budget_is_spent() {
         let mut backoff = ReconnectBackoff::new();
-        for _ in 0..(u32::from(u8::MAX) + 50) {
+        for _ in 0..u32::from(FAST_ATTEMPTS) {
             assert!(backoff.next_delay() <= Duration::from_millis(RECONNECT_MAX_MS));
         }
+        for _ in 0..50 {
+            assert_eq!(backoff.next_delay(), Duration::from_millis(IDLE_RETRY_MS));
+        }
+        backoff.reset();
         assert_eq!(
             backoff.next_delay(),
-            Duration::from_millis(RECONNECT_MAX_MS)
+            Duration::from_millis(RECONNECT_INITIAL_MS)
         );
     }
 

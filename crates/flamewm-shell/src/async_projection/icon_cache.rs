@@ -268,7 +268,8 @@ mod tests {
             cache
                 .get(&first.0, (first.1, first.2))
                 .expect("first cache hit")
-                .source.as_ref(),
+                .source
+                .as_ref(),
             "first"
         );
         cache.insert(&third.0, (third.1, third.2), test_image("third").into());
@@ -281,14 +282,16 @@ mod tests {
             cache
                 .get(&first.0, (first.1, first.2))
                 .expect("first retained")
-                .source.as_ref(),
+                .source
+                .as_ref(),
             "first"
         );
         assert_eq!(
             cache
                 .get(&third.0, (third.1, third.2))
                 .expect("third retained")
-                .source.as_ref(),
+                .source
+                .as_ref(),
             "third"
         );
     }
