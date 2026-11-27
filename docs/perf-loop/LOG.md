@@ -326,3 +326,6 @@ dock_backdrops 72% (bounded capture), elements 14% (titlebar 84% of it, ~11% of 
 
 ## u167 titlebar move without rebuild (done)
 Titlebar element cost during a drag 71 ms -> ~1 ms (elements 14% -> 2-3% of frame work); no stale-reuse lag any more. 458 tests, clippy -D warnings; title strips match the old frame within 0.07% RMSE.
+
+## CI after u167
+CI green for b7548fe2, 76cbc484, 1e0376bc, d3f427ca. Arch package runs still in progress.
