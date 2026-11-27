@@ -120,15 +120,16 @@ impl RenderElement<GlowRenderer> for RoundedMemoryElement {
 /// pixel centre and spans `w * scale / factor` texels.
 #[must_use]
 pub fn source_rect(
+    origin: (i32, i32),
     w: usize,
     h: usize,
     scale: f64,
     factor: usize,
 ) -> Rectangle<f64, smithay::utils::Logical> {
     let step = scale / factor as f64;
-    let start = 0.5 / factor as f64 - 0.5 * step;
+    let start = |origin: i32| (f64::from(origin) * scale + 0.5) / factor as f64 - 0.5 * step;
     Rectangle::new(
-        (start, start).into(),
+        (start(origin.0), start(origin.1)).into(),
         (w as f64 * step, h as f64 * step).into(),
     )
 }
@@ -140,7 +141,7 @@ mod tests {
     #[test]
     fn source_rect_places_each_output_centre_where_the_cpu_crop_sampled() {
         for scale in [1.0_f64, 1.25, 2.0] {
-            let rect = source_rect(100, 40, scale, 4);
+            let rect = source_rect((0, 0), 100, 40, scale, 4);
             for x in [0_usize, 1, 37, 99] {
                 // GPU: output pixel centre -> texel position inside the source rectangle.
                 let gpu = rect.loc.x + (x as f64 + 0.5) / 100.0 * rect.size.w;
@@ -155,6 +156,13 @@ mod tests {
                 );
             }
             assert!((rect.size.h - 40.0 * scale / 4.0).abs() < 1e-9);
+            let moved = source_rect((37, 11), 100, 40, scale, 4);
+            let cpu_x = ((37.0 + 5.0) * scale + 0.5) / 4.0;
+            let gpu_x = moved.loc.x + 5.5 / 100.0 * moved.size.w;
+            assert!(
+                (gpu_x - cpu_x).abs() < 1e-9,
+                "origin shifts the window: {gpu_x} vs {cpu_x}"
+            );
         }
     }
 }

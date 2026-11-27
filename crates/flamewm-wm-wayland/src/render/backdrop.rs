@@ -91,6 +91,10 @@ pub(super) struct DesktopBackdrop {
     /// new commit on its surface, so it changes this and triggers a recapture.
     pub(super) commits: Vec<CommitCounter>,
     pub(super) pixels: Vec<u8>,
+    /// The same reduced image as opaque little-endian BGRA, the form the GPU titlebar backdrops upload.
+    pub(super) bgra: Vec<u8>,
+    /// Bumped by every capture, so a titlebar knows its uploaded copy is stale.
+    pub(super) generation: u64,
     pub(super) captured_at: Instant,
 }
 

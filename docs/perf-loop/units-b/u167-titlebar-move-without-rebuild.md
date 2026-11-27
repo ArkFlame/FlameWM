@@ -4,3 +4,8 @@ Cause (`titlebar.rs` `element`): once the stale-reuse budget (`stale_reuse_allow
 Idea: draw two elements, as u166 does for windows: the blurred desktop (the reduced desktop capture as a GPU texture, `source_rect` at the bar's origin, GPU filter) under a cached transparent chrome overlay that is rebuilt only when width/active/maximized/title/feedback change. A move then costs no CPU pixel work.
 Constraints: titlebar corner rounding must come from the clip program or the overlay alpha; the stale-reuse logic and its tests go away or shrink; frame-diff a moved titlebar against the current one (tolerance 2/byte); one extra element per window.
 Expected shift: removes most of the ~11% titlebar share of a drag; idle desktops are unaffected (nothing rebuilds).
+
+## Result (done, u167)
+`Decorations::element` builds the bar once per (width, active, maximized, rounded, title) with no backdrop; a move or a desktop recapture rebuilds nothing. `titlebar_backdrop` draws the reduced desktop capture (per-bar upload keyed by `DesktopBackdrop.generation`) at bar size through `RoundedMemoryElement` with radii `[r, r, 0, 0]`, placed beneath the bar. `stale_reuse` (flag, constants, `reused_ok`, the extra redraw request and its test) is deleted; `source_rect` takes the bar origin.
+Drag probe, real Intel GPU, 90-step drag: elements 14% (85 ms) -> 2-3% (12-18 ms) of frame work; titlebar 71 ms -> ~1 ms. Frame read: both bars render with controls and rounded top corners; title-strip RMSE vs the pre-change frame 0.07% (Task Manager bar) and 0.01% (sh bar).
+Side effect: a wallpaper recapture no longer rebuilds every titlebar (only re-uploads the small reduced copy).

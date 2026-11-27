@@ -588,6 +588,7 @@ impl Decorations {
             &backing.buffer,
             None,
             Some(super::backing_element::source_rect(
+                (0, 0),
                 w,
                 h,
                 scale,

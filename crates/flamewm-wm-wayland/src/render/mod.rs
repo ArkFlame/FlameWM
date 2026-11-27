@@ -687,8 +687,11 @@ fn scene_elements_into(
                     ) {
                         out.push(element);
                     }
-                    if std::mem::take(&mut decorations.stale_reuse) {
-                        state.request_redraw();
+                    // The blurred desktop goes beneath the bar (front-to-back order: after it).
+                    if let Some(backdrop) =
+                        decorations.titlebar_backdrop(renderer, id, titlebar, scale)
+                    {
+                        out.push(backdrop);
                     }
                     dl.mark(stage_timers::Stage::Titlebar);
                 }

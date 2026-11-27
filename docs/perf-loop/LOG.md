@@ -323,3 +323,6 @@ Nested run with the real shell dock (`flamewm-shell` autostart): 172 backdrop ca
 
 ## Drag composition after u166
 dock_backdrops 72% (bounded capture), elements 14% (titlebar 84% of it, ~11% of the drag), draw 11%. Next unit u167: move a titlebar without rebuilding it.
+
+## u167 titlebar move without rebuild (done)
+Titlebar element cost during a drag 71 ms -> ~1 ms (elements 14% -> 2-3% of frame work); no stale-reuse lag any more. 458 tests, clippy -D warnings; title strips match the old frame within 0.07% RMSE.

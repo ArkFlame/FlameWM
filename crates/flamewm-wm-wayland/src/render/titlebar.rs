@@ -6,8 +6,6 @@ use crate::chrome_buttons::{self, Feedback};
 #[derive(Default)]
 pub struct Decorations {
     pub(super) parts: HashMap<WindowId, ChromeBuffer>,
-    /// Set when a titlebar was reused at a stale position; the caller owes one more frame.
-    pub(super) stale_reuse: bool,
     /// Blurred desktop layer (straight RGBA, output-sized) that translucent titlebars blend over.
     pub(super) desktop: Option<DesktopBackdrop>,
     /// True while a one-shot wake timer is armed to recapture the desktop after the throttle window.
@@ -97,9 +95,6 @@ pub(crate) fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub(super) struct ChromeBuffer {
-    /// When the pixels (and the baked desktop crop) were built, and how many moved frames reused them.
-    pub(super) built_at: std::time::Instant,
-    pub(super) reused: u8,
     pub(super) origin: (i32, i32),
     pub(super) width: i32,
     pub(super) active: bool,
@@ -109,26 +104,15 @@ pub(super) struct ChromeBuffer {
     /// Pointer feedback the cached pixels were drawn with.
     pub(super) feedback: Feedback,
     pub(super) title: String,
-    /// Blurred desktop under the bar, kept so one control can be repainted without a new crop.
-    pub(super) backdrop: Option<Vec<u8>>,
+    /// The bar itself: translucent fill, border and controls, with nothing under it. The blurred
+    /// desktop is a separate GPU element, so moving the bar never rebuilds these pixels.
     pub(super) buffer: MemoryRenderBuffer,
-}
-
-const MAX_STALE_FRAMES: u8 = 2;
-const STALE_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// A moved-only titlebar may reuse its baked crop while it is younger than `STALE_WINDOW` or has been
-/// reused fewer than `MAX_STALE_FRAMES` times. Past both, the next frame rebuilds it.
-fn stale_reuse_allowed(age: std::time::Duration, reused: u8) -> bool {
-    age < STALE_WINDOW || reused < MAX_STALE_FRAMES
+    /// This bar's upload of the reduced desktop capture and the capture generation it holds. Each bar
+    /// owns its buffer because an element id is the buffer's identity.
+    pub(super) desktop: Option<(u64, MemoryRenderBuffer)>,
 }
 
 impl ChromeBuffer {
-    /// A titlebar that only moved may keep its baked desktop crop for a bounded time.
-    pub(super) fn reused_ok(&self, now: std::time::Instant) -> bool {
-        stale_reuse_allowed(now.saturating_duration_since(self.built_at), self.reused)
-    }
-
     /// Repaints the controls whose hover or pressed state differs from the cached bar. Only those
     /// button rects are damaged; the rest of the bitmap and its damage bag are untouched.
     pub(super) fn repaint_feedback(&mut self, feedback: Feedback) {
@@ -147,9 +131,7 @@ impl ChromeBuffer {
             feedback.pressed,
         ];
         let rounded = self.rounded;
-        let ChromeBuffer {
-            buffer, backdrop, ..
-        } = self;
+        let ChromeBuffer { buffer, .. } = self;
         let mut ctx = buffer.render();
         for (index, target) in changed.iter().enumerate() {
             let Some(button) = *target else { continue };
@@ -169,7 +151,7 @@ impl ChromeBuffer {
             let rect =
                 Rectangle::<i32, Buffer>::new((x0, 0).into(), ((x1 - x0), TITLEBAR_HEIGHT).into());
             let _ = ctx.draw(|mem| {
-                repaint_slot(mem, w, h, rounded, backdrop.as_deref(), &slot, feedback);
+                repaint_slot(mem, w, h, rounded, None, &slot, feedback);
                 Ok::<_, std::convert::Infallible>(vec![rect])
             });
         }
@@ -305,7 +287,8 @@ impl Decorations {
         })
     }
 
-    /// Replaces the desktop capture. Titlebars and surface backdrops baked from the old one are rebuilt.
+    /// Replaces the desktop capture. Surface backdrops cropped from the old one are rebuilt; titlebars
+    /// re-upload their GPU copy when they see the new generation.
     pub(super) fn set_desktop(
         &mut self,
         size: (usize, usize),
@@ -318,12 +301,18 @@ impl Decorations {
             sw * sh * 4,
             "capture must be stored at the reduced size"
         );
-        self.parts.clear();
         self.surfaces.clear();
         self.desktop = Some(DesktopBackdrop {
             width: size.0,
             height: size.1,
             commits,
+            bgra: pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|px| [px[2], px[1], px[0], 255])
+                .collect(),
+            generation: self.desktop.as_ref().map_or(1, |d| d.generation + 1),
             pixels,
             captured_at: Instant::now(),
         });
@@ -388,51 +377,23 @@ impl Decorations {
             return None;
         }
         let origin = (rect.x, rect.y);
-        let now = std::time::Instant::now();
-        let (same_but_origin, moved) = self.parts.get(&window).map_or((false, false), |part| {
-            (
-                part.width == rect.w
-                    && part.active == active
-                    && part.maximized == maximized
-                    && part.rounded == rounded
-                    && part.title == title,
-                part.origin != origin,
-            )
+        // A moved bar is the same pixels at a new place; only its content or size rebuilds it.
+        let same = self.parts.get(&window).is_some_and(|part| {
+            part.width == rect.w
+                && part.active == active
+                && part.maximized == maximized
+                && part.rounded == rounded
+                && part.title == title
         });
-        // A moved-only bar may keep its baked desktop crop for a bounded time (the bar itself is
-        // placed at the new origin below); the caller then owes one more frame so the final
-        // position always gets a fresh crop.
-        let reuse_moved = same_but_origin
-            && moved
-            && self
-                .parts
-                .get(&window)
-                .is_some_and(|part| part.reused_ok(now));
-        let same_geometry = same_but_origin && (!moved || reuse_moved);
-        if same_geometry {
-            if reuse_moved {
-                // Only the baked blur lags the desktop for a frame or two; the bar is placed at the new origin.
-                if let Some(part) = self.parts.get_mut(&window) {
-                    part.reused += 1;
-                }
-                self.stale_reuse = true;
-            }
+        if same {
             // Only pointer feedback moved: repaint the affected controls in place.
             if let Some(part) = self.parts.get_mut(&window) {
                 part.repaint_feedback(feedback);
+                part.origin = origin;
             }
         } else {
-            // The blurred desktop is cropped at the titlebar origin, so a moved titlebar is rebuilt.
-            let backdrop = self.crop(origin, rect.w as usize, TITLEBAR_HEIGHT as usize, scale);
-            let pixels = chrome_pixels_over(
-                rect.w,
-                active,
-                maximized,
-                rounded,
-                feedback,
-                title,
-                backdrop.as_deref(),
-            );
+            let pixels =
+                chrome_pixels_over(rect.w, active, maximized, rounded, feedback, title, None);
             let buffer = MemoryRenderBuffer::from_slice(
                 &pixels,
                 Fourcc::Argb8888,
@@ -441,20 +402,19 @@ impl Decorations {
                 Transform::Normal,
                 None,
             );
+            let desktop = self.parts.remove(&window).and_then(|part| part.desktop);
             self.parts.insert(
                 window,
                 ChromeBuffer {
                     origin,
-                    built_at: std::time::Instant::now(),
-                    reused: 0,
                     width: rect.w,
                     active,
                     maximized,
                     rounded,
                     feedback,
                     title: title.to_owned(),
-                    backdrop,
                     buffer,
+                    desktop,
                 },
             );
         }
@@ -469,6 +429,69 @@ impl Decorations {
         )
         .ok()
         .map(Elem::Memory)
+    }
+
+    /// The blurred desktop under a titlebar: the reduced capture drawn at the bar's size by the GPU
+    /// (the filter does the upscale the CPU used to write per moved frame) with the bar's rounded
+    /// top corners. Placed beneath [`Self::element`]. `None` without a capture, with flat glass (the
+    /// opaque fill covers it) or without the clip program.
+    pub(super) fn titlebar_backdrop(
+        &mut self,
+        renderer: &mut GlowRenderer,
+        window: WindowId,
+        rect: Rect,
+        scale: f64,
+    ) -> Option<Elem> {
+        if glass_flat() {
+            return None;
+        }
+        let program = self.clip_program(renderer)?;
+        let desktop = self.desktop.as_ref()?;
+        let part = self.parts.get_mut(&window)?;
+        let size = stored_size((desktop.width, desktop.height));
+        if part
+            .desktop
+            .as_ref()
+            .is_none_or(|(generation, _)| *generation != desktop.generation)
+        {
+            let buffer = MemoryRenderBuffer::from_slice(
+                &desktop.bgra,
+                Fourcc::Argb8888,
+                (size.0 as i32, size.1 as i32),
+                1,
+                Transform::Normal,
+                None,
+            );
+            part.desktop = Some((desktop.generation, buffer));
+        }
+        let (_, buffer) = part.desktop.as_ref()?;
+        let radius =
+            titlebar_corner_radius(part.rounded, rect.w, TITLEBAR_HEIGHT).clamp(0, 255) as u8;
+        let radius = super::physical_radius(radius, scale);
+        let inner = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            Point::from((f64::from(rect.x) * scale, f64::from(rect.y) * scale)),
+            buffer,
+            None,
+            Some(super::backing_element::source_rect(
+                (rect.x, rect.y),
+                rect.w.max(1) as usize,
+                TITLEBAR_HEIGHT as usize,
+                scale,
+                DESKTOP_SCALE,
+            )),
+            Some(Size::from((rect.w.max(1), TITLEBAR_HEIGHT))),
+            Kind::Unspecified,
+        )
+        .ok()?;
+        Some(Elem::Backing(
+            super::backing_element::RoundedMemoryElement::new(
+                inner,
+                &program,
+                [radius, radius, 0, 0],
+                size,
+            ),
+        ))
     }
 
     /// Blurred desktop under an override-redirect surface at `rect`. Placed beneath the surface,
@@ -1015,8 +1038,6 @@ mod hover_repaint_tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let rest = Feedback::default();
         let mut buffer = ChromeBuffer {
-            built_at: std::time::Instant::now(),
-            reused: 0,
             origin: (0, 0),
             width: W,
             active: true,
@@ -1024,7 +1045,6 @@ mod hover_repaint_tests {
             rounded: false,
             feedback: rest,
             title: "Terminal".to_owned(),
-            backdrop: None,
             buffer: MemoryRenderBuffer::from_slice(
                 &bar(rest),
                 Fourcc::Argb8888,
@@ -1033,6 +1053,7 @@ mod hover_repaint_tests {
                 Transform::Normal,
                 None,
             ),
+            desktop: None,
         };
         // Same feedback: no-op, feedback stays put.
         buffer.repaint_feedback(rest);
@@ -1054,8 +1075,6 @@ mod hover_repaint_tests {
         let narrow = 10;
         let rest = Feedback::default();
         let mut buffer = ChromeBuffer {
-            built_at: std::time::Instant::now(),
-            reused: 0,
             origin: (0, 0),
             width: narrow,
             active: true,
@@ -1063,7 +1082,6 @@ mod hover_repaint_tests {
             rounded: false,
             feedback: rest,
             title: String::new(),
-            backdrop: None,
             buffer: MemoryRenderBuffer::from_slice(
                 &chrome_pixels_over(narrow, true, false, false, rest, "", None),
                 Fourcc::Argb8888,
@@ -1072,6 +1090,7 @@ mod hover_repaint_tests {
                 Transform::Normal,
                 None,
             ),
+            desktop: None,
         };
         for button in [Button::Close, Button::Minimize, Button::Maximize] {
             let feedback = Feedback {
@@ -1131,28 +1150,5 @@ mod translucent_backdrop_tests {
         // Left of the empty centred title and clear of the controls on the right.
         let at = ((h / 2) * width + 20) * 4;
         assert_eq!(&pixels[at..at + 4], &[4, 0, 60, 255]);
-    }
-}
-
-#[cfg(test)]
-mod stale_reuse_tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    #[test]
-    fn stale_reuse_is_bounded_by_age_and_by_frame_count() {
-        let young = Duration::from_millis(1);
-        // Young bars keep being reused however many frames they served.
-        assert!(stale_reuse_allowed(young, 0));
-        assert!(stale_reuse_allowed(young, MAX_STALE_FRAMES));
-        // Old bars are reused only while under the frame budget.
-        assert!(stale_reuse_allowed(STALE_WINDOW, MAX_STALE_FRAMES - 1));
-        // Past both limits the bar must rebuild.
-        assert!(!stale_reuse_allowed(STALE_WINDOW, MAX_STALE_FRAMES));
-        assert!(!stale_reuse_allowed(
-            STALE_WINDOW + Duration::from_secs(1),
-            u8::MAX
-        ));
     }
 }
