@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -39,6 +41,9 @@ pub struct Session {
     modes: (bool, bool),
     /// Output buffers the UI has finished parsing, so the reader reuses an allocation instead of making one per event.
     recycle: Sender<Vec<u8>>,
+    /// Output bytes sent to the UI and not yet parsed. The reader pauses while this is at the cap, so a
+    /// flood the UI cannot keep up with fills the PTY (and blocks the child) instead of this process's memory.
+    queued: Arc<AtomicUsize>,
 }
 
 impl Session {
@@ -56,9 +61,21 @@ impl Session {
         let reader = pty.take_reader().ok_or("pty reader missing")?;
         let notice_wake = wake.try_clone().map_err(|error| error.to_string())?;
         let (recycle, recycled) = mpsc::channel::<Vec<u8>>();
+        let queued = Arc::new(AtomicUsize::new(0));
+        let reader_queued = Arc::clone(&queued);
         std::thread::Builder::new()
             .name(format!("flamewm-terminal-read-{id}"))
-            .spawn(move || read_loop(id, reader, events, wake, notice_wake, recycled))
+            .spawn(move || {
+                read_loop(
+                    id,
+                    reader,
+                    events,
+                    wake,
+                    notice_wake,
+                    recycled,
+                    reader_queued,
+                );
+            })
             .map_err(|error| error.to_string())?;
         let modes = pty.line_modes();
         Ok(Self {
@@ -68,6 +85,7 @@ impl Session {
             screen: Screen::new(size.cols as usize, size.rows as usize, scrollback),
             modes,
             recycle,
+            queued,
         })
     }
 
@@ -96,6 +114,11 @@ impl Session {
         if !replies.is_empty() {
             let _ = self.pty.write(replies);
         }
+    }
+
+    /// Marks `len` output bytes as parsed, letting a reader paused at [`MAX_QUEUED_BYTES`] continue.
+    pub fn consumed(&self, len: usize) {
+        self.queued.fetch_sub(len, Ordering::Relaxed);
     }
 
     /// Returns an output buffer the UI finished parsing. The reader reuses it for the next batch, so a flood does not
@@ -152,6 +175,8 @@ pub const FRAME: Duration = Duration::from_millis(16);
 /// Bytes one `Output` event may carry. Data the kernel already holds is merged into one event, so a flood costs one
 /// allocation, one channel message and one banner check per batch instead of one per few-KiB read.
 const BATCH_BYTES: usize = 32 * 1024;
+/// Output bytes allowed in flight to the UI before the reader pauses (about 16 ms of a fast flood).
+const MAX_QUEUED_BYTES: usize = 4 * 1024 * 1024;
 
 /// Batches at or below this size sample the line-discipline flags: smaller output is where a prompt echo arrives, and
 /// a flood batch would otherwise pay an ioctl per 32 KiB just to read flags a running program is not changing.
@@ -168,6 +193,7 @@ fn read_loop(
     mut wake: UnixStream,
     notice_wake: UnixStream,
     recycled: Receiver<Vec<u8>>,
+    queued: Arc<AtomicUsize>,
 ) {
     let _notice = ExitNotice {
         id,
@@ -187,6 +213,12 @@ fn read_loop(
             }
             last_wake = Some(Instant::now());
             unsent = false;
+        }
+        // Backpressure: the UI has not parsed enough of what was already sent. Stop reading (the PTY
+        // fills and the child blocks) and keep the frame-cadence wake above going until it catches up.
+        if queued.load(Ordering::Relaxed) >= MAX_QUEUED_BYTES {
+            std::thread::sleep(FRAME);
+            continue;
         }
         let timeout = if unsent {
             last_wake.and_then(|at| (at + FRAME).checked_duration_since(Instant::now()))
@@ -233,6 +265,7 @@ fn read_loop(
                 let mut fresh = recycled.try_recv().unwrap_or_default();
                 fresh.reserve(next);
                 let bytes = std::mem::replace(&mut batch, fresh);
+                queued.fetch_add(bytes.len(), Ordering::Relaxed);
                 if events.send(SessionEvent::Output { id, bytes }).is_err() {
                     return;
                 }
@@ -270,13 +303,15 @@ mod tests {
             pixel_height: 0,
         };
         let started = Instant::now();
-        let _session = Session::start(1, &launch, size, 0, events_tx, writer).expect("start flood");
+        let session = Session::start(1, &launch, size, 0, events_tx, writer).expect("start flood");
         let (mut bytes, mut chunks) = (0_usize, 0_usize);
         while let SessionEvent::Output { bytes: chunk, .. } = events_rx
             .recv_timeout(Duration::from_secs(30))
             .expect("event before timeout")
         {
             bytes += chunk.len();
+            // The real UI reports each parsed batch; without it the reader would pause at the cap.
+            session.consumed(chunk.len());
             chunks += 1;
         }
         let elapsed = started.elapsed();
@@ -302,6 +337,48 @@ mod tests {
         assert!(
             wakes * 2 <= chunks,
             "{wakes} wakes for {chunks} events: no coalescing"
+        );
+    }
+
+    /// A flood the UI is not draining stops at the in-flight cap instead of growing without bound, and
+    /// resumes once the UI reports the bytes parsed.
+    #[test]
+    fn an_undrained_flood_is_capped_and_resumes_when_the_ui_catches_up() {
+        let (events_tx, events_rx) = mpsc::channel();
+        let (writer, _peer) = UnixStream::pair().expect("socket pair");
+        let launch = Launch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "yes".into()],
+            cwd: None,
+        };
+        let size = PtySize {
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let session = Session::start(1, &launch, size, 0, events_tx, writer).expect("start flood");
+        // The reader fills toward the cap (32 KiB batches), then pauses.
+        std::thread::sleep(Duration::from_secs(2));
+        let before = session.queued.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(300));
+        let after = session.queued.load(Ordering::Relaxed);
+        assert!(
+            after <= MAX_QUEUED_BYTES + BATCH_BYTES,
+            "queued {after} bytes, cap {MAX_QUEUED_BYTES}"
+        );
+        assert_eq!(before, after, "a paused reader queues nothing more");
+        // The UI drains and reports everything: the reader continues.
+        let mut drained = 0_usize;
+        while let Ok(SessionEvent::Output { bytes, .. }) = events_rx.try_recv() {
+            drained += bytes.len();
+            session.consumed(bytes.len());
+        }
+        assert!(drained > 0, "something was queued");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            session.queued.load(Ordering::Relaxed) > 0,
+            "output resumes after the UI catches up"
         );
     }
 }
