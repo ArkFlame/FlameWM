@@ -21,6 +21,9 @@ use pulse::volume::{ChannelVolumes, Volume};
 
 const APPLICATION_NAME: &str = "FlameWM";
 const RETRY_TIMER_SEED: Duration = Duration::from_secs(86_400);
+/// Keep-alive probe once the fast reconnect backoff is exhausted. Without it the adapter stops
+/// retrying permanently, so a backend started later in the session is never picked up.
+const SLOW_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_TEXT_MAX_CHARS: usize = 128;
 
 type SnapshotCallback = dyn FnMut(AudioSnapshot) + Send + 'static;

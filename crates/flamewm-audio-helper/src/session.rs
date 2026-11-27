@@ -200,6 +200,38 @@ mod tests {
     }
 
     #[test]
+    fn readiness_wait_backs_off_instead_of_tight_polling() {
+        struct CountingBackend {
+            polls: RefCell<Vec<Instant>>,
+        }
+        impl Backend for CountingBackend {
+            fn snapshot(&self) -> AudioSnapshot {
+                self.polls.borrow_mut().push(Instant::now());
+                AudioSnapshot::default()
+            }
+            fn set_volume(&self, _: AudioVolumeAction) -> FlameResult<()> {
+                Ok(())
+            }
+            fn set_mute(&self, _: AudioMuteAction) -> FlameResult<()> {
+                Ok(())
+            }
+        }
+
+        let backend = CountingBackend {
+            polls: RefCell::new(Vec::new()),
+        };
+        assert!(!wait_until_ready(&backend, Duration::from_millis(260)));
+        let polls = backend.polls.borrow();
+        assert!(polls.len() <= 6, "too many probes: {}", polls.len());
+        let first_gap = polls[1] - polls[0];
+        let last_gap = polls[polls.len() - 1] - polls[polls.len() - 2];
+        assert!(
+            last_gap > first_gap,
+            "probe interval must grow: {first_gap:?} -> {last_gap:?}"
+        );
+    }
+
+    #[test]
     fn get_before_ready_publishes_the_ready_snapshot() {
         let backend = FakeBackend::default();
         let ready = Arc::clone(&backend.ready);

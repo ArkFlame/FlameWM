@@ -24,3 +24,5 @@ HOUR 4 RESULT: slot 2 cargo check --tests exit 0 for shell, wm-wayland, wm-x11, 
 OPEN (from hour 4 warnings): platform/src/storage.rs quarantine_and_report + quarantine_unparsable are dead outside their own test (load.rs has its own quarantine) -> remove or unify; terminal/src/theme.rs:11 unused import builtin_themes. cleanup_own_temps now called at host start (UNBUILT).
 | 2026-11-27T16:01-03:00 | cargo test -p platform session-core wm-x11 wm-wayland integrations-linux (pool idle, 429 backoff) | hour 5 slot 1 |
 HOUR 5 slot 1: platform/session-core/wm-x11/integrations-linux tests ran; platform had 5 fails (corrupt_name './' prefix; cleanup_own_temps racing parallel tests) fixed, 415/415 x2.
+| 2026-11-27T16:12-03:00 | cargo test wm-wayland shell desktop lock terminal | hour 5 slot 2 |
+HOUR 5 slot 2: tests render-core/wm-wayland/shell/desktop/lock/terminal ran, 517+ pass. Fixed worker compile errors (glyph_bytes init, lock Arc deref); regenerated stale layout golden for usage + notification-center (stale since eba95409). Pool idle on 429 until ~16:25.

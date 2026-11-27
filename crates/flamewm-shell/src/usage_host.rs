@@ -226,7 +226,12 @@ mod tests {
             rx
         }));
         assert!(!host.due(start), "a fetch is in flight");
-        tx.send(vec![snapshot(UsageProvider::Claude)]).unwrap();
+        tx.send(vec![ProviderSnapshot {
+            provider: UsageProvider::Claude,
+            state: ProviderState::Ready(vec![]),
+            updated_at: Some(1),
+        }])
+        .unwrap();
         assert!(host.tick(start, |_| panic!(
             "no fetch while in flight or inside the interval"
         )));

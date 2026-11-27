@@ -141,12 +141,11 @@ impl App {
         }
         let font = (self.config.font_size, self.config.font_family.clone());
         doc.font_family(font.1.clone())?;
-        let pool = self.pool();
-        for row in 0..pool.rows {
-            for slot in 0..pool.runs {
-                doc.font_size(&run_id(row, slot), f32::from(self.config.font_size))?;
-            }
-        }
+        // The per-node font-size override is now written by `write_run` on a node's first visible write.
+        // The compiled pool reserves up to 18,432 run slots (tier 2); setting the override on every slot at
+        // startup made unused rows, including rows only reached by the settings/search/menu overlays, retain
+        // document style state from launch. Nodes are hidden until that first write, so deferring the setter
+        // is pixel-identical; clearing rows and slots below re-applies it to every shown node on a font change.
         self.ui.font = Some(font);
         self.ui.rows.clear();
         // The new font changes every box and the node's font size, so forget the written attributes too.
@@ -176,8 +175,18 @@ impl UiCache {
             .empty
             .get_or_insert_with(|| Row::from(Vec::new()))
             .clone();
+        // `project_font` records the active size before any rows are written. Direct callers (tests and the
+        // projection bench) have no configured size, where 0 only feeds the counting recorder.
+        let font_size = self.font.as_ref().map_or(0, |(size, _)| *size);
         for row in 0..pool.rows {
-            self.project_row(doc, pool, cell, row, frame.get(row).unwrap_or(&empty))?;
+            self.project_row(
+                doc,
+                pool,
+                cell,
+                font_size,
+                row,
+                frame.get(row).unwrap_or(&empty),
+            )?;
         }
         Ok(())
     }
@@ -189,6 +198,7 @@ impl UiCache {
         doc: &mut impl UiDocumentAccess,
         pool: Pool,
         cell: (f32, f32),
+        font_size: u16,
         row: usize,
         runs: &Row,
     ) -> Result<(), String> {
@@ -222,6 +232,7 @@ impl UiCache {
                 Self::write_run(
                     doc,
                     cell,
+                    font_size,
                     &id,
                     run,
                     row,
@@ -241,6 +252,7 @@ impl UiCache {
     fn write_run(
         doc: &mut impl UiDocumentAccess,
         cell: (f32, f32),
+        font_size: u16,
         id: &str,
         run: &Run,
         row: usize,
@@ -280,6 +292,9 @@ impl UiCache {
         if !state.visible {
             doc.position(id, x, y)?;
             doc.size(id, w, h)?;
+            // Lazy font-size: only the nodes actually shown carry their own override. Hidden pool slots,
+            // including rows reached only by the settings/search/menu overlays, never allocate one.
+            doc.font_size(id, f32::from(font_size))?;
             doc.foreground(id, UiColor::from_rgb(run.fg, 255))?;
             match run.bg {
                 Some(bg) => doc.background(id, UiColor::from_rgb(bg, 255))?,

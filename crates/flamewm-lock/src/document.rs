@@ -244,7 +244,7 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         }
         (LockBackgroundMode::Default, _) => Some(RuntimeImage::from_rgba(
             BUILTIN_BACKGROUND_SOURCE.to_string(),
-            cover_rgba(&builtin_background()?, width, height)?,
+            cover_rgba(&*builtin_background()?, width, height)?,
         )),
         // Solid colour, or a custom mode without a saved path: the caller paints the colour.
         _ => None,

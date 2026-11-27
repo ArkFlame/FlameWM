@@ -480,42 +480,6 @@ pub(crate) fn stage_line(stage: Stage, status: StageStatus, detail: &str) {
     }
 }
 
-/// X11 is optional: record a missing or crashed XWayland exactly once, drop autostart so no X11 app
-/// is launched and the content deadline cannot turn the skip into a session-ending failure, and leave
-/// the Wayland session running. Smithay disables its source after `Error`, so there is no respawn loop
-/// to bound here.
-static XWAYLAND_FAILURE_REPORTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub(crate) fn note_xwayland_unavailable(state: &mut State, detail: &str) {
-    if XWAYLAND_FAILURE_REPORTED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    stage_line(Stage::Xwayland, StageStatus::Fail, detail);
-    use flamewm_session_core::diagnostics::{
-        BlastRadius, FailureCode, FailureRecord, append_record,
-    };
-    let record = FailureRecord::at_now(
-        "xwayland",
-        FailureCode::SubsystemError,
-        detail.to_owned(),
-        BlastRadius::new(
-            [
-                "process",
-                "session_log",
-                "wayland_socket",
-                "wayland_clients",
-            ],
-            ["x11_clients", "autostart"],
-        ),
-        false,
-    );
-    if let Err(error) = append_record(&backend_failure_log_path(), &record) {
-        eprintln!("flamewm-wayland: failure record write failed: {error}");
-    }
-    state.autostart.clear();
-}
-
 fn stage_reported(stage: Stage) -> bool {
     REPORTED_STAGES.load(Ordering::Relaxed) & (1u8 << stage.code()) != 0
 }
@@ -897,14 +861,20 @@ fn run() -> Result<i32, Box<dyn Error>> {
             Some(client)
         }
         Some(Err(error)) => {
+            stage_line(
+                Stage::Xwayland,
+                StageStatus::Fail,
+                &xwayland_unavailable_detail(&error),
+            );
             eprintln!(
                 "flamewm-wayland: XWayland unavailable ({error}); continuing without X11 clients"
             );
-            note_xwayland_unavailable(&mut state, &xwayland_unavailable_detail(&error));
+            state.autostart.clear();
             None
         }
         None => {
-            note_xwayland_unavailable(&mut state, "panic");
+            stage_line(Stage::Xwayland, StageStatus::Fail, "panic");
+            state.autostart.clear();
             None
         }
     };

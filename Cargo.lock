@@ -926,6 +926,7 @@ dependencies = [
  "flamewm-render-compiler",
  "flamewm-ui-core",
  "flamewm-ui-x11",
+ "imagesize",
 ]
 
 [[package]]

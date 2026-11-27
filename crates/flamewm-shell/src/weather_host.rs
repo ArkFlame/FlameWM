@@ -184,6 +184,10 @@ impl WeatherHost {
         if became_active {
             self.fetch_on_open = true;
         }
+        if !settings.enabled || location_changed || became_active {
+            self.consecutive_failures = 0;
+            self.retry_at = None;
+        }
         self.settings = settings;
         let state = std::mem::replace(&mut self.state, WeatherState::Disabled);
         self.state = state.begin_refresh(&self.settings);
@@ -200,14 +204,20 @@ impl WeatherHost {
             return false;
         }
         self.fetch_on_open
-            || self
-                .last_started
-                .is_some_and(|started| now.duration_since(started) >= WEATHER_REFRESH_INTERVAL)
+            || match self.retry_at {
+                // A failed fetch owns the schedule until it succeeds: the normal periodic
+                // interval must not cut short an in-progress exponential backoff.
+                Some(retry_at) => now >= retry_at,
+                None => self
+                    .last_started
+                    .is_some_and(|started| now.duration_since(started) >= WEATHER_REFRESH_INTERVAL),
+            }
     }
 
     /// Instant the next refresh becomes due, for the shell wake slot. `None` while weather is
     /// disabled or has no location (the tick then never fetches) and while a fetch is in flight:
-    /// its completion worker wakes the loop through the result socket.
+    /// its completion worker wakes the loop through the result socket. After a failure this is a
+    /// single one-shot retry deadline, so the wait itself costs no idle wakeups.
     #[must_use]
     pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
         if !self.settings.enabled || self.settings.location.is_none() || self.inflight.is_some() {
@@ -216,8 +226,10 @@ impl WeatherHost {
         if self.fetch_on_open {
             return Some(now);
         }
-        self.last_started
-            .map(|started| started + WEATHER_REFRESH_INTERVAL)
+        self.retry_at.or_else(|| {
+            self.last_started
+                .map(|started| started + WEATHER_REFRESH_INTERVAL)
+        })
     }
 
     /// Advances the scheduler: applies a finished fetch, then starts one if due.
@@ -240,8 +252,16 @@ impl WeatherHost {
         };
         if let Some(result) = polled {
             self.inflight = None;
+            let failed = result.is_err();
             let state = std::mem::replace(&mut self.state, WeatherState::Disabled);
             self.state = state.finish_refresh(result);
+            if failed {
+                self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+                self.retry_at = Some(now + weather_retry_delay(self.consecutive_failures));
+            } else {
+                self.consecutive_failures = 0;
+                self.retry_at = None;
+            }
             changed = true;
         }
         if self.fetch_due(now) {
@@ -250,6 +270,9 @@ impl WeatherHost {
                 self.state = state.begin_refresh(&self.settings);
                 self.last_started = Some(now);
                 self.fetch_on_open = false;
+                // A user-opened or due fetch supersedes the pending retry; the next failure
+                // moves the counter forward again.
+                self.retry_at = None;
                 self.inflight = Some(Arc::new(Mutex::new(fetch(location))));
                 changed = true;
             }
@@ -530,6 +553,48 @@ mod tests {
         assert_eq!(calls.get(), 2, "still inside the 30 minute window");
         host.tick(start + WEATHER_REFRESH_INTERVAL, fetch);
         assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn failures_back_off_exponentially_with_a_cap_and_no_idle_wake() {
+        fn fail(_: WeatherLocation) -> mpsc::Receiver<WeatherResult> {
+            answer(Err(WeatherError::Transport))
+        }
+
+        let start = Instant::now();
+        let mut host = WeatherHost::new();
+        host.apply_settings(settings(true, true));
+        assert_eq!(
+            host.next_deadline(start),
+            Some(start),
+            "open fetch is immediate"
+        );
+        host.tick(start, fail);
+        host.tick(start, fail);
+
+        let mut at = start;
+        let mut delay = WEATHER_RETRY_BASE;
+        for _ in 0..7 {
+            assert_eq!(host.next_deadline(at), Some(at + delay));
+            assert!(!host.fetch_due(at + delay - Duration::from_secs(1)));
+            assert!(host.fetch_due(at + delay));
+            at += delay;
+            host.tick(at, fail);
+            assert_eq!(host.next_deadline(at), None, "in flight arms no idle wake");
+            host.tick(at, fail);
+            delay = (delay * 2).min(WEATHER_REFRESH_INTERVAL);
+        }
+        assert_eq!(delay, WEATHER_REFRESH_INTERVAL, "backoff is capped");
+        assert_eq!(host.next_deadline(at), Some(at + WEATHER_REFRESH_INTERVAL));
+
+        let recovered = at + WEATHER_REFRESH_INTERVAL;
+        host.tick(recovered, |_| fixture_rx());
+        host.tick(recovered, |_| fixture_rx());
+        assert_eq!(
+            host.next_deadline(recovered),
+            Some(recovered + WEATHER_REFRESH_INTERVAL),
+            "a success restores the normal interval"
+        );
     }
 
     #[test]

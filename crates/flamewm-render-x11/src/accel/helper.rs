@@ -72,35 +72,50 @@ impl RemoteGpu {
             request: Vec::new(),
             reply: Vec::new(),
         };
-        read_reply_with_deadline(&mut remote.child, &mut remote.stdout, &mut remote.reply)?;
+        pipe_exchange_with_deadline(
+            &mut remote.child,
+            None,
+            &mut remote.stdout,
+            &mut remote.reply,
+        )?;
         remote.device = String::from_utf8_lossy(reply_payload(&remote.reply)?).into_owned();
         Ok(remote)
     }
 
-    /// Sends `self.request` and reads the reply into `self.reply`.
+    /// Sends `self.request` and reads the reply into `self.reply`, both under one deadline.
     fn exchange(&mut self) -> Result<(), String> {
-        write_message(&mut self.stdin, &self.request)?;
-        read_reply_with_deadline(&mut self.child, &mut self.stdout, &mut self.reply)
+        pipe_exchange_with_deadline(
+            &mut self.child,
+            Some((&mut self.stdin, self.request.as_slice())),
+            &mut self.stdout,
+            &mut self.reply,
+        )
     }
 }
 
-/// Reads one helper reply with a deadline. A hung child must not block the paint thread forever:
-/// the blocking read runs on a scoped thread, and when no reply arrives before the deadline the
-/// child is killed, which closes the pipe so the reader unwinds too. The caller turns the timeout
-/// error into `FallbackReason::DeviceLost` and paints the frame on the CPU raster.
-fn read_reply_with_deadline(
+/// Runs one helper pipe exchange under a deadline. The request write and the reply read share one
+/// scoped thread, so a child that stops reading stdin (a full pipe would block `write_all`) or
+/// stops replying is killed and the paint thread is released instead of stalling. The caller turns
+/// the timeout error into `FallbackReason::DeviceLost` and paints the frame on the CPU raster.
+fn pipe_exchange_with_deadline(
     child: &mut Child,
+    send: Option<(&mut ChildStdin, &[u8])>,
     stdout: &mut ChildStdout,
     reply: &mut Vec<u8>,
 ) -> Result<(), String> {
-    const REPLY_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
+    const EXCHANGE_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(move || {
-            let outcome = read_message(stdout, reply);
+            let outcome = match send {
+                Some((stdin, request)) => {
+                    write_message(stdin, request).and_then(|()| read_message(stdout, reply))
+                }
+                None => read_message(stdout, reply),
+            };
             let _ = tx.send(outcome);
         });
-        match rx.recv_timeout(REPLY_DEADLINE) {
+        match rx.recv_timeout(EXCHANGE_DEADLINE) {
             Ok(result) => result,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let _ = child.kill();

@@ -99,10 +99,10 @@ fn present_x11(username: &str) -> ExitCode {
     };
     let settings = session::load_settings();
     let result = flamewm_lock::run::run(session, &settings, username);
-    // The X11 lock surfaces are gone on either outcome. Release the decoded wallpaper held in
-    // the process-local cache now instead of leaving it resident until process exit; a later
-    // lock show re-reads the same on-disk entry, so the pixels are unchanged.
-    flamewm_image_core::decode_cache::release_shared_raster();
+    // The X11 lock surfaces are gone on either outcome. Release the process-local decoded
+    // wallpapers (built-in and custom) now instead of leaving them resident until process exit;
+    // a later lock show re-reads the same bytes, so the pixels are unchanged.
+    document::release_wallpaper_caches();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -176,11 +176,11 @@ fn present_wayland(username: &str) -> ExitCode {
         }
         paint_document(&runtime, width, height, 1.0)
     });
-    // The lock surfaces are gone on either outcome. Drop the cached output-sized raster and
-    // the process-local decoded source before returning; a later lock show re-reads the same
-    // on-disk decode entry, so the pixels are unchanged.
+    // The lock surfaces are gone on either outcome. Drop the cached output-sized raster and the
+    // process-local decoded wallpapers (built-in and custom) before returning; a later lock show
+    // re-reads the same bytes, so the pixels are unchanged.
     cache.borrow_mut().take();
-    flamewm_image_core::decode_cache::release_shared_raster();
+    document::release_wallpaper_caches();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

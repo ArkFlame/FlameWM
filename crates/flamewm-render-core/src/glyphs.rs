@@ -70,12 +70,20 @@ struct AdvanceEntry {
     used: u64,
 }
 
+/// Byte budget for cached glyph bitmaps. The entry cap alone does not bound memory: one glyph
+/// rasterized at a huge size can be megabytes, so a stream of such sizes could still grow without
+/// limit. Coverage dominates each entry, so this counts coverage bytes.
+const GLYPH_BYTE_CAP: usize = 8 * 1024 * 1024;
+
 struct FontCache {
     font: Font,
     glyphs: HashMap<(char, u32), GlyphEntry>,
+    /// Coverage bytes held by `glyphs`, kept in sync on insert, eviction and trim.
+    glyph_bytes: usize,
     /// Advance widths of characters measured but never painted. Layout measures every word of a
     /// line (and every candidate line) through `advance`; without this table each measure re-scales
-    /// the same glyph in `fontdue` and re-rasterizes nothing. Bounded like `glyphs`.
+    /// the same glyph in `fontdue` and re-rasterizes nothing. Entries are fixed-size and capped by
+    /// `CACHE_LIMIT`, so this table is already byte-bounded.
     advances: HashMap<(char, u32), AdvanceEntry>,
     /// Monotonic use counter shared by both tables; wrapping only costs eviction order.
     uses: u64,
@@ -87,21 +95,30 @@ impl FontCache {
         self.uses
     }
 
-    /// Drops the least recently used glyph when the cap is reached, instead of wiping every
-    /// bitmap: a sustained stream of new sizes then costs one re-raster instead of a full
-    /// re-raster of the whole visible set on the next frame.
-    fn make_room_for_glyph(&mut self) {
-        if self.glyphs.len() < CACHE_LIMIT {
-            return;
+    /// Evicts least-recently-used glyphs until both the entry and byte caps admit `incoming`
+    /// coverage bytes. A glyph bigger than the whole budget is not cached: the caller still gets
+    /// its freshly rasterized mask, so pixels stay identical and one entry cannot blow the cap.
+    /// A sustained stream of new sizes costs one re-raster instead of a full visible-set reset.
+    fn make_room_for_glyph(&mut self, incoming: usize) -> bool {
+        if incoming > GLYPH_BYTE_CAP {
+            return false;
         }
-        if let Some(key) = self
-            .glyphs
-            .iter()
-            .min_by_key(|(_, entry)| entry.used)
-            .map(|(key, _)| *key)
+        while self.glyphs.len() >= CACHE_LIMIT
+            || self.glyph_bytes.saturating_add(incoming) > GLYPH_BYTE_CAP
         {
-            self.glyphs.remove(&key);
+            let Some(key) = self
+                .glyphs
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| *key)
+            else {
+                break;
+            };
+            if let Some(entry) = self.glyphs.remove(&key) {
+                self.glyph_bytes = self.glyph_bytes.saturating_sub(entry.mask.coverage.len());
+            }
         }
+        true
     }
 
     /// Same policy for the advance table, whose entries are much smaller but just as cold.
@@ -228,14 +245,17 @@ impl Run<'_> {
             height: metrics.height,
             coverage,
         });
-        self.cache.make_room_for_glyph();
-        self.cache.glyphs.insert(
-            key,
-            GlyphEntry {
-                mask: Arc::clone(&glyph),
-                used: tick,
-            },
-        );
+        let bytes = glyph.coverage.len();
+        if self.cache.make_room_for_glyph(bytes) {
+            self.cache.glyphs.insert(
+                key,
+                GlyphEntry {
+                    mask: Arc::clone(&glyph),
+                    used: tick,
+                },
+            );
+            self.cache.glyph_bytes += bytes;
+        }
         glyph
     }
 
@@ -281,6 +301,7 @@ fn with_run<R>(px: f32, f: impl FnOnce(&mut Run<'_>) -> R) -> Option<R> {
             glyphs: HashMap::new(),
             advances: HashMap::new(),
             uses: 0,
+            glyph_bytes: 0,
         }));
     }
     let cache = guard.as_mut()?.as_mut()?;
