@@ -93,6 +93,19 @@ fn glyph_source(text: &str, size: f32, x: f32, y: f32, color: [u8; 4]) -> Prepar
 }
 
 /// One source per `Text`, `TextShadow` and `Image` command, in command order.
+/// The document holds straight RGBA8 but `PixelOp::BlendImage` composites premultiplied pixels;
+/// handing it straight edges left a dark fringe on every soft-edged image.
+fn premultiplied(straight: &[u8]) -> Vec<u8> {
+    let mut out = straight.to_vec();
+    for px in out.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(px[3]);
+        for c in &mut px[..3] {
+            *c = ((u16::from(*c) * alpha + 127) / 255) as u8;
+        }
+    }
+    out
+}
+
 fn prepare_sources(commands: &[PaintCommand], document: &RuntimeDocument) -> Vec<Prepared> {
     let mut sources = Vec::new();
     for command in commands {
@@ -123,7 +136,7 @@ fn prepare_sources(commands: &[PaintCommand], document: &RuntimeDocument) -> Vec
                 // The document already holds the decoded pixels for this node.
                 let (width, height, rgba) = match document.image_for_node(*node) {
                     Some((_asset, image_width, image_height, _revision, pixels)) => {
-                        (image_width, image_height, pixels.to_vec())
+                        (image_width, image_height, premultiplied(pixels))
                     }
                     None => (0, 0, Vec::new()),
                 };
@@ -185,6 +198,15 @@ pub fn paint_document(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_pixels_are_premultiplied_for_the_software_blend() {
+        assert_eq!(
+            super::premultiplied(&[255, 255, 255, 128, 10, 20, 30, 255]),
+            [128, 128, 128, 128, 10, 20, 30, 255]
+        );
+        assert_eq!(super::premultiplied(&[200, 100, 50, 0]), [0, 0, 0, 0]);
+    }
+
     use super::*;
     use flamewm_render_core::{CompiledDocument, CompiledNode, NodeKind, RuntimeDocument, Style};
     use std::sync::Arc;
