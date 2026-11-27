@@ -8,7 +8,7 @@ use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 
 use crate::store::FOLLOW_FLAMEWM;
-use crate::themes::{DEFAULT_PALETTE, Palette, Theme, builtin_themes};
+use crate::themes::{DEFAULT_PALETTE, Palette, Theme};
 
 /// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
 pub const DEFAULT_ACCENT: u32 = 0x003D_AEE9;
@@ -122,6 +122,7 @@ pub fn window_backdrop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::themes::builtin_themes;
 
     #[test]
     fn opacity_percent_scales_to_alpha() {
