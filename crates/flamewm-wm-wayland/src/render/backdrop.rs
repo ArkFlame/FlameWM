@@ -87,7 +87,7 @@ pub(super) struct DesktopBackdrop {
 /// Bilinear in stored-pixel space, clamped to the edges. The column indices and weights depend only
 /// on `x`, so they are computed once instead of once per row, and each row's two source rows and
 /// weight are hoisted out of the pixel loop, and the vertical blend is done once per row, so a pixel
-/// costs one horizontal lerp per channel. Matches the per-pixel reference to within 1 per byte
+/// costs one horizontal lerp per channel. Fixed-point (10-bit weights). Matches the per-pixel reference to within 1 per byte
 /// (float rounding order).
 pub(super) fn crop_capture(
     pixels: &[u8],
@@ -104,35 +104,40 @@ pub(super) fn crop_capture(
     let stored_scale = DESKTOP_SCALE as f32;
     let scale = scale as f32;
     // Per column: byte offsets of the two source pixels and the horizontal weight.
-    let columns: Vec<(usize, usize, f32)> = (0..w)
+    let columns: Vec<(usize, usize, u32)> = (0..w)
         .map(|x| {
             let ox = ((origin.0 + x as i32) as f32 * scale).clamp(0.0, (src.0 as i32 - 1) as f32);
             let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (sw - 1) as f32);
             let x0 = fx as usize;
-            (x0 * 4, (x0 + 1).min(sw - 1) * 4, fx - x0 as f32)
+            (
+                x0 * 4,
+                (x0 + 1).min(sw - 1) * 4,
+                ((fx - x0 as f32) * 1024.0 + 0.5) as u32,
+            )
         })
         .collect();
     let mut out = vec![0_u8; w * h * 4];
     // The two source rows of an output row blended vertically, one value per stored sample.
-    let mut blended = vec![0.0_f32; sw * 4];
+    let mut blended = vec![0_u32; sw * 4];
     for (y, out_row) in out.chunks_exact_mut(w * 4).enumerate() {
         // Output pixel centre mapped into stored space, clamped to the output edges.
         let oy = ((origin.1 + y as i32) as f32 * scale).clamp(0.0, (src.1 as i32 - 1) as f32);
         let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (sh - 1) as f32);
         let y0 = fy as usize;
         let y1 = (y0 + 1).min(sh - 1);
-        let ty = fy - y0 as f32;
+        let ty = ((fy - y0 as f32) * 1024.0 + 0.5) as u32;
         let top_row = &pixels[y0 * sw * 4..(y0 + 1) * sw * 4];
         let bottom_row = &pixels[y1 * sw * 4..(y1 + 1) * sw * 4];
+        // 10-bit fixed point: a blended sample is at most 255 << 10, so the horizontal blend
+        // (<= 255 << 20) fits u32 and one shift rounds it.
         for ((value, &top), &bottom) in blended.iter_mut().zip(top_row).zip(bottom_row) {
-            let top = f32::from(top);
-            *value = top + (f32::from(bottom) - top) * ty;
+            *value = u32::from(top) * (1024 - ty) + u32::from(bottom) * ty;
         }
         let (pixels4, _) = out_row.as_chunks_mut::<4>();
         for (pixel, &(i0, i1, tx)) in pixels4.iter_mut().zip(&columns) {
             for (c, value) in pixel.iter_mut().enumerate() {
-                let (left, right) = (blended[i0 + c], blended[i1 + c]);
-                *value = (left + (right - left) * tx).round().clamp(0.0, 255.0) as u8;
+                let sample = blended[i0 + c] * (1024 - tx) + blended[i1 + c] * tx;
+                *value = ((sample + (1 << 19)) >> 20) as u8;
             }
         }
     }
