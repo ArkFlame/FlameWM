@@ -91,12 +91,20 @@ pub fn project_start_error(
 pub enum ProgramRow<'a> {
     Header(char),
     App(&'a DesktopApplication),
+    /// Power entry pinned at the bottom of All Programs.
+    Session(flamewm_api::session::SessionAction),
 }
 
 impl ProgramRow<'_> {
     #[must_use]
     pub fn is_app(&self) -> bool {
         matches!(self, Self::App(_))
+    }
+
+    /// True for rows the highlight and Enter may land on: apps and session entries.
+    #[must_use]
+    pub fn is_selectable(&self) -> bool {
+        !matches!(self, Self::Header(_))
     }
 }
 
@@ -167,6 +175,11 @@ fn all_programs_rows<'a>(
                 .map(|index| ProgramRow::App(&applications[index])),
         );
     }
+    rows.extend([
+        ProgramRow::Session(flamewm_api::session::SessionAction::Suspend),
+        ProgramRow::Session(flamewm_api::session::SessionAction::Reboot),
+        ProgramRow::Session(flamewm_api::session::SessionAction::Shutdown),
+    ]);
     rows
 }
 
@@ -201,7 +214,7 @@ pub fn start_selectable_window(
         .iter()
         .skip(first)
         .take(count)
-        .map(ProgramRow::is_app)
+        .map(|row| row.is_selectable())
         .collect()
 }
 
@@ -214,7 +227,7 @@ pub fn start_application_for_slot(
 ) -> Option<flamewm_api::DesktopAppId> {
     match start_program_rows(model, category, query).get(slot)? {
         ProgramRow::App(application) => Some(application.id.clone()),
-        ProgramRow::Header(_) => None,
+        ProgramRow::Header(_) | ProgramRow::Session(_) => None,
     }
 }
 
@@ -228,7 +241,7 @@ pub fn start_application_name_for_slot(
 ) -> Option<String> {
     match start_program_rows(model, category, query).get(slot)? {
         ProgramRow::App(application) => Some(application.name.clone()),
-        ProgramRow::Header(_) => None,
+        ProgramRow::Header(_) | ProgramRow::Session(_) => None,
     }
 }
 
@@ -415,11 +428,15 @@ mod all_programs_rule_tests {
             .map(|row| match row {
                 ProgramRow::Header(letter) => format!("#{letter}"),
                 ProgramRow::App(app) => app.name.clone(),
+                ProgramRow::Session(_) => "session".to_owned(),
             })
             .collect();
         assert_eq!(
             labels,
-            ["##", "9Lives", "~tilde", "#A", "Alpha", "apple", "#B", "beta", "#Z", "Zed"]
+            [
+                "##", "9Lives", "~tilde", "#A", "Alpha", "apple", "#B", "beta", "#Z", "Zed", "session",
+                "session", "session"
+            ]
         );
     }
 

@@ -155,6 +155,7 @@ mod tests {
         "startup",
         "defaults",
         "assistant",
+        "usage",
         "about",
     ];
 
@@ -334,7 +335,7 @@ mod tests {
         let end = wrapper.find("</nav>").unwrap_or(wrapper.len());
         let rows = wrapper[..end].matches("class=\"nav-row\"").count();
         assert_eq!(
-            rows, 17,
+            rows, 18,
             "every settings page row must sit inside the scroll wrapper"
         );
     }

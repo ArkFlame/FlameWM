@@ -120,8 +120,25 @@ impl State {
                 } else {
                     self.last_title_click = None;
                 }
+            } else if let Some(Grab::Resize {
+                id,
+                pointer,
+                start,
+                edge,
+            }) = self.grab
+            {
+                // Resize grabs are not title clicks. Outline mode commits the final rectangle now,
+                // in one configure, so the content updates the instant the button is released.
+                self.last_title_click = None;
+                if !self.show_content_while_dragging {
+                    let dx = (self.pointer.x - pointer.0).round() as i32;
+                    let dy = (self.pointer.y - pointer.1).round() as i32;
+                    self.model.set_rect(id, edge.resized(start, dx, dy));
+                    self.apply_geometry(id);
+                }
+                self.snap_preview.hide();
+                self.request_paint();
             } else if self.grab.is_some() {
-                // Resize grabs are not title clicks.
                 self.last_title_click = None;
             }
             self.grab = None;

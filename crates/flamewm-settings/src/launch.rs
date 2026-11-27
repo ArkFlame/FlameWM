@@ -97,6 +97,7 @@ fn parse_page(value: &str) -> Option<(SettingsPage, AppearanceTab)> {
         "startup" => Some((SettingsPage::Startup, AppearanceTab::Theme)),
         "defaults" => Some((SettingsPage::Defaults, AppearanceTab::Theme)),
         "assistant" => Some((SettingsPage::Assistant, AppearanceTab::Theme)),
+        "usage" => Some((SettingsPage::Usage, AppearanceTab::Theme)),
         "about" => Some((SettingsPage::About, AppearanceTab::Theme)),
         _ => None,
     }

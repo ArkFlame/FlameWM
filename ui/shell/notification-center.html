@@ -3,19 +3,20 @@
 <head>
   <meta charset="utf-8">
   <title>FlameWM notification center</title>
+  <link rel="stylesheet" href="../base/tokens.css">
   <link rel="stylesheet" href="flamewm.css">
   <style>
     body { margin:0px; }
-    .tray-popup.notification-center-popup { position:absolute; left:0px; top:0px; width:380px; height:520px; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:24px; background:var(--surface); }
-    .nc-header { position:relative; height:48px; display:flex; flex-direction:row; align-items:center; padding:0px var(--sp-5); gap:10px; }
+    .tray-popup.notification-center-popup { box-sizing:border-box; width:380px; height:520px; gap:0px; }
+    .nc-header { position:relative; height:40px; display:flex; flex-direction:row; align-items:center; gap:10px; }
     .nc-title { flex-grow:1; font-size:var(--fs-lg); font-weight:600; color:var(--text); }
     .nc-clear { height:28px; padding:0px var(--sp-4); display:flex; align-items:center; justify-content:center; background:#ffffff1f; border-width:0px; border-radius:var(--r-pill); font-size:var(--fs-sm); font-weight:600; color:var(--text); }
-    .nc-toggles { height:52px; padding:6px var(--sp-5); display:flex; flex-direction:row; align-items:center; gap:10px; }
+    .nc-toggles { height:48px; padding:6px 0px; display:flex; flex-direction:row; align-items:center; gap:10px; }
     .nc-toggle { flex:1; height:36px; display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:0px var(--sp-4); background:#ffffff14; border-width:0px; border-radius:var(--r-lg); font-size:var(--fs-md); color:var(--text); }
     .nc-toggle-state { font-size:var(--fs-sm); font-weight:600; color:var(--text); }
-    .nc-list { position:relative; height:400px; overflow-y:auto; }
-    .nc-empty { position:relative; padding:32px var(--sp-5); font-size:var(--fs-md); color:var(--text); }
-    .nc-group { position:relative; margin:0px 16px 10px 16px; padding:10px var(--sp-4); background:#ffffff14; border-radius:16px; }
+    .nc-list { position:relative; height:394px; overflow-y:auto; }
+    .nc-empty { position:relative; padding:32px 0px; font-size:var(--fs-md); color:var(--text); }
+    .nc-group { position:relative; margin:0px 0px 10px 0px; padding:10px var(--sp-4); background:#ffffff14; border-radius:16px; }
     .nc-group-header { height:24px; display:flex; flex-direction:row; align-items:center; gap:var(--sp-3); }
     .nc-group-app { flex-grow:1; font-size:var(--fs-sm); font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .nc-group-count { font-size:var(--fs-xs); color:var(--text); }

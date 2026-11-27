@@ -758,6 +758,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("startup", SettingsPage::Startup),
             ("defaults", SettingsPage::Defaults),
             ("assistant", SettingsPage::Assistant),
+            ("usage", SettingsPage::Usage),
             ("about", SettingsPage::About),
         ] {
             document.visible(&format!("page-{name}"), self.client.ui().page == page)?;

@@ -17,7 +17,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsPage::Startup => 13,
             SettingsPage::Defaults => 14,
             SettingsPage::Assistant => 15,
-            SettingsPage::About => 16,
+            SettingsPage::Usage => 16,
+            SettingsPage::About => 17,
         }
     }
 

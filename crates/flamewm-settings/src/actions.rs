@@ -200,6 +200,7 @@ pub(crate) fn page(value: &str) -> Option<SettingsPage> {
         "startup" => Some(SettingsPage::Startup),
         "defaults" => Some(SettingsPage::Defaults),
         "assistant" => Some(SettingsPage::Assistant),
+        "usage" => Some(SettingsPage::Usage),
         "about" => Some(SettingsPage::About),
         _ => None,
     }
@@ -288,7 +289,7 @@ pub(crate) fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-pub(crate) const TOGGLE_KEYS: [&str; 72] = [
+pub(crate) const TOGGLE_KEYS: [&str; 75] = [
     "taskbar.enabled",
     "dock.enabled",
     "dock.reserveSpace",
@@ -333,6 +334,9 @@ pub(crate) const TOGGLE_KEYS: [&str; 72] = [
     "weatherTint",
     "usage.claude",
     "usage.commandCode",
+    "usage.codex",
+    "usage.openCodeGo",
+    "usage.openDesign",
     "autoLocationEnabled",
     "autoTimeZoneEnabled",
     "snapPreviewEnabled",

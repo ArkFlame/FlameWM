@@ -172,6 +172,8 @@ pub fn project_menu_surface(
             menu_surface(snapshot).radius as f32
         },
     )?;
+    // Same themed outline as the taskbar and popups, not the static bright `--rim` fallback.
+    flamewm_ui_document::surface_style::project_surface_outline(document, id, snapshot)?;
     // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
     document.node_backdrop(id, Some(surface_blur_percent(snapshot)))
 }

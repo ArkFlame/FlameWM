@@ -267,6 +267,16 @@ impl ShellLoop {
         slot: usize,
     ) -> Result<(), UiBackendError> {
         let index = self.start_index_for_slot(slot);
+        if let Some(projection::ProgramRow::Session(action)) =
+            projection::start_program_rows(&self.start_model, self.start_category, &self.start_query)
+                .get(index)
+        {
+            let action = *action;
+            self.submit(ControlRequest::SessionAction(action));
+            self.close_transients(runtime)?;
+            self.end_start_session();
+            return Ok(());
+        }
         let Some(app_id) = projection::start_application_for_slot(
             &self.start_model,
             self.start_category,

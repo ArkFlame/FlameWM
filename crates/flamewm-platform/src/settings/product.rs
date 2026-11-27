@@ -132,6 +132,11 @@ pub struct ProductSettings {
     pub usage_claude: bool,
     /// `usage.commandCode`: fetch Command Code usage on the AI usage card (default on).
     pub usage_command_code: bool,
+    /// `usage.codex`, `usage.openCodeGo`, `usage.openDesign`: provider rows (default on; a row
+    /// is still hidden until the provider is configured).
+    pub usage_codex: bool,
+    pub usage_open_code_go: bool,
+    pub usage_open_design: bool,
     /// `usage.refreshSeconds`: usage refresh period in seconds (default 300).
     pub usage_refresh_seconds: u16,
     /// Sets `weatherLocation` from the IP-geolocated position.
@@ -366,6 +371,9 @@ impl Default for ProductSettings {
             weather_units: "celsius".to_owned(),
             usage_claude: true,
             usage_command_code: true,
+            usage_codex: true,
+            usage_open_code_go: true,
+            usage_open_design: true,
             usage_refresh_seconds: 300,
             auto_location_enabled: true,
             auto_time_zone_enabled: true,

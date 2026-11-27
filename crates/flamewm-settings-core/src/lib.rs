@@ -36,6 +36,7 @@ pub enum SettingsPage {
     Startup,
     Defaults,
     Assistant,
+    Usage,
     About,
 }
 

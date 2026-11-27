@@ -232,12 +232,21 @@ impl State {
                     let dx = (location.x - pointer.0).round() as i32;
                     let dy = (location.y - pointer.1).round() as i32;
                     let rect = edge.resized(start, dx, dy);
-                    // Sub-step pointer motion leaves the rectangle unchanged: no configure. A real change
-                    // is deferred to the next paint, which flushes it once (see `flush_pending_configure`).
-                    let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
-                    self.model.set_rect(id, rect);
-                    if !unchanged {
-                        self.pending_configure = Some(id);
+                    if self.show_content_while_dragging {
+                        // Live mode: sub-step pointer motion leaves the rectangle unchanged (no
+                        // configure); a real change is flushed once on the next paint.
+                        let unchanged = self.model.get(id).is_some_and(|m| m.rect == rect);
+                        self.model.set_rect(id, rect);
+                        if !unchanged {
+                            self.pending_configure = Some(id);
+                        }
+                    } else {
+                        // Outline mode: the client is not reconfigured or repainted while the
+                        // pointer moves. Only the landing ring is drawn; release commits once.
+                        let ring = frame_for_client(rect, self.model.titlebars());
+                        if self.snap_preview.show(ring) {
+                            self.request_paint();
+                        }
                     }
                 }
             }

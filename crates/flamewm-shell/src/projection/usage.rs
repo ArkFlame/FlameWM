@@ -23,7 +23,11 @@ fn slug(provider: UsageProvider) -> &'static str {
 #[must_use]
 pub fn row_values(state: Option<&ProviderState>, now: i64) -> (Option<f64>, String) {
     match state {
-        Some(ProviderState::Ready(windows)) => match windows.first() {
+        // Always the busiest window (e.g. 5 h vs 7 d), with that window's own reset.
+        Some(ProviderState::Ready(windows)) => match windows
+            .iter()
+            .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+        {
             Some(window) => {
                 let percent = window.used_percent.clamp(0.0, 100.0);
                 let lane = window.lane_name();
@@ -40,19 +44,23 @@ pub fn row_values(state: Option<&ProviderState>, now: i64) -> (Option<f64>, Stri
     }
 }
 
-/// Projects every provider row and the footer timestamp. Unknown or missing providers stay
-/// "not configured", so the card always lists all five providers.
+/// Projects every configured provider row and the footer timestamp. A provider that is disabled
+/// in settings (never fetched) or reports `NotConfigured` has its row hidden until configured.
 pub fn project_usage(
     document: &mut impl UiDocumentAccess,
     snapshots: &[ProviderSnapshot],
     now: i64,
 ) -> Result<(), String> {
+    let mut any_shown = false;
     for provider in UsageProvider::ALL {
         let slug = slug(provider);
         let state = snapshots
             .iter()
             .find(|snapshot| snapshot.provider == provider)
             .map(|snapshot| &snapshot.state);
+        let shown = matches!(state, Some(s) if !matches!(s, ProviderState::NotConfigured));
+        document.visible(&format!("usage-row-{slug}"), shown)?;
+        any_shown |= shown;
         let (percent, caption) = row_values(state, now);
         let value = percent.unwrap_or(0.0);
         document.text(
@@ -76,6 +84,14 @@ pub fn project_usage(
         Some(time) => format!("Updated {}", time.format("%H:%M")),
         None => "Not updated yet".to_owned(),
     };
+    document.text(
+        "usage-title",
+        if any_shown || snapshots.is_empty() {
+            "AI usage".to_owned()
+        } else {
+            "AI usage: no provider configured".to_owned()
+        },
+    )?;
     document.text("usage-updated", line)
 }
 

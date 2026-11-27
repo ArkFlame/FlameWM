@@ -121,7 +121,21 @@ pub fn project_start_unified(
                 // Heading style: smaller bold accent letter (the hover fill is cleared by the highlight pass).
                 document.font_size(&label_id, START_HEADER_FONT_PX)?;
                 document.font_weight(&label_id, 700)?;
-                document.foreground(&label_id, crate::projection::start_header_ink())?;
+                document.foreground_clear(&label_id)?;
+            }
+            Some(ProgramRow::Session(action)) => {
+                use flamewm_api::session::SessionAction;
+                let name = match action {
+                    SessionAction::Suspend => "Suspend",
+                    SessionAction::Reboot => "Restart",
+                    _ => "Shut Down",
+                };
+                document.text_ref(&label_id, name)?;
+                document.visible(&button_id, true)?;
+                document.visible(&icon_id, false)?;
+                document.font_size(&label_id, START_ROW_FONT_PX)?;
+                document.font_weight(&label_id, 400)?;
+                document.foreground_clear(&label_id)?;
             }
             Some(ProgramRow::App(application)) => {
                 document.text_ref(&label_id, &application.name)?;
@@ -171,6 +185,7 @@ pub fn project_start_unified(
     }
     let show_session = query.trim().is_empty()
         && category == StartCategory::Power
+        && model.view != flamewm_shell_core::start_menu::StartView::AllPrograms
         && crate::projection::session_available(*session);
     document.visible("start-group-power", show_session)?;
     document.visible("start-session-lock", show_session && session.lock)?;

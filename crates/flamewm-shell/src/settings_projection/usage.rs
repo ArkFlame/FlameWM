@@ -9,35 +9,46 @@ pub const USAGE_REFRESH_MIN_SECONDS: i64 = 60;
 pub const USAGE_REFRESH_MAX_SECONDS: i64 = 3600;
 pub const USAGE_REFRESH_DEFAULT_SECONDS: i64 = 300;
 
-/// Providers to fetch and the refresh period, clamped to the supported range. Codex has no
-/// toggle: its auth file is the gate, so it is always listed.
+/// Settings key per provider, in `UsageProvider::ALL` order.
+const PROVIDER_KEYS: [(UsageProvider, &str); 5] = [
+    (UsageProvider::Codex, "usage.codex"),
+    (UsageProvider::Claude, "usage.claude"),
+    (UsageProvider::OpenCodeGo, "usage.openCodeGo"),
+    (UsageProvider::CommandCode, "usage.commandCode"),
+    (UsageProvider::OpenDesign, "usage.openDesign"),
+];
+
+/// Enabled providers and the refresh period, clamped to the supported range. A provider that is
+/// enabled but not configured is fetched as `NotConfigured` and hidden by the card projection.
 #[must_use]
 pub fn usage_settings_from(
-    claude: bool,
-    command_code: bool,
+    enabled: impl Fn(UsageProvider) -> bool,
     refresh_seconds: i64,
 ) -> (Vec<UsageProvider>, Duration) {
-    let mut providers = vec![UsageProvider::Codex];
-    if claude {
-        providers.push(UsageProvider::Claude);
-    }
-    if command_code {
-        providers.push(UsageProvider::CommandCode);
-    }
+    let providers = PROVIDER_KEYS
+        .iter()
+        .filter(|(provider, _)| enabled(*provider))
+        .map(|(provider, _)| *provider)
+        .collect();
     let seconds = refresh_seconds.clamp(USAGE_REFRESH_MIN_SECONDS, USAGE_REFRESH_MAX_SECONDS);
     let seconds = u64::try_from(seconds).unwrap_or(300);
     (providers, Duration::from_secs(seconds))
 }
 
-/// Reads the `usage.*` keys; a missing snapshot or key keeps the defaults.
+/// Reads the `usage.*` keys; a missing snapshot or key keeps the defaults (all enabled).
 #[must_use]
 pub fn usage_settings(snapshot: Option<&SettingsSnapshot>) -> (Vec<UsageProvider>, Duration) {
     let Some(snapshot) = snapshot else {
-        return usage_settings_from(true, true, USAGE_REFRESH_DEFAULT_SECONDS);
+        return usage_settings_from(|_| true, USAGE_REFRESH_DEFAULT_SECONDS);
     };
     usage_settings_from(
-        boolean_value(snapshot, "usage.claude").unwrap_or(true),
-        boolean_value(snapshot, "usage.commandCode").unwrap_or(true),
+        |provider| {
+            PROVIDER_KEYS
+                .iter()
+                .find(|(p, _)| *p == provider)
+                .and_then(|(_, key)| boolean_value(snapshot, key))
+                .unwrap_or(true)
+        },
         integer_value(snapshot, "usage.refreshSeconds").unwrap_or(USAGE_REFRESH_DEFAULT_SECONDS),
     )
 }
@@ -47,31 +58,22 @@ mod tests {
     use super::*;
 
     // OBSERVABLE: the disabled provider is dropped and the interval clamps to 60 s..1 h.
-    // MUTATION: keeping a disabled provider, or no clamp, fails one of these asserts.
     #[test]
     fn disabled_providers_drop_and_interval_clamps() {
-        let (providers, interval) = usage_settings_from(false, true, 10);
-        assert_eq!(
-            providers,
-            vec![UsageProvider::Codex, UsageProvider::CommandCode]
-        );
+        let (providers, interval) =
+            usage_settings_from(|p| p != UsageProvider::Claude, 10);
+        assert!(!providers.contains(&UsageProvider::Claude));
+        assert_eq!(providers.len(), 4);
         assert_eq!(interval, Duration::from_secs(60));
-        let (providers, interval) = usage_settings_from(true, true, 99_999);
-        assert_eq!(
-            providers,
-            vec![
-                UsageProvider::Codex,
-                UsageProvider::Claude,
-                UsageProvider::CommandCode
-            ]
-        );
+        let (providers, interval) = usage_settings_from(|_| true, 99_999);
+        assert_eq!(providers.len(), 5);
         assert_eq!(interval, Duration::from_secs(3600));
     }
 
     #[test]
     fn missing_snapshot_keeps_defaults() {
         let (providers, interval) = usage_settings(None);
-        assert_eq!(providers.len(), 3);
+        assert_eq!(providers.len(), 5);
         assert_eq!(interval, Duration::from_secs(300));
     }
 }
