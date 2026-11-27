@@ -281,3 +281,7 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## Capture crop scouted: at CPU floor
 - Read `crop_capture` again: nothing left to hoist. Remaining cost is the full-resolution bilinear upscale itself; folded into u162 (GPU does the upscale). No code change.
+
+## Duplicate dependency scan: nothing first-party
+- `cargo tree --workspace -d`: duplicates (calloop 0.13/0.14, x11rb 0.13/0.14, digest/sha2, hashbrown, thiserror 1/2, rustix 0.38/1.x, getrandom, syn 2/3) all come from third-party pins: winit 0.30 and smithay-client-toolkit (older calloop, x11rb), vendored smithay (sha2), fontdue (hashbrown). No first-party crate causes one.
+- Not changed: removing them means patching vendored smithay/winit for a few hundred KB of binary and no runtime share. Revisit if winit moves to the newer calloop.
