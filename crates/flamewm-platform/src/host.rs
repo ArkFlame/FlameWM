@@ -90,7 +90,33 @@ impl<E: EnginePorts> PlatformHost<E> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
         let loaded = crate::settings::load_settings(&path, epoch_secs);
-        // `load_settings` already emitted its single notice; the returned text is never reprinted.
+        // One notice per quarantine event. `load_settings` already printed its single `flamewm:`
+        // line; the returned text is recorded once as the user notice in the shared session log.
+        // There is no shell notification port here (the shell's NotificationProvider is a D-Bus
+        // server, not a client this crate can call), so the failure-record API is the sink.
+        if let Some(notice) = loaded.notice {
+            use flamewm_session_core::diagnostics::{
+                BlastRadius, FailureCode, FailureRecord, append_record, session_log_path,
+            };
+            let fallback = std::path::PathBuf::from("/tmp/flamewm-session.log");
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            let log = session_log_path(
+                std::env::var_os("XDG_STATE_HOME").as_deref(),
+                home.as_deref(),
+                &fallback,
+            );
+            let record = FailureRecord::new(
+                "settings",
+                FailureCode::SubsystemError,
+                notice,
+                BlastRadius::new(["session", "shell", "wm"], ["custom_settings"]),
+                true,
+                epoch_secs,
+            );
+            if let Err(error) = append_record(&log, &record) {
+                eprintln!("flamewm: settings notice record write failed: {error}");
+            }
+        }
         // Only a parsed file bumps the revision away from defaults, so a missing or quarantined
         // file keeps the untouched default store and revision.
         if loaded.settings != crate::settings::ProductSettings::default() {

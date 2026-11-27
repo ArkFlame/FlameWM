@@ -133,7 +133,7 @@ pub(super) fn supervise(
                 return Ok(());
             }
             match children[index].supervisor.child_exited(exit) {
-                SupervisorDecision::GiveUp if index != 0 => {
+                SupervisorDecision::GiveUp => {
                     session_diagnostics::log(
                         role_label(children[index].plan.role),
                         "restart budget exhausted; starting the fallback instead",
@@ -172,13 +172,6 @@ pub(super) fn supervise(
                             startup_grace(child, parent, stop_requested)?;
                         }
                     }
-                }
-                SupervisorDecision::GiveUp => {
-                    return Err(format!(
-                        "{:?} at {} exhausted its restart budget",
-                        children[index].plan.role,
-                        children[index].plan.program.display()
-                    ));
                 }
                 SupervisorDecision::StopCleanly => return Ok(()),
                 SupervisorDecision::SpawnNow => {

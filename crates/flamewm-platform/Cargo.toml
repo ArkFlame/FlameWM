@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
+flamewm-session-core = { path = "../flamewm-session-core" }
 
 [lints]
 workspace = true
