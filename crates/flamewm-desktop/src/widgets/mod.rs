@@ -131,6 +131,14 @@ struct FaceKey {
     accent: Rgb,
 }
 
+/// Inputs of the twelve static numeral nodes of an analog clock. The face image changes every
+/// second for the hand, but these nodes only change with size or hand colour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AnalogLabelKey {
+    size: u32,
+    hands: Rgb,
+}
+
 /// Samples kept for the CPU and RAM graph; one per refresh tick.
 const HISTORY_LEN: usize = 60;
 
@@ -243,6 +251,7 @@ pub(crate) struct WidgetState {
     rings: [Option<RingKey>; MAX_WIDGETS],
     graphs: [Option<GraphKey>; MAX_WIDGETS],
     faces: [Option<FaceKey>; MAX_WIDGETS],
+    analog_labels: [Option<AnalogLabelKey>; MAX_WIDGETS],
     username: String,
     hostname: String,
 }

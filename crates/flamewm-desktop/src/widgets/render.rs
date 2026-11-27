@@ -227,6 +227,7 @@ pub(crate) fn sync_widgets(
             state.widgets.rings[slot] = None;
             state.widgets.graphs[slot] = None;
             state.widgets.faces[slot] = None;
+            state.widgets.analog_labels[slot] = None;
             continue;
         };
         let editing = editing_buffer(state, widget);

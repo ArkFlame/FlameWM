@@ -157,6 +157,10 @@ run_case() { # case-name
     CHAIN_LOG="$CASE_DIR/home/.cache/flamewm/session-chain.log"
     [[ "$CASE_NAME" == unwritable-log-dir ]] && CHAIN_LOG="$CASE_DIR/blocked/cache/flamewm/session-chain.log"
     (
+        # Inherited FlameWM overrides must not decide which fault is exercised.
+        unset FLAMEWM_SESSION_FALLBACK FLAMEWM_SESSION_ATTEMPT FLAMEWM_WAYLAND_BACKEND \
+            FLAMEWM_WAYLAND_DBUS_WRAPPED FLAMEWM_WAYLAND_SOCKET FLAMEWM_BINDIR \
+            FLAMEWM_WAYLAND_AUTOSTART FLAMEWM_CHAIN_GUARD_MAX FLAMEWM_CHAIN_GUARD_WINDOW_S
         export HOME="$CASE_DIR/home"
         export XDG_CACHE_HOME="$HOME/.cache"
         export XDG_STATE_HOME="$HOME/.local/state"

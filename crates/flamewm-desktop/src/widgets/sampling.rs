@@ -21,6 +21,7 @@ impl WidgetState {
             rings: [None; MAX_WIDGETS],
             graphs: std::array::from_fn(|_| None),
             faces: [None; MAX_WIDGETS],
+            analog_labels: [None; MAX_WIDGETS],
             username: std::env::var("USER")
                 .ok()
                 .filter(|name| !name.is_empty())

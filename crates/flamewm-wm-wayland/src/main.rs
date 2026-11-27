@@ -808,9 +808,13 @@ fn run() -> Result<i32, Box<dyn Error>> {
     };
     fill_backend_stages();
     // Debug-only virtual outputs (env-gated); needs the primary size the backend just set.
-    debug_outputs::install_from_env(&mut state);
+    let _ = guard_startup("debug-outputs", || {
+        debug_outputs::install_from_env(&mut state)
+    });
     // Extra headless outputs for multi-head testing (env-gated, nested backend only).
-    virtual_output::install_from_env(&mut state);
+    let _ = guard_startup("virtual-outputs", || {
+        virtual_output::install_from_env(&mut state)
+    });
 
     // The socket exists before XWayland connects back to this compositor.
     let listening = match ListeningSocketSource::with_name(&socket_name) {
@@ -849,12 +853,14 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // reported and survived instead of aborting a compositor that already owns the seat. Autostart
     // lives in the XWayland ready handler (`State::xwayland_ready`), which can never run without a
     // client, so the list is dropped here to make the skip explicit.
-    let xwayland_client = match xwayland::spawn_xwayland(&xwayland_dh, &handle) {
-        Ok(client) => {
+    let xwayland_client = match guard_startup("xwayland", || {
+        xwayland::spawn_xwayland(&xwayland_dh, &handle)
+    }) {
+        Some(Ok(client)) => {
             stage_line(Stage::Xwayland, StageStatus::Ok, "spawned");
             Some(client)
         }
-        Err(error) => {
+        Some(Err(error)) => {
             stage_line(
                 Stage::Xwayland,
                 StageStatus::Fail,
@@ -863,6 +869,11 @@ fn run() -> Result<i32, Box<dyn Error>> {
             eprintln!(
                 "flamewm-wayland: XWayland unavailable ({error}); continuing without X11 clients"
             );
+            state.autostart.clear();
+            None
+        }
+        None => {
+            stage_line(Stage::Xwayland, StageStatus::Fail, "panic");
             state.autostart.clear();
             None
         }
