@@ -101,12 +101,14 @@ impl ShellLoop {
         }
         let online = self.shell.snapshot().system.network.availability
             == flamewm_api::system::ServiceAvailability::Available;
-        let waker = self.result_wake.waker();
+        // Only clone the wake writer when a lookup actually starts; an enabled-but-not-due
+        // tick used to pay for a waker it never handed to a worker.
+        let wake = &self.result_wake;
         let Some(result) = self.auto_lookup.tick(
             std::time::Instant::now(),
             self.auto_location_enabled,
             online,
-            || flamewm_shell::weather_auto::spawn_ip_lookup(waker),
+            || flamewm_shell::weather_auto::spawn_ip_lookup(wake.waker()),
         ) else {
             return;
         };

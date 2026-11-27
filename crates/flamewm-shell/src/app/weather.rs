@@ -6,9 +6,11 @@ impl ShellLoop {
     /// Weather tick: no timers and no fetch while disabled. Projects the tray and pushes
     /// the feed only when the scheduler changed or a settings snapshot arrived.
     pub(super) fn tick_weather(&mut self, runtime: &mut SurfaceRuntime) {
-        let waker = self.result_wake.waker();
+        // Clone the wake writer only when a fetch actually starts: an idle tick with no
+        // due fetch previously paid an Arc clone for a waker it never used.
+        let wake = &self.result_wake;
         let changed = self.weather.tick(std::time::Instant::now(), |location| {
-            flamewm_shell::weather_host::spawn_weather_fetch(location, waker)
+            flamewm_shell::weather_host::spawn_weather_fetch(location, wake.waker())
         });
         if !(changed || self.weather_feed_pending) {
             return;

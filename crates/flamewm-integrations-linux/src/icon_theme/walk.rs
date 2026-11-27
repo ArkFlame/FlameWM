@@ -141,7 +141,16 @@ pub(super) fn read_theme_inherits(roots: &[PathBuf], theme: &str) -> Option<Icon
         if !index_file.is_file() {
             return None;
         }
-        let file = fs::File::open(index_file).ok()?;
+        let file = match fs::File::open(&index_file) {
+            Ok(file) => file,
+            Err(error) => {
+                eprintln!(
+                    "flamewm: icon theme {theme} index {} unreadable: {error}; skipping inherited theme",
+                    index_file.display()
+                );
+                return None;
+            }
+        };
         #[cfg(test)]
         INDEX_THEME_READS.with(|c| c.set(c.get() + 1));
         IconThemeIndex::parse_inherits(theme, std::io::BufReader::new(file))
@@ -154,7 +163,16 @@ pub(super) fn read_theme_index(roots: &[PathBuf], theme: &str) -> Option<IconThe
         if !index_file.is_file() {
             return None;
         }
-        let text = fs::read_to_string(index_file).ok()?;
+        let text = match fs::read_to_string(&index_file) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!(
+                    "flamewm: icon theme {theme} index {} unreadable: {error}; skipping theme index",
+                    index_file.display()
+                );
+                return None;
+            }
+        };
         #[cfg(test)]
         INDEX_THEME_READS.with(|c| c.set(c.get() + 1));
         Some(IconThemeIndex::parse(theme, &text))

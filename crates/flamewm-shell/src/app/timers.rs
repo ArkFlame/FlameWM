@@ -110,13 +110,11 @@ impl ShellLoop {
             ),
         }
         self.tick_auto_location();
-        let settled = self
-            .zone_settle_at
-            .is_some_and(|at| std::time::Instant::now() >= at);
+        let now_instant = Instant::now();
+        let settled = self.zone_settle_at.is_some_and(|at| now_instant >= at);
         if settled {
             self.zone_settle_at = None;
         }
-        let now_instant = Instant::now();
         let clock_key = (self.settings_revision, self.settings_cache.is_some());
         let clock_settings_changed = self.clock_settings_key != Some(clock_key);
         if clock_settings_changed {
@@ -195,10 +193,10 @@ impl ShellLoop {
             self.apply_controls(runtime)?;
             runtime.redraw_dirty()?;
         }
-        self.tick_osd(runtime, changed);
-        self.tick_switcher(runtime);
-        self.tick_dock_bounce(runtime, std::time::Instant::now());
-        self.publish_wake(std::time::Instant::now());
+        self.tick_osd(runtime, changed, now_instant);
+        self.tick_switcher(runtime, now_instant);
+        self.tick_dock_bounce(runtime, now_instant);
+        self.publish_wake(now_instant);
         Ok(())
     }
 
@@ -257,6 +255,7 @@ impl ShellLoop {
         &mut self,
         runtime: &mut SurfaceRuntime,
         changed: flamewm_shell::runtime::ChangedDomains,
+        now: Instant,
     ) {
         let snapshot = self.shell.snapshot();
         let system = &snapshot.system;
@@ -265,7 +264,6 @@ impl ShellLoop {
         // Same output source as the panel scale: the shown panel's placement output. The lookup is
         // lazy: the controller calls it only when the card shows, so idle ticks allocate nothing.
         let target = || active_output_target(&self.surfaces, snapshot);
-        let now = Instant::now();
         let settings = self.settings_cache.as_ref();
         let active = snapshot
             .workspaces
@@ -307,20 +305,17 @@ impl ShellLoop {
     /// Alt+Tab overlay: renders the WM's latest switcher snapshot after its hold delay. Nonfatal:
     /// a failed card leaves the WM switch untouched. Idle ticks (no snapshot, no deadline) return
     /// before any output lookup.
-    pub(super) fn tick_switcher(&mut self, runtime: &mut SurfaceRuntime) {
+    pub(super) fn tick_switcher(&mut self, runtime: &mut SurfaceRuntime, now: Instant) {
         let frame = self.shell.take_switcher_frame();
-        let due = self
-            .switcher
-            .deadline()
-            .is_some_and(|at| Instant::now() >= at);
+        let due = self.switcher.deadline().is_some_and(|at| now >= at);
         if frame.is_none() && !due {
             return;
         }
         let (output, scale) = active_output_target(&self.surfaces, self.shell.snapshot());
         let settings = self.settings_cache.as_ref();
-        if let Err(error) =
-            self.switcher
-                .update(runtime, frame, || (output, scale), settings, Instant::now())
+        if let Err(error) = self
+            .switcher
+            .update(runtime, frame, || (output, scale), settings, now)
         {
             eprintln!("flamewm-shell: window switcher failed (nonfatal): {error:?}");
         }

@@ -394,6 +394,8 @@ impl<C: Connection> Wm<'_, C> {
             session.session.cancel();
         }
         self.snap_preview.hide(self.conn);
+        // A cancelled resize must not leave a stale gate for the next grab.
+        self.resize_configure_at = None;
         self.release_pointer();
     }
 

@@ -43,12 +43,21 @@ impl std::error::Error for CursorError {}
 
 /// Load `<theme_root>/cursors/left_ptr` and decode its preview frame.
 pub fn load_left_ptr_preview(theme_root: &Path) -> Result<CursorPreview, CursorError> {
-    let path = resolve_in_theme_root(theme_root, &theme_root.join("cursors").join("left_ptr"))
-        .map_err(CursorError::Io)?;
-    let bytes = read_regular_capped(&path, MAX_FILE_BYTES)
-        .map_err(CursorError::Io)?
-        .ok_or(CursorError::TooLarge)?;
-    parse_xcursor_preview(&bytes)
+    let preview = (|| {
+        let path = resolve_in_theme_root(theme_root, &theme_root.join("cursors").join("left_ptr"))
+            .map_err(CursorError::Io)?;
+        let bytes = read_regular_capped(&path, MAX_FILE_BYTES)
+            .map_err(CursorError::Io)?
+            .ok_or(CursorError::TooLarge)?;
+        parse_xcursor_preview(&bytes)
+    })();
+    if let Err(error) = &preview {
+        eprintln!(
+            "flamewm: cursor theme {} left_ptr preview unavailable: {error}; preview skipped",
+            theme_root.display()
+        );
+    }
+    preview
 }
 
 /// Canonicalizes `path` and accepts it only when it stays under the canonical

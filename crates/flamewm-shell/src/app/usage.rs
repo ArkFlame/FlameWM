@@ -21,10 +21,12 @@ impl ShellLoop {
             self.usage.configure(providers, interval);
             self.usage_settings_key = Some((self.settings_revision, self.settings_cache.is_some()));
         }
-        let waker = self.result_wake.waker();
+        // Clone the wake writer only when a fetch actually starts, not on every tick:
+        // the usage card is usually closed and most ticks start no worker.
+        let wake = &self.result_wake;
         let now = Instant::now();
         let changed = self.usage.tick(now, |providers| {
-            flamewm_shell::usage_host::spawn_usage_fetch(providers, waker)
+            flamewm_shell::usage_host::spawn_usage_fetch(providers, wake.waker())
         });
         if !self.surfaces.is_usage_open() {
             self.usage_projected_at = None;

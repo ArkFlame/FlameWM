@@ -8,8 +8,10 @@ tests, so nothing in this unit has been compiled or executed).
 - Edits: `crates/flamewm-platform/src/settings/load.rs`,
   `crates/flamewm-platform/src/settings/persist.rs`, `crates/flamewm-platform/src/settings.rs`
   (module declarations and `pub(crate)` re-exports), this log.
-- File IO only. `product.rs`, `stable.rs` key tables, `host.rs`, `storage.rs` and
-  `services/settings_persist.rs` are untouched.
+- File IO only. `product.rs`, `stable.rs` key tables and `storage.rs` are untouched. The callers
+  `crates/flamewm-platform/src/host.rs` and
+  `crates/flamewm-platform/src/services/settings_persist.rs` were integrated in a second pass and
+  are owned by that pass; no other files were changed.
 - Route evidence: `flamewm-source-first` (source/callers/owners read first) and
   `flamewm-rust-systems` (ownership, atomicity, failure paths). `AGENTS.md`, `scripts/version`,
   `.opencode/HARNESS.md`, `.opencode/ROUTES.md`, `.agents/{README,CONTRACTS,JOBS}.md` read.
@@ -53,13 +55,25 @@ tests, so nothing in this unit has been compiled or executed).
 - `persist.rs`: writable-target check, temp sibling naming, invalid path, own-temp classification,
   single-line degraded notice, durable/degraded outcome distinction.
 
-## Integration required by the owning worker
+## Caller integration (completed)
 
-`settings.rs` now declares `mod load;` and `mod persist;` and re-exports `LoadOutcome`,
-`load_settings`, `PersistOutcome`, `persist_settings` and `cleanup_own_temps` as `pub(crate)`, so the
-units are reachable through `crate::settings::*`. The callers in `host.rs` /
-`services/settings_persist.rs` must still delegate to `load_settings` and `persist_settings`; those
-files are outside this unit's ownership.
+`settings.rs` declares `mod load;` and `mod persist;` and re-exports `LoadOutcome`, `load_settings`,
+`PersistOutcome`, `persist_settings` and `cleanup_own_temps` as `pub(crate)`, so the units are
+reachable through `crate::settings::*`.
+
+- `host.rs::start` no longer reads the file itself or uses the two-line `eprintln!` plus
+  `storage::quarantine_and_report` `.bak` path. It calls `load_settings(&path, epoch_secs)` and
+  adopts the returned `ProductSettings` through the existing `SettingsService::load_text` entry
+  point. Quarantine, defaults and the single notice come from `load_settings`; the caller never
+  prints `LoadOutcome.notice`. Only a parsed file (revision bumped above the default) is adopted,
+  so a missing or quarantined file leaves the default store and revision exactly as before.
+- `services/settings_persist.rs::spawn` no longer calls `storage::write_atomic_text` directly in its
+  sink. It parses the serialized text into a `ProductSettings` and calls
+  `persist_settings(&path, &snapshot)`, mapping `PersistOutcome::Durable` to `Ok(())` and
+  `PersistOutcome::Degraded(notice)` to the same `FlameError::IoFailure` the writer already
+  returned. The notice is emitted once by `persist_settings`; the caller does not print it. The
+  `Sink = FnMut(&str) -> FlameResult<()>` type and all writer methods are unchanged, so tests using
+  `with_sink` keep their in-memory sinks.
 
 ## Verification
 

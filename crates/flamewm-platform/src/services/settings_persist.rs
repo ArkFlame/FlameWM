@@ -52,8 +52,16 @@ impl SettingsWriter {
             SETTINGS_IDLE_DEBOUNCE,
             SETTINGS_MAX_DEFER,
             Box::new(move |text| {
-                crate::storage::write_atomic_text(&path, text)
-                    .map_err(|error| FlameError::new(ErrorCode::IoFailure, error.to_string()))
+                let snapshot = crate::settings::ConfigStore::default()
+                    .parse_snapshot(text)
+                    .unwrap_or_default();
+                match crate::settings::persist_settings(&path, &snapshot) {
+                    crate::settings::PersistOutcome::Durable => Ok(()),
+                    // `persist_settings` already emitted this notice exactly once.
+                    crate::settings::PersistOutcome::Degraded(notice) => {
+                        Err(FlameError::new(ErrorCode::IoFailure, notice))
+                    }
+                }
             }),
         )
     }

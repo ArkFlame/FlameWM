@@ -570,6 +570,13 @@ impl NotificationHost {
             .visible
             .as_ref()
             .and_then(|notification| notification.icon_name.as_deref());
+        if wanted.is_none() {
+            // No visible toast wants an icon: the outstanding request belongs to a toast that
+            // has already gone. Stop the 15 ms wake instead of polling until the wait limit
+            // expires with nothing visible to update.
+            self.icon_wait = None;
+            return Ok(());
+        }
         let Some(loader) = self.icons.as_mut() else {
             self.icon_wait = None;
             return Ok(());
@@ -924,21 +931,7 @@ fn execute() -> Result<(), String> {
     )?));
     // StatusNotifier host: shares this reactor's bus source, no thread or timer.
     if bus_offline {
-        let attach_state = Rc::clone(&state);
-        let attach_handle = reactor.handle();
-        let mut attached = false;
-        reactor
-            .register_timer(BUS_RETRY_INTERVAL, true, move || {
-                if attached {
-                    return;
-                }
-                // Failures stay silent: the one-time startup line already explains the degraded state.
-                if attach_control_bus(&attach_state, &attach_handle).is_ok() {
-                    attached = true;
-                    eprintln!("flamewm-shell: session control bus attached");
-                }
-            })
-            .map_err(|error| format!("register control bus retry: {error}"))?;
+        arm_bus_retry(&reactor.handle(), Rc::clone(&state))?;
     }
     let tray_host =
         flamewm_shell::tray_host::TrayHost::connect().map(|host| Rc::new(RefCell::new(host)));
@@ -1412,6 +1405,30 @@ fn fetch_settings(client: &ControlClient) -> Option<SettingsSnapshot> {
             None
         }
     }
+}
+
+/// Arms one degraded-start bus attach retry. A repeating timer would keep a 30 s wake forever
+/// after the bus came back (its callback only checked a flag and returned); this one-shot chain
+/// stops the moment an attach succeeds, so the recovered shell parks at zero timer wakeups.
+fn arm_bus_retry(
+    reactor: &flamewm_reactor::ReactorHandle,
+    state: Rc<RefCell<ShellLoop>>,
+) -> Result<(), String> {
+    let retry_reactor = reactor.clone();
+    let retry_state = Rc::clone(&state);
+    reactor
+        .register_timer(BUS_RETRY_INTERVAL, move || {
+            // Failures stay silent: the one-time startup line already explains the degraded state.
+            if attach_control_bus(&retry_state, &retry_reactor).is_ok() {
+                eprintln!("flamewm-shell: session control bus attached");
+            } else {
+                // Inserting a fresh one-shot from inside this callback is supported; the source
+                // that just fired drops itself after the callback returns.
+                let _ = arm_bus_retry(&retry_reactor, Rc::clone(&retry_state));
+            }
+        })
+        .map(|_| ())
+        .map_err(|error| format!("register control bus retry: {error}"))
 }
 
 /// Late attach for a shell that started without the bus: bootstrap, signal source, then state.

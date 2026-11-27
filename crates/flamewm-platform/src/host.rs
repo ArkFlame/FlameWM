@@ -86,29 +86,16 @@ impl<E: EnginePorts> PlatformHost<E> {
             return Ok(());
         }
         let path = self.settings.path().to_path_buf();
-        match std::fs::read_to_string(&path) {
-            // The parse runs before any state change, so a rejected file leaves defaults in place.
-            Ok(text) => {
-                if let Err(error) = self.settings.load_text(&text) {
-                    eprintln!(
-                        "flamewm: settings {} ignored, using defaults: {}",
-                        path.display(),
-                        error.message
-                    );
-                    crate::storage::quarantine_and_report(&path);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                eprintln!(
-                    "flamewm: settings {} is not UTF-8, using defaults: {error}",
-                    path.display()
-                );
-                crate::storage::quarantine_and_report(&path);
-            }
-            Err(error) => {
-                return Err(FlameError::new(ErrorCode::IoFailure, error.to_string()));
-            }
+        let epoch_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let loaded = crate::settings::load_settings(&path, epoch_secs);
+        // `load_settings` already emitted its single notice; the returned text is never reprinted.
+        // Only a parsed file bumps the revision away from defaults, so a missing or quarantined
+        // file keeps the untouched default store and revision.
+        if loaded.settings != crate::settings::ProductSettings::default() {
+            self.settings
+                .load_text(&crate::settings::ConfigStore::serialize(&loaded.settings))?;
         }
         self.windows.refresh(&self.engine)?;
         self.displays.refresh(&mut self.engine)?;

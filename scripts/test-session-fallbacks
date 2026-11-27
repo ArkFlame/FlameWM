@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# Fault-injection test for the session wrapper fallback chain.
+#
+# Runs the real wrapper *logic* against stubs only: both wrapper scripts are copied into a mktemp -d
+# sandbox, the compositor, X11 session, safe-mode WM/terminal and a few environment tools are stubs on
+# a sandbox-prefixed PATH, and every case gets its own HOME / XDG_* directories. No real session,
+# compositor, Xwayland, D-Bus activation, cargo build or network access is involved.
+#
+# Injected faults: missing XDG_RUNTIME_DIR, failing drm backend, failing nested backend, failing X11
+# session, unwritable log dir, and crash loop. For every case the chain must keep going, write one
+# FLAMEWM-SESSION-CHAIN failure record per failed stage (stage, cause, blast_radius) and end in safe
+# mode with exit 0 instead of returning a stage's non-zero code early.
+#
+# Usage: bash scripts/test-session-fallbacks
+# Exit: 0 when every check passes, 1 otherwise. Tail: `SUMMARY checks=<n> passed=<n> failed=<n>`.
+set -uo pipefail
+
+SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd -- "$SELF_DIR/.." && pwd)
+
+BASE=$(mktemp -d "${TMPDIR:-/tmp}/flamewm-session-fallbacks.XXXXXX") || exit 1
+cleanup() { rm -rf "$BASE"; }
+trap cleanup EXIT
+
+BIN="$BASE/bin"
+STUBS="$BASE/stubs"
+CASES="$BASE/cases"
+mkdir -p "$BIN" "$STUBS" "$CASES"
+cp "$ROOT/scripts/flamewm-session-wrapper" "$BIN/" || exit 1
+cp "$ROOT/scripts/flamewm-wayland-session" "$BIN/" || exit 1
+chmod 700 "$BIN"/flamewm-session-wrapper "$BIN"/flamewm-wayland-session
+
+# The only external command whose identity affects a fault case: force /run/user/<uid> to be absent
+# so an unset XDG_RUNTIME_DIR cannot silently recover on the test host.
+REAL_ID=$(command -v id)
+
+cat >"$STUBS/id" <<EOF
+#!/bin/sh
+if [ "\${1:-}" = "-u" ]; then printf '999999\n'; exit 0; fi
+exec "$REAL_ID" "\$@"
+EOF
+
+cat >"$STUBS/flamewm-wayland" <<'EOF'
+#!/bin/sh
+# Stub compositor: capability gate and run fail according to STUB_* (no seat, no KMS).
+set -u
+printf 'compositor args=[%s] backend=%s\n' "$*" "${FLAMEWM_WAYLAND_BACKEND:-<unset>}" \
+    >>"${STUB_RECORD:-/dev/null}"
+for arg in "$@"; do
+    case "$arg" in
+        --capabilities)
+            if [ "${STUB_DRM_FAIL:-1}" = 1 ]; then
+                printf 'backend=drm\ndrm_compiled=false\n'
+            else
+                printf 'backend=drm\ndrm_compiled=true\n'
+            fi
+            exit 0
+            ;;
+        --probe) exit 0 ;;
+    esac
+done
+if [ "${FLAMEWM_WAYLAND_BACKEND:-}" = winit ] && [ "${STUB_NESTED_FAIL:-1}" = 1 ]; then
+    exit 9
+fi
+exit "${STUB_RUN_RC:-8}"
+EOF
+
+cat >"$STUBS/flamewm-session" <<'EOF'
+#!/bin/sh
+# Stub X11 session: exits with the injected code, never opens an X connection.
+printf 'x11-session args=[%s] attempt=%s\n' "$*" "${FLAMEWM_SESSION_ATTEMPT:-<unset>}" \
+    >>"${STUB_RECORD:-/dev/null}"
+exit "${STUB_X11_RC:-7}"
+EOF
+
+cat >"$STUBS/flamewm-wm" <<'EOF'
+#!/bin/sh
+printf 'safe-wm\n' >>"${STUB_RECORD:-/dev/null}"
+exit 0
+EOF
+
+cat >"$STUBS/flamewm-term" <<'EOF'
+#!/bin/sh
+# Safe mode reached: the marker is the assertion that no stage exited the chain early.
+printf 'safe-terminal\n' >>"${STUB_RECORD:-/dev/null}"
+: >"${STUB_SAFE_MARKER:?}"
+exit 0
+EOF
+
+cat >"$STUBS/ldd" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+cat >"$STUBS/Xvfb" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+cat >"$STUBS/dbus-update-activation-environment" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+
+cat >"$STUBS/systemctl" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+
+cat >"$STUBS/dbus-run-session" <<'EOF'
+#!/bin/sh
+# Belt and braces: the environment in each case already provides a bus address.
+[ "${1:-}" = "--" ] && shift
+exec "$@"
+EOF
+chmod 700 "$STUBS"/*
+
+CHECKS=0
+FAILURES=0
+CASE_NAME=""
+
+ok() { CHECKS=$((CHECKS + 1)); printf 'ok   %s: %s\n' "$CASE_NAME" "$1"; }
+bad() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); printf 'FAIL %s: %s: %s\n' "$CASE_NAME" "$1" "$2"; }
+check_true() { if "$@"; then ok "$1"; else bad "$1" "command failed: $*"; fi; }
+check_eq() { # name expected actual
+    if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "expected [$2] got [$3]"; fi
+}
+
+file_exists() { [[ -f "$1" ]]; }
+file_absent() { [[ ! -e "$1" ]]; }
+no_stage_launch() { ! grep -aqE 'compositor args=|x11-session args=' "$1"; }
+
+# One machine-readable chain record: stage=, cause=, code= and blast_radius=works:...|degraded:...
+# are all required, whatever the stage outcome.
+record_has() { # file stage status [cause-regex]
+    local file="$1" stage="$2" status="$3" cause="${4:-}" re
+    [[ -f "$file" ]] || return 1
+    re="FLAMEWM-SESSION-CHAIN stage=${stage} status=${status} cause="
+    if [[ -n "$cause" ]]; then re+="${cause}"; else re+='[^[:space:]]+'; fi
+    re+=' code=[0-9]+ blast_radius=works:[^[:space:]|]+\|degraded:[^[:space:]|]+'
+    grep -aEq "$re" "$file"
+}
+
+file_has() { # file needle
+    [[ -f "$1" ]] && grep -aqF -- "$2" "$1"
+}
+
+CASE_RC=0
+CASE_DIR=""
+CHAIN_LOG=""
+
+run_case() { # case-name
+    CASE_NAME="$1"
+    CASE_DIR="$CASES/$1"
+    mkdir -p "$CASE_DIR/home" "$CASE_DIR/runtime"
+    : >"$CASE_DIR/stub.log"
+    CHAIN_LOG="$CASE_DIR/home/.cache/flamewm/session-chain.log"
+    [[ "$CASE_NAME" == unwritable-log-dir ]] && CHAIN_LOG="$CASE_DIR/blocked/cache/flamewm/session-chain.log"
+    (
+        export HOME="$CASE_DIR/home"
+        export XDG_CACHE_HOME="$HOME/.cache"
+        export XDG_STATE_HOME="$HOME/.local/state"
+        export XDG_RUNTIME_DIR="$CASE_DIR/runtime"
+        # Display-manager identity turns the fallback chain on in both wrappers.
+        export XDG_SESSION_ID=fixture DESKTOP_SESSION=flamewm XDG_SESSION_CLASS=user XDG_SESSION_TYPE=tty
+        export XDG_SEAT=seat0 DISPLAY=:77
+        export DBUS_SESSION_BUS_ADDRESS='unix:path=/nonexistent/fixture-bus'
+        export PATH="$STUBS:$PATH"
+        export FLAMEWM_WAYLAND_BINARY="$STUBS/flamewm-wayland"
+        export FLAMEWM_SESSION_BINARY="$STUBS/flamewm-session"
+        export FLAMEWM_SAFE_WM="$STUBS/flamewm-wm"
+        export FLAMEWM_SAFE_TERMINAL="$STUBS/flamewm-term"
+        export FLAMEWM_SERVICES_BINARY="$CASE_DIR/no-such-bridge"
+        export FLAMEWM_WAYLAND_STARTUP_TIMEOUT_MS=200
+        export FLAMEWM_WAYLAND_SHUTDOWN_TIMEOUT_MS=200
+        export FLAMEWM_WAYLAND_READY_TIMEOUT_MS=200
+        export STUB_RECORD="$CASE_DIR/stub.log"
+        export STUB_SAFE_MARKER="$CASE_DIR/safe.marker"
+        case "$CASE_NAME" in
+            missing-runtime-dir)
+                unset XDG_RUNTIME_DIR
+                ;;
+            unwritable-log-dir)
+                # A regular file where the cache directory should be: mkdir -p cannot succeed.
+                : >"$CASE_DIR/blocked"
+                export XDG_CACHE_HOME="$CASE_DIR/blocked/cache"
+                ;;
+            crash-loop)
+                mkdir -p "$XDG_CACHE_HOME/flamewm"
+                printf '%s %s\n' "$(date +%s)" 2 >"$XDG_CACHE_HOME/flamewm/session-chain.state"
+                export FLAMEWM_CHAIN_GUARD_MAX=1
+                ;;
+        esac
+        "$BIN/flamewm-wayland-session" >"$CASE_DIR/stdout" 2>"$CASE_DIR/stderr"
+    )
+    CASE_RC=$?
+}
+
+assert_common() { # source-of-truth file
+    local record_source="$1"
+    check_eq "exit 0 (chain reached safe mode, no early stage exit)" 0 "$CASE_RC"
+    check_true "safe-mode terminal stub ran" file_exists "$CASE_DIR/safe.marker"
+    check_true "stub record shows safe mode" file_has "$CASE_DIR/stub.log" safe-terminal
+    if [[ "$CASE_NAME" == crash-loop ]]; then
+        # The guard path starts safe mode directly; it does not re-enter chain_supervisor's loop.
+        check_true "guard failure record has stage/cause/blast radius" \
+            record_has "$record_source" guard fail crash_loop
+    else
+        check_true "drm failure record has stage/cause/blast radius" \
+            record_has "$record_source" drm fail
+        check_true "nested failure record has stage/cause/blast radius" \
+            record_has "$record_source" nested fail
+        check_true "x11 failure record has stage/cause/blast radius" \
+            record_has "$record_source" x11 fail
+        check_true "safe success record has stage/cause/blast radius" \
+            record_has "$record_source" safe ok
+        check_true "stub record shows injected compositor failure" \
+            file_has "$CASE_DIR/stub.log" 'compositor args=[--capabilities]'
+        check_true "stub record shows injected X11 failure" \
+            file_has "$CASE_DIR/stub.log" 'x11-session args='
+    fi
+}
+
+for case_name in missing-runtime-dir drm-fail nested-fail x11-fail unwritable-log-dir crash-loop; do
+    run_case "$case_name"
+    truth="$CHAIN_LOG"
+    if [[ "$case_name" == unwritable-log-dir ]]; then
+        # No chain log is possible: chain_record still writes the records to the VT (stderr).
+        truth="$CASE_DIR/stderr"
+    fi
+    assert_common "$truth"
+    case "$case_name" in
+        missing-runtime-dir)
+            check_true "wayland log names the missing runtime dir" \
+                file_has "$CASE_DIR/home/.cache/flamewm/wayland-session.log" \
+                'stage=runtime status=fail'
+            check_true "drm cause includes runtime_dir" \
+                record_has "$truth" drm fail '[^[:space:]]*runtime_dir'
+            ;;
+        drm-fail)
+            check_true "drm cause names the capability gate" \
+                record_has "$truth" drm fail '[^[:space:]]*capability_gate'
+            ;;
+        nested-fail)
+            check_true "nested cause names the failing stage" \
+                record_has "$truth" nested fail 'stage_exit'
+            check_true "stub record shows nested backend run" \
+                file_has "$CASE_DIR/stub.log" 'backend=winit'
+            ;;
+        x11-fail)
+            check_true "x11 cause names the session failure" \
+                record_has "$truth" x11 fail 'session_exit'
+            ;;
+        unwritable-log-dir)
+            check_true "unwritable cache dir created no chain log" [[ ! -e "$CHAIN_LOG" ]]
+            check_true "records still reached stderr" file_has "$truth" 'stage=safe status=ok'
+            ;;
+        crash-loop)
+            check_true "stub record has no session launch" [[ ! -s "$CASE_DIR/stub.log" ]]
+            ;;
+    esac
+done
+
+printf 'SUMMARY checks=%s passed=%s failed=%s\n' "$CHECKS" "$((CHECKS - FAILURES))" "$FAILURES"
+(( FAILURES == 0 ))

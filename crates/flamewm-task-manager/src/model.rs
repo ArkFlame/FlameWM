@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Default)]
 pub struct Process {
@@ -135,6 +135,9 @@ struct Cached {
     last: Option<Process>,
     /// Global CPU total ticks at this process's last `stat` read.
     read_total: u64,
+    /// mtime of `/proc/<pid>/stat` at the last static refresh. Procfs stamps the inode when the
+    /// task is created, so this and `start` identify a pid without a second content read.
+    stat_mtime: Option<(u64, u64)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -373,6 +376,14 @@ fn proc_path<'a>(path: &'a mut String, pid: u32, leaf: &str) -> &'a str {
     path.clear();
     let _ = write!(path, "/proc/{pid}/{leaf}");
     path.as_str()
+}
+/// mtime of a procfs file as `(secs, nanos)` since the Unix epoch. Procfs sets it when the task
+/// is created, so it is a stable identity token for a pid; `None` means the entry is gone.
+/// Probed only where a static refresh was already due: one `stat` replaces two file reads.
+fn stat_mtime(path: &str) -> Option<(u64, u64)> {
+    let modified = fs::metadata(path).ok()?.modified().ok()?;
+    let since = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some((since.as_secs(), since.subsec_nanos()))
 }
 fn sanitize(text: &str, max_chars: usize) -> String {
     text.chars()
@@ -630,31 +641,44 @@ impl Sampler {
             );
         }
         cached.read_total = total;
-        let stale = !known
-            || cached.name != task.name
-            || tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
+        // `start` is the kernel starttime and the stat inode mtime is stamped at task creation:
+        // together they say whether a pid is still the same process. Probe the mtime only where
+        // a static refresh was already due: one `stat` replaces the `status` + `cmdline`
+        // open/read/close pairs that an unchanged pid used to pay every refresh interval.
+        let refresh_due = tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
+        let mtime = if !known || refresh_due {
+            stat_mtime(&self.path)
+        } else {
+            cached.stat_mtime
+        };
+        let identity_changed = !known || cached.stat_mtime != mtime;
+        let stale = identity_changed || (refresh_due && cached.name != task.name);
         if stale {
-            let status = read_proc_prefix(
-                &mut self.scratch,
-                proc_path(&mut self.path, pid, "status"),
-                STATUS_PREFIX,
-            );
-            let uid = status
-                .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                .map_or(u32::MAX, parse_uid);
-            cached.user = self
-                .user_cache
-                .as_ref()
-                .and_then(|names| names.get(&uid))
-                .cloned()
-                .unwrap_or_else(|| {
-                    if uid == u32::MAX {
-                        Arc::from("?")
-                    } else {
-                        Arc::from(uid.to_string())
-                    }
-                });
-            // exec can replace argv without changing PID/starttime; the refresh bounds that lag.
+            if identity_changed {
+                let status = read_proc_prefix(
+                    &mut self.scratch,
+                    proc_path(&mut self.path, pid, "status"),
+                    STATUS_PREFIX,
+                );
+                let uid = status
+                    .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                    .map_or(u32::MAX, parse_uid);
+                cached.user = self
+                    .user_cache
+                    .as_ref()
+                    .and_then(|names| names.get(&uid))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if uid == u32::MAX {
+                            Arc::from("?")
+                        } else {
+                            Arc::from(uid.to_string())
+                        }
+                    });
+                cached.stat_mtime = mtime;
+            }
+            // exec can replace argv without changing PID/starttime or the inode mtime; a rename
+            // still refreshes the command column, and the periodic deadline bounds the rest.
             // The sanitized text goes into one reused buffer, and the shared `Arc<str>` is only
             // rebuilt when the command actually changed.
             command_into(

@@ -115,6 +115,7 @@ pub(super) fn sync_gauge(
         WidgetKind::Ring => WidgetKind::Memory,
         kind => kind,
     };
+    let show_details = widget.flag("showDetails");
     let (title, percent, detail) = match metric {
         WidgetKind::Cpu => (
             "CPU",
@@ -128,13 +129,19 @@ pub(super) fn sync_gauge(
         _ => (
             "Memory",
             samples.memory.and_then(MemoryUsage::percent),
-            samples.memory.map_or_else(String::new, |memory| {
-                format!(
-                    "{} / {} GiB",
-                    format_gib(memory.used_kib()),
-                    format_gib(memory.total_kib)
-                )
-            }),
+            // The detail node is hidden when `showDetails` is off, so formatting the used and
+            // total GiB strings on every sample would allocate for text nobody can see.
+            if show_details {
+                samples.memory.map_or_else(String::new, |memory| {
+                    format!(
+                        "{} / {} GiB",
+                        format_gib(memory.used_kib()),
+                        format_gib(memory.total_kib)
+                    )
+                })
+            } else {
+                String::new()
+            },
         ),
     };
     let percent_text = percent.map_or_else(|| "--%".to_owned(), |value| format!("{value}%"));
@@ -142,7 +149,6 @@ pub(super) fn sync_gauge(
     let side_by_side = widget.flag("sideBySide") && widget.rect.width >= COMPACT_CARD_WIDTH;
     let show_title = widget.flag("showTitle");
     let show_percent = widget.flag("showPercent");
-    let show_details = widget.flag("showDetails");
     let text_color = color(widget.color("textColor"), 255);
     let caption_height = if !side_by_side && show_title {
         22.0
@@ -229,24 +235,27 @@ pub(super) fn history_pixels(width: u32, height: u32, series: &[(&VecDeque<u8>, 
             let y = max_y - f32::from(value.min(100)) / 100.0 * max_y;
             (x, y)
         };
-        let points: Vec<(f32, f32)> = values
-            .iter()
-            .enumerate()
-            .map(|(index, value)| point(index + HISTORY_LEN - count, *value))
-            .collect();
-        for pair in points.windows(2) {
-            let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+        // Walk consecutive pairs directly instead of collecting a `Vec<(f32, f32)>` of points:
+        // the drawn pixels are identical and one allocation per series disappears.
+        let mut previous: Option<(f32, f32)> = None;
+        for (index, value) in values.iter().enumerate() {
+            let (x1, y1) = point(index + HISTORY_LEN - count, *value);
+            let Some((x0, y0)) = previous else {
+                previous = Some((x1, y1));
+                continue;
+            };
             let steps = (x1 - x0).abs().max((y1 - y0).abs()).ceil().max(1.0) as u32;
             for step in 0..=steps {
                 let t = step as f32 / steps as f32;
                 let x = (x0 + (x1 - x0) * t).round() as u32;
                 let y = (y0 + (y1 - y0) * t).round() as u32;
-                let index = ((y.min(height - 1) * width + x.min(width - 1)) * 4) as usize;
-                pixels[index] = color.red;
-                pixels[index + 1] = color.green;
-                pixels[index + 2] = color.blue;
-                pixels[index + 3] = 255;
+                let pixel = ((y.min(height - 1) * width + x.min(width - 1)) * 4) as usize;
+                pixels[pixel] = color.red;
+                pixels[pixel + 1] = color.green;
+                pixels[pixel + 2] = color.blue;
+                pixels[pixel + 3] = 255;
             }
+            previous = Some((x1, y1));
         }
     }
     pixels
@@ -293,6 +302,33 @@ pub(super) fn sync_network(
     sync_graph(document, graph, slot, widget, "network", &series)
 }
 
+/// Borrowed equivalent of `GraphKey` equality: an unchanged graph compares without cloning
+/// each series into an owned `Vec` just to discard it on the early return.
+fn graph_matches(
+    graph: &Option<GraphKey>,
+    prefix: &'static str,
+    width: u32,
+    height: u32,
+    series: &[(&VecDeque<u8>, Rgb)],
+) -> bool {
+    let Some(graph) = graph else {
+        return false;
+    };
+    graph.prefix == prefix
+        && graph.width == width
+        && graph.height == height
+        && graph.series.len() == series.len()
+        && graph
+            .series
+            .iter()
+            .zip(series)
+            .all(|((stored, color), (live, live_color))| {
+                *color == *live_color
+                    && stored.len() == live.len()
+                    && stored.iter().zip(live.iter()).all(|(a, b)| a == b)
+            })
+}
+
 /// Shared sparkline path: sizes `widget-N-<prefix>-image` to the card and draws `series`.
 /// The image is rebuilt only when its size, colours or samples differ from `graph`.
 fn sync_graph(
@@ -311,6 +347,9 @@ fn sync_graph(
         .max(2.0)
         .floor() as u32;
     document.size(&id, width as f32, height as f32)?;
+    if graph_matches(graph, prefix, width, height, series) {
+        return Ok(());
+    }
     let key = GraphKey {
         prefix,
         width,
@@ -320,9 +359,6 @@ fn sync_graph(
             .map(|(values, color)| (values.iter().copied().collect(), *color))
             .collect(),
     };
-    if graph.as_ref() == Some(&key) {
-        return Ok(());
-    }
     document.image_rgba8(
         &id,
         RuntimeImage {

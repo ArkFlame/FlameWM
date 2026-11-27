@@ -72,6 +72,10 @@ impl ThemeCatalog {
         let mut entries = Vec::new();
         for root in search_roots(data_dirs) {
             let Ok(read) = fs::read_dir(&root) else {
+                eprintln!(
+                    "flamewm: theme root {} unreadable; skipping all themes under it; blast_radius=works:other-roots,icons,settings|degraded:themes-under-root",
+                    root.display()
+                );
                 continue;
             };
             let mut dirs: Vec<PathBuf> = read.filter_map(Result::ok).map(|e| e.path()).collect();
@@ -92,6 +96,13 @@ impl ThemeCatalog {
                 }
                 let text = fs::read_to_string(&index);
                 let readable = text.is_ok();
+                if !readable && index.is_file() {
+                    eprintln!(
+                        "flamewm: theme index {} unreadable; listing theme {} with no directories",
+                        index.display(),
+                        id
+                    );
+                }
                 let text = text.unwrap_or_default();
                 let parsed = IconThemeIndex::parse(&id, &text);
                 let name =

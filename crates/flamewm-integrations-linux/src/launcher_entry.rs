@@ -282,8 +282,15 @@ fn handle_message(
         let Some(owner) = message.sender().map(|value| value.to_string()) else {
             return MessageDisposition::Handled;
         };
-        if let Ok((app_uri, update)) = parse_update(&message.get_items()) {
-            *changed |= apply_update(entries, &owner, &app_uri, update);
+        match parse_update(&message.get_items()) {
+            Ok((app_uri, update)) => {
+                *changed |= apply_update(entries, &owner, &app_uri, update);
+            }
+            Err(()) => {
+                eprintln!(
+                    "flamewm: malformed launcher .desktop Update from {owner}; progress ignored"
+                );
+            }
         }
         return MessageDisposition::Handled;
     }

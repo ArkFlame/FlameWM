@@ -33,14 +33,31 @@ pub fn parse_ini_value(text: &str, section: &str, key: &str) -> Option<String> {
 /// `[Icons] Theme=` first, then GTK 3 `settings.ini` `gtk-icon-theme-name=`.
 #[must_use]
 pub fn configured_icon_theme(config_home: &Path) -> Option<String> {
-    fs::read_to_string(config_home.join("kdeglobals"))
-        .ok()
-        .and_then(|text| parse_ini_value(&text, "Icons", "Theme"))
-        .or_else(|| {
-            fs::read_to_string(config_home.join("gtk-3.0/settings.ini"))
-                .ok()
-                .and_then(|text| parse_ini_value(&text, "Settings", "gtk-icon-theme-name"))
-        })
+    let kde = config_home.join("kdeglobals");
+    let configured = match fs::read_to_string(&kde) {
+        Ok(text) => parse_ini_value(&text, "Icons", "Theme"),
+        Err(error) => {
+            eprintln!(
+                "flamewm: icon theme config {} unreadable: {error}; trying GTK settings",
+                kde.display()
+            );
+            None
+        }
+    };
+    if configured.is_some() {
+        return configured;
+    }
+    let gtk = config_home.join("gtk-3.0/settings.ini");
+    match fs::read_to_string(&gtk) {
+        Ok(text) => parse_ini_value(&text, "Settings", "gtk-icon-theme-name"),
+        Err(error) => {
+            eprintln!(
+                "flamewm: icon theme config {} unreadable: {error}; using bundled default",
+                gtk.display()
+            );
+            None
+        }
+    }
 }
 
 /// Cycle-safe recursive `Inherits` expansion. `hicolor` is always the final

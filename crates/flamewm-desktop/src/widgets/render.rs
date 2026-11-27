@@ -161,11 +161,21 @@ pub(crate) fn sync_widgets(
         if needs_time && sync_key_inputs_match(key, state, state.widgets.store.widgets()) {
             let accent = projection_accent(state);
             let placeholders = widget_placeholders_if_used(state, time);
+            // The key proves every non-time input is unchanged on this path, so a calendar's
+            // date-derived cells can only change on a day boundary, not on each seconds tick.
+            let previous_time = key.time;
             for slot in 0..MAX_WIDGETS {
                 let Some(widget) = state.widgets.store.widgets().get(slot).cloned() else {
                     continue;
                 };
                 if !uses_wall_time(&widget) {
+                    continue;
+                }
+                if widget.kind == WidgetKind::Calendar
+                    && previous_time.is_some_and(|before| {
+                        (before.year, before.month, before.day) == (time.year, time.month, time.day)
+                    })
+                {
                     continue;
                 }
                 let id = format!("widget-{}", slot + 1);

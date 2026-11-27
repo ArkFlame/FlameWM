@@ -1179,6 +1179,11 @@ pub fn run() -> Result<(), String> {
                 if !worker_gate.wait_visible(|| active.load(Ordering::Relaxed)) {
                     break;
                 }
+                // A hide can land between the gate check and the walk. Re-read the mirrored
+                // flag so an obscured/minimized window pays no `/proc` pass on that race.
+                if worker_hidden.load(Ordering::Relaxed) {
+                    continue;
+                }
                 let snapshot = sampler.collect();
                 if sender.try_send(snapshot).is_ok() {
                     match writer.write(&[1]) {
