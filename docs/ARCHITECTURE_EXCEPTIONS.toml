@@ -490,3 +490,10 @@ reason = "The AI usage worker reads the provider-documented `CLAUDE_CONFIG_DIR` 
 canonical_target = "crates/flamewm-shell/src/usage_host.rs"
 remove_by = "0.2.0"
 
+
+[[exception]]
+path = "crates/flamewm-screenshot/src/portal.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The capture fallback chain probes the standard session variables `WAYLAND_DISPLAY`, `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS` (presence only, values are never read or logged) to order portal, screencopy and X11 capture; they are the display server's own variables, not FlameWM settings."
+canonical_target = "crates/flamewm-screenshot/src/portal.rs"
+remove_by = "0.3.0"
