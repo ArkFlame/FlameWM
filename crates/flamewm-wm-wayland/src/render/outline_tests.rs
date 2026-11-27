@@ -59,22 +59,16 @@ fn outlines_off_or_zero_opacity_draw_nothing() {
     );
 }
 
-/// The ring is cached per window: an unchanged frame reuses the strips, while a move, a
-/// resize, a new radius and new outline settings each rebuild them.
+/// The ring is cached per window: an unchanged frame and a moved frame both reuse the strips,
+/// while a resize, a new radius and new outline settings each rebuild them.
 #[test]
 fn outline_cache_rebuilds_only_when_an_input_changes() {
     let mut decorations = decorated();
     let frame = Rect::new(10, 20, 300, 200);
     let ring = decorations.ring_strips(1, frame, 24).expect("ring");
     assert_eq!(
-        (
-            ring.origin,
-            ring.width,
-            ring.height,
-            ring.radius,
-            ring.builds
-        ),
-        ((10, 20), 300, 200, 24, 1)
+        (ring.width, ring.height, ring.radius, ring.builds),
+        (300, 200, 24, 1)
     );
     let strips = ring.strips.len();
     let ring = decorations.ring_strips(1, frame, 24).expect("ring");
@@ -83,14 +77,17 @@ fn outline_cache_rebuilds_only_when_an_input_changes() {
 
     let moved = Rect::new(11, 20, 300, 200);
     let ring = decorations.ring_strips(1, moved, 24).expect("ring");
-    assert_eq!((ring.origin, ring.builds), ((11, 20), 2), "a move rebuilds");
+    assert_eq!(
+        ring.builds, 1,
+        "a move reuses the strips: they are frame-relative"
+    );
 
     let resized = Rect::new(11, 20, 301, 200);
     let ring = decorations.ring_strips(1, resized, 24).expect("ring");
-    assert_eq!((ring.width, ring.builds), (301, 3), "a resize rebuilds");
+    assert_eq!((ring.width, ring.builds), (301, 2), "a resize rebuilds");
 
     let ring = decorations.ring_strips(1, resized, 12).expect("ring");
-    assert_eq!((ring.radius, ring.builds), (12, 4), "a new radius rebuilds");
+    assert_eq!((ring.radius, ring.builds), (12, 3), "a new radius rebuilds");
 
     assert!(decorations.set_outline(0x0011_2233, 127, 2));
     let ring = decorations.ring_strips(1, resized, 12).expect("ring");

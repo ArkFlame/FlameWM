@@ -583,6 +583,7 @@ fn scene_elements_into(
                     continue;
                 }
                 let first = out.len();
+                let mut dl = stage_timers::Lap::detail(!capture);
                 // Front-to-back list: the outline comes first in this window's group, so the ring
                 // sits above the client and the titlebar and above every window behind it.
                 out.extend(decorations.outline_elements(
@@ -592,6 +593,7 @@ fn scene_elements_into(
                     outline_radius(managed),
                     scale,
                 ));
+                dl.mark(stage_timers::Stage::Outline);
                 let window_backdrop = !capture
                     && window_needs_backdrop(
                         true,
@@ -625,6 +627,7 @@ fn scene_elements_into(
                             (element, _) => element,
                         }),
                 );
+                dl.mark(stage_timers::Stage::Surface);
                 if window_backdrop {
                     out.extend(decorations.window_backdrop(
                         renderer,
@@ -638,6 +641,7 @@ fn scene_elements_into(
                         scale,
                     ));
                 }
+                dl.mark(stage_timers::Stage::WindowBackdrop);
                 if managed.decorated() {
                     // A cell-grid client may commit a buffer shorter than its configured size. Paint
                     // the frame body behind the client over its full extent, so no desktop shows
@@ -680,6 +684,7 @@ fn scene_elements_into(
                     ) {
                         out.push(element);
                     }
+                    dl.mark(stage_timers::Stage::Titlebar);
                 }
                 // Everything this window paints is now in `out`; its opaque areas hide whatever
                 // lower windows are fully behind it.

@@ -47,7 +47,6 @@ pub(super) struct OutlineStrip {
 
 /// One window's cached outline: the inputs it was built from and the strips to draw.
 pub(super) struct OutlineRing {
-    pub(super) origin: (i32, i32),
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) radius: u32,
@@ -58,18 +57,11 @@ pub(super) struct OutlineRing {
 }
 
 impl OutlineRing {
-    /// Whether the cached strips still describe this window at these inputs.
-    pub(super) fn matches(
-        &self,
-        origin: (i32, i32),
-        size: (u32, u32),
-        radius: u32,
-        paint: OutlinePaint,
-    ) -> bool {
-        self.origin == origin
-            && (self.width, self.height) == size
-            && self.radius == radius
-            && self.paint == paint
+    /// Whether the cached strips still describe this window at these inputs. The frame position is
+    /// not an input: strips are offsets from the frame origin and are placed when the element is
+    /// built, so a moved window reuses them instead of re-rasterising and re-uploading every frame.
+    pub(super) fn matches(&self, size: (u32, u32), radius: u32, paint: OutlinePaint) -> bool {
+        (self.width, self.height) == size && self.radius == radius && self.paint == paint
     }
 }
 
@@ -522,13 +514,12 @@ impl Decorations {
         {
             return None;
         }
-        let origin = (frame.x, frame.y);
         let size = (frame.w as u32, frame.h as u32);
         let radius = u32::from(radius);
         let stale = self
             .rings
             .get(&window)
-            .is_none_or(|ring| !ring.matches(origin, size, radius, paint));
+            .is_none_or(|ring| !ring.matches(size, radius, paint));
         if stale {
             let builds = self.rings.get(&window).map_or(0, |ring| ring.builds) + 1;
             let strips = outline::outline_strips(
@@ -556,7 +547,6 @@ impl Decorations {
             self.rings.insert(
                 window,
                 OutlineRing {
-                    origin,
                     width: size.0,
                     height: size.1,
                     radius,
