@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# One-shot, scoped 1 s COMPOSITION baseline for a running flamewm session.
+# Samples every flamewm-* process: RSS, threads, CPU tick share and wakeups/s
+# (voluntary + nonvoluntary ctxt switches / s) from /proc. Reports shares of
+# the sample, never absolute CPU. No python, no sleep binary, no builds.
+# Usage: scripts/bench-baseline [--out docs/PERF_BASELINE.md]
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+WINDOW=1          # seconds of simulated usage: one bounded window, never a loop
+OUT=""
+MARKER='bench-baseline:captured'
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/bench-baseline [--out docs/PERF_BASELINE.md]
+
+Against an already running flamewm session, sample per-process RSS, thread
+count, CPU tick share and wakeups/s for every flamewm-* process over one
+second. Prints a composition table (share of the sample, NOT absolute CPU).
+
+With --out PATH, also append one dated, frozen section containing the commit
+hash, machine identity, composition and raw rows. A baseline is taken ONCE:
+if PATH already holds a captured section, the script refuses to touch it.
+
+Tools: rg, sed, awk and coreutils only. Does not build or start anything.
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --out)
+      (($# >= 2)) || { echo "bench-baseline: --out needs a path" >&2; exit 2; }
+      OUT="$2"; shift 2 ;;
+    --out=*) OUT="${1#--out=}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "bench-baseline: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+# Baseline is frozen after the first capture. Refuse before sampling at all.
+if [[ -n "$OUT" && -f "$OUT" ]] && rg -q -F "$MARKER" "$OUT"; then
+  echo "bench-baseline: $OUT already contains a frozen baseline section; refusing to overwrite (baseline is taken ONCE)" >&2
+  exit 1
+fi
+
+# Discover flamewm-* processes from /proc/<pid>/comm (prefix survives comm truncation).
+mapfile -t PIDS < <(
+  for comm in /proc/[0-9]*/comm; do
+    [[ -r "$comm" ]] || continue
+    name="$(cat "$comm" 2>/dev/null || true)"
+    case "$name" in
+      flamewm-*) basename "$(dirname "$comm")" ;;
+    esac
+  done | sort -n
+)
+
+if ((${#PIDS[@]} == 0)); then
+  echo "bench-baseline: no flamewm-* processes found; start a running flamewm session first" >&2
+  exit 1
+fi
+
+# snapshot PID -> "rss_kB threads utime stime voluntary_ctxt nonvoluntary_ctxt"
+snapshot() {
+  local pid="$1" stat_line rss threads utime stime v nv
+  rss="$(awk '/^VmRSS:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+  threads="$(awk '/^Threads:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+  # comm may contain spaces/parens: strip through the last ')' then utime/stime are fields 12,13.
+  stat_line="$(sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null || true)"
+  read -r utime stime <<<"$(awk '{print $12, $13}' <<<"$stat_line" 2>/dev/null || true)"
+  v="$(awk '/^voluntary_ctxt_switches:/{print $2; exit}' "/proc/$pid/sched" 2>/dev/null || true)"
+  nv="$(awk '/^nonvoluntary_ctxt_switches:/{print $2; exit}' "/proc/$pid/sched" 2>/dev/null || true)"
+  printf '%s %s %s %s %s %s\n' "${rss:-0}" "${threads:-0}" "${utime:-0}" "${stime:-0}" "${v:-0}" "${nv:-0}"
+}
+
+declare -A T0 W0 RSS THREADS NAME
+for pid in "${PIDS[@]}"; do
+  read -r rss threads utime stime v nv < <(snapshot "$pid")
+  T0[$pid]=$((utime + stime))
+  W0[$pid]=$((v + nv))
+  RSS[$pid]=$rss
+  THREADS[$pid]=$threads
+  NAME[$pid]="$(cat "/proc/$pid/comm" 2>/dev/null || echo "pid-$pid")"
+done
+
+# Exactly one bounded window; read -t timeout, not the sleep binary and not a polling loop.
+read -rt "$WINDOW" <> <(:) || true
+
+total_ticks=0
+total_wake=0
+RECORDS=""
+for pid in "${PIDS[@]}"; do
+  read -r _ _ utime stime v nv < <(snapshot "$pid")
+  t1=$((utime + stime))
+  w1=$((v + nv))
+  dt=$((t1 - ${T0[$pid]}))
+  dw=$((w1 - ${W0[$pid]}))
+  if ((dt < 0)); then dt=0; fi
+  if ((dw < 0)); then dw=0; fi
+  total_ticks=$((total_ticks + dt))
+  total_wake=$((total_wake + dw))
+  # fields: pid name rss threads ticks_t0 ticks_t1 ctxt_t0 ctxt_t1 d_ticks d_ctxt
+  RECORDS+="$pid"$'\t'"${NAME[$pid]}"$'\t'"${RSS[$pid]}"$'\t'"${THREADS[$pid]}"$'\t'"${T0[$pid]}"$'\t'"$t1"$'\t'"${W0[$pid]}"$'\t'"$w1"$'\t'"$dt"$'\t'"$dw"$'\n'
+done
+
+# Highest CPU-tick share first, so the largest share can be fixed then re-ranked.
+SORTED="$(printf '%s' "$RECORDS" | sort -t $'\t' -k9,9nr)"
+
+format_composition() {
+  awk -F'\t' -v tt="$total_ticks" -v tw="$total_wake" -v win="$WINDOW" '
+    function pct(n, d) { return (d > 0 ? sprintf("%.1f", 100 * n / d) : "0.0") }
+    BEGIN {
+      print "| Process | RSS (kB) | Threads | Tick Δ | Tick share % | Wakeups/s | Wake share % |"
+      print "| --- | --- | --- | --- | --- | --- | --- |"
+    }
+    {
+      printf "| %s (%s) | %s | %s | %s | %s | %.1f | %s |\n", \
+        $2, $1, $3, $4, $9, pct($9, tt), ($10 / win), pct($10, tw)
+    }'
+}
+
+format_raw() {
+  awk -F'\t' '
+    BEGIN {
+      print "| PID | Name | RSS (kB) | Threads | ticks t0 | ticks t1 | ctxt t0 | ctxt t1 | Δticks | Δctxt |"
+      print "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    }
+    { printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", \
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10 }'
+}
+
+echo "FlameWM baseline sample — ${WINDOW}s window, ${#PIDS[@]} flamewm-* process(es)"
+echo "Composition (shares of this sample; NOT absolute CPU):"
+printf '%s\n' "$SORTED" | format_composition
+
+if [[ -n "$OUT" ]]; then
+  commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  machine="$(uname -srm 2>/dev/null || echo unknown)"
+  cpu="$(awk -F: '/^model name/{sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || echo unknown)"
+  stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  {
+    echo
+    echo "---"
+    echo
+    echo "## Frozen baseline capture — $stamp"
+    echo
+    echo "<!-- $MARKER — baseline is taken ONCE; do not capture again -->"
+    echo
+    echo "- Commit: \`$commit\`"
+    echo "- Machine: \`$machine\`"
+    echo "- CPU model: $cpu"
+    echo "- Window: ${WINDOW}s, ${#PIDS[@]} flamewm-* process(es)"
+    echo
+    echo "### Composition (share of sample, NOT absolute CPU)"
+    echo
+    printf '%s\n' "$SORTED" | format_composition
+    echo
+    echo "### Raw rows"
+    echo
+    printf '%s\n' "$SORTED" | format_raw
+    echo
+  } >> "$OUT"
+  echo "Appended frozen baseline section to $OUT"
+fi
