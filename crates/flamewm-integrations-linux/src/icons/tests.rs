@@ -766,3 +766,13 @@ fn ark_ai_svg_rasterises_at_taskbar_sizes() {
         assert!(opaque_white > 0, "ARK AI glyph is empty at {size}px");
     }
 }
+
+#[test]
+fn builtin_glyph_is_opaque_inside_and_clear_at_corners() {
+    let glyph = super::builtin_glyph(20);
+    assert_eq!((glyph.width, glyph.height), (20, 20));
+    assert_eq!(glyph.pixels.len(), 20 * 20 * 4);
+    assert_eq!(glyph.pixels[3], 0, "top-left corner must be transparent");
+    let centre = (10 * 20 + 10) * 4;
+    assert_eq!(glyph.pixels[centre + 3], 255, "centre must be opaque");
+}

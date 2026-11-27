@@ -907,11 +907,24 @@ impl IconResolver {
                 raster.fallback_reason = candidate_error;
                 Ok(raster)
             }
-            Err(fallback_error) => Err(IconError::FallbackUnavailable {
-                fallback,
-                fallback_error: Box::new(fallback_error),
-                candidate_error: candidate_error.map(Box::new),
-            }),
+            Err(fallback_error) => {
+                // The packaged glyph is missing or unreadable (broken install): never leave
+                // the UI blank. Report once and return a generated neutral rounded square.
+                static REPORTED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!(
+                        "flamewm: packaged icon fallback {} unavailable ({fallback_error}); \
+                         using a generated glyph. Application icons without an installed theme \
+                         degrade to a plain square",
+                        fallback.display()
+                    );
+                }
+                let mut raster = builtin_glyph(size.physical.max(1));
+                raster.source = fallback.to_string_lossy().into_owned();
+                raster.fallback_reason = Some(fallback_error);
+                Ok(raster)
+            }
         }
     }
 
@@ -1035,6 +1048,37 @@ fn decode_webp(
         .map_err(|message| invalid_raster_error(path, "WebP", &message))?;
     let image = scale_to_physical(path, "WebP", natural, size)?;
     Ok(raster_from_image(path, image, origin))
+}
+
+/// Last-resort glyph built in code: a neutral grey rounded square, `side` pixels wide.
+fn builtin_glyph(side: u32) -> Rgba8Raster {
+    let radius = (side / 5).max(1);
+    let mut pixels = Vec::with_capacity((side as usize) * (side as usize) * 4);
+    for y in 0..side {
+        for x in 0..side {
+            // Distance outside the rounded corner arcs; inside the body the pixel is opaque.
+            let dx = radius
+                .saturating_sub(x)
+                .max(x.saturating_sub(side - 1 - radius));
+            let dy = radius
+                .saturating_sub(y)
+                .max(y.saturating_sub(side - 1 - radius));
+            let inside = dx * dx + dy * dy <= radius * radius;
+            pixels.extend_from_slice(if inside {
+                &[128, 132, 140, 255]
+            } else {
+                &[0, 0, 0, 0]
+            });
+        }
+    }
+    Rgba8Raster {
+        source: String::from("builtin-glyph"),
+        width: side,
+        height: side,
+        pixels,
+        origin: IconOrigin::PackagedFallback,
+        fallback_reason: None,
+    }
 }
 
 fn raster_from_image(
