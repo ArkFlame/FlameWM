@@ -253,6 +253,9 @@ pub(crate) use persist::{PersistOutcome, cleanup_own_temps, persist_settings};
 mod tests;
 
 #[cfg(test)]
+mod load_tests;
+
+#[cfg(test)]
 mod glass_settings_tests;
 
 #[cfg(test)]

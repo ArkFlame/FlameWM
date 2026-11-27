@@ -109,7 +109,11 @@ pub fn hot_pids_into(hot: &mut Vec<u32>, ranked: &mut Vec<(f64, u32)>, processes
     hot.clear();
     hot.extend(ranked.iter().map(|&(_, pid)| pid));
     // Ascending, so the pid walk can test membership with one forward index instead of hashing.
-    hot.sort_unstable();
+    // A snapshot hands us processes in pid order; when they all fit in `hot` the extension is
+    // already ascending, so sorting again is pure work with no effect on the membership set.
+    if !hot.windows(2).all(|pair| pair[0] < pair[1]) {
+        hot.sort_unstable();
+    }
 }
 
 /// Static-per-process fields are re-read on first sight, on a rename (comm changed), on PID

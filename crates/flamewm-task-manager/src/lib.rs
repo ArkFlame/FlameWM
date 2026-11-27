@@ -326,7 +326,10 @@ impl Application {
                 .filter(|(_, process)| process_matches(process, &query))
                 .map(|(index, _)| index),
         );
-        self.hits.sort_unstable_by(|&ai, &bi| {
+        // The sampler hands processes over in ascending pid order. If that order already satisfies
+        // the selected sort, sorting cannot change it, so skip the O(n log n) pass; the check walks
+        // the list once and stops at the first inversion in the usual (pid-ordered) case.
+        let compare = |&ai: &usize, &bi: &usize| {
             let a = &processes[ai];
             let b = &processes[bi];
             let order = match sort {
@@ -338,7 +341,14 @@ impl Application {
             };
             let order = if descending { order.reverse() } else { order };
             order.then_with(|| a.pid.cmp(&b.pid))
-        });
+        };
+        if !self
+            .hits
+            .windows(2)
+            .all(|pair| compare(&pair[0], &pair[1]).is_le())
+        {
+            self.hits.sort_unstable_by(compare);
+        }
     }
     fn selected_process(&self) -> Option<&model::Process> {
         let (pid, start) = self.selected?;
