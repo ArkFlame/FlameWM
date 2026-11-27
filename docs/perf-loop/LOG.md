@@ -344,3 +344,6 @@ All fs calls (scan, trash list, copy/move/delete in jobs.rs, search, mime, thumb
 
 ## Live idle read (nested harness, Intel GL, ~10 s, no input)
 flamewm-wayland RSS ~123 MB, +55 voluntary ctx switches (~5.5/s); flamewm-shell RSS ~23 MB, +18 (~1.8/s). Idle wakeups already very low, no unit. Compositor RSS includes the winit host window and GL driver, so it is not a clean DRM-session figure and is not ranked.
+
+## Compositor RSS breakdown (smaps, nested harness)
+RSS 123 MB = libLLVM 45 + nvidia GL libs 31 + gallium 13 (shared, file-backed driver pages) + binary 7 + heap 11.7 + anon 4. Private anon ~25 MB. Renderer reported as Mesa Intel UHD (hardware). No RAM unit: the compositors own footprint is small; why libLLVM is resident on the hardware path is a driver question, not ranked.
