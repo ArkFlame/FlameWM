@@ -127,9 +127,15 @@ fn present_wayland(username: &str) -> ExitCode {
     // Settings load after the lock request (see `wayland::run_with`) and feed the frame closure.
     let shared = Rc::new(RefCell::new(flamewm_lock::settings::LockSettings::default()));
     let painted = Rc::clone(&shared);
+    // The blurred wallpaper is about 90% of a repaint (about 200 ms at 1080p), and it only changes with
+    // the settings or the output size, so keep the last one instead of re-blurring on every keystroke.
+    let backgrounds: Rc<RefCell<Option<(u32, u32, flamewm_ui_document::RuntimeImage)>>> =
+        Rc::new(RefCell::new(None));
+    let stale = Rc::clone(&backgrounds);
     let load = move || {
         let loaded = session::load_settings();
         *shared.borrow_mut() = loaded.clone();
+        *stale.borrow_mut() = None;
         loaded
     };
     match wayland::run(load, username, move |view, width, height| {
@@ -137,7 +143,17 @@ fn present_wayland(username: &str) -> ExitCode {
         let settings = &*current;
         let template = document::template()?;
         let mut runtime = template.into_runtime_document();
-        let background = document::background_image(settings, width, height);
+        let background = {
+            let mut cache = backgrounds.borrow_mut();
+            match cache.as_ref() {
+                Some((w, h, image)) if (*w, *h) == (width, height) => image.clone(),
+                _ => {
+                    let image = document::background_image(settings, width, height);
+                    *cache = Some((width, height, image.clone()));
+                    image
+                }
+            }
+        };
         {
             let mut access = UiDocumentView::from_runtime(&mut runtime, None);
             document::apply_document(&mut access, settings, width, height, background)?;

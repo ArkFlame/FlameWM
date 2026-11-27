@@ -369,3 +369,6 @@ The Wayland closure in main.rs applied the document and the view but never `appl
 Wayland lock summary this session: idle poll 62/s -> 1/s, red/blue swap, no clock/date, popups open: all fixed; the Wayland lock had never been looked at in a frame before.
 
 Wayland lock avatar ring fringe fixed (u169): straight image pixels went into a premultiplied blend. See units-b/u169.
+
+## Wayland lock: cache the blurred wallpaper across repaints
+Area: flamewm-lock Wayland path (`present_wayland` frame closure in main.rs). Scoped timing of ONE repaint at 1080p (release, 3 rounds): template 0.06 ms, background decode+blur 197-366 ms, apply 1.1 ms, paint 18-32 ms. Composition: background ~90%, paint ~8%, rest ~1%. Every keystroke (dots) and every minute tick re-ran the 200 ms wallpaper blur. Change: keep the last blurred `RuntimeImage` keyed by output size, cleared when the settings load. Expected: repaint ~220 ms -> ~20 ms (the paint), a 10x cut in typing latency and in CPU per keystroke; wallpaper is computed once per size. Frame read after the change: same lock frame (clock, date, ring, field, four power rows), 0.1% pixel difference vs the previous frame (new clock minute, ring fix). Not measured in-process after the change; the 20 ms figure is the measured paint share, not a re-measurement.
