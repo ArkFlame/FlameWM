@@ -37,50 +37,6 @@ pub(crate) fn write_atomic_text(path: &Path, text: &str) -> io::Result<()> {
     ))
 }
 
-/// Moves an unparsable settings file aside to `<name>.bak` (or `<name>.bak.N` when that is taken),
-/// so the next save cannot silently destroy the user's data. Precedent: XDG/KConfig-style config
-/// files are never overwritten blind; `.vendor/` was not present, so no upstream source was checked.
-pub(crate) fn quarantine_unparsable(path: &Path) -> io::Result<PathBuf> {
-    let file_name = path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "quarantine path must name a file",
-        )
-    })?;
-    let parent = parent_dir(path);
-    for index in 0..=u16::MAX {
-        let mut name = file_name.to_os_string();
-        name.push(".bak");
-        if index > 0 {
-            name.push(format!(".{index}"));
-        }
-        let backup = parent.join(name);
-        if fs::symlink_metadata(&backup).is_ok() {
-            continue;
-        }
-        fs::rename(path, &backup)?;
-        return Ok(backup);
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no free backup name for unparsable settings",
-    ))
-}
-
-/// Startup path for an unparsable settings file: quarantines it and reports where it went.
-pub(crate) fn quarantine_and_report(path: &Path) {
-    match quarantine_unparsable(path) {
-        Ok(backup) => eprintln!(
-            "flamewm: preserved unparsable settings at {}",
-            backup.display()
-        ),
-        Err(error) => eprintln!(
-            "flamewm: could not preserve unparsable settings {}: {error}",
-            path.display()
-        ),
-    }
-}
-
 fn parent_dir(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -140,23 +96,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-
-    #[test]
-    fn quarantine_keeps_corrupt_bytes_and_never_overwrites_earlier_backup() {
-        let dir = temp_dir("quarantine");
-        let path = dir.join("settings.conf");
-        let fixtures: [&[u8]; 3] = [b"", b"revision=12\naccent=#11", b"\xff\xfe\x00garbage\x01"];
-        for (round, bytes) in fixtures.iter().enumerate() {
-            fs::write(&path, bytes).unwrap();
-            let backup = quarantine_unparsable(&path).expect("quarantine");
-            assert!(!path.exists(), "corrupt file moved aside (round {round})");
-            assert_eq!(fs::read(&backup).unwrap(), *bytes, "exact bytes kept");
-        }
-        let backups = fs::read_dir(&dir).unwrap().count();
-        assert_eq!(backups, 3, "each quarantine gets its own backup name");
-        assert_eq!(fs::read(dir.join("settings.conf.bak")).unwrap(), b"");
-        let _ = fs::remove_dir_all(&dir);
-    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let path =
