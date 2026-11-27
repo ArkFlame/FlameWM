@@ -199,7 +199,7 @@ fn find_font() -> Option<Font> {
         )
         .ok()
     });
-    font.clone()
+    (*font).clone()
 }
 
 /// One font at one pixel size: the only source of glyph advances and kerning.
