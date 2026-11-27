@@ -254,3 +254,7 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Tests: new `an_undrained_flood_is_capped_and_resumes_when_the_ui_catches_up` (queued <= cap + one batch, no growth while paused, resumes after `consumed`); the existing flood test now reports consumed like the UI does (it had exactly a 4 MiB flood = the cap). 210 terminal tests green, clippy `-D warnings` clean.
 - Not measured end to end in the nested compositor (the harness cannot type `yes` into a pane); the throughput path is covered by the flood test (4 MiB, frame-cadence wakes, no byte lost) still passing within its time budget.
 - Composition shift: worst-case terminal RAM during a flood is bounded to ~4 MiB of queued output plus recycled buffers instead of unbounded.
+
+## Lock scan (compositor, explorer): nothing ranked
+- Listed every non-test `.lock()` site. Compositor locks guard small in-memory state (font glyph cache: one rasterize per cache miss, bounded by `CACHE_LIMIT`; control queues; surface data). Explorer `chunk_for_device` releases its map lock before the sysfs read; thumbnail/search/journal locks wrap map updates only.
+- No lock held across disk, network or a blocking call found. No change.
