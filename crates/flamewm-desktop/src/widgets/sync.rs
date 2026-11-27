@@ -26,12 +26,18 @@ pub(super) fn sync_analog(
         hands,
         accent,
     };
-    if state.widgets.faces[slot] != Some(key) {
+    // The twelve numeral nodes do not read the clock: write them only when their size or hand
+    // colour changes, instead of reformatting twelve ids on every one-second face refresh.
+    let label_key = AnalogLabelKey { size, hands };
+    if state.widgets.analog_labels[slot] != Some(label_key) {
         for number in 1..=12 {
             let numeral = format!("{id}-analog-n{number}");
             document.foreground(&numeral, color(hands, 255))?;
             document.font_size(&numeral, (side * 0.11).clamp(9.0, 22.0))?;
         }
+        state.widgets.analog_labels[slot] = Some(label_key);
+    }
+    if state.widgets.faces[slot] != Some(key) {
         document.image_rgba8(
             &format!("{id}-analog-image"),
             RuntimeImage {
