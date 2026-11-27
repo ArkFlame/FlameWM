@@ -57,3 +57,5 @@ Caveat: pre-wave binaries; nested winit, idle, no input. The wave 2-6 edits are 
 | B2 | flamewm-wayland idle wakeups | 46% of wakeups, 19/s | winit pacing / redraw request loop likely; p29 found loop event driven in code | per-thread ctxt delta to find the thread; check winit frame pacing while idle | open |
 | B3 | flamewm-gpu-helper RSS | 142 MB, largest RSS | GPU context + buffers in helper for a nested idle session | lazy-start helper on first GPU use, or software path when idle | open |
 | B4 | flamewm-wayland RSS | 124 MB | glyph/atlas + surfaces | p20 glyph byte cap landed (unmeasured) | open, re-sample after release build |
+
+Correction (same day, re-sample 30 s after launch, per-thread voluntary ctxt switches over 5 s): flamewm-wayland busiest thread 1.4/s, others 0.4/s and 0.2/s. The baseline 19/s for wayland (and likely desktop 21/s) was startup churn inside the 1 s window. B2 is downgraded to "not an idle problem"; B1 needs a steady-state re-sample of desktop before any cut. The earlier 179/s thread seen in one sample was a startup window too. Next baseline-style sample must start at least 30 s after launch.

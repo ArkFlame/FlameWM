@@ -1,7 +1,16 @@
 # Unit p52-conversion-downloads-fail
-STATUS: OPEN
+STATUS: DONE
 
 Crates flamewm-conversion-core and flamewm-downloads-core: missing converter binary, partial download, disk full, bad URL: error value, cleanup of partial files, no panic. Max 3 edits.
 
 ## Result
-STARTED
+
+Investigation (rg/Read): all four named fault modes already produce error values on the existing paths. A missing converter is rejected before any temporary is reserved in `convert_image` (conversion.rs:262), `convert_media` (media.rs:126) and `convert_file` (conversion.rs:372); `run_tool` and `extract_archive` report a missing provider and clean up their reserved output. Partial downloads (`crdownload`, `part`, `download`, `tmp`, `opdownload`, `partial`) are excluded by `is_candidate_name` (lib.rs:98), and `copy_then_commit` removes its hidden partial on copy or rename failure (lib.rs:289-298). Disk-full writes in conversions and tools return `Err`, and the outer `result.is_err()` cleanup removes the reserved temporary. No shell is used and no URL text is executed. The three real gaps were a half-written notice latch left behind after a disk-full write, a public move entry point that accepted path-like or URL text and still-growing partial names, and an unchecked byte slice on a crafted archive name. Reference check: `.vendor/kensaku-master/src-tauri/src/config.rs:503` uses the same temp/fsync/rename pattern but does not remove its temp on error; `.vendor/ark-master` reports corrupt archives as error signals instead of crashing, matching the no-panic rule.
+
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| crates/flamewm-downloads-core/src/lib.rs:235 | `persist_notice` used bare `?` after `File::create`; a disk-full `write_all`/`sync_all` or a failed rename left a half-written `.tmp` partial behind. | After creating the temp ourselves, run write/sync/rename in a closure, remove the temp on error, and still return the original `io::Error`. | UNBUILT — no cargo was run; cleanup is best effort and the error value is unchanged. |
+| crates/flamewm-downloads-core/src/lib.rs:312 | `move_into_category` accepted any `&str`, so path-like or URL text and still-growing partial names could be joined into a path outside the tracked set. | Gate the public entry with the crate's own `is_candidate_name` and return `InvalidInput` otherwise; the desktop caller already calls `classify` first, so valid names are unaffected. | UNBUILT — a caller relying on hidden or partial names now gets an error; no build or test ran. |
+| crates/flamewm-conversion-core/src/conversion/tools.rs:241 | `&name[..name.len() - suffix_len]` was an unchecked slice computed from a lowercased copy of an untrusted archive name. | Use `name.get(..len.saturating_sub(suffix_len))` with an error value on `None`, so a crafted name cannot panic. | UNBUILT — no behavior change for valid archives; no build or test ran. |
+
+PASS: all four fault modes already return error values rather than panicking; the three edits close the remaining partial-file and panic gaps without changing valid-input behavior or visuals. No `git`, `cargo`, Python, build or test was run in this shared checkout, so every edit is UNBUILT and the orchestrator must verify it after the batch lands.
