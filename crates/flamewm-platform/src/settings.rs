@@ -246,8 +246,8 @@ mod snapshot_serialize;
 mod validate;
 use validate::*;
 
-pub(crate) use load::{LoadOutcome, load_settings};
-pub(crate) use persist::{PersistOutcome, cleanup_own_temps, persist_settings};
+pub(crate) use load::load_settings;
+pub(crate) use persist::{PersistOutcome, persist_settings};
 
 #[cfg(test)]
 mod tests;

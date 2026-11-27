@@ -6,7 +6,6 @@
 //! propagates: the in-memory settings remain authoritative and the user gets one error-line notice.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use super::{ConfigStore, ProductSettings};
