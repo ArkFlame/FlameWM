@@ -194,7 +194,7 @@ fn find_font() -> Option<Font> {
             );
         });
         Font::from_bytes(
-            include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf"),
+            &include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf")[..],
             FontSettings::default(),
         )
         .ok()

@@ -1190,17 +1190,13 @@ fn execute() -> Result<(), String> {
         if let Some(toast_icon_fd) = host.borrow().icon_wake_fd() {
             let toast_state = Rc::clone(host);
             reactor
-                .register_raw_fd_with_action(
-                    toast_icon_fd,
-                    calloop::Interest::READ,
-                    move |_, _| {
-                        if toast_state.borrow().drain_icon_wake() {
-                            flamewm_reactor::FdAction::Continue
-                        } else {
-                            flamewm_reactor::FdAction::Remove
-                        }
-                    },
-                )
+                .register_raw_fd_with_action(toast_icon_fd, calloop::Interest::READ, move |_, _| {
+                    if toast_state.borrow().drain_icon_wake() {
+                        flamewm_reactor::FdAction::Continue
+                    } else {
+                        flamewm_reactor::FdAction::Remove
+                    }
+                })
                 .map_err(|error| format!("register toast icon result source: {error}"))?;
         }
     }

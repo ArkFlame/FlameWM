@@ -144,6 +144,7 @@ impl Cursors {
 
     /// The decoded cursor for `icon`, then the theme's default arrow, then the built-in arrow.
     fn named(&mut self, icon: CursorIcon) -> &Named {
+        let mut found = None;
         for wanted in [icon, CursorIcon::Default] {
             if !self.named.contains_key(&wanted) {
                 let loaded = self
@@ -158,8 +159,9 @@ impl Cursors {
                 }
                 self.named.insert(wanted, loaded);
             }
-            if let Some(named) = self.named.get(&wanted).and_then(Option::as_ref) {
-                return named;
+            if self.named.get(&wanted).and_then(Option::as_ref).is_some() {
+                found = Some(wanted);
+                break;
             }
             // Report the degraded outcome; the theme lookup failure itself is logged above.
             eprintln!(
@@ -167,7 +169,11 @@ impl Cursors {
                 wanted.name()
             );
         }
-        &self.fallback
+        // One borrow after the loop: returning a borrow from inside it conflicts with the insert.
+        match found.and_then(|wanted| self.named.get(&wanted).and_then(Option::as_ref)) {
+            Some(named) => named,
+            None => &self.fallback,
+        }
     }
 }
 

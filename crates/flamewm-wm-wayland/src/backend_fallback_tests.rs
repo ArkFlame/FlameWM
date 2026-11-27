@@ -53,11 +53,7 @@ fn each_failure_appends_a_record() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "one record per injected failure: {text}");
     assert!(lines[0].contains("stage=\"drm\""), "{}", lines[0]);
-    assert!(
-        lines[0].contains("code=subsystem_error"),
-        "{}",
-        lines[0]
-    );
+    assert!(lines[0].contains("code=subsystem_error"), "{}", lines[0]);
     assert!(
         lines[0].contains("cause=\"injected drm init failure\""),
         "{}",
@@ -65,11 +61,7 @@ fn each_failure_appends_a_record() {
     );
     assert!(lines[0].contains("fallback_taken=true"), "{}", lines[0]);
     assert!(lines[1].contains("stage=\"nested_winit\""), "{}", lines[1]);
-    assert!(
-        lines[1].contains("code=subsystem_error"),
-        "{}",
-        lines[1]
-    );
+    assert!(lines[1].contains("code=subsystem_error"), "{}", lines[1]);
     assert!(lines[1].contains("fallback_taken=true"), "{}", lines[1]);
 
     let _ = std::fs::remove_file(&path);

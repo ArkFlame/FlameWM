@@ -82,6 +82,7 @@ pub use start::{
     start_selectable_window, start_visible_results, view_after_back, ProgramRow, START_STATUS_NODE,
     START_WHEEL_ROWS,
 };
+pub(crate) use start::{project_start_with_results, start_program_rows_and_results};
 pub use usage::{project_usage, project_usage_focus};
 pub use weather::{project_weather_popup, project_weather_tray};
 
