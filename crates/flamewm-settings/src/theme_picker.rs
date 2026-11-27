@@ -297,6 +297,11 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
     }
     registry.icon = with_bundled_icon_themes(registry.icon);
     registry.cursor = with_installed_cursor_themes(registry.cursor);
+    // Only the first THEME_ROW_SLOTS rows upload previews, and the selected-value image
+    // uses `previews.first()`, so a hidden theme needs no other decoded examples.
+    for item in registry.icon.iter_mut().skip(THEME_ROW_SLOTS) {
+        item.previews.truncate(1);
+    }
     registry
 }
 

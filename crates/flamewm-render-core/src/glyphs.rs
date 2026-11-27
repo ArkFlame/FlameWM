@@ -181,14 +181,25 @@ fn find_font() -> Option<Font> {
         }
     }
 
-    // Last resort: a small permissively licensed font shipped with the binary. The bytes are
-    // referenced only on this failure path, so a machine with system fonts never faults them
-    // into RAM; keeping the include_bytes! here avoids an eagerly used static as well.
-    Font::from_bytes(
-        include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf"),
-        FontSettings::default(),
-    )
-    .ok()
+    // Last resort: a permissively licensed font shipped with the binary. The bytes are referenced
+    // only on this failure path, so a machine with system fonts never faults them into RAM; keeping
+    // the include_bytes! here avoids an eagerly used static as well. The parse is cached behind the
+    // OnceLock so a font-less machine pays for it once, and only here.
+    static FALLBACK: std::sync::OnceLock<Option<Font>> = std::sync::OnceLock::new();
+    let font = FALLBACK.get_or_init(|| {
+        static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
+        NO_FONT_LOG.call_once(|| {
+            eprintln!(
+                "flamewm: no system font found; using bundled DejaVuSansMono fallback; blast_radius=works:non-text-ui|degraded:text"
+            );
+        });
+        Font::from_bytes(
+            include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf"),
+            FontSettings::default(),
+        )
+        .ok()
+    });
+    font.clone()
 }
 
 /// One font at one pixel size: the only source of glyph advances and kerning.
@@ -260,19 +271,11 @@ impl Run<'_> {
     }
 }
 
-/// Runs `f` with the font at `px` pixels, or returns `None` when no font is installed.
+/// Runs `f` with the font at `px` pixels, or returns `None` when no font is usable.
 fn with_run<R>(px: f32, f: impl FnOnce(&mut Run<'_>) -> R) -> Option<R> {
     let mut guard = FONT.lock().ok()?;
     if guard.is_none() {
         let font = find_font();
-        if font.is_none() {
-            static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
-            NO_FONT_LOG.call_once(|| {
-                eprintln!(
-                    "flamewm: no system font found; skipping text; blast_radius=works:non-text-ui|degraded:text"
-                );
-            });
-        }
         *guard = Some(font.map(|font| FontCache {
             font,
             glyphs: HashMap::new(),

@@ -1,4 +1,6 @@
 mod backend;
+#[cfg(test)]
+mod fault_tests;
 mod gles;
 mod helper;
 
@@ -366,11 +368,19 @@ fn record_software(kind: RenderBackend, device: &str) {
 /// child), then `Failed` so the caller runs the CPU raster. Every failed stage emits one failure
 /// record; the first usable device is kept, with software devices marked as degraded.
 fn open_gpu() -> GpuSlot {
-    match helper::RemoteGpu::spawn(helper::GpuMode::Hardware) {
+    open_gpu_with(&|mode| {
+        helper::RemoteGpu::spawn(mode).map(|gpu| Box::new(gpu) as Box<dyn GpuPixels>)
+    })
+}
+
+/// Chain body with the helper spawn injectable. Fault tests fail each tier without a GPU child;
+/// production passes the real spawn and behaves exactly as before.
+fn open_gpu_with(spawn: &dyn Fn(helper::GpuMode) -> Result<Box<dyn GpuPixels>, String>) -> GpuSlot {
+    match spawn(helper::GpuMode::Hardware) {
         Ok(gpu) if !is_software_renderer(gpu.device()) => {
             eprintln!("flamewm-render-x11: GPU acceleration on {}", gpu.device());
             record_ready(gpu.kind(), gpu.device());
-            return GpuSlot::Ready(Box::new(gpu));
+            return GpuSlot::Ready(gpu);
         }
         Ok(gpu) => {
             // A hardware request that resolves to llvmpipe has already reached the software-GL
@@ -381,7 +391,7 @@ fn open_gpu() -> GpuSlot {
                 "works:gpu-raster|degraded:hardware-accel",
             );
             record_software(gpu.kind(), gpu.device());
-            return GpuSlot::Ready(Box::new(gpu));
+            return GpuSlot::Ready(gpu);
         }
         Err(error) => gpu_failure_record(
             "hardware-gl",
@@ -389,10 +399,10 @@ fn open_gpu() -> GpuSlot {
             "works:render|degraded:next=software-gl",
         ),
     }
-    match helper::RemoteGpu::spawn(helper::GpuMode::Software) {
+    match spawn(helper::GpuMode::Software) {
         Ok(gpu) => {
             record_software(gpu.kind(), gpu.device());
-            GpuSlot::Ready(Box::new(gpu))
+            GpuSlot::Ready(gpu)
         }
         Err(error) => {
             gpu_failure_record("software-gl", &error, "works:render|degraded:cpu-raster");
@@ -406,7 +416,17 @@ fn open_gpu() -> GpuSlot {
 /// `false` means the operation did not run on the GPU and the caller must run it on the CPU; the
 /// GPU contract leaves the frame untouched on error, so the CPU sees the original pixels.
 fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> bool {
-    if render_acceleration() != RenderAcceleration::Gpu {
+    try_gpu_with(op, render_acceleration(), &|| open_gpu())
+}
+
+/// `try_gpu` body with the acceleration request and slot opener injectable. Fault tests pass `Gpu`
+/// and a failing spawn chain without changing the process-wide acceleration setting.
+fn try_gpu_with(
+    op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>,
+    acceleration: RenderAcceleration,
+    open: &dyn Fn() -> GpuSlot,
+) -> bool {
+    if acceleration != RenderAcceleration::Gpu {
         return false;
     }
     release_if_stale();
@@ -416,7 +436,7 @@ fn try_gpu(op: &mut dyn FnMut(&mut dyn PixelBackend) -> Result<(), String>) -> b
         if matches!(*slot, GpuSlot::Untried) {
             #[cfg(test)]
             INIT_CALLS.with(|calls| calls.set(calls.get() + 1));
-            *slot = open_gpu();
+            *slot = open();
         }
         let GpuSlot::Ready(gpu) = &mut *slot else {
             return false;
