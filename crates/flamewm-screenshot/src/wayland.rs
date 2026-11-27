@@ -86,16 +86,22 @@ struct Client {
 
 /// Captures the whole output on a native Wayland session.
 ///
-/// `Ok(None)` means the Wayland path is not available here (no `WAYLAND_DISPLAY`, or the
-/// compositor does not advertise screencopy or an output): the caller falls back to X11. `Err`
-/// means screencopy exists but failed, which must be reported rather than silently replaced.
+/// `Ok(None)` means the Wayland path is not available here (no `WAYLAND_DISPLAY`, a compositor
+/// that cannot complete registry/shm/roundtrip setup, or one that does not advertise screencopy
+/// or an output): the caller falls back to X11. `Err` means screencopy exists but its capture
+/// failed, which must be reported rather than silently replaced.
 pub fn capture_output() -> Result<Option<Image>, String> {
     // `connect_to_env` reads WAYLAND_DISPLAY itself and fails when it is unset.
     let Ok(conn) = Connection::connect_to_env() else {
         return Ok(None);
     };
-    let (globals, mut queue) =
-        registry_queue_init::<Client>(&conn).map_err(|e| format!("wayland registry: {e}"))?;
+    let (globals, mut queue) = match registry_queue_init::<Client>(&conn) {
+        Ok(globals) => globals,
+        Err(error) => {
+            eprintln!("flamewm-screenshot: wayland registry unavailable ({error}); falling back");
+            return Ok(None);
+        }
+    };
     let qh = queue.handle();
     let Some(manager) = bind_optional::<ZwlrScreencopyManagerV1>(&globals, &qh, 1..=3)? else {
         return Ok(None);
@@ -103,15 +109,20 @@ pub fn capture_output() -> Result<Option<Image>, String> {
     let Some(output) = bind_optional::<WlOutput>(&globals, &qh, 1..=4)? else {
         return Ok(None);
     };
-    let shm: WlShm = globals
-        .bind(&qh, 1..=1, ())
-        .map_err(|e| format!("wl_shm: {e}"))?;
+    let shm: WlShm = match globals.bind(&qh, 1..=1, ()) {
+        Ok(shm) => shm,
+        Err(error) => {
+            eprintln!("flamewm-screenshot: wl_shm unavailable ({error}); falling back");
+            return Ok(None);
+        }
+    };
     let mut client = Client {
         frame: Frame::default(),
     };
-    queue
-        .roundtrip(&mut client)
-        .map_err(|e| format!("wayland roundtrip: {e}"))?;
+    if let Err(error) = queue.roundtrip(&mut client) {
+        eprintln!("flamewm-screenshot: wayland roundtrip failed ({error}); falling back");
+        return Ok(None);
+    }
     let frame = manager.capture_output(1, &output, &qh, ());
     let image = receive(&mut queue, &mut client, &shm, &qh, &frame)?;
     frame.destroy();

@@ -448,10 +448,20 @@ pub fn main() -> Result<(), String> {
                     let mut state = flush_cell.borrow_mut();
                     let (next_outputs, next_grids, next_default) =
                         resolve_output_layout(surface, state.entry_scale_percent);
+                    let output_removed = state
+                        .output_geometries
+                        .iter()
+                        .any(|(id, _)| !next_outputs.iter().any(|(next_id, _)| next_id == id));
                     if next_outputs != state.output_geometries
                         || next_grids != state.output_grids
                         || next_default != state.default_output
                     {
+                        if output_removed {
+                            // An output disappeared: drop the process-local decoded raster so
+                            // the old topology is not retained. The on-disk cache still yields
+                            // identical pixels for the next request.
+                            flamewm_image_core::decode_cache::release_shared_raster();
+                        }
                         state.output_geometries = next_outputs;
                         state.output_grids = next_grids;
                         state.default_output = next_default;

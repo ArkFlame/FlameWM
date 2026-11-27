@@ -648,10 +648,10 @@ fn mark_disconnected(
         controller.next_reconnect_delay_ms()
     };
     emit_snapshot(controller, on_snapshot);
-    let Some(delay) = retry_delay else {
-        return;
-    };
-    restart_timer(timer, Duration::from_millis(delay));
+    match retry_delay {
+        Some(delay) => restart_timer(timer, Duration::from_millis(delay)),
+        None => restart_timer(timer, SLOW_RETRY_INTERVAL),
+    }
 }
 
 fn restart_timer(timer: &Weak<RefCell<Option<PulseTimer>>>, delay: Duration) {

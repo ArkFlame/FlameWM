@@ -1,10 +1,11 @@
 use super::super::*;
+use super::scroll::spawn_frame_ticker;
 
 impl ExplorerApp {
     pub(crate) fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map_or_else(||home.join(".local/share"), PathBuf::from).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,pending_navigation:None,pending_directory_dirty:false,chooser_tx,chooser:None,convert_picker:None,thumbs:RefCell::new(Thumbnails::default()),thumb_queue:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,pending_navigation:None,pending_directory_dirty:false,chooser_tx,chooser:None,convert_picker:None,thumbs:RefCell::new(Thumbnails::default()),thumb_queue:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),hidden:thumbs::HiddenCache::default(),hidden_timer:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
             ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,context_scroll:0,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,scroll_timer:None,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,dialog_focus:0,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_running:false,search_rows:None,watch:None,watched:None,device_watch:None,context_place:None,trash_base,places_gen:0,unmounted:Vec::new(),space:RefCell::new(view::SpaceCache::default()),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
@@ -38,6 +39,25 @@ impl ExplorerApp {
         let Some((tx,wake))=self.events.as_ref() else {return};
         let (tx,Ok(mut wake))=(tx.clone(),wake.try_clone()) else {return};
         aux_pool().submit(move||{if tx.send(job()).is_ok() {let _=wake.write_all(&[1]);}});
+    }
+
+    /// Window visibility. A covered window keeps its decoded rows through one short grace (a quick
+    /// alt-tab back stays warm), then drops the cache and abandons queued decodes. One long-lived
+    /// timer lane is reused for every hidden period, so no thread is spawned per event and no poll
+    /// wake is added while the window is covered.
+    pub(crate) fn visibility(&mut self,obscured:bool) {
+        self.hidden.set_hidden(obscured,Instant::now());
+        if !obscured {return;}
+        if self.hidden_timer.is_none() {
+            let events=self.events.clone();
+            self.hidden_timer=Some(spawn_frame_ticker(thumbs::HIDDEN_CACHE_GRACE,move||{
+                if let Some((tx,wake))=&events
+                    && tx.send(WorkerResult::HiddenCacheDue).is_ok()
+                    && let Ok(mut wake)=wake.try_clone() {let _=wake.write_all(&[1]);}
+                true
+            }));
+        }
+        if let Some(timer)=self.hidden_timer.as_ref() {let _=timer.send(());}
     }
 
     /// Lists unmounted devices on a worker. Remounting remembered drives is the session's job, not the explorer's.

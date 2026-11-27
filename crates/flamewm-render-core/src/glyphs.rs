@@ -222,7 +222,7 @@ fn find_font() -> Option<Font> {
 /// One font at one pixel size: the only source of glyph advances and kerning.
 ///
 /// Paint (`text_mask`), caret positions (`caret_positions`), hit-testing (`char_index_at`) and
-/// layout width (`advance_width`) all go through `shape`, so they cannot disagree.
+/// layout width (`advance_width`) all go through the same shaping walk, so they cannot disagree.
 struct Run<'a> {
     cache: &'a mut FontCache,
     px: f32,
@@ -352,36 +352,31 @@ pub fn cache_stats() -> Option<(usize, usize)> {
     Some((cache.glyphs.len(), cache.advances.len()))
 }
 
-/// Shapes `text`: the fractional pen origin of every char plus the run end (`len = chars + 1`),
-/// and the glyph of every inkable char. Whitespace advances the pen but has no bitmap, so it is
-/// left as `None` instead of rasterizing an empty mask into the glyph cache. The pen is
-/// accumulated in f32; nothing is rounded per glyph.
-fn shape(text: &str, run: &mut Run<'_>) -> (Vec<f32>, Vec<Option<Arc<GlyphMask>>>) {
-    let mut origins = Vec::with_capacity(text.len() + 1);
-    let mut glyphs = Vec::with_capacity(text.len());
+/// Visits each inkable glyph of `text` with its fractional pen origin, in paint order.
+/// Whitespace advances the pen but has no bitmap, so it is skipped instead of rasterized. The
+/// pen is accumulated in f32; nothing is rounded per glyph. Walking the run twice (bounds, then
+/// blit) keeps both passes identical without allocating an origins array and a glyph array per
+/// painted line.
+fn for_each_glyph(text: &str, run: &mut Run<'_>, mut visit: impl FnMut(f32, &GlyphMask)) {
     let mut pen = 0.0f32;
     let mut prev: Option<char> = None;
     for character in text.chars() {
         if let Some(left) = prev {
             pen += run.kern(left, character);
         }
-        origins.push(pen);
         if character.is_whitespace() {
             pen += run.advance(character);
-            glyphs.push(None);
         } else {
             let glyph = run.glyph(character);
+            visit(pen, glyph.as_ref());
             pen += glyph.advance;
-            glyphs.push(Some(glyph));
         }
         prev = Some(character);
     }
-    origins.push(pen);
-    (origins, glyphs)
 }
 
 /// Pen origin of every char plus the run end (`len = chars + 1`), accumulated in f32 exactly as
-/// [`shape`] does, but from advances only: no glyph is rasterized or cached.
+/// [`for_each_glyph`] does, but from advances only: no glyph is rasterized or cached.
 fn shape_origins(text: &str, run: &mut Run<'_>) -> Vec<f32> {
     let mut origins = Vec::with_capacity(text.len() + 1);
     let mut pen = 0.0f32;
@@ -398,7 +393,7 @@ fn shape_origins(text: &str, run: &mut Run<'_>) -> Vec<f32> {
     origins
 }
 
-/// Final pen of `text`, accumulated in the exact order [`shape`] uses, with no allocation.
+/// Final pen of `text`, accumulated in the exact order [`for_each_glyph`] uses, with no allocation.
 fn advance_pen(text: &str, run: &mut Run<'_>) -> f32 {
     let mut pen = 0.0f32;
     let mut prev: Option<char> = None;
@@ -479,15 +474,13 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
         return None;
     }
     with_run(size, |run| {
-        let (origins, shaped) = shape(text, run);
         let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
         let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
         let mut inked = false;
-        for (origin, glyph) in origins.iter().zip(&shaped) {
-            let Some(glyph) = glyph else { continue };
+        for_each_glyph(text, &mut *run, |origin, glyph| {
             // Each origin rounds once on its own; the pen itself never accumulates rounding.
             if glyph.width == 0 || glyph.height == 0 {
-                continue;
+                return;
             }
             inked = true;
             let left = origin.round() as i32 + glyph.left;
@@ -496,7 +489,7 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
             min_y = min_y.min(top);
             max_x = max_x.max(left + glyph.width as i32);
             max_y = max_y.max(top + glyph.height as i32);
-        }
+        });
         if !inked {
             return TextMask {
                 x: pen_x.round() as i32,
@@ -511,10 +504,9 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
         let height = (max_y - min_y).max(0) as u32;
         let mut coverage = vec![0u8; width as usize * height as usize];
 
-        for (origin, glyph) in origins.iter().zip(&shaped) {
-            let Some(glyph) = glyph else { continue };
+        for_each_glyph(text, &mut *run, |origin, glyph| {
             if glyph.width == 0 || glyph.height == 0 {
-                continue;
+                return;
             }
             let base_x = origin.round() as i32 + glyph.left - min_x;
             let base_y = -glyph.top - min_y;
@@ -534,7 +526,7 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
                 let take = dst_end - dst_start;
                 coverage[dst_start..dst_end].copy_from_slice(&src[skip..skip + take]);
             }
-        }
+        });
 
         TextMask {
             x: pen_x.round() as i32 + min_x,

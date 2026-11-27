@@ -215,6 +215,8 @@ enum WorkerResult {
     Thumbnail{key:ThumbKey,pixels:Option<Vec<u8>>},
     /// Trailing-edge timer for held resize sizes.
     ResizeFlush,
+    /// The hidden-window grace elapsed: drop this window's decoded thumbnails and queued decodes.
+    HiddenCacheDue,
     /// Streamed remote listing chunk, converted off the UI thread.
     RemoteRows {generation:u64,path:PathBuf,rows:Vec<Entry>},
     /// End of a remote listing; `failure` is worded for the status strip.
@@ -285,6 +287,8 @@ struct ExplorerApp {
     chooser_tx:Sender<ChooserJob>, chooser:Option<OpenWithChooser>,
     // Row thumbnails: the cache and the image id each row slot currently shows. `project` takes `&self`, hence the cells.
     thumbs:RefCell<Thumbnails>, thumb_queue:Option<Arc<thumbs::ThumbQueue>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
+    /// Hidden-window policy and the one long-lived timer lane that arms its single deadline wake.
+    hidden:thumbs::HiddenCache, hidden_timer:Option<std::sync::mpsc::Sender<()>>,
     chooser_loading:bool, chooser_request:u64, places:Vec<Place>,
     /// Source file of the open "Convert to" picker; `None` when the picker is closed.
     convert_picker:Option<PathBuf>,
@@ -497,7 +501,7 @@ fn run()->Result<(),String>{
                 UiControllerEvent::Drag(UiDragEvent::Drop{paths,x,y,..})=>app.external_drop(paths.clone(),*x,*y),
                 // Enter/over/leave do not change the list layout.
                 UiControllerEvent::Drag(_)=>{},
-                UiControllerEvent::Visibility{..}=>{},
+                UiControllerEvent::Visibility{obscured}=>app.visibility(*obscured),
             }
             // A row dragged out of the window starts the XDND drag here, once the event is handled.
             if let Some(paths)=app.file_drag_out.take()

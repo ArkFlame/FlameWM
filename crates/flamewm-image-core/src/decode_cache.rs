@@ -23,6 +23,8 @@ const MAGIC: &[u8; 8] = b"FWRGBA01";
 const HEADER_LEN: usize = 16;
 /// Total size budget for the decoded-wallpaper cache directory.
 pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+/// Total entry budget for the decoded-wallpaper cache directory.
+const MAX_CACHE_ENTRIES: usize = 256;
 
 /// Decodes `path` to natural-size straight RGBA8, reusing a cached raster when its key matches.
 pub fn decode_file_cached(path: &Path) -> Result<RgbaImage, String> {
@@ -230,12 +232,13 @@ fn prune(dir: &Path, keep: &Path, max_bytes: u64) {
         files.push((modified, meta.len(), path));
     }
     let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
-    if total <= max_bytes {
+    let mut remaining = files.len();
+    if remaining <= MAX_CACHE_ENTRIES && total <= max_bytes {
         return;
     }
     files.sort_by_key(|(modified, _, _)| *modified);
     for (_, len, path) in files {
-        if total <= max_bytes {
+        if remaining <= MAX_CACHE_ENTRIES && total <= max_bytes {
             break;
         }
         if path
@@ -246,6 +249,7 @@ fn prune(dir: &Path, keep: &Path, max_bytes: u64) {
         }
         if fs::remove_file(&path).is_ok() {
             total -= len;
+            remaining -= 1;
         }
     }
 }

@@ -1,4 +1,19 @@
 # Unit p40-screenshot-portal-fallback
-STATUS: OPEN
+STATUS: PARTIAL
 
 Crate flamewm-screenshot: wayland without screencopy/portal and X11 without XFixes: fall back (other backend or clear error value), never abort.
+
+## Result
+
+Investigated with rg/Read only (no cargo, build, git, python or sleep loops, per brief). Reference-first: checked `.vendor/cosmic-epoch/cosmic-screenshot` and `.vendor/cosmic-epoch/xdg-desktop-portal-cosmic/src/wayland` (capture setup degrades instead of aborting) and `.vendor/smithay-master/src/wayland`; precedent supports treating an unusable compositor path as unavailable and keeping the caller alive. Production edits: 3 (three Wayland setup sites in one file); the portal and XFixes paths were audited and already satisfy the brief. Every row is UNBUILT because builds and tests are forbidden in this unit.
+
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| `crates/flamewm-screenshot/src/wayland.rs:98-104` | `registry_queue_init` failure was `map_err(...)?`, so a compositor that cannot complete registry setup returned `Err`; `main.rs:432` propagated it and exited 1 instead of falling back to X11, contradicting the function's own `Ok(None)` contract. | UNBUILT — report once on stderr and return `Ok(None)` so the caller takes the existing X11 fallback. | One stderr line on a failure path only; pixel path for a healthy compositor is unchanged. Pure Wayland X11 root may be empty, but the process no longer aborts. |
+| `crates/flamewm-screenshot/src/wayland.rs:112-118` | A failed/absent `wl_shm` bind returned `Err`; without a shm pool screencopy cannot copy at all, so this is "Wayland path unavailable", not "screencopy failed". | UNBUILT — stderr note once and `Ok(None)` fallback to X11. | Same as above; no change to the bound-shm capture path. |
+| `crates/flamewm-screenshot/src/wayland.rs:122-125` | `queue.roundtrip` failure returned `Err` even though a broken connection means Wayland capture is impossible; the failure occurred during setup, before screencopy ran. | UNBUILT — stderr note once and `Ok(None)` fallback; real capture failures in `receive()` still return `Err`. | Same as above; `Err` reporting for screencopy frames is preserved, so no gate was loosened. |
+| `crates/flamewm-screenshot/src/wayland.rs:87-92` | Doc comment defined `Ok(None)` only as missing display/screencopy/output and did not cover setup failures now taking that path. | UNBUILT — clarified the contract; setup failures yield `Ok(None)`, capture failures yield `Err`. | Documentation only. |
+| `crates/flamewm-screenshot/src/main.rs:428-441,442-478` | Audit: `wayland::capture_output()?` followed by unconditional X11 connection already gives the `Ok(None)` fallback; `--cursor` blend errors are reported once and the image is saved without the pointer. | None — already correct; UNBUILT (static audit). | No behavior changed. |
+| `crates/flamewm-screenshot/src/portal.rs:115-140,193-200`; `crates/flamewm-screenshot/src/capture.rs:611-625` | Audit: portal `capture_full_output` tries screencopy then `capture_root`, and `answer` maps any error to response 2 with one stderr line; `serve()` returns `Err` on a missing session bus; `blend_cursor` rejects a short XFixes reply without indexing past it. No abort/panic found. | None — already correct; UNBUILT (static audit). | No behavior changed; visuals stay pixel-identical. |
+
+PARTIAL — three Wayland setup failure sites now degrade to the existing X11 fallback with one diagnostic each instead of aborting the capture, and the contract comment matches that behavior; portal absence and X11-without-XFixes were audited and already return clear error values without panicking. Every edit is UNBUILT because cargo, builds, tests and git are forbidden by this unit's brief, so the orchestrator must build and test before claiming verification.

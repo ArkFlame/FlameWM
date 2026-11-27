@@ -32,6 +32,9 @@ thread_local! {
     /// Clip-sized buffer for in-place clipped fills, so they do not force the whole-frame scratch
     /// copy that the blur and backdrop ops need.
     static INPLACE_REGION: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// Clip-sized region for the stand-alone backdrop path, retained across calls so a backdrop
+    /// outside the batch path does not allocate a fresh buffer on every paint.
+    static BACKDROP_REGION: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Which pixel backend the `renderAcceleration` setting requests. `Cpu` is the default; `Gpu` is
@@ -237,17 +240,25 @@ pub fn backdrop_blur_cpu<B: PixelBackend + ?Sized>(
     corner: u32,
     radius: f32,
 ) -> Result<(), String> {
-    backdrop_blur_into(
-        backend,
-        &mut Vec::new(),
-        pixels,
-        width,
-        height,
-        clip,
-        node,
-        corner,
-        radius,
-    )
+    BACKDROP_REGION.with(|cell| {
+        let mut region = cell.borrow_mut();
+        let result = backdrop_blur_into(
+            backend,
+            &mut region,
+            pixels,
+            width,
+            height,
+            clip,
+            node,
+            corner,
+            radius,
+        );
+        // A one-off huge clip must not pin its bytes for the life of the thread.
+        if region.capacity() > SCRATCH_RETAIN_BYTES {
+            *region = Vec::new();
+        }
+        result
+    })
 }
 
 /// [`backdrop_blur_cpu`] with a caller-owned region buffer, so the batch path reuses one

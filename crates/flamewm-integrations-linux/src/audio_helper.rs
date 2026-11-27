@@ -202,7 +202,7 @@ impl Core {
         }
         process.failures = process.failures.saturating_add(1);
         let shift = u32::from(process.failures.min(7));
-        let delay = RETRY_FLOOR.saturating_mul(1_u64 << shift).min(RETRY_CAP);
+        let delay = RETRY_FLOOR.saturating_mul(1_u32 << shift).min(RETRY_CAP);
         process.retry_at = Some(std::time::Instant::now() + delay);
         drop(process);
         publish_unavailable(&self.on_snapshot, &self.process);

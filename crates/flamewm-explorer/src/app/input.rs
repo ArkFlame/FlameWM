@@ -494,6 +494,10 @@ impl ExplorerApp {
             },
             WorkerResult::ScrollTick=>self.step_scroll(),
             WorkerResult::ResizeFlush=>self.flush_resize(),
+            WorkerResult::HiddenCacheDue=>{
+                let Some(queue)=self.thumb_queue.as_ref() else {return};
+                let _=self.hidden.check(Instant::now(),&mut self.thumbs.borrow_mut(),queue);
+            },
             WorkerResult::Thumbnail{key,pixels}=>self.thumbs.borrow_mut().complete(key,pixels),
             WorkerResult::SearchTick=>self.take_search_results(),
             WorkerResult::Properties(result)=>self.show_properties(result),
