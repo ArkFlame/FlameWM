@@ -78,13 +78,6 @@ canonical_target = "crates/flamewm-clipboard/src/owner.rs"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-desktop/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "8882 production lines: the desktop facade still owns widgets, projection, Convert and rename UI in one crate."
-canonical_target = "crates/flamewm-desktop/src"
-remove_by = "0.3.0"
-
-[[exception]]
 path = "crates/flamewm-desktop/src/widgets/sampling.rs"
 capability = "j11-g08-prefixed-env"
 reason = "The task-manager widget shows the login name taken from `USER`."
@@ -97,27 +90,6 @@ capability = "j12-g12-wallpaper-not-cpu"
 reason = "The widget gallery previews the CPU and memory gauge kinds (`WidgetKind::Cpu`, `WidgetKind::Memory`); no wallpaper code is involved."
 canonical_target = "crates/flamewm-desktop/src/widgets/panels.rs"
 remove_by = "0.2.0"
-
-[[exception]]
-path = "crates/flamewm-explorer/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "8193 production lines of file-browser views, selection and transfer policy in one facade."
-canonical_target = "crates/flamewm-explorer/src"
-remove_by = "0.3.0"
-
-[[exception]]
-path = "crates/flamewm-integrations-linux/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "12139 production lines: the Linux integration facade still holds tray, icon, audio, network and calendar adapters together."
-canonical_target = "crates/flamewm-integrations-linux/src"
-remove_by = "0.3.0"
-
-[[exception]]
-path = "crates/flamewm-lock/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "5004 production lines, 4 over the facade budget: the lock screen keeps PAM, the Xlib grab and its renderer preview in one binary."
-canonical_target = "crates/flamewm-lock/src"
-remove_by = "0.3.0"
 
 [[exception]]
 path = "crates/flamewm-lock/Cargo.toml"
@@ -176,13 +148,6 @@ canonical_target = "crates/flamewm-lock/src/x11.rs"
 remove_by = "0.3.0"
 
 [[exception]]
-path = "crates/flamewm-platform/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "6406 production lines of cross-session policy (shortcut registry, workspace facade, terminal and open-files actions) in one facade crate."
-canonical_target = "crates/flamewm-platform/src"
-remove_by = "0.3.0"
-
-[[exception]]
 path = "crates/flamewm-remote-fs/src/client.rs"
 capability = "j11-g08-prefixed-env"
 reason = "The remote filesystem client names its per-user fallback runtime directory from USER, the standard login name; the guard only admits FLAMEWM_, XDG_ and similar prefixes."
@@ -232,32 +197,11 @@ canonical_target = "crates/flamewm-session-core/src/diagnostics.rs"
 remove_by = "0.2.0"
 
 [[exception]]
-path = "crates/flamewm-settings/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "9123 production lines: settings keeps its panels, control clients and persistence in one facade."
-canonical_target = "crates/flamewm-settings/src"
-remove_by = "0.3.0"
-
-[[exception]]
-path = "crates/flamewm-shell/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "17958 production lines: Start, status, calendar, anchored popovers and quick controls are still one facade, and the split is deferred because those owners share one shell runtime transaction and land as a dedicated migration tranche rather than a half-move."
-canonical_target = "crates/flamewm-shell/src"
-remove_by = "0.3.0"
-
-[[exception]]
 path = "crates/flamewm-shell/src/runtime.rs"
 capability = "j12h-g06-anchored-popover"
 reason = "`open_status_anchored_id` moved to `runtime/start_status.rs` when the shell runtime was split, but j12h-g06 still reads `runtime.rs`, which now only declares the module."
 canonical_target = "crates/flamewm-shell/src/runtime/start_status.rs"
 remove_by = "0.2.0"
-
-[[exception]]
-path = "crates/flamewm-terminal/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "8232 production lines: the terminal keeps VT parsing, pty, flamefetch and settings surfaces in one facade."
-canonical_target = "crates/flamewm-terminal/src"
-remove_by = "0.3.0"
 
 [[exception]]
 path = "crates/flamewm-terminal/src/fetch.rs"
@@ -334,13 +278,6 @@ path = "crates/flamewm-wm/src/session_diagnostics.rs"
 capability = "x11rb-symbol"
 reason = "The diagnostics probe calls `x11rb::connect` to test whether the display answers at all."
 canonical_target = "crates/flamewm-wm-x11/src"
-remove_by = "0.3.0"
-
-[[exception]]
-path = "crates/flamewm-x11-canary/Cargo.toml"
-capability = "facade-source-loc>5000"
-reason = "9588 production lines, but the budget targets product facades: this crate is the XTEST scenario harness, whose scenarios are independent integration probes."
-canonical_target = "crates/flamewm-x11-canary/src"
 remove_by = "0.3.0"
 
 [[exception]]
@@ -552,3 +489,4 @@ capability = "j11-g08-prefixed-env"
 reason = "The AI usage worker reads the provider-documented `CLAUDE_CONFIG_DIR` (Claude CLI config root) and `COMMAND_CODE_API_KEY` (Command Code API key) to locate the user's own credentials, and the proof-only `FLAMEWM_USAGE_FIXTURE` path (a JSON snapshot file that replaces network and credential reads); they are third-party variables, not FlameWM settings, and are never logged or rendered."
 canonical_target = "crates/flamewm-shell/src/usage_host.rs"
 remove_by = "0.2.0"
+

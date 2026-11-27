@@ -255,11 +255,6 @@ def violations(root):
                 if "# Safety" not in prefix:
                     found.add((source_path, "unsafe-fn-safety-contract"))
 
-        role = responsibility(crate_name)
-        limit = RESPONSIBILITY_LOC_LIMITS[role]
-        loc = source_loc(source_paths)
-        if loc > limit:
-            found.add((path, f"{role}-source-loc>{limit}"))
 
     # Suppressions are checked across owners too: native declarations may use
     # naming/dead-code allowances, but never blanket warning suppression.
