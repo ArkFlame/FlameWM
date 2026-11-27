@@ -82,28 +82,13 @@ pub(super) struct DesktopBackdrop {
     pub(super) captured_at: Instant,
 }
 
-/// Bilinear sample of straight RGBA at stored-pixel coordinates (`fx`, `fy`), clamped to the edges.
-pub(super) fn sample_bilinear(
-    pixels: &[u8],
-    (sw, sh): (usize, usize),
-    fx: f32,
-    fy: f32,
-) -> [u8; 4] {
-    let (x0, y0) = (fx as usize, fy as usize);
-    let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
-    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-    let at = |x: usize, y: usize, c: usize| f32::from(pixels[(y * sw + x) * 4 + c]);
-    let mut out = [0u8; 4];
-    for (c, value) in out.iter_mut().enumerate() {
-        let top = at(x0, y0, c) + (at(x1, y0, c) - at(x0, y0, c)) * tx;
-        let bottom = at(x0, y1, c) + (at(x1, y1, c) - at(x0, y1, c)) * tx;
-        *value = (top + (bottom - top) * ty).round().clamp(0.0, 255.0) as u8;
-    }
-    out
-}
-
 /// Samples a reduced capture of a `src` physical-pixel region into a `w` x `h` logical buffer. The
 /// logical `origin` and size map to physical pixels at `scale`, clamped to the region's edges.
+/// Bilinear in stored-pixel space, clamped to the edges. The column indices and weights depend only
+/// on `x`, so they are computed once instead of once per row, and each row's two source rows and
+/// weight are hoisted out of the pixel loop, and the vertical blend is done once per row, so a pixel
+/// costs one horizontal lerp per channel. Matches the per-pixel reference to within 1 per byte
+/// (float rounding order).
 pub(super) fn crop_capture(
     pixels: &[u8],
     src: (usize, usize),
@@ -112,21 +97,136 @@ pub(super) fn crop_capture(
     h: usize,
     scale: f64,
 ) -> Vec<u8> {
-    let stored = stored_size(src);
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let (sw, sh) = stored_size(src);
+    let stored_scale = DESKTOP_SCALE as f32;
+    let scale = scale as f32;
+    // Per column: byte offsets of the two source pixels and the horizontal weight.
+    let columns: Vec<(usize, usize, f32)> = (0..w)
+        .map(|x| {
+            let ox = ((origin.0 + x as i32) as f32 * scale).clamp(0.0, (src.0 as i32 - 1) as f32);
+            let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (sw - 1) as f32);
+            let x0 = fx as usize;
+            (x0 * 4, (x0 + 1).min(sw - 1) * 4, fx - x0 as f32)
+        })
+        .collect();
+    let mut out = vec![0_u8; w * h * 4];
+    // The two source rows of an output row blended vertically, one value per stored sample.
+    let mut blended = vec![0.0_f32; sw * 4];
+    for (y, out_row) in out.chunks_exact_mut(w * 4).enumerate() {
+        // Output pixel centre mapped into stored space, clamped to the output edges.
+        let oy = ((origin.1 + y as i32) as f32 * scale).clamp(0.0, (src.1 as i32 - 1) as f32);
+        let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (sh - 1) as f32);
+        let y0 = fy as usize;
+        let y1 = (y0 + 1).min(sh - 1);
+        let ty = fy - y0 as f32;
+        let top_row = &pixels[y0 * sw * 4..(y0 + 1) * sw * 4];
+        let bottom_row = &pixels[y1 * sw * 4..(y1 + 1) * sw * 4];
+        for ((value, &top), &bottom) in blended.iter_mut().zip(top_row).zip(bottom_row) {
+            let top = f32::from(top);
+            *value = top + (f32::from(bottom) - top) * ty;
+        }
+        let (pixels4, _) = out_row.as_chunks_mut::<4>();
+        for (pixel, &(i0, i1, tx)) in pixels4.iter_mut().zip(&columns) {
+            for (c, value) in pixel.iter_mut().enumerate() {
+                let (left, right) = (blended[i0 + c], blended[i1 + c]);
+                *value = (left + (right - left) * tx).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// The original per-pixel formulation, kept as the reference `crop_capture` must match exactly.
+#[cfg(test)]
+fn crop_capture_reference(
+    pixels: &[u8],
+    src: (usize, usize),
+    origin: (i32, i32),
+    w: usize,
+    h: usize,
+    scale: f64,
+) -> Vec<u8> {
+    let (sw, sh) = stored_size(src);
     let stored_scale = DESKTOP_SCALE as f32;
     let scale = scale as f32;
     let mut out = Vec::with_capacity(w * h * 4);
     for y in 0..h {
-        // Output pixel centre mapped into stored space, clamped to the output edges.
         let oy = ((origin.1 + y as i32) as f32 * scale).clamp(0.0, (src.1 as i32 - 1) as f32);
-        let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.1 - 1) as f32);
+        let fy = ((oy + 0.5) / stored_scale - 0.5).clamp(0.0, (sh - 1) as f32);
         for x in 0..w {
             let ox = ((origin.0 + x as i32) as f32 * scale).clamp(0.0, (src.0 as i32 - 1) as f32);
-            let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (stored.0 - 1) as f32);
-            out.extend_from_slice(&sample_bilinear(pixels, stored, fx, fy));
+            let fx = ((ox + 0.5) / stored_scale - 0.5).clamp(0.0, (sw - 1) as f32);
+            let (x0, y0) = (fx as usize, fy as usize);
+            let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
+            let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+            let at = |x: usize, y: usize, c: usize| f32::from(pixels[(y * sw + x) * 4 + c]);
+            for c in 0..4 {
+                let top = at(x0, y0, c) + (at(x1, y0, c) - at(x0, y0, c)) * tx;
+                let bottom = at(x0, y1, c) + (at(x1, y1, c) - at(x0, y1, c)) * tx;
+                out.push((top + (bottom - top) * ty).round().clamp(0.0, 255.0) as u8);
+            }
         }
     }
     out
+}
+
+#[cfg(test)]
+mod crop_tests {
+    use super::*;
+
+    fn noise(len: usize) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_u32;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn crop_capture_matches_the_per_pixel_reference() {
+        for (src, origin, w, h, scale) in [
+            ((203, 117), (0, 0), 203, 117, 1.0),
+            ((203, 117), (-5, -3), 190, 110, 1.0),
+            ((200, 120), (7, 9), 61, 44, 1.5),
+            ((64, 64), (0, 0), 1, 1, 1.0),
+            ((1, 1), (0, 0), 7, 5, 2.0),
+            ((257, 31), (250, 20), 40, 30, 1.25),
+        ] {
+            let (sw, sh) = stored_size(src);
+            let pixels = noise(sw * sh * 4);
+            let fast = crop_capture(&pixels, src, origin, w, h, scale);
+            let slow = crop_capture_reference(&pixels, src, origin, w, h, scale);
+            assert_eq!(fast.len(), slow.len(), "{src:?} {w}x{h}");
+            let worst = fast
+                .iter()
+                .zip(&slow)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                worst <= 1,
+                "src {src:?} origin {origin:?} {w}x{h} scale {scale}: off by {worst}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_output_is_empty() {
+        let pixels = noise(4 * 4 * 4);
+        assert_eq!(
+            crop_capture(&pixels, (16, 16), (0, 0), 0, 5, 1.0),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            crop_capture(&pixels, (16, 16), (0, 0), 5, 0, 1.0),
+            Vec::<u8>::new()
+        );
+    }
 }
 
 /// Reads the `dims` region of `texture` back in [`DESKTOP_STRIP_ROWS`] strips and box-averages each

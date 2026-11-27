@@ -278,6 +278,7 @@ fn capture_dock(
     scale: f64,
 ) -> Result<DockBacking, Box<dyn Error>> {
     CAPTURES.fetch_add(1, Ordering::Relaxed);
+    let mut clock = PhaseClock::start();
     let dims = (region.size.w.max(1) as usize, region.size.h.max(1) as usize);
     let target_size = Size::<i32, Physical>::from((dims.0 as i32, dims.1 as i32));
     let mut texture: GlesTexture = match take_scratch(&mut decorations.dock_scratch, dims) {
@@ -287,6 +288,7 @@ fn capture_dock(
             Size::<i32, Buffer>::from((dims.0 as i32, dims.1 as i32)),
         )?,
     };
+    clock.split("texture");
     // The scene is positioned in output space; shift it so the Dock region starts at the origin.
     let shifted: Vec<RelocateRenderElement<Elem>> = elements
         .into_iter()
@@ -303,15 +305,17 @@ fn capture_dock(
         let mut tracker = OutputDamageTracker::new(target_size, 1.0, Transform::Normal);
         tracker.render_output(renderer, &mut target, 0, &shifted, CLEAR)?;
     }
-    let mut clock = PhaseClock::start();
+    clock.split("render");
     let stored = read_reduced(renderer, &mut texture, dims, &mut clock)?;
     decorations.dock_scratch = Some((dims, texture));
     let blurred = blur_reduced(stored, stored_size(dims), key.material.blur);
+    clock.split("blur");
 
     // The logical buffer is sampled from the blurred capture, then its alpha is the Dock's outline.
     let (w, h) = (key.rect.2.max(1) as usize, key.rect.3.max(1) as usize);
     let radius = key.radius as f32 / scale as f32;
     let mut pixels = crop_capture(&blurred, dims, (0, 0), w, h, scale);
+    clock.split("crop");
     for y in 0..h {
         for x in 0..w {
             let alpha = if key.site == BackdropSite::Dock(key.rect) {
@@ -330,6 +334,8 @@ fn capture_dock(
         Transform::Normal,
         None,
     );
+    clock.split("store");
+    clock.report(dims.1);
     Ok(DockBacking {
         key,
         buffer,
