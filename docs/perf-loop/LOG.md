@@ -329,3 +329,6 @@ Titlebar element cost during a drag 71 ms -> ~1 ms (elements 14% -> 2-3% of fram
 
 ## CI after u167
 CI green for b7548fe2, 76cbc484, 1e0376bc, d3f427ca. Arch package runs still in progress.
+
+## Terminal wakeup scout: nothing ranked
+PTY reader coalesces wakes to one per 16 ms frame; scroll glide thread runs per request only; pty.rs sleeps are test-only. No change.
