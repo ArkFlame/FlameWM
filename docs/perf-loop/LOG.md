@@ -320,3 +320,6 @@ Quiet run total 5.9 ms: blur 2.2 ms (CPU separable blur on the 295x161 reduced i
 
 ## u166 dock check
 Nested run with the real shell dock (`flamewm-shell` autostart): 172 backdrop captures, dock bar at the bottom renders with its dark translucent backdrop, no artifacts or missing backdrop (frame read). The dock here is a full-width bar with no pill radius and nothing under it, so the rounded pill clip on a dock is covered only by the shared clip shader and its tests, not by this frame.
+
+## Drag composition after u166
+dock_backdrops 72% (bounded capture), elements 14% (titlebar 84% of it, ~11% of the drag), draw 11%. Next unit u167: move a titlebar without rebuilding it.

@@ -1,0 +1,6 @@
+# u167 move a titlebar without rebuilding it (next share after the capture)
+Composition of a drag (u166 build, real Intel GPU, 89 frames, 635 ms of frame work): dock_backdrops 72% (the capture, bounded), elements 14%, draw 11%, submit 2%. Inside elements: titlebar 84% (about 11% of the drag), window_backdrop 6%, surface 6%, outline 2%.
+Cause (`titlebar.rs` `element`): once the stale-reuse budget (`stale_reuse_allowed`) is spent, a moved titlebar is rebuilt each frame: `crop` of the desktop capture (CPU bilinear), `chrome_pixels_over` (title text, icons, corners over the backdrop), a new `MemoryRenderBuffer` upload. Only the backdrop under it changed; the chrome pixels did not.
+Idea: draw two elements, as u166 does for windows: the blurred desktop (the reduced desktop capture as a GPU texture, `source_rect` at the bar's origin, GPU filter) under a cached transparent chrome overlay that is rebuilt only when width/active/maximized/title/feedback change. A move then costs no CPU pixel work.
+Constraints: titlebar corner rounding must come from the clip program or the overlay alpha; the stale-reuse logic and its tests go away or shrink; frame-diff a moved titlebar against the current one (tolerance 2/byte); one extra element per window.
+Expected shift: removes most of the ~11% titlebar share of a drag; idle desktops are unaffected (nothing rebuilds).
