@@ -35,12 +35,12 @@ pub(crate) const CORE_FALLBACK_EXTENSIONS: &[(&[u8], &str, &str)] = &[
     (
         b"RENDER",
         "RENDER",
-        "XRender text and image drawing falls back to core X",
+        "XRender-based text and image drawing falls back to core X",
     ),
     (
         b"COMPOSITE",
         "COMPOSITE",
-        "frames are not redirected; core painting is used",
+        "frames are not redirected; transitions may be missing",
     ),
     (
         b"DAMAGE",
@@ -50,7 +50,7 @@ pub(crate) const CORE_FALLBACK_EXTENSIONS: &[(&[u8], &str, &str)] = &[
     (
         b"XFIXES",
         "XFIXES",
-        "cursor and selection updates use core X where possible",
+        "not used by the WM sources; reported for completeness",
     ),
 ];
 

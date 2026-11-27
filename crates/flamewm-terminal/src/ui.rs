@@ -6,7 +6,7 @@ use std::sync::Arc;
 use flamewm_ui_x11::{UiColor, UiDocumentAccess};
 
 use crate::app::App;
-use crate::pool::{Pool, run_id, run_id_into};
+use crate::pool::{Pool, run_id_into};
 use crate::view::{Row, Run};
 
 /// Geometry, colours and weight last written to one pooled node. A run whose text changed but whose box and style

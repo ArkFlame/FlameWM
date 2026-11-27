@@ -21,6 +21,21 @@ use crate::weather_provider::{CurlFetcher, OpenMeteo};
 /// Minimum spacing between periodic weather fetches (opening the popup always fetches).
 pub const WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
+/// First retry delay after a failed fetch. Each consecutive failure doubles it, up to
+/// [`WEATHER_REFRESH_INTERVAL`]. Mirrors the shared reconnect schedule in
+/// `flamewm-integrations-core::backoff`; kept local so the shell does not gain a manifest edge.
+const WEATHER_RETRY_BASE: Duration = Duration::from_secs(30);
+
+/// Caps the shift so `1 << shift` stays small; the delay itself is capped separately.
+const WEATHER_RETRY_MAX_SHIFT: u32 = 6;
+
+fn weather_retry_delay(consecutive_failures: u8) -> Duration {
+    let shift = u32::from(consecutive_failures.saturating_sub(1)).min(WEATHER_RETRY_MAX_SHIFT);
+    WEATHER_RETRY_BASE
+        .saturating_mul(1_u32 << shift)
+        .min(WEATHER_REFRESH_INTERVAL)
+}
+
 /// Write end handed to worker threads. Shared, so one pipe serves every worker of a loop.
 pub type Waker = Arc<UnixStream>;
 
@@ -120,6 +135,10 @@ pub struct WeatherHost {
     pub state: WeatherState,
     fetch_on_open: bool,
     last_started: Option<Instant>,
+    /// Consecutive failed fetches; reset on success or when settings change.
+    consecutive_failures: u8,
+    /// One-shot retry deadline set only after a failure; no periodic wake is armed for it.
+    retry_at: Option<Instant>,
     /// Shared so the scheduler stays `Clone`; only the owning thread polls it.
     inflight: Option<Arc<Mutex<mpsc::Receiver<WeatherResult>>>>,
 }
@@ -132,6 +151,8 @@ impl WeatherHost {
             state: WeatherState::Disabled,
             fetch_on_open: false,
             last_started: None,
+            consecutive_failures: 0,
+            retry_at: None,
             inflight: None,
         }
     }

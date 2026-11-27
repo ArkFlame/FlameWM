@@ -13,7 +13,10 @@ use flamewm_integrations_linux::audio_protocol::{AudioRequest, parse_request};
 
 /// How long the first request of a helper process waits for `PulseAudio` to become ready.
 pub const READY_WAIT: Duration = Duration::from_secs(2);
-const READY_POLL: Duration = Duration::from_millis(10);
+/// Readiness probes back off from the first interval to the cap instead of polling on a
+/// fixed short tick: a backend that starts a moment late is still found, without a tight loop.
+const READY_POLL_START: Duration = Duration::from_millis(25);
+const READY_POLL_MAX: Duration = Duration::from_millis(500);
 
 /// The `PulseAudio` operations the request loop needs.
 pub trait Backend {
@@ -25,6 +28,7 @@ pub trait Backend {
 /// Wait until the backend reports ready, for at most `limit`. Returns whether it became ready.
 pub fn wait_until_ready(backend: &impl Backend, limit: Duration) -> bool {
     let deadline = Instant::now() + limit;
+    let mut delay = READY_POLL_START;
     loop {
         if backend.snapshot().availability == ServiceAvailability::Available {
             return true;
@@ -33,7 +37,8 @@ pub fn wait_until_ready(backend: &impl Backend, limit: Duration) -> bool {
         if now >= deadline {
             return false;
         }
-        thread::sleep(READY_POLL.min(deadline - now));
+        thread::sleep(delay.min(deadline - now));
+        delay = (delay * 2).min(READY_POLL_MAX);
     }
 }
 

@@ -150,8 +150,12 @@ fn receive(
         if client.frame.failed {
             return Err("compositor refused the capture".into());
         }
-        // Every announced format was unusable. Report once instead of spinning forever.
-        if client.frame.buffer_seen && client.frame.format.is_none() {
+        // Every announced format was unusable. Report once instead of spinning forever. On v3+
+        // wait for buffer_done so a multi-format offer cannot fail on its first, unusable entry;
+        // v1/v2 send exactly one buffer event and never send buffer_done.
+        if client.frame.format.is_none()
+            && (client.frame.buffer_done || (frame.version() < 3 && client.frame.buffer_seen))
+        {
             return Err("unsupported compositor buffer format".into());
         }
         let announced =

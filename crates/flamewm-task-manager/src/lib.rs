@@ -1250,10 +1250,8 @@ pub fn run() -> Result<(), String> {
                             }
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => break,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            std::thread::sleep(remaining);
-                            break;
-                        }
+                        // The UI side is gone: exit now instead of arming a final timed sleep.
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break 'sampler,
                     }
                 }
             }
@@ -1593,5 +1591,29 @@ mod tests {
         assert!(pid_contains(4242, "242"));
         assert!(pid_contains(0, "0"));
         assert!(!pid_contains(4242, "999"));
+    }
+    #[test]
+    fn hidden_sampler_never_arms_the_channel_timer() {
+        let source = include_str!("lib.rs");
+        let production = source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("task-manager production source");
+        let wait = production
+            .split("// Sleep on the worker channel until the next sample is due")
+            .nth(1)
+            .expect("sampler channel wait");
+        let before_wait = wait
+            .split("match action_rx.recv_timeout(remaining)")
+            .next()
+            .expect("worker channel wait");
+        assert!(
+            before_wait.contains("worker_hidden.load"),
+            "visibility must be re-checked before arming the 1 s channel timer"
+        );
+        assert!(
+            !wait.contains("std::thread::sleep"),
+            "disconnect must not arm a final timed sleep"
+        );
     }
 }

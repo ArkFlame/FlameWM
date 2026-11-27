@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn guard_returns_value_when_nothing_panics() {
-        assert_eq!(guard("shell", || 40 + 2), Ok(6));
+        assert_eq!(guard("shell", || 40 + 2), Ok(42));
         CURRENT_SUBSYSTEM.with(|slot| assert!(slot.borrow().is_none()));
     }
 

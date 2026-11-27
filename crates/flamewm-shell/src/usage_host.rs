@@ -251,4 +251,56 @@ mod tests {
         assert!(!host.tick(start, |_| mpsc::channel().1));
         assert_eq!(host.snapshots.len(), 0);
     }
+
+    #[test]
+    fn disabled_usage_never_fetches_or_arms_a_wake() {
+        let mut host = UsageHost::default();
+        let start = Instant::now();
+        host.configure(Vec::new(), Duration::from_secs(1));
+        assert!(!host.due(start));
+        assert_eq!(host.next_deadline(), None);
+        assert!(!host.tick(start, |_| panic!("disabled usage must not spawn a worker")));
+    }
+
+    #[test]
+    fn unconfigured_result_backs_off_then_a_usable_snapshot_restores_cadence() {
+        let mut host = UsageHost::default();
+        let start = Instant::now();
+        let (tx, rx) = mpsc::channel();
+        host.tick(start, |_| rx);
+        tx.send(vec![snapshot(UsageProvider::Claude)]).unwrap();
+        host.tick(start, |_| panic!("inside interval"));
+        assert_eq!(
+            host.next_deadline(),
+            Some(start + 2 * USAGE_REFRESH_INTERVAL)
+        );
+        assert!(!host.due(start + USAGE_REFRESH_INTERVAL));
+        let retry_at = start + 2 * USAGE_REFRESH_INTERVAL;
+        let (tx2, rx2) = mpsc::channel();
+        assert!(!host.tick(retry_at, |_| rx2));
+        tx2.send(vec![ProviderSnapshot {
+            provider: UsageProvider::Claude,
+            state: ProviderState::Ready(vec![]),
+            updated_at: Some(2),
+        }])
+        .unwrap();
+        assert!(host.tick(retry_at, |_| panic!("in flight")));
+        assert_eq!(
+            host.next_deadline(),
+            Some(retry_at + USAGE_REFRESH_INTERVAL)
+        );
+    }
+
+    #[test]
+    fn zero_interval_after_disconnect_cannot_busy_poll() {
+        let mut host = UsageHost::default();
+        let start = Instant::now();
+        host.configure(vec![UsageProvider::Codex], Duration::ZERO);
+        let (tx, rx) = mpsc::channel::<UsageResult>();
+        drop(tx);
+        host.tick(start, |_| rx);
+        assert!(!host.due(start));
+        assert_eq!(host.next_deadline(), Some(start + USAGE_RETRY_MIN));
+        assert!(!host.tick(start, |_| panic!("no immediate retry")));
+    }
 }

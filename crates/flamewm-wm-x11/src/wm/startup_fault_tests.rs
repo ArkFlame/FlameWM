@@ -104,3 +104,30 @@ fn randr_resources_failure_falls_back_to_root_geometry_with_a_record() {
     assert!(outputs.is_empty());
     assert!(modes.is_empty());
 }
+
+#[test]
+fn every_core_fallback_extension_is_audited_once() {
+    assert_eq!(CORE_FALLBACK_EXTENSIONS.len(), 4);
+    let names: Vec<&str> = CORE_FALLBACK_EXTENSIONS
+        .iter()
+        .map(|(_, name, _)| *name)
+        .collect();
+    assert_eq!(names, ["RENDER", "COMPOSITE", "DAMAGE", "XFIXES"]);
+}
+
+#[test]
+fn absent_core_fallback_extension_records_one_fault_present_records_none() {
+    for &(bytes, name, detail) in CORE_FALLBACK_EXTENSIONS {
+        assert_eq!(std::str::from_utf8(bytes).unwrap(), name);
+        assert_eq!(core_fallback_fault(name, detail, true), None);
+        let fault = record(core_fallback_fault(name, detail, false));
+        assert_eq!(fault.stage, "extension");
+        assert!(
+            fault
+                .message
+                .starts_with(&format!("flamewm: {name} absent"))
+        );
+        assert!(fault.message.contains(detail));
+        assert_eq!(fault.exit_code, None);
+    }
+}

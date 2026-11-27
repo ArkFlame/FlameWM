@@ -465,6 +465,29 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn missing_portal_maps_to_one_clear_message_and_keeps_other_errors() {
+        let absent = FlameError::unavailable(format!(
+            "D-Bus reply failed: org.freedesktop.DBus.Error.ServiceUnknown: The name {PORTAL_SERVICE} was not provided by any .service files"
+        ));
+        assert!(is_portal_absent(&absent));
+        assert_eq!(
+            portal_absent(),
+            FlameError::unavailable(PORTAL_ABSENT_MESSAGE)
+        );
+        assert!(PORTAL_ABSENT_MESSAGE.contains("xdg-desktop-portal"));
+
+        let timeout = FlameError::unavailable(
+            "D-Bus reply failed: org.freedesktop.DBus.Error.Timeout: no reply".to_owned(),
+        );
+        assert!(!is_portal_absent(&timeout));
+        let other_service = FlameError::unavailable(
+            "D-Bus reply failed: org.freedesktop.DBus.Error.ServiceUnknown: The name org.example.Other was not provided"
+                .to_owned(),
+        );
+        assert!(!is_portal_absent(&other_service));
+    }
+
+    #[test]
     fn wallpaper_uri_decodes_local_percent_escapes() {
         assert_eq!(
             file_uri_to_path("file:///tmp/wall%20paper.png")

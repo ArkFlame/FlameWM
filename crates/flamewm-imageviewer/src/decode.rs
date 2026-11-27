@@ -491,7 +491,8 @@ mod tests {
         let mut png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
         png.extend_from_slice(&20_000u32.to_be_bytes());
         png.extend_from_slice(&20_000u32.to_be_bytes());
-        png.extend_from_slice(&[0; 13]);
+        // IHDR payload is 13 bytes: width, height, then five descriptor bytes.
+        png.extend_from_slice(&[0; 5]);
         let png_path = dir.join("huge.png");
         fs::write(&png_path, &png).unwrap();
         let error = decode_file(&png_path).expect_err("huge png is rejected");
