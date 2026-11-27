@@ -245,6 +245,10 @@ impl WallpaperLoader {
         state.completion = None;
         state.stale_generation = None;
         self.applied = None;
+        // A solid fill covers the wallpaper: release the process-local decoded raster so no
+        // full-resolution copy stays resident while nothing can show it. The next image request
+        // re-reads the on-disk cache and produces identical pixels.
+        flamewm_image_core::decode_cache::release_shared_raster();
         drop(state);
         self.state = WallpaperState {
             generation,
@@ -343,6 +347,7 @@ impl WallpaperLoader {
             self.control.wake.notify_one();
         }
         let _ = worker.join();
+        flamewm_image_core::decode_cache::release_shared_raster();
     }
 }
 

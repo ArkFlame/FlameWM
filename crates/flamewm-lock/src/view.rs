@@ -35,7 +35,13 @@ impl LockView {
         let (clock, date) = match now {
             Some(time) => (
                 format_clock(time.hour, time.minute, settings.clock_format),
-                format_date(time.year, time.month, time.day).unwrap_or_default(),
+                // The date node is hidden when the flag is off; formatting it on every
+                // minute boundary only allocated a string that nothing rendered.
+                if settings.show_date {
+                    format_date(time.year, time.month, time.day).unwrap_or_default()
+                } else {
+                    String::new()
+                },
             ),
             None => ("--:--".to_string(), String::new()),
         };

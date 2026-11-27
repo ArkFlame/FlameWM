@@ -351,6 +351,12 @@ impl FramePacer {
                     }
                     drop(on);
                     thread::sleep(FRAME_INTERVAL);
+                    // The animation may have stopped during the sleep. Going back to the
+                    // condvar without a wake avoids a needless reactor turn after the
+                    // last Ribbons frame; while running, the cadence is unchanged.
+                    if !*flag.lock().unwrap_or_else(PoisonError::into_inner) {
+                        continue;
+                    }
                     if !thread_waker.wake() {
                         return;
                     }

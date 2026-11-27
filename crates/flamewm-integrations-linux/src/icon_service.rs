@@ -19,6 +19,7 @@ use std::thread::{self, JoinHandle};
 use crate::background;
 use crate::icon_theme::IconLookupIndex;
 use crate::icons::{IconError, IconKey, IconResolver, Rgba8Raster};
+use crate::tracing;
 
 /// Resolution urgency. Required jobs are never discarded by the service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -778,21 +779,28 @@ fn worker_loop<R: IconResolve>(
             if queue.stopped {
                 return;
             }
-            let front_key = queue
+            let Some(front_key) = queue
                 .high
                 .front()
                 .map(|q| q.key.clone())
                 .or_else(|| queue.low.front().map(|q| q.key.clone()))
-                .expect("queued icon");
+            else {
+                tracing::warn!("icon queue empty; skip tick (blast radius: waiter stays pending)");
+                continue;
+            };
             if let Some(hit) = result_cache
                 .lock()
                 .ok()
                 .and_then(|c| c.entries.get(&front_key).cloned())
             {
                 let queued = if queue.high.front().is_some_and(|q| q.key == front_key) {
-                    queue.high.pop_front().expect("queued icon")
+                    queue.high.pop_front()
                 } else {
-                    queue.low.pop_front().expect("queued icon")
+                    queue.low.pop_front()
+                };
+                let Some(queued) = queued else {
+                    tracing::warn!("cached icon job vanished; skip (blast radius: result undelivered)");
+                    continue;
                 };
                 // Queue wait: envelope submitted_at -> dequeue, not Condvar idle.
                 flamewm_profiler::record_elapsed("icon.queue.wait", queued.submitted_at.elapsed());
@@ -802,11 +810,10 @@ fn worker_loop<R: IconResolve>(
                     completed_at: std::time::Instant::now(),
                 }))
             } else {
-                let queued = queue
-                    .high
-                    .pop_front()
-                    .or_else(|| queue.low.pop_front())
-                    .expect("queued icon");
+                let Some(queued) = queue.high.pop_front().or_else(|| queue.low.pop_front()) else {
+                    tracing::warn!("resolve job vanished; skip (blast radius: icon unresolved)");
+                    continue;
+                };
                 flamewm_profiler::record_elapsed("icon.queue.wait", queued.submitted_at.elapsed());
                 Some(Next::Resolve(queued.key))
             }

@@ -187,7 +187,7 @@ impl App {
             config,
             config_path,
             themes: Vec::new(),
-            palette: crate::themes::builtin_themes()[0].palette.clone(),
+            palette: crate::themes::DEFAULT_PALETTE.clone(),
             store,
             snapshot,
             surface_alpha: 255,

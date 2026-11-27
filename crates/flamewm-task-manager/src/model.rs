@@ -689,15 +689,20 @@ impl Sampler {
                 &mut self.command_text,
                 pid,
             );
-            let trimmed = self.command_text.trim();
             let current: &str = &cached.command;
-            if trimmed.is_empty() {
-                let fallback = format!("[{}]", task.name);
+            if self.command_text.trim().is_empty() {
+                // Write the fallback into the reused text buffer: no fresh `String` per stale pid.
+                self.command_text.clear();
+                let _ = write!(self.command_text, "[{}]", task.name);
+                let fallback = self.command_text.as_str();
                 if current != fallback {
                     cached.command = Arc::from(fallback);
                 }
-            } else if current != trimmed {
-                cached.command = Arc::from(trimmed);
+            } else {
+                let trimmed = self.command_text.trim();
+                if current != trimmed {
+                    cached.command = Arc::from(trimmed);
+                }
             }
             cached.refreshed = tick;
         }

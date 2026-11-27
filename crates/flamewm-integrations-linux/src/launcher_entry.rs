@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use crate::tracing;
 use dbus::arg::messageitem::MessageItem;
 use dbus::{Message, MessageType};
 use flamewm_api::applications::DesktopApplication;
@@ -166,20 +167,17 @@ fn apply_update(
     };
     let key = (owner.to_owned(), app_uri.to_owned());
     let before = entries.get(&key).map(visible_progress);
-    if !entries.contains_key(&key) {
-        if entries.len() >= MAX_ENTRIES {
-            return false;
-        }
-        entries.insert(
-            key.clone(),
-            LauncherState {
-                desktop_id,
-                progress: None,
-                visible: false,
-            },
-        );
+    if !entries.contains_key(&key) && entries.len() >= MAX_ENTRIES {
+        return false;
     }
-    let state = entries.get_mut(&key).expect("entry inserted above");
+    let state = entries.entry(key.clone()).or_insert_with(|| {
+        tracing::warn!("launcher entry missing after admission; recreating default state (blast radius: only this update is affected, it starts from an invisible progress-free entry instead of merging with prior state)");
+        LauncherState {
+            desktop_id,
+            progress: None,
+            visible: false,
+        }
+    });
     if let Some(progress) = update.progress {
         state.progress = Some(progress);
     }

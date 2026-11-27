@@ -56,7 +56,7 @@ pub struct Reactor {
     wake: WakeDeadline,
     owned_wakes: Vec<WakeDeadline>,
     /// Shared dirty flag for every deadline slot this reactor handed out. A slot sets it on
-    /// write, so dispatch recomputes the earliest deadline only when a slot actually changed.
+    /// change, so dispatch recomputes the earliest deadline only when a slot actually changed.
     wake_dirty: Rc<Cell<bool>>,
     /// Cached earliest deadline over all slots; outer `None` means "recompute on next read".
     cached_wake: Option<Option<Instant>>,
@@ -67,7 +67,7 @@ pub struct Reactor {
 #[derive(Clone, Debug, Default)]
 pub struct WakeDeadline {
     at: Rc<Cell<Option<Instant>>>,
-    /// Marked on every write; the reactor clears it after recomputing the earliest deadline.
+    /// Marked when the value changes; the reactor clears it after recomputing the earliest.
     dirty: Rc<Cell<bool>>,
 }
 
@@ -81,8 +81,10 @@ impl WakeDeadline {
     }
 
     pub fn set(&self, at: Option<Instant>) {
-        self.at.set(at);
-        self.dirty.set(true);
+        if self.at.get() != at {
+            self.at.set(at);
+            self.dirty.set(true);
+        }
     }
 
     #[must_use]
@@ -628,6 +630,22 @@ mod wake_tests {
         assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(1)));
         owned.set(None);
         assert_eq!(reactor.earliest_wake(), Some(now + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn republishing_the_same_deadline_keeps_the_cache_clean() {
+        let mut reactor = Reactor::new().expect("reactor");
+        let slot = reactor.owned_wake_deadline();
+        let at = Instant::now() + Duration::from_secs(1);
+        slot.set(Some(at));
+        assert!(reactor.wake_dirty.get());
+        assert_eq!(reactor.earliest_wake(), Some(at));
+        assert!(!reactor.wake_dirty.get());
+        // An owner that recomputes the same absolute deadline must not force a rescan.
+        slot.set(Some(at));
+        assert!(!reactor.wake_dirty.get());
+        slot.set(None);
+        assert!(reactor.wake_dirty.get());
     }
 
     #[test]

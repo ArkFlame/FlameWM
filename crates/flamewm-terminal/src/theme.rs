@@ -8,7 +8,7 @@ use flamewm_ui_core::surface::surface_fill;
 use flamewm_ui_x11::backdrop::WindowBackdrop;
 
 use crate::store::FOLLOW_FLAMEWM;
-use crate::themes::{Palette, Theme, builtin_themes};
+use crate::themes::{DEFAULT_PALETTE, Palette, Theme, builtin_themes};
 
 /// `FlameWM` default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
 pub const DEFAULT_ACCENT: u32 = 0x003D_AEE9;
@@ -46,7 +46,6 @@ fn accent(snapshot: &SettingsSnapshot) -> u32 {
 /// Palette for `follow-flamewm`: surface background, accent cursor, accent-tinted selection, and the Dark+ ANSI set.
 #[must_use]
 pub fn follow_palette(snapshot: &SettingsSnapshot) -> Palette {
-    let base = builtin_themes()[0].palette.clone();
     let surface = surface_fill(snapshot).rgb;
     let accent = accent(snapshot);
     let blend = |a: u32, b: u32, weight: u32| {
@@ -60,7 +59,7 @@ pub fn follow_palette(snapshot: &SettingsSnapshot) -> Palette {
         foreground: 0xf1_f2_f3,
         cursor: accent,
         selection: blend(accent, surface, 40),
-        ansi: base.ansi,
+        ansi: DEFAULT_PALETTE.ansi,
     }
 }
 
@@ -71,13 +70,13 @@ pub fn resolve_palette(
     snapshot: Option<&SettingsSnapshot>,
 ) -> Palette {
     if active == FOLLOW_FLAMEWM {
-        return snapshot.map_or_else(|| builtin_themes()[0].palette.clone(), follow_palette);
+        return snapshot.map_or_else(|| DEFAULT_PALETTE.clone(), follow_palette);
     }
     themes
         .iter()
         .find(|theme| theme.name == active)
         .map_or_else(
-            || builtin_themes()[0].palette.clone(),
+            || DEFAULT_PALETTE.clone(),
             |theme| theme.palette.clone(),
         )
 }

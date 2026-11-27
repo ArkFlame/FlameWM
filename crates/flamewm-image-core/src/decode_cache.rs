@@ -10,9 +10,11 @@
 //! used entries (mtime; a hit refreshes it) until the directory is at most [`MAX_CACHE_BYTES`].
 //! The entry just written is never evicted.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::RgbaImage;
@@ -33,6 +35,78 @@ pub fn decode_file_cached(path: &Path) -> Result<RgbaImage, String> {
         write_entry(entry, &image);
     }
     Ok(image)
+}
+
+/// Identity of one decoded raster in this process. The same tuple that selects the on-disk
+/// entry also selects the in-process handle, so an edited file can never reuse stale pixels.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct MemoryKey {
+    path_hash: u64,
+    len: u64,
+    mtime_ns: u128,
+}
+
+/// At most one root-sized raster is kept here. A new source replaces the old handle, so the
+/// previous full-resolution buffer is released instead of being retained beside the new one.
+fn memory() -> &'static Mutex<HashMap<MemoryKey, Arc<RgbaImage>>> {
+    static MEMORY: OnceLock<Mutex<HashMap<MemoryKey, Arc<RgbaImage>>>> = OnceLock::new();
+    MEMORY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn memory_key(path: &Path) -> Option<MemoryKey> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let path_bytes = path.to_string_lossy();
+    Some(MemoryKey {
+        path_hash: fnv1a(0xcbf2_9ce4_8422_2325, path_bytes.as_bytes()),
+        len: meta.len(),
+        mtime_ns,
+    })
+}
+
+fn memory_get(key: &MemoryKey) -> Option<Arc<RgbaImage>> {
+    let map = memory()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.get(key).cloned()
+}
+
+fn memory_put(key: MemoryKey, image: Arc<RgbaImage>) {
+    let mut map = memory()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.clear();
+    map.insert(key, image);
+}
+
+/// Decodes `path` once per process for an unchanged path, byte length and mtime, returning a
+/// shared handle that every consumer can borrow. Other processes still reuse the on-disk entry
+/// produced by [`decode_file_cached`], so no consumer re-decodes the same pixels.
+pub fn decode_file_shared(path: &Path) -> Result<Arc<RgbaImage>, String> {
+    let key = memory_key(path);
+    if let Some(image) = key.as_ref().and_then(memory_get) {
+        return Ok(image);
+    }
+    let image = Arc::new(decode_file_cached(path)?);
+    if let Some(key) = key {
+        memory_put(key, Arc::clone(&image));
+    }
+    Ok(image)
+}
+
+/// Drops the process-local decoded raster. Call when no consumer needs it, for example when a
+/// solid fill covers the desktop, so the full-resolution buffer is not retained unnecessarily.
+/// The on-disk cache remains valid and the next request produces identical pixels.
+pub fn release_shared_raster() {
+    let mut map = memory()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.clear();
 }
 
 fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {

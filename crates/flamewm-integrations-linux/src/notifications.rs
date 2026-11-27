@@ -324,6 +324,11 @@ impl NotificationProvider {
 
     /// Removes expired entries and emits the standard `NotificationClosed` signal.
     pub fn expire(&mut self, now: Instant) -> FlameResult<usize> {
+        // Most turns are D-Bus activity with no toast due; skip the scan and the
+        // id Vec until the earliest deadline actually passes.
+        if self.next_deadline().is_none_or(|deadline| deadline > now) {
+            return Ok(0);
+        }
         let expired: Vec<_> = self
             .notifications
             .iter()

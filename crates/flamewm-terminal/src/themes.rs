@@ -38,6 +38,19 @@ pub const ANSI_NAMES: [&str; 16] = [
     "bright_white",
 ];
 
+/// Dark+ palette, the fallback used before a configured theme resolves. Kept as a const so a
+/// fallback never parses the whole built-in table to read one row.
+pub const DEFAULT_PALETTE: Palette = Palette {
+    background: 0x1e1e1e,
+    foreground: 0xd4d4d4,
+    cursor: 0xaeafad,
+    selection: 0x264f78,
+    ansi: [
+        0x000000, 0xcd3131, 0x0dbc79, 0xe5e510, 0x2472c8, 0xbc3fbc, 0x11a8cd, 0xe5e5e5,
+        0x666666, 0xf14c4c, 0x23d18b, 0xf5f543, 0x3b8eea, 0xd670d6, 0x29b8db, 0xffffff,
+    ],
+};
+
 /// Hex for background, foreground, cursor, selection, then the 16 ANSI colours. One line per theme.
 const BUILTIN: &[(&str, &str)] = &[
     (
