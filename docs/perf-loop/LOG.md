@@ -285,3 +285,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 ## Duplicate dependency scan: nothing first-party
 - `cargo tree --workspace -d`: duplicates (calloop 0.13/0.14, x11rb 0.13/0.14, digest/sha2, hashbrown, thiserror 1/2, rustix 0.38/1.x, getrandom, syn 2/3) all come from third-party pins: winit 0.30 and smithay-client-toolkit (older calloop, x11rb), vendored smithay (sha2), fontdue (hashbrown). No first-party crate causes one.
 - Not changed: removing them means patching vendored smithay/winit for a few hundred KB of binary and no runtime share. Revisit if winit moves to the newer calloop.
+
+## Binary size scout: terminal 14 MB is by design
+- `flamewm-terminal` is the largest binary (14.0 MB vs compositor 8.9, shell 7.4, explorer 5.4, task manager 3.6) because it embeds three compiled UI tiers (0.75, 2.4 and 7.2 MB, 24x80 / 48x128 / 96x192 run slots). A window decodes only the smallest tier that fits its grid (`pool_tier_for`); the other tiers are untouched read-only file pages and never resident. Measured RSS stays 22-31 MB (per-app table). Disk size only; no runtime share. No change.
