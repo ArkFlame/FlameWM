@@ -302,3 +302,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## u162 GPU-side capture downscale (done)
 Capture total 83.4 -> 26.5 ms on real Intel GPU (map 35.8 -> 2.6 ms) by halving twice on the GPU and reading back 1/16 of the bytes. Output within 1 level/byte of the CPU path (55 live captures). clippy -D warnings and 460 wm-wayland tests pass. Next: crop/store (~14 ms) via GPU upscale.
+
+## Scout after u162
+Capture residual: crop 30%, store 23%, blur 12%, gpu_wait 13%, map 10%. Next unit u166 (GPU upscale of the blurred backing) written.
