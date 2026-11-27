@@ -281,25 +281,39 @@ impl IconLoader {
             .spawn(move || {
                 let _ = flamewm_session_core::diagnostics::guard("shell-icons", move || {
                     flamewm_integrations_linux::background::lower_current_thread();
-                    let mut resolver = IconResolver::from_environment_with_theme(
-                        packaged_root,
-                        0,
-                        Some(&initial_theme),
-                    );
+                    // The resolver (theme index scan, several MB) is built on the first icon
+                    // request, not at thread start: the notification host spawns its loader at
+                    // connect only to own a registrable wake fd, and a shell whose toasts never
+                    // carry a named icon must not pay for a second index.
+                    let mut packaged_root = packaged_root;
+                    let mut theme_name = initial_theme;
+                    let mut resolver: Option<IconResolver> = None;
                     let rebuilder = ThemeRebuilder::new();
                     while let Ok(msg) = req_rx.recv() {
                         let req = match msg {
                             WorkerMsg::Icon(req) => req,
                             // Off the UI thread: the index scan runs here.
                             WorkerMsg::Theme(name) => {
-                                resolver.set_preferred_theme(Some(&name));
+                                match resolver.as_mut() {
+                                    Some(resolver) => {
+                                        resolver.set_preferred_theme(Some(&name));
+                                    }
+                                    None => theme_name = name,
+                                }
                                 continue;
                             }
                         };
+                        let resolver = resolver.get_or_insert_with(|| {
+                            IconResolver::from_environment_with_theme(
+                                std::mem::take(&mut packaged_root),
+                                0,
+                                Some(&theme_name),
+                            )
+                        });
                         // Throttled (5s) mtime check runs off this thread; a finished
                         // rebuilt index is applied here and advances the resolver's
                         // theme generation when themes change.
-                        refresh_icon_index(&mut resolver, &rebuilder);
+                        refresh_icon_index(resolver, &rebuilder);
                         // Generic app miss must never rasterize brand artwork:
                         // no empty-name retry (it resolves to the brand
                         // fallback) and any brand fallback raster is dropped to
@@ -307,7 +321,7 @@ impl IconLoader {
                         // transparent empty placeholder. Applies to every
                         // request type/role uniformly.
                         let size = IconSize::new(req.width, req.height);
-                        let raster = resolve_icon_raster(&mut resolver, &req.name, size);
+                        let raster = resolve_icon_raster(resolver, &req.name, size);
                         let res = IconResult {
                             target: req.target,
                             generation: req.generation,

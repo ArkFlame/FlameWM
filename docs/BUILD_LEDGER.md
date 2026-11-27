@@ -39,3 +39,7 @@ RESULT: cargo check --tests --workspace clean (no errors). Tests + release build
 ## HOUR 7 slot 2 (18:32)
 cargo check --tests --workspace then cargo test --workspace --no-fail-fast (waves 6-8 batch)
 RESULT slot2: workspace check clean; full test run 177 targets ok, 1 failed (render-x11 fault_tests vs accel tests raced on global STATUS: two separate locks). Fixed by sharing TEST_SERIAL; render-x11 475 pass x3.
+
+## HOUR 7 slot 3 (19:04)
+cargo build --release -p flamewm-wm-wayland -p flamewm-shell -p flamewm-desktop -p flamewm-audio-helper -p flamewm-render-x11 (waves 6-8, for post-wave baseline sample + frame)
+RESULT slot3: release build exit=0 (wayland, shell, desktop, audio-helper, render-x11)

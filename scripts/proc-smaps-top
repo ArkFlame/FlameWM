@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Top memory mappings of a process by Rss, from /proc/PID/smaps (no python, no builds).
+# Usage: scripts/proc-smaps-top <pid|name> [N=8]
+set -Eeuo pipefail
+t="${1:?usage: proc-smaps-top <pid|name> [N]}"; n="${2:-8}"
+[[ "$t" =~ ^[0-9]+$ ]] && pid="$t" || pid="$(pgrep -x "$t" | head -1)"
+[[ -r /proc/$pid/smaps ]] || { echo "proc-smaps-top: cannot read /proc/$pid/smaps" >&2; exit 1; }
+awk '/^[0-9a-f]+-[0-9a-f]+ /{name=($6==""?"[anon]":$6); next} /^Rss:/{r[name]+=$2} END{for(k in r) printf "%8d kB  %s\n", r[k], k}' "/proc/$pid/smaps" | sort -rn | head -"$n"
+awk '/^Rss:/{s+=$2} /^Private_Dirty:/{d+=$2} END{printf "total Rss %d kB, Private_Dirty %d kB\n", s, d}' "/proc/$pid/smaps"

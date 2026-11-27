@@ -59,3 +59,20 @@ Caveat: pre-wave binaries; nested winit, idle, no input. The wave 2-6 edits are 
 | B4 | flamewm-wayland RSS | 124 MB | glyph/atlas + surfaces | p20 glyph byte cap landed (unmeasured) | open, re-sample after release build |
 
 Correction (same day, re-sample 30 s after launch, per-thread voluntary ctxt switches over 5 s): flamewm-wayland busiest thread 1.4/s, others 0.4/s and 0.2/s. The baseline 19/s for wayland (and likely desktop 21/s) was startup churn inside the 1 s window. B2 is downgraded to "not an idle problem"; B1 needs a steady-state re-sample of desktop before any cut. The earlier 179/s thread seen in one sample was a startup window too. Next baseline-style sample must start at least 30 s after launch.
+
+## POST-WAVE SAMPLE (2026-11-27 19:10, release build of waves 2-8 vs pre-wave binaries, both sampled 40 s after launch, nested idle)
+
+| process | pre-wave RSS kB | post-wave RSS kB | delta |
+| --- | --- | --- | --- |
+| flamewm-shell | 17712 | 25180 | +7468 REGRESSION |
+| flamewm-desktop | 24824 | 30552 | +5728 REGRESSION |
+| flamewm-wayland | 126092 | 124764 | -1328 |
+| flamewm-gpu-helper | 141608 | 143076 | +1468 |
+| flamewm-audio-helper | 6348 | 6232 | -116 |
+
+Wakeups/s at idle unchanged (wayland 16-20/s sampled in both; per-thread steady state about 2/s). So the cuts done so far moved wakeups by nothing measurable and RSS the wrong way for shell and desktop.
+
+- R1 shell +7.5 MB: `[heap]` 3.4 -> 9.0 MB. Cause found: p56 made `NotificationHost::connect` call `IconLoader::spawn` eagerly, and the loader thread built a full `IconResolver` (theme index scan) at thread start, a second index next to the panel loader. Fix: build the resolver on the first icon request (`crates/flamewm-shell/src/icon_loader.rs`). UNBUILT, verify next slot.
+- R2 desktop +5.7 MB: `[heap]` 9.2 -> 11.4 MB plus a new 3.6 MB `[anon]`. Cause unknown; wallpaper_loader/main.rs/icon_cache diffs only release memory. Unit p87.
+- R3 panic strategy: release profile has `panic = "abort"`, so `diagnostics::guard` (`catch_unwind`) never catches in production. Real recovery is the session supervisor respawning the crashed process. Decision on `panic = "unwind"` needs a measured size/RSS delta (unit p88). Do not flip blind.
+- Lesson: every cut needs its own scoped before/after (scripts/bench-baseline + scripts/proc-smaps-top, 40 s after launch) before it counts as landed.
