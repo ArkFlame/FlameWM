@@ -66,9 +66,8 @@ pub(super) fn sync_clock(
     );
     // The date nodes stay hidden when `showDate` is off; formatting their text on every
     // seconds tick would allocate a string for content nobody can see.
-    let date_text = show_date.then(|| {
-        format_date(time, widget.flag("showWeekday"), widget.flag("showYear"))
-    });
+    let date_text =
+        show_date.then(|| format_date(time, widget.flag("showWeekday"), widget.flag("showYear")));
     let time_color = color(widget.color("textColor"), 255);
     let date_color = color(widget.color_or_accent("accentColor", accent), 255);
     let weight = if widget.flag("bold") { 700 } else { 400 };
