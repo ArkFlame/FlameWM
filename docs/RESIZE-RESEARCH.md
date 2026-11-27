@@ -1,99 +1,99 @@
-# Resize research
+# Resize research and Wayland improvement plan
 
-Source-only survey of resize behavior in `.vendor/smithay-master` and
-`.vendor/cosmic-epoch`, narrowed to what applies to
-`crates/flamewm-wm-wayland/src/input/pointer.rs`.
+## Scope and evidence
 
-## Smithay: xdg_toplevel resize state
+This compares the active FlameWM Wayland pointer resize path with the local
+KWin, cosmic-epoch, and Smithay reference trees. The `.vendor` trees are
+read-only research material, not runtime dependencies. Paths and symbols below
+are the local source evidence; upstream revision identifiers were not recorded.
 
-- `.vendor/smithay-master/src/wayland/shell/xdg/mod.rs` — `ToplevelSurface::with_pending_state`
-  (1698) lazily seeds `XdgToplevelSurfaceData::server_pending` from `current_server_state()`, then
-  hands `&mut ToplevelState` to the caller. This is where a compositor writes a new size and the
-  `ToplevelState::Resizing` bit for an interactive resize.
-- Same file — `ToplevelSurface::send_configure` (1489) and `send_configure_internal` (1837) turn
-  that pending state into a configure carrying a fresh `Serial`, appended to `pending_configures`;
-  `send_pending_configure` sends only when the state actually changed.
-- Same file — `XdgShellHandler::resize_request` (1114) is the compositor-side hook for a
-  client-requested interactive resize (seat, serial, `ResizeEdge`).
+Active FlameWM owner: `crates/flamewm-wm-wayland/src/input/pointer.rs` handles
+pointer motion during a resize; `crates/flamewm-wm-wayland/src/input/buttons.rs`
+commits the final geometry on release. Outline resize is the default.
 
-## Smithay: configure serial ack
+## Techniques that keep resize cheap
 
-- `.vendor/smithay-master/src/wayland/shell/xdg/mod.rs` — the generated `ack_configure` (221) finds
-  the pending configure whose serial matches, promotes it to `last_acked`, and retains only
-  configures with a newer serial. `last_acked` is the field declared at 209-212.
-- `.vendor/smithay-master/src/wayland/shell/xdg/handlers/surface.rs` — the `Request::AckConfigure`
-  arm (267) calls that helper (302/310) and forwards the resolved configure to
-  `XdgShellHandler::ack_configure` (334); an unknown serial raises `InvalidSurfaceState`.
-- Narrow read: `last_acked.state.size` is the only authoritative "client caught up" signal. A
-  compositor that sends the next resize configure before it changes is stacking requests.
+### KWin
 
-## Cosmic-epoch: configure throttling until ack
+- `src/x11window.cpp:interactiveMoveResize` and the nearby geometry update path
+  resize from the current move/resize geometry and apply size constraints
+  before committing with `moveResize`. `src/x11window.cpp:resizeWithChecks`
+  contains the constraint operation. This keeps geometry policy centralized
+  rather than repeating it in the pointer event path.
+- `src/waylandwindow.cpp:resizeWithChecks` provides the corresponding
+  constrained geometry operation for Wayland windows. Geometry is changed
+  through window-level methods, not by having input code directly manipulate
+  client buffers.
 
-- `.vendor/cosmic-epoch/cosmic-comp/src/shell/element/surface.rs` — `ShellSurface::latest_size_committed`
-  (630) compares `current_server_state().size` against `cached_state.last_acked.state.size`; it is
-  true only once the client committed the compositor's previous size. The comment names the reason:
-  clients that do not batch size requests misbehave with very fast (1000 Hz) input devices.
-- `.vendor/cosmic-epoch/cosmic-comp/src/shell/layout/floating/grabs/resize.rs` —
-  `ResizeSurfaceGrab::update_location` (82) gates `self.window.configure()` on
-  `latest_size_committed()` (177). The tiling twin, `src/shell/layout/tiling/grabs/resize.rs`
-  (`ResizeForkGrab::update_location`, 330), uses the same gate at 442-453.
-- `cosmic-comp/src/state.rs` — `throttle` (1344) is a separate *frame* throttle
-  (`SCREENCOPY_THROTTLE` ~16.7 ms, `THROTTLE` 995 ms); it is not the ack gate.
+### cosmic-epoch
 
-## Cosmic-epoch: per-frame motion coalescing
+- `cosmic-comp/src/wayland/handlers/xdg_shell/mod.rs:resize_request` hands a
+  protocol resize request into the shell's resize-grab machinery. The handler
+  is the boundary between the xdg-shell request and compositor-owned grab
+  state.
+- `cosmic-comp/src/state.rs:send_frames` dispatches frame callbacks along
+  rendered surface trees. The backend calls this in response to presented
+  frames, so callback progress follows the compositor's frame lifecycle
+  rather than every raw pointer event.
+- `cosmic-comp/src/shell/element/surface.rs:send_frame` forwards callbacks
+  through the surface abstraction. That lets frame delivery remain bounded by
+  the compositor's presentation path.
 
-- `cosmic-comp/src/shell/layout/floating/grabs/resize.rs` — `PointerGrab::motion` (202) forwards
-  motion to Smithay, then `update_location` (82) stores the newest size in `last_window_size` (170)
-  and configures only when acked: many motion samples collapse into one configure per ack/frame.
-  `PointerGrab::frame` (258) delegates to `handle.frame`, the frame flush point.
-- `cosmic-comp/src/shell/layout/tiling/grabs/resize.rs` — `ResizeForkGrab::update_location` (330)
-  accumulates `accumulated_delta` across motion events, ignores rounded-zero steps (403), and
-  pushes one `update_positions` tree update when `should_configure` holds (442-453).
-- Narrow read: coalesce at a single pending-configure slot, not per motion event.
+### Smithay
 
-## Cosmic-epoch: last-buffer scaling
+- `src/wayland/shell/xdg/handlers/surface/toplevel.rs:request` dispatches
+  `xdg_toplevel.resize` to `XdgShellHandler::resize_request`. The protocol
+  handler delegates grab authorization and resize policy to the compositor.
+- `src/wayland/shell/xdg/handlers/surface.rs:ack_configure` resolves the
+  acknowledged configure serial and calls `XdgShellHandler::ack_configure`.
+  Configure state is tied to its serial, allowing clients to acknowledge the
+  configure they actually applied rather than treating a request as an
+  immediate buffer resize.
+- `src/desktop/wayland/window.rs:send_frame` and the surface-tree frame
+  helpers deliver frame callbacks through the desktop window abstraction.
+  Rendering/presentation therefore controls callback delivery, not pointer
+  motion frequency.
 
-- `.vendor/cosmic-epoch/cosmic-comp/src/shell/layout/floating/mod.rs` — `FloatingLayout::render`
-  (1552) reads `buffer_size = elem.geometry().size` (1603), builds a `Scale` from target over buffer
-  geometry (1604-1607), and wraps the element in `RescaleRenderElement` (1612). The last committed
-  buffer is therefore stretched to the new geometry until the client commits a fresh one, with no
-  extra configure needed to keep the frame correct.
-- There is no literal `last_buffer` identifier in this tree; the effect is render-side and lives
-  outside pointer input, so it cannot be copied into `pointer.rs`.
+## FlameWM gaps, ranked
 
-## Cosmic-epoch: outline vs live
+1. **No explicit frame-paced configure policy for live resize.**
+   `input/pointer.rs` updates the model on each changed pointer position and
+   sets `pending_configure`; the paint/flush path can therefore send successive
+   size configures at input-event frequency. Avoiding duplicate unchanged
+   rectangles helps, but does not bound configure production to useful display
+   frames. Add a frame-paced/latest-geometry policy at the resize-to-configure
+   boundary, preserving the final release geometry. Likely owner:
+   `crates/flamewm-wm-wayland/src/input/pointer.rs` plus the configure flush
+   owner in `crates/flamewm-wm-wayland/src/input/handlers.rs`.
+2. **No demonstrated serial-correlated resize completion behavior in the
+   resize interaction path.** `buttons.rs` clears `pending_configure` after
+   release applies geometry, while client buffer readiness is asynchronous.
+   Audit and make the configure/ack/commit relationship explicit so a late
+   configure or commit cannot regress the final target geometry. Likely owner:
+   `crates/flamewm-wm-wayland/src/input/handlers.rs`; preserve the release
+   commit in `crates/flamewm-wm-wayland/src/input/buttons.rs`.
+3. **No demonstrated presentation-driven resize feedback policy.**
+   `pointer.rs` requests a scene paint when resize state changes, but the
+   resize path should be verified against frame callbacks and presentation
+   cadence so clients are not encouraged to render more often than useful.
+   Likely owner: `crates/flamewm-wm-wayland/src/input/handlers.rs` and the
+   existing output/frame scheduling owner; do not move WM authority into UI.
+4. **Outline mode trades responsiveness for low work.** The current default
+   draws only a landing ring during motion and applies one final configure on
+   release (`pointer.rs`, `buttons.rs`). Keep this safe fallback, while making
+   any live mode use a bounded configure cadence rather than reverting to
+   unbounded per-event work.
 
-- `.vendor/cosmic-epoch/cosmic-comp/src/shell/mod.rs` — `Shell::set_resize_mode` (2528) and
-  `Shell::resize_mode` (2555) own `ResizeMode` (Started/Active/Ended) and a `ResizeIndicator`;
-  `cosmic-comp/src/backend/render/mod.rs` reads it at 767 and passes it to layouts at 1021 and 1060.
-- `cosmic-comp/src/shell/layout/floating/mod.rs` — inside `FloatingLayout::render` (1660-1677) the
-  indicator is resized to the focused geometry plus a 36 px margin and pushed as a render element,
-  while the grab reconfigures the window only in live mode.
-- Two modes result: outline draws the ring and commits once on release; live resizes the real
-  geometry and configures per frame.
+## Plan
 
-## Ranked applicability for pointer.rs
+Implement item 1 first: retain only the newest geometry during a resize and
+flush it at most once per compositor frame, with a final release flush that
+cannot be dropped. Keep configure serial tracking and client commit handling
+in their existing protocol owner. Add focused tests for rapid motion, unchanged
+geometry, release before a scheduled flush, and a late client commit. Measure
+the resize path under a fixed pointer-event/frame cadence before claiming a
+performance improvement. This research task does not implement the plan.
 
-1. **Ack-gated configure throttle — highest.** `State::on_motion` (122) sets
-   `pending_configure = Some(id)` on every changed live-resize rect (246) with no check of the last
-   acked size. Adopt `ShellSurface::latest_size_committed` semantics before issuing the next one.
-2. **Per-frame motion coalescing — high.** `grab_motion_needs_work` (643) already drops
-   anchor-unchanged steps and the `pending_configure` slot already collapses writes; make the flush
-   point explicit at the `pointer.frame(self)` call in `update_pointer_focus` (315) and gate it on
-   ack rather than on raw motion count.
-3. **Outline vs live — already present.** The `show_content_while_dragging` branch (235-255)
-   gives live rect + configure versus ring-only + release commit; only naming could be aligned with
-   `ResizeMode`. Low effort, low risk.
-4. **Smithay configure/ack plumbing — supporting.** `with_pending_state`, `send_configure` and
-   `ack_configure` supply the serial and `last_acked` that items 1-2 need; `pointer.rs` should
-   consume that state, never duplicate it.
-5. **Last-buffer scaling — lowest / out of scope.** It lives in `FloatingLayout::render` via
-   `RescaleRenderElement`; `pointer.rs` has no render path, so no change belongs here.
-
-PASS — every section above cites a concrete file path and function from the two vendors, and the
-applicability list is ranked for `crates/flamewm-wm-wayland/src/input/pointer.rs` with line anchors.
-Two brief labels map to differently named code rather than literal identifiers: "last-buffer
-scaling" is the render-side `RescaleRenderElement`, and "outline vs live" is
-`ResizeMode`/`ResizeIndicator` (mirrored locally by `show_content_while_dragging`). Items 1-2 are
-the only ones that warrant a code change in `pointer.rs`; the survey is static because this task
-forbids builds, tests and runtime checks.
+PASS — research and the ranked improvement plan are recorded from local
+reference and active-source paths. No product code was changed; implementation
+and performance claims remain unverified.
