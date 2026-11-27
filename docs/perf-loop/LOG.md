@@ -197,3 +197,9 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Frame check: end-of-drag titlebar band is bit-identical (fuzz 0) to the previous builds' dumps, so the settled frame is rebuilt at the final position. The mid-drag tint lag was not captured frame by frame (the harness dumps once, at the end); it is bounded to 2 frames / 50 ms.
 - Not covered by a unit test: `reused_ok` and the `Decorations::element` reuse decision need a GL renderer or a ChromeBuffer fixture; candidate follow-up.
 - Dock backdrops are now 87% of the compositor frame (captures); the remaining levers are in u160/u162.
+
+## u160 fused alpha-mask + premultiply store pass
+- `store` made three full-size passes over a capture (mask into the RGBA buffer, `premultiplied_argb_bytes` into a second buffer, then `MemoryRenderBuffer::from_slice` copies). The first two are now one pass writing premultiplied BGRA directly (`premultiply_pixel`; opaque window rows only reorder channels). Test: `premultiply_pixel` equals `premultiplied_argb_bytes` for 256 alphas x 6 channel values.
+- Measured, 2 runs: store 7.3 -> 4.05 / 4.03 ms. Caution: crop (untouched) also read lower (8.2 -> 5.5 ms) so the machine was quieter this run; treat total_us (35 -> 24 ms) as partly noise, the store drop as the change. Composition: dock_backdrops 87% -> 85% of frame time.
+- Frame check: titlebar band and window top-right corner 0 differing pixels vs the previous dump (fuzz 0); full-frame diff 1739 px vs 1715 px between two runs of the same build (live TM content).
+- Remaining per capture (ms, this run): map ~9.9 (renderer wait, see u162), crop ~5.5, store ~4.0, blur ~4, downscale ~2.6.
