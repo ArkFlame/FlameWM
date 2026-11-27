@@ -190,3 +190,10 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 ## u160 readback map: not reducible in this harness
 - Read `read_reduced`: `map` (12 ms) is where the software GL finishes the queued scene render, so it measures llvmpipe, not transfer cost. No honest CPU-side win exists; a GPU-side two-step 2x blit (exact 4x4 box) would cut real-GPU readback bytes 16x but must be measured on the DRM backend. Written up as u162.
 - Open from u160/u161: titlebar rebuild on move (~4 ms/frame), store ~7 ms, blur ~4 ms.
+
+## u161 titlebar reuse while only its position changes
+- The titlebar bakes the blurred desktop crop at its origin, so every drag frame rebuilt it (91-93% of the remaining element-build time, ~4 ms/frame). Now a titlebar whose width/active/maximized/rounded/title are unchanged and only whose origin moved keeps its pixels for up to 50 ms or 2 frames (same rule as the u156 window backdrop); it is still placed at the new position, only the blurred tint under it lags. Each reuse sets `Decorations::stale_reuse`, and the render loop requests one more frame, so the final position always gets a fresh crop (checked below).
+- Measured, same scripted drag, 2 runs: element-build time 360/392 -> 67/62 ms; elements share 19% -> 6-7%; total compositor frame time 1267/1234 -> 1020/850 ms (frames 88-90, captures 22).
+- Frame check: end-of-drag titlebar band is bit-identical (fuzz 0) to the previous builds' dumps, so the settled frame is rebuilt at the final position. The mid-drag tint lag was not captured frame by frame (the harness dumps once, at the end); it is bounded to 2 frames / 50 ms.
+- Not covered by a unit test: `reused_ok` and the `Decorations::element` reuse decision need a GL renderer or a ChromeBuffer fixture; candidate follow-up.
+- Dock backdrops are now 87% of the compositor frame (captures); the remaining levers are in u160/u162.

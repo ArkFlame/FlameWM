@@ -684,6 +684,9 @@ fn scene_elements_into(
                     ) {
                         out.push(element);
                     }
+                    if std::mem::take(&mut decorations.stale_reuse) {
+                        state.request_redraw();
+                    }
                     dl.mark(stage_timers::Stage::Titlebar);
                 }
                 // Everything this window paints is now in `out`; its opaque areas hide whatever

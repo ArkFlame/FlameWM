@@ -6,6 +6,8 @@ use crate::chrome_buttons::{self, Feedback};
 #[derive(Default)]
 pub struct Decorations {
     pub(super) parts: HashMap<WindowId, ChromeBuffer>,
+    /// Set when a titlebar was reused at a stale position; the caller owes one more frame.
+    pub(super) stale_reuse: bool,
     /// Blurred desktop layer (straight RGBA, output-sized) that translucent titlebars blend over.
     pub(super) desktop: Option<DesktopBackdrop>,
     /// True while a one-shot wake timer is armed to recapture the desktop after the throttle window.
@@ -95,6 +97,9 @@ pub(crate) fn premultiplied_argb_bytes(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub(super) struct ChromeBuffer {
+    /// When the pixels (and the baked desktop crop) were built, and how many moved frames reused them.
+    pub(super) built_at: std::time::Instant,
+    pub(super) reused: u8,
     pub(super) origin: (i32, i32),
     pub(super) width: i32,
     pub(super) active: bool,
@@ -109,7 +114,15 @@ pub(super) struct ChromeBuffer {
     pub(super) buffer: MemoryRenderBuffer,
 }
 
+const MAX_STALE_FRAMES: u8 = 2;
+const STALE_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
+
 impl ChromeBuffer {
+    /// A titlebar that only moved may keep its baked desktop crop for a bounded time.
+    pub(super) fn reused_ok(&self, now: std::time::Instant) -> bool {
+        now.duration_since(self.built_at) < STALE_WINDOW || self.reused < MAX_STALE_FRAMES
+    }
+
     /// Repaints the controls whose hover or pressed state differs from the cached bar. Only those
     /// button rects are damaged; the rest of the bitmap and its damage bag are untouched.
     pub(super) fn repaint_feedback(&mut self, feedback: Feedback) {
@@ -369,15 +382,35 @@ impl Decorations {
             return None;
         }
         let origin = (rect.x, rect.y);
-        let same_geometry = self.parts.get(&window).is_some_and(|part| {
-            part.origin == origin
-                && part.width == rect.w
-                && part.active == active
-                && part.maximized == maximized
-                && part.rounded == rounded
-                && part.title == title
+        let now = std::time::Instant::now();
+        let (same_but_origin, moved) = self.parts.get(&window).map_or((false, false), |part| {
+            (
+                part.width == rect.w
+                    && part.active == active
+                    && part.maximized == maximized
+                    && part.rounded == rounded
+                    && part.title == title,
+                part.origin != origin,
+            )
         });
+        // A moved-only bar may keep its baked desktop crop for a bounded time (the bar itself is
+        // placed at the new origin below); the caller then owes one more frame so the final
+        // position always gets a fresh crop.
+        let reuse_moved = same_but_origin
+            && moved
+            && self
+                .parts
+                .get(&window)
+                .is_some_and(|part| part.reused_ok(now));
+        let same_geometry = same_but_origin && (!moved || reuse_moved);
         if same_geometry {
+            if reuse_moved {
+                // Only the baked blur lags the desktop for a frame or two; the bar is placed at the new origin.
+                if let Some(part) = self.parts.get_mut(&window) {
+                    part.reused += 1;
+                }
+                self.stale_reuse = true;
+            }
             // Only pointer feedback moved: repaint the affected controls in place.
             if let Some(part) = self.parts.get_mut(&window) {
                 part.repaint_feedback(feedback);
@@ -406,6 +439,8 @@ impl Decorations {
                 window,
                 ChromeBuffer {
                     origin,
+                    built_at: std::time::Instant::now(),
+                    reused: 0,
                     width: rect.w,
                     active,
                     maximized,
@@ -974,6 +1009,8 @@ mod hover_repaint_tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let rest = Feedback::default();
         let mut buffer = ChromeBuffer {
+            built_at: std::time::Instant::now(),
+            reused: 0,
             origin: (0, 0),
             width: W,
             active: true,
@@ -1011,6 +1048,8 @@ mod hover_repaint_tests {
         let narrow = 10;
         let rest = Feedback::default();
         let mut buffer = ChromeBuffer {
+            built_at: std::time::Instant::now(),
+            reused: 0,
             origin: (0, 0),
             width: narrow,
             active: true,
