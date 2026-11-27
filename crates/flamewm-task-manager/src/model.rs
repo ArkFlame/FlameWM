@@ -646,15 +646,18 @@ impl Sampler {
         // a static refresh was already due: one `stat` replaces the `status` + `cmdline`
         // open/read/close pairs that an unchanged pid used to pay every refresh interval.
         let refresh_due = tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
+        // Bound the skip: even a pid whose identity token never moves gets one full static
+        // refresh every 20 ticks, so a setuid or same-comm exec cannot stay stale forever.
+        let hard_due = tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS * 4;
         let mtime = if !known || refresh_due {
             stat_mtime(&self.path)
         } else {
             cached.stat_mtime
         };
         let identity_changed = !known || cached.stat_mtime != mtime;
-        let stale = identity_changed || (refresh_due && cached.name != task.name);
+        let stale = identity_changed || hard_due || (refresh_due && cached.name != task.name);
         if stale {
-            if identity_changed {
+            if identity_changed || hard_due {
                 let status = read_proc_prefix(
                     &mut self.scratch,
                     proc_path(&mut self.path, pid, "status"),

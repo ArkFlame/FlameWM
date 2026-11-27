@@ -38,7 +38,7 @@ pub fn configured_icon_theme(config_home: &Path) -> Option<String> {
         Ok(text) => parse_ini_value(&text, "Icons", "Theme"),
         Err(error) => {
             eprintln!(
-                "flamewm: icon theme config {} unreadable: {error}; trying GTK settings",
+                "flamewm: icon theme config {} unreadable: {error}; trying GTK settings; blast_radius=works:gtk-settings,ui|degraded:kde-configured-theme",
                 kde.display()
             );
             None

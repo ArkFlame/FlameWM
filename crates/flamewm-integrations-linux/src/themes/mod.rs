@@ -98,7 +98,7 @@ impl ThemeCatalog {
                 let readable = text.is_ok();
                 if !readable && index.is_file() {
                     eprintln!(
-                        "flamewm: theme index {} unreadable; listing theme {} with no directories",
+                        "flamewm: theme index {} unreadable; listing theme {} with no directories; blast_radius=works:theme-entry,cursor-preview|degraded:icon-directories,theme-name",
                         index.display(),
                         id
                     );
