@@ -257,14 +257,18 @@ pub(super) fn is_true(value: Option<&String>) -> bool {
 }
 
 pub(super) fn list_value(value: Option<&String>) -> Vec<String> {
-    value
+    // Trim the Vec to its length: split/collect can leave spare capacity that
+    // would otherwise stay on the heap for the life of the catalog entry.
+    let mut items: Vec<String> = value
         .map(|v| {
             v.split(';')
                 .filter(|item| !item.is_empty())
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    items.shrink_to_fit();
+    items
 }
 
 pub(super) fn desktop_environment_matches(

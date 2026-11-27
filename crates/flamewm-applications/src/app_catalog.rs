@@ -25,7 +25,6 @@ impl WindowApplicationIdentity {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ApplicationCatalog {
     pub(super) applications: Vec<DesktopEntry>,
-    pub(super) by_id: std::collections::BTreeMap<String, usize>,
     pub(super) by_wm_class: std::collections::BTreeMap<String, usize>,
     pub(super) by_stem: std::collections::BTreeMap<String, usize>,
     pub(super) by_exec: std::collections::BTreeMap<String, usize>,
@@ -79,14 +78,10 @@ impl ApplicationCatalog {
     }
 
     pub(super) fn rebuild_indexes(&mut self) {
-        self.by_id.clear();
         self.by_wm_class.clear();
         self.by_stem.clear();
         self.by_exec.clear();
         for (index, entry) in self.applications.iter().enumerate() {
-            self.by_id
-                .entry(entry.id.as_str().to_owned())
-                .or_insert(index);
             let wm_class = entry.application.startup_wm_class.trim();
             if !wm_class.is_empty() {
                 self.by_wm_class
@@ -125,9 +120,11 @@ impl ApplicationCatalog {
     }
 
     pub fn find(&self, id: &DesktopAppId) -> FlameResult<&DesktopEntry> {
-        self.by_id
-            .get(id.as_str())
-            .and_then(|index| self.applications.get(*index))
+        // Ids are unique (`seen` in from_dirs), so a linear scan over the
+        // sorted entries matches the old by_id map without keeping a String per entry.
+        self.applications
+            .iter()
+            .find(|entry| entry.id.as_str() == id.as_str())
             .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "application id not found"))
     }
 

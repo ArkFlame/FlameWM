@@ -48,6 +48,9 @@ pub struct UsageHost {
     /// Consecutive unsuccessful refreshes; drives the bounded doubling delay.
     failures: u8,
     inflight: Option<mpsc::Receiver<UsageResult>>,
+    /// False while the usage popup is closed: no fetch starts, no credentials are read, and no
+    /// wake is scheduled. Results already in flight are still polled.
+    needed: bool,
 }
 
 impl Default for UsageHost {
@@ -60,16 +63,23 @@ impl Default for UsageHost {
             retry_at: None,
             failures: 0,
             inflight: None,
+            needed: true,
         }
     }
 }
 
 impl UsageHost {
-    /// True when at least one provider is enabled, no fetch is running, and both the normal
-    /// interval and any failure backoff have elapsed.
+    /// Marks whether the usage popup currently needs data. Fetches start only while needed.
+    pub fn set_needed(&mut self, needed: bool) {
+        self.needed = needed;
+    }
+
+    /// True when at least one provider is enabled, the popup needs data, no fetch is running,
+    /// and both the normal interval and any failure backoff have elapsed.
     #[must_use]
     pub fn due(&self, now: Instant) -> bool {
-        !self.enabled.is_empty()
+        self.needed
+            && !self.enabled.is_empty()
             && self.inflight.is_none()
             && self.retry_at.is_none_or(|at| now >= at)
             && self
@@ -93,7 +103,7 @@ impl UsageHost {
     /// enabled (idle wakeups stay at zero) or while a fetch runs: its worker writes the wake.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Instant> {
-        if self.enabled.is_empty() || self.inflight.is_some() {
+        if !self.needed || self.enabled.is_empty() || self.inflight.is_some() {
             return None;
         }
         let interval_at = self.last_started.map(|started| started + self.interval);

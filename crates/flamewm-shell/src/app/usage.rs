@@ -25,6 +25,8 @@ impl ShellLoop {
         // the usage card is usually closed and most ticks start no worker.
         let wake = &self.result_wake;
         let now = Instant::now();
+        // Credentials are read only by a fetch, and a fetch starts only while the popup is open.
+        self.usage.set_needed(self.surfaces.is_usage_open());
         let changed = self.usage.tick(now, |providers| {
             flamewm_shell::usage_host::spawn_usage_fetch(providers, wake.waker())
         });

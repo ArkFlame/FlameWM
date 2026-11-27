@@ -511,7 +511,6 @@ fn identity_catalog() -> ApplicationCatalog {
             entry("myeditor.desktop", "MyEditor", "", "myeditor"),
             entry("myeditor-pro.desktop", "MyEditor Pro", "", "myeditor-pro"),
         ],
-        by_id: std::collections::BTreeMap::new(),
         by_wm_class: std::collections::BTreeMap::new(),
         by_stem: std::collections::BTreeMap::new(),
         by_exec: std::collections::BTreeMap::new(),
