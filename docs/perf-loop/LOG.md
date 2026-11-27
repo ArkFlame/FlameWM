@@ -332,3 +332,6 @@ CI green for b7548fe2, 76cbc484, 1e0376bc, d3f427ca. Arch package runs still in 
 
 ## Terminal wakeup scout: nothing ranked
 PTY reader coalesces wakes to one per 16 ms frame; scroll glide thread runs per request only; pty.rs sleeps are test-only. No change.
+
+## Shell timers scout: nothing ranked
+Profiler wake gated on enabled(); weather/usage/clock intervals are 5 min to 6 h; launch-feedback polls 50/250 ms only while a launch is pending; weather_host 10 ms sleep is test-only. No change.
