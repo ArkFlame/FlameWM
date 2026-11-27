@@ -52,6 +52,10 @@ impl App {
             for pane in tab.root.leaves_mut() {
                 pane.session.pty.kill();
             }
+            // Release the closing tab's baked rows now instead of waiting for the next frame, and give the
+            // map its buckets back so repeated open/close cycles do not keep the high-water mark.
+            self.pane_runs.retain(|id, _| !tab.root.contains(*id));
+            self.pane_runs.shrink_to_fit();
             self.retarget_active(index);
         }
     }

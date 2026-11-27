@@ -481,8 +481,11 @@ impl App {
         let index = self.tabs.iter().position(|tab| tab.root.contains(id))?;
         let tab = &mut self.tabs[index];
         let removed = tab.root.remove_leaf(id)?;
+        // The pane is gone from every tree, so its cached rows can never be reused.
+        self.pane_runs.remove(&id);
         if matches!(tab.root, PaneNode::Vacant) {
             self.tabs.remove(index);
+            self.pane_runs.shrink_to_fit();
             self.retarget_active(index);
             return Some(removed.pane);
         }

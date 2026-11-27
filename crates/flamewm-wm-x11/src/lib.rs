@@ -55,6 +55,7 @@ use flamewm_x11_desktop::shared::{self, PendingMode};
 use flamewm_x11_desktop::shortcuts::{ShortcutGrabs, XGrabBackend, read_keyboard_table};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
+use x11rb::errors::ReplyError;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
 use x11rb::protocol::xproto::{self, Atom, AtomEnum, ConnectionExt, Window};
 use x11rb::rust_connection::RustConnection;
@@ -955,17 +956,22 @@ impl DisplayPort for X11Desktop {
         // RandR is optional: without it the WM must still start. Blast radius: no
         // per-output modes or hotplug geometry; the existing root-output fallback below
         // supplies a single connected output so panels and geometry still work.
-        let (config_timestamp, output_ids) = match self
+        let (config_timestamp, output_ids, resource_modes) = match self
             .conn
             .randr_get_screen_resources_current(self.root)
+            .map_err(ReplyError::from)
             .and_then(|cookie| cookie.reply())
         {
-            Ok(resources) => (resources.config_timestamp, resources.outputs),
+            Ok(resources) => (
+                resources.config_timestamp,
+                resources.outputs,
+                resources.modes,
+            ),
             Err(error) => {
                 eprintln!(
                     "flamewm: RandR screen resources unavailable: {error}; blast radius: no per-output geometry/modes, falling back to root geometry"
                 );
-                (0, Vec::new())
+                (0, Vec::new(), Vec::new())
             }
         };
         // Stable physical output identity: never infer primary from RandR
@@ -993,7 +999,7 @@ impl DisplayPort for X11Desktop {
             {
                 continue;
             }
-            let modes = shared::display_modes(&info.modes, &resources.modes);
+            let modes = shared::display_modes(&info.modes, &resource_modes);
             let crtc = info.crtc;
             let (geometry, current_mode) = if crtc != 0 {
                 let c = self

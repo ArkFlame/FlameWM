@@ -167,6 +167,7 @@ chain_supervisor() {
     if chain_guard_trip; then
         chain_record guard fail crash_loop 0 "$(chain_works safe)" "$(chain_degraded safe)" \
             "attempts=$CHAIN_ATTEMPTS"
+        preflight_libs "$SESSION" || : # record only; safe mode remains the last resort
         run_safe_mode; rc=$?
         # Keep counting while safe mode fails too; only a stage that actually came up clears the loop.
         if (( rc == 0 || rc == 129 || rc == 130 || rc == 143 )); then chain_clear_guard; fi
@@ -174,10 +175,16 @@ chain_supervisor() {
     fi
     for stage in x11 safe; do
         if [[ "$stage" == x11 ]]; then
-            env FLAMEWM_SESSION_ATTEMPT=x11 "$0" "$@" & CHAIN_CHILD=$!
-            chain_wait "$CHAIN_CHILD"; rc=$?
-            CHAIN_CHILD=""
+            # Missing NEEDED libraries skip this backend; the chain then picks safe mode.
+            if preflight_libs "$SESSION"; then
+                env FLAMEWM_SESSION_ATTEMPT=x11 "$0" "$@" & CHAIN_CHILD=$!
+                chain_wait "$CHAIN_CHILD"; rc=$?
+                CHAIN_CHILD=""
+            else
+                rc=78
+            fi
         else
+            preflight_libs "$SESSION" || : # record only; safe mode remains the last resort
             run_safe_mode; rc=$?
         fi
         if (( rc == 0 || rc == 129 || rc == 130 || rc == 143 )); then
@@ -205,30 +212,96 @@ if [[ -z "${FLAMEWM_SESSION_ATTEMPT:-}" && "${1:-}" != "--check" ]]; then
             && CHAIN_WANTED=1 ;;
     esac
 fi
-if (( CHAIN_WANTED )); then
-    chain_supervisor "$@"
-    exit $?
-fi
 # Keep Plasma/KDE isolation: set FlameWM identity only when SDDM did not.
 if [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then export XDG_CURRENT_DESKTOP=FlameWM; fi
 export XDG_MENU_PREFIX=flamewm-
 SESSION="${FLAMEWM_SESSION_BINARY:-/usr/bin/flamewm-session}"
-# Graceful startup check: name unresolved libraries or a too-old C library instead of dying silently.
-if command -v ldd >/dev/null 2>&1 && [[ -x "$SESSION" ]]; then
-    missing="$(ldd "$SESSION" 2>&1 | grep -E 'not found|version .* not found' || true)"
-    if [[ -n "$missing" ]]; then
-        log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/flamewm"
-        mkdir -p "$log_dir" 2>/dev/null || :
-        msg="FlameWM cannot start: required libraries are missing or too old.
-$missing
-Fix: sudo apt install -f   (or reinstall the flamewm package)"
-        printf '%s\n' "$msg" >&2
-        printf '%s\n' "$msg" >>"$log_dir/startup-error.log" 2>/dev/null || :
-        if command -v notify-send >/dev/null 2>&1; then notify-send -u critical "FlameWM" "$msg" 2>/dev/null || :
-        elif command -v xmessage >/dev/null 2>&1; then xmessage -center "$msg" 2>/dev/null || :; fi
-        exit 78
-    fi
+# Missing-library preflight: one failure record per unresolved NEEDED library with its blast
+# radius, then hand the session to the next fallback stage instead of leaving a dead session.
+# UNBUILT: this slice was syntax-checked with bash -n only; no session was started.
+session_preflight_blast() { # soname -> "works degraded"
+    case "${1%%.so*}" in
+        libX11|libXi|libdbus-1|libc|libm|libgcc_s)
+            printf '%s %s' "$(chain_works safe)" "$(chain_degraded safe)" ;;
+        libxkbcommon)
+            printf '%s %s' "$(chain_works x11)" "wayland_keyboard_layout" ;;
+        libgbm|libdrm|libinput|libudev|libseat)
+            printf '%s %s' "$(chain_works x11)" "wayland_drm_backend+kms_presentation" ;;
+        libEGL|libGLESv2|libGL)
+            printf '%s %s' "$(chain_works x11)" "wayland_gpu_renderer+x11_gpu_blur" ;;
+        libpulse)
+            printf '%s %s' "$(chain_works x11)" "audio_helper" ;;
+        libpam)
+            printf '%s %s' "$(chain_works x11)" "lock_authentication" ;;
+        libfontconfig|libXft|libfreetype)
+            printf '%s %s' "$(chain_works x11)" "text_fonts" ;;
+        libwayland-client|libwayland-server|libwayland-egl)
+            printf '%s %s' "$(chain_works x11)" "nested_wayland+wayland_lock" ;;
+        *)
+            printf '%s %s' "$(chain_works safe)" "unknown_component" ;;
+    esac
+}
+
+session_preflight_record() { # stage status cause code works degraded [extra]
+    local prefix line log_dir
+    prefix="$(date '+%F %T' 2>/dev/null)"
+    line="$prefix FLAMEWM-SESSION-CHAIN stage=$1 status=$2 cause=$3 code=$4 blast_radius=works:$5|degraded:$6 ms=$(chain_ms)"
+    [[ -n "${7:-}" ]] && line+=" detail=$7"
+    printf '%s\n' "$line" >&2
+    [[ -n "$CHAIN_LOG" ]] && printf '%s\n' "$line" >>"$CHAIN_LOG" 2>/dev/null || :
+    log_dir="${XDG_STATE_HOME:-${HOME:-}/.local/state}/flamewm"
+    mkdir -p "$log_dir" 2>/dev/null || :
+    printf '%s\n' "$line" >>"$log_dir/session.log" 2>/dev/null || :
+}
+
+# preflight_libs BIN: record every unresolved NEEDED library and return non-zero so the fallback
+# chain skips this backend instead of exiting; the caller decides which backend comes next.
+preflight_libs() { # bin -> 0 clean; non-zero when a missing-lib record was written
+    local bin="${1:-}" missing lib works degraded rc=0
+    command -v ldd >/dev/null 2>&1 || return 0
+    [[ -x "$bin" ]] || return 0
+    missing="$(ldd "$bin" 2>&1 | grep -F 'not found' || true)"
+    [[ -n "$missing" ]] || return 0
+    while IFS= read -r lib; do
+        [[ -n "$lib" ]] || continue
+        read -r works degraded < <(session_preflight_blast "$lib")
+        session_preflight_record preflight fail missing_lib 78 "$works" "$degraded" \
+            "lib=$lib binary=$bin"
+        rc=1
+    done < <(printf '%s\n' "$missing" | awk '/not found/ && !seen[$1]++ {print $1}')
+    return "$rc"
+}
+
+session_preflight_missing_libs() { # [binary] -> 0 clean; otherwise the next fallback was selected and run
+    local binary="${1:-$SESSION}" missing lib works degraded
+    command -v ldd >/dev/null 2>&1 || return 0
+    [[ -x "$binary" ]] || return 0
+    missing="$(ldd "$binary" 2>&1 | grep -E 'not found|version .* not found' || true)"
+    [[ -n "$missing" ]] || return 0
+
+    while IFS= read -r lib; do
+        [[ -n "$lib" ]] || continue
+        read -r works degraded < <(session_preflight_blast "$lib")
+        session_preflight_record preflight fail missing_lib 78 "$works" "$degraded" \
+            "lib=$lib binary=$binary"
+    done < <(printf '%s\n' "$missing" | awk '/not found/ && !seen[$1]++ {print $1}')
+
+    # The chain order is x11 -> safe. A compositor that cannot load its NEEDED libraries
+    # hands off to the next stage instead of returning the old exit-78 dead end.
+    session_preflight_record preflight fail missing_libs 78 \
+        "$(chain_works safe)" "$(chain_degraded safe)" "next=safe"
+    run_safe_mode
+    return $?
+}
+
+if (( CHAIN_WANTED )); then
+    chain_supervisor "$@"
+    exit $?
 fi
+
+# Graceful startup check: name unresolved libraries or a too-old C library, then take the next
+# fallback stage rather than exiting with a dead session.
+session_preflight_missing_libs "$SESSION" || exit $?
 # Preflight report only: no bridge, no components.
 if [[ "${1:-}" == "--check" ]]; then exec "$SESSION" --check; fi
 BRIDGE="${FLAMEWM_SERVICES_BINARY:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/flamewm-desktop-services}"

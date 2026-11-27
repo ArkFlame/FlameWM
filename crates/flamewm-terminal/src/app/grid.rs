@@ -194,6 +194,10 @@ impl App {
                     }
                 }
             }
+            // A pane that left the tree, or belongs to a tab that is not on screen, has no rows to keep:
+            // its baked runs, palette clone and scratch buffers are dead weight until that tab is shown
+            // again, where a fresh cache rebuilds the same rows from the unchanged screen.
+            cache.retain(|id, _| tab.root.contains(*id));
         }
         self.pane_runs = cache;
         // The composed rows are updated in place, so the old allocations serve the new frame. A row whose inputs are

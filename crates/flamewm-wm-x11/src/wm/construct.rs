@@ -9,6 +9,7 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
     // output geometry falls back to the root window until the next start.
     match conn
         .query_extension(b"RANDR")
+        .map_err(ReplyError::from)
         .and_then(|cookie| cookie.reply())
     {
         Ok(reply) if reply.present => {
@@ -18,7 +19,10 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
                     | randr::NotifyMask::OUTPUT_CHANGE
                     | randr::NotifyMask::CRTC_CHANGE,
             );
-            if let Err(error) = selection.and_then(|cookie| cookie.check()) {
+            if let Err(error) = selection
+                .map_err(ReplyError::from)
+                .and_then(|cookie| cookie.check())
+            {
                 eprintln!(
                     "flamewm: RandR event selection failed: {error}; blast radius: no live output hotplug/CRTC change notifications, root geometry is used until restart"
                 );

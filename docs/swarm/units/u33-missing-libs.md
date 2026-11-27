@@ -44,7 +44,7 @@ transitive `-sys` crates and smithay's pkg-config probes.
 
 ## Implemented slice: wrapper preflight only
 
-`scripts/flamewm-session-wrapper` gains three functions in the preflight section and replaces the
+`scripts/flamewm-session-wrapper` gains four functions in the preflight section and replaces the
 old `ldd`-then-`exit 78` block:
 
 - `session_preflight_blast` — maps a soname to a `works|degraded` blast-radius pair, reusing the
@@ -54,8 +54,15 @@ old `ldd`-then-`exit 78` block:
 - `session_preflight_missing_libs [binary]` — runs `ldd` on the compositor/session binary, extracts
   each `not found` soname (deduplicated), writes one failure record per library, writes a summary
   record with `next=safe`, then calls `run_safe_mode` instead of exiting.
+- `preflight_libs BIN` — runs `ldd` on `BIN`, collects `not found` lines, and writes one failure
+  record per missing soname to `flamewm/session.log` (same `FLAMEWM-SESSION-CHAIN ... status=fail
+  ... blast_radius=works:...|degraded:...` format as `chain_record`, via `session_preflight_record`).
+  It returns non-zero instead of exiting, so the chain skips the backend.
 
-The call site is `session_preflight_missing_libs "$SESSION" || exit $?`. The helper takes a binary
+`preflight_libs "$SESSION"` is called before each backend launch in `chain_supervisor`: it gates the
+x11 launch (non-zero selects safe), and records without gating safe mode, which stays the last
+resort. The chain dispatch was moved below the preflight definitions so these helpers exist when the
+supervisor runs. The direct-launch call site remains `session_preflight_missing_libs "$SESSION" || exit $?`. The helper takes a binary
 argument so the Wayland wrapper can pass `FLAMEWM_WAYLAND_BINARY` in a later unit. No `cargo`
 feature, dependency or `libloading` call was added in this slice; those rows are a plan only.
 
