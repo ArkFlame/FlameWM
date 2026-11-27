@@ -142,6 +142,13 @@ fn present_wayland(username: &str) -> ExitCode {
             let mut access = UiDocumentView::from_runtime(&mut runtime, None);
             document::apply_document(&mut access, settings, width, height, background)?;
             document::apply_view(&mut access, view)?;
+            // The lock has no power actions on Wayland: the idle view keeps the rows disabled and
+            // hides the confirm dialog and the Other list, which the document ships visible.
+            let power = flamewm_lock::power::PowerUi::new(
+                flamewm_api::session::SessionCapabilities::default(),
+            )
+            .view();
+            document::apply_power(&mut access, width, height, &power)?;
         }
         paint_document(&runtime, width, height, 1.0)
     }) {

@@ -363,3 +363,7 @@ Still wrong in the same frame (open, unexamined): the "Log out / Cancel" menu an
 
 ## Wayland lock: no clock or date (fixed)
 All Wayland projections passed `None` for the time, so the lock could never show a clock or date (`--:--`). Now `native_time::local_now()` feeds the projection, and the loop repaints when the minute changes (`minute_changed`, checked on the existing ~1 s wake; unit-tested). Frame read in the nested harness: `01:03` and `Friday, 27 November 2026` shown. 178 tests + clippy -D warnings green with --features wayland. Still open: the "Log out / Cancel" menu and "Are you sure?" dialog are drawn open in the same frame.
+
+## Wayland lock: confirm dialog and Other menu drawn open (fixed)
+The Wayland closure in main.rs applied the document and the view but never `apply_power`, so the "Are you sure?" dialog and the Log out/Cancel list stayed at the document default (visible). It now applies the idle `PowerUi` view (rows disabled, dialogs hidden), matching the theme preview path. Frame read: blue sky, `01:05` + date, avatar, username, password field, four dimmed power rows, no open popups. Remaining difference vs the X11 lock frame: the Wayland software painter draws a dashed avatar ring and regular-weight text (X11 shows a solid ring and bold); not examined further.
+Wayland lock summary this session: idle poll 62/s -> 1/s, red/blue swap, no clock/date, popups open: all fixed; the Wayland lock had never been looked at in a frame before.
