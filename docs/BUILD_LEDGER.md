@@ -43,3 +43,5 @@ RESULT slot2: workspace check clean; full test run 177 targets ok, 1 failed (ren
 ## HOUR 7 slot 3 (19:04)
 cargo build --release -p flamewm-wm-wayland -p flamewm-shell -p flamewm-desktop -p flamewm-audio-helper -p flamewm-render-x11 (waves 6-8, for post-wave baseline sample + frame)
 RESULT slot3: release build exit=0 (wayland, shell, desktop, audio-helper, render-x11)
+
+## HOUR 8 slot 1 (19:38): release build -p flamewm-shell -p flamewm-desktop (icon resolver lazy fix R1); pool stopped by provider limit, no workers running.

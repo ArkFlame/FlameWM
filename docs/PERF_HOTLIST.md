@@ -76,3 +76,16 @@ Wakeups/s at idle unchanged (wayland 16-20/s sampled in both; per-thread steady 
 - R2 desktop +5.7 MB: `[heap]` 9.2 -> 11.4 MB plus a new 3.6 MB `[anon]`. Cause unknown; wallpaper_loader/main.rs/icon_cache diffs only release memory. Unit p87.
 - R3 panic strategy: release profile has `panic = "abort"`, so `diagnostics::guard` (`catch_unwind`) never catches in production. Real recovery is the session supervisor respawning the crashed process. Decision on `panic = "unwind"` needs a measured size/RSS delta (unit p88). Do not flip blind.
 - Lesson: every cut needs its own scoped before/after (scripts/bench-baseline + scripts/proc-smaps-top, 40 s after launch) before it counts as landed.
+
+## CORRECTION to the post-wave sample (2026-11-27 20:10): the baseline binaries were too old
+
+The `.target/release` binaries used as "pre-wave" were built 12:00-12:05, BEFORE commit 99b7c4c3 (12:15, "perf: batch ten slices"), which added `warm_application_catalog_in_background` (call site `crates/flamewm-shell/src/main.rs:846`, unchanged since). So R1/R2 are NOT regressions of waves 2-8; they compare against a build from before the base commit. A true baseline needs a build of 408c614e (one slot, use `--profile fast` for a relative number).
+
+Evidence (strace, new shell, thread `app-catalog-warm`): 225 `.desktop` files parsed within 30 s of launch; old binary: zero. Main-thread heap span 5.5 MB (old) -> 9.3 MB (new). Fresh XDG dirs (no user state): shell 19.5 -> 20.7 MB, desktop 24.5 -> 29.2 MB; real HOME: shell 17.6 -> 24.8, desktop 24.7 -> 31.0. Also new: extra font parse `IBMPlexSans-Bold.ttf`, cursor theme preview reads (Breeze_Light), `usage` worker reads `~/.claude/.credentials.json` and `~/.codex/auth.json` at startup.
+
+Real targets:
+- R4 catalog heap about 25 KB per entry (5.6 MB / 225): the parsed `ApplicationCatalog` keeps far more than the start menu needs. Unit p89.
+- R5 desktop +4.7 MB with empty state: unknown, needs a true base build. Unit p87 stays.
+- R6 extra bold font parse (`IBMPlexSans-Bold`) in the shell: find which text asks for weight 700 and whether the regular face can serve it. Unit p90.
+- R7 usage worker starts at launch and reads provider credentials even when the usage tray is not shown. Unit p91.
+- Process lesson: a baseline binary must be built from a known commit; record the commit hash in the ledger next to every sample.
