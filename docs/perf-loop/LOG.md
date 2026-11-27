@@ -341,3 +341,6 @@ Duplicate crate versions (x11rb 0.13/0.14, rustix 0.38/1, thiserror 1/2) come fr
 
 ## Explorer filesystem scout: nothing ranked
 All fs calls (scan, trash list, copy/move/delete in jobs.rs, search, mime, thumbs) run on dedicated worker threads (flamewm-explorer-scan/io/mime/thumbs, refresh, search); no blocking disk work on the UI thread. No change.
+
+## Live idle read (nested harness, Intel GL, ~10 s, no input)
+flamewm-wayland RSS ~123 MB, +55 voluntary ctx switches (~5.5/s); flamewm-shell RSS ~23 MB, +18 (~1.8/s). Idle wakeups already very low, no unit. Compositor RSS includes the winit host window and GL driver, so it is not a clean DRM-session figure and is not ranked.
