@@ -791,6 +791,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
                         return TimeoutAction::Drop;
                     }
                     captures_at_start = render::backdrop_captures();
+                    render::stage_timers::reset();
                     began_at = std::time::Instant::now();
                 }
                 step += 1;
@@ -800,9 +801,10 @@ fn run() -> Result<i32, Box<dyn Error>> {
                 if step >= steps {
                     state.grab = None;
                     eprintln!(
-                        "SCRIPT_DRAG steps={steps} planned_ms={total} elapsed_ms={} backdrop_captures={}",
+                        "SCRIPT_DRAG steps={steps} planned_ms={total} elapsed_ms={} backdrop_captures={} {}",
                         began_at.elapsed().as_millis(),
-                        render::backdrop_captures() - captures_at_start
+                        render::backdrop_captures() - captures_at_start,
+                        render::stage_timers::report()
                     );
                     return TimeoutAction::Drop;
                 }

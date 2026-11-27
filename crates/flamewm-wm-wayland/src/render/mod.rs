@@ -31,6 +31,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 mod backdrop;
 mod dock_backdrop;
 pub(crate) use dock_backdrop::backdrop_captures;
+pub(crate) mod stage_timers;
 mod switcher_thumbs;
 mod titlebar;
 pub use switcher_thumbs::serve_switcher_thumbs;
@@ -761,10 +762,13 @@ fn render_into(
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
+    let mut lap = stage_timers::Lap::start();
     refresh_desktop_backdrop(state, backend.renderer(), size)?;
+    lap.mark(stage_timers::Stage::DesktopBackdrop);
     if let Err(error) = refresh_dock_backdrops(state, backend.renderer()) {
         eprintln!("flamewm-wayland: dock backdrop failed: {error}");
     }
+    lap.mark(stage_timers::Stage::DockBackdrops);
     // While locked, the lock client owns the screen: painting the desktop behind it would put
     // other clients' content back on the output the lock exists to cover. A dead locker leaves an
     // opaque cover (`screen_for`), it never reveals the desktop.
@@ -795,8 +799,10 @@ fn render_into(
             elements
         }
     };
+    lap.mark(stage_timers::Stage::Elements);
     serve_screencopy(state, backend.renderer(), &elements, size);
     serve_switcher_thumbs(state, backend.renderer());
+    lap.mark(stage_timers::Stage::Readbacks);
     // Partial repaint: when the driver reports a valid swapchain age, the damage tracker only
     // touches the rectangles that changed (the pointer is the common case), instead of clearing
     // and redrawing the full output on every motion event. Some nested software-EGL drivers return
@@ -901,10 +907,13 @@ fn render_into(
         result.damage.cloned()
     };
     let feedback = crate::presentation_scale::collect_feedback(state, &state.output);
+    lap.mark(stage_timers::Stage::Draw);
     backend.submit(damage.as_deref())?;
+    lap.mark(stage_timers::Stage::Submit);
     FIRST_FRAME_SUBMITTED.store(true, std::sync::atomic::Ordering::Relaxed);
     crate::presentation_scale::presented(feedback, &state.output);
     send_frame_callbacks(state);
+    lap.mark(stage_timers::Stage::Callbacks);
     Ok(())
 }
 
