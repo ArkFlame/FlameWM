@@ -27,16 +27,25 @@ are UNBUILT** — no compiler or runtime evidence was collected here.
 | Multiple timerfds that could share one | calloop `Timer` source, `lib.rs:303`, `lib.rs:371`, `lib.rs:477` | calloop 0.14.4 creates one timerfd per `Timer`. Merging requires a shared wheel/source above the reactor with per-owner callbacks, an API change across callers outside the owned files. Not provably safe in this unit. |
 | Wakeups with no work | `timeline.rs:229-233`, `lib.rs:502-522` | `Timeline::next_deadline` returns `None` when no transition is active, and `dispatch` only bounds its wait when an owner published a deadline. No idle polling path remains; the only redundant-work path was the republish rescan cut above. |
 
+## Narrow retry — correctness review and one more cut search
+
+| Area | file:line | Cost | Change | Risk |
+| --- | --- | --- | --- | --- |
+| Review of the previous `WakeDeadline::set` edit | `lib.rs:83-88`, flag/cache contract `lib.rs:58-62,70,74-93,165-187`, tests `lib.rs:617-649` | Zero (read-only review; no fix was needed). | Re-read `set`, `earliest_wake`, `dispatch`, `owned_wake_deadline` and the wake tests. The edit is semantics-identical: `dirty` is only a cache-invalidation hint for `cached_wake`, which is recomputed from *all* slots on the next `earliest_wake` call; `set` raises it on every real change (including both `None`↔`Some` directions), new slots invalidate the cache at `lib.rs:170`, and no timerfd or callback is gated by the flag. **No missed wake**: dispatch still bounds epoll by the same minimum deadline, so a clean cache cannot hide a changed deadline. No code change applied. | Low: slots are single-threaded `Rc<Cell<_>>`, so the read-compare-write in `set` is atomic with respect to other slots, and `Option<Instant>` has exact `PartialEq`. A real change followed by a revert before a read still leaves `dirty` set and forces a recompute. |
+| Timers re-armed each tick vs aligned deadlines | `lib.rs:302-320` (`register_timer` repeat), `lib.rs:469-491` (`register_wall_clock`), `lib.rs:142-150` (`next_repeat_deadline`), `docs/perf-loop/LOG-u11-reactor-timers.md:9-18,33-34` | No change (candidate rejected). | Looked for a second idle-wake cut in this domain. Non-zero repeating `register_timer` already re-arms to an aligned `next_repeat_deadline` grid and skips missed periods; zero-delay repeats are an explicit per-tick caller choice. `register_wall_clock` must keep recomputing `wall_clock_delay_ms(clock.now_epoch_ms())` on every tick — documented at `lib.rs:449-452` — so a suspend/resume jump realigns to the next live boundary. Switching to `ToInstant` off the fired deadline would misalign after a jump, and basing the re-arm on calloop's scheduled `&Instant` instead of `Instant::now()` can land just before a boundary and add a catch-up wake. There is no safe aligned-deadline cut left in the owned files. | None (rejected): either variant changes documented wake semantics and cannot be proven safe here; per-timerfd merging and heartbeat timers with empty callbacks live outside the owned files. |
+
 ## Verification
 
 - No `cargo`, `git`, tests, builds, Python or sleep loops were run in this unit, per the brief.
-  The single code edit and its regression test are **UNBUILT** and need the orchestrator's build
-  and test run.
-- Static check only: `WakeDeadline::set` is the sole writer of `at` and `dirty`; every real change
-  still raises the shared flag that `Reactor::earliest_wake` clears after its recompute.
+  The earlier `WakeDeadline::set` edit and its regression test remain **UNBUILT**; this retry added
+  no code, so the orchestrator's build and test run is still owed.
+- Static check only: `WakeDeadline::set` is the sole writer of `at` and `dirty` (`lib.rs:84-87`);
+  every real change still raises the shared flag that `Reactor::earliest_wake` clears after its
+  recompute (`lib.rs:177-185`), and `owned_wake_deadline` invalidates the cache on slot creation
+  (`lib.rs:170`). No wake source is driven by `dirty`, so an unchanged republish cannot cause a
+  missed wake.
 
-PARTIAL — rows 17-19 have no owned code and row 20's timer realignment had already landed. Of the
-three requested wake mechanics, one provably-safe cut was applied (unchanged deadline republishes
-no longer dirty the shared slot cache), while per-timerfd merging and wall-clock `ToInstant`
-re-arming were rejected as unsafe or outside the owned files. The edit is UNBUILT and awaits the
-orchestrator's verification.
+**Status: UNBUILT.** No compiler or runtime evidence was collected; all findings are source-level
+only and need the orchestrator's `cargo test -p flamewm-reactor` run.
+
+PARTIAL — the previous attempt's single safe cut (unchanged deadline republishes no longer dirty the shared slot cache) was re-reviewed and found semantics-identical with no missed wake, so no fix was required. Rows 17-19 have no owned code and row 20's timer realignment had already landed; the one additional cut requested in this retry (timers re-armed each tick vs aligned deadlines) was examined and rejected because repeating timers are already aligned and the wall-clock timer's per-tick wall-time recomputation is required by the suspend/resume contract. Everything stays UNBUILT and awaits the orchestrator's verification.
