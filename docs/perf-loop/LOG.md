@@ -387,3 +387,10 @@ Cold wallpaper build at 1080p is now roughly: WebP decode ~280, cover ~76, blur 
 Area: release binary composition. Cached release binaries (rough; build profile and commit not pinned): terminal ~13.3 MB, compositor ~8.5, shell ~7.1, explorer ~5.2, lock ~3.9, task manager ~3.4. The terminal links 88 unique crates, fewer than the explorer's 101, so dependency count does not explain its size.
 Cause: `build.rs` embeds three compiled UI documents, one per pool tier (1920 / 6144 / 18432 run slots, two nodes each): ~0.7 + 2.3 + 6.9 MB, about 10 of 13.3 MB. `main.rs` decodes only the tier a window needs (`decode_document(UI[tier])`), so the larger tiers are untouched file-backed pages with no resident cost until a window grows into them.
 Conclusion: trimming Cargo dependencies would not shrink the terminal meaningfully. The real RAM lever is the decoded document of the active tier (documented trade-off in `pool.rs`); reducing it means allocating run nodes lazily instead of pre-baking a pool, a UI-pipeline redesign that needs a live measurement of resident memory per tier first. Duplicate crates (`x11rb`, `rustix`, `calloop`, `thiserror`, `digest`, `zip`) come from upstream pairings and are a separate, unmeasured question.
+Measured follow-up (scoped, one component): decoding each embedded tier with `decode_document` in a throwaway release example (deleted afterwards), RSS from `/proc/self/statm` before and after:
+| tier (rows x runs) | decode time | resident cost of the decoded document |
+|---|---|---|
+| 0 (24 x 80) | 2.0 ms | +1.35 MB |
+| 1 (48 x 128) | 9.3 ms | +4.2 MB |
+| 2 (96 x 192) | 22.8 ms | +12.2 MB |
+A default 880x540 window (about 110 x 30 cells) fits tier 1 only, so it pays about 4 MB and 9 ms; a maximised 1080p window needs tier 2 (about 12 MB, 23 ms). These are the decoded document only, not layout or paint state. The tier choice already avoids paying for the large tiers, so the remaining lever is allocating run nodes lazily inside a tier (resident cost scales with slots, not with how many runs a typical screen uses); that needs a live check of how full the slots are in normal use before any change.
