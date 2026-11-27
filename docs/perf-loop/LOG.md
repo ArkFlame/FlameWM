@@ -186,3 +186,7 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Measured, same scripted drag, 2 runs: crop 24 -> 8.2 / 8.1 ms per capture; capture total 51 -> 35.4 / 35.2 ms; compositor frame time 1697 -> 1267 / 1234 ms (frames 89, captures 22).
 - Frame check: titlebar band (blurred crop) bit-identical (fuzz 0) to the previous dump; full-frame diff is 1833 px (0.2%) but the same count appears between two runs of the previous build (1834), so it is live task-manager content, not the crop.
 - Remaining per capture (ms): map ~12 (GPU readback), store ~7.3, blur ~4, downscale ~2.6, crop ~8.2.
+
+## u160 readback map: not reducible in this harness
+- Read `read_reduced`: `map` (12 ms) is where the software GL finishes the queued scene render, so it measures llvmpipe, not transfer cost. No honest CPU-side win exists; a GPU-side two-step 2x blit (exact 4x4 box) would cut real-GPU readback bytes 16x but must be measured on the DRM backend. Written up as u162.
+- Open from u160/u161: titlebar rebuild on move (~4 ms/frame), store ~7 ms, blur ~4 ms.
