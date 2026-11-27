@@ -236,6 +236,10 @@ impl<C: Connection> Wm<'_, C> {
         trace_restore("restore.trace.wm.commit_restore", || {
             format!("window={client}")
         });
+        // A restore overlay consumes its capture when an animation runs. When restore
+        // bypasses the overlay (animations disabled, or the transition was skipped), the
+        // cached capture is dead once the frame maps again, so release it here as well.
+        self.minimized_captures.remove(client);
         let frame = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());
