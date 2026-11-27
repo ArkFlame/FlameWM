@@ -73,10 +73,35 @@ struct NotificationHost {
     /// Loads toast icons by theme name; spawned on the first named icon.
     icons: Option<IconLoader>,
     icon_root: PathBuf,
-    /// True while an icon request for the visible toast is outstanding.
-    icon_wait: bool,
+    /// When the outstanding icon request for the visible toast was made; `None` when none is.
+    icon_wait: Option<Instant>,
 }
 
+/// How long a toast waits for its named icon before keeping the fallback glyph.
+const ICON_WAIT_LIMIT: Duration = Duration::from_secs(2);
+
+/// True once an icon request has been outstanding for [`ICON_WAIT_LIMIT`].
+fn icon_wait_expired(requested_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(requested_at) >= ICON_WAIT_LIMIT
+}
+
+#[cfg(test)]
+mod icon_wait_tests {
+    use super::*;
+
+    #[test]
+    fn icon_wait_expires_only_after_the_limit() {
+        let start = Instant::now();
+        assert!(!icon_wait_expired(start, start));
+        assert!(!icon_wait_expired(
+            start,
+            start + Duration::from_millis(1999)
+        ));
+        assert!(icon_wait_expired(start, start + Duration::from_secs(2)));
+        // A clock that appears to go backwards never counts as expired.
+        assert!(!icon_wait_expired(start + Duration::from_secs(5), start));
+    }
+}
 impl NotificationHost {
     fn connect(
         runtime: &mut SurfaceRuntime,
@@ -167,7 +192,7 @@ impl NotificationHost {
             closed_by_press: None,
             icons: None,
             icon_root,
-            icon_wait: false,
+            icon_wait: None,
         }))
     }
 
@@ -499,7 +524,7 @@ impl NotificationHost {
         runtime: &mut SurfaceRuntime,
         notification: Option<&notifications::NotificationView>,
     ) -> Result<(), String> {
-        self.icon_wait = false;
+        self.icon_wait = None;
         let Some(notification) = notification else {
             return self.set_icon(runtime, None);
         };
@@ -527,7 +552,7 @@ impl NotificationHost {
             notifications::NOTIFICATION_ICON_EDGE,
             notifications::NOTIFICATION_ICON_EDGE,
         );
-        self.icon_wait = true;
+        self.icon_wait = Some(Instant::now());
         self.set_icon(runtime, None)
     }
 
@@ -538,15 +563,15 @@ impl NotificationHost {
         runtime: &mut SurfaceRuntime,
         wake: Option<&flamewm_reactor::WakeDeadline>,
     ) -> Result<(), String> {
-        if !self.icon_wait {
+        let Some(requested_at) = self.icon_wait else {
             return Ok(());
-        }
+        };
         let wanted = self
             .visible
             .as_ref()
             .and_then(|notification| notification.icon_name.as_deref());
         let Some(loader) = self.icons.as_mut() else {
-            self.icon_wait = false;
+            self.icon_wait = None;
             return Ok(());
         };
         let mut arrived = None;
@@ -560,7 +585,7 @@ impl NotificationHost {
             }
         }
         if let Some(raster) = arrived {
-            self.icon_wait = false;
+            self.icon_wait = None;
             let icon = raster.map(|raster| RuntimeImage {
                 source: raster.source,
                 width: raster.width,
@@ -568,6 +593,11 @@ impl NotificationHost {
                 pixels: raster.pixels,
             });
             self.set_icon(runtime, icon)
+        } else if icon_wait_expired(requested_at, Instant::now()) {
+            // The loader never answered (dropped or mismatched request): stop the 15 ms poll and
+            // keep the fallback glyph instead of waking for as long as the toast is visible.
+            self.icon_wait = None;
+            Ok(())
         } else {
             if let Some(wake) = wake {
                 let deadline = Instant::now() + Duration::from_millis(15);

@@ -208,3 +208,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - `blur_reduced` built a fresh `BlurScratch` (several Vec<f32> work buffers) per capture. It now uses a thread-local scratch on the render thread (output identical, same library path; 457 tests green; titlebar band 0 differing pixels).
 - Measured: NOT distinguishable from noise. This run the whole machine was ~1.7x slower (crop 5.5 -> 9.7 ms, store 4.0 -> 7.0 ms, both untouched), blur read 3.6-3.7 ms vs ~4 before. Kept as harmless allocation-churn removal, not counted as a win.
 - Larger lever found while reading: the blur runs on a region padded by 2*radius on every side (~2x the area for small captures). Written up as u163.
+
+## u158 notification icon poll is bounded
+- Area: shell idle wakeups. While a toast's named-icon request was outstanding, `poll_icon` re-armed a 15 ms wake (66 Hz) until a matching raster arrived; a dropped or mismatched answer meant that polling for as long as the toast was visible. `icon_wait` now carries the request time and expires after 2 s (`icon_wait_expired`, unit-tested including a backwards clock), keeping the fallback glyph. An icon that arrives in time takes the unchanged path.
+- Composition shift: bounded worst case 66 Hz idle wake -> at most 133 wakes per toast; typical case (icon arrives within a few ms) unchanged. Not measured at runtime: the lost-answer path was not reproduced, so this is a bound, not a measured saving.
+- Also logged: u163 sized (blur padding ~1.6x area, saves ~1.5 ms/capture, changes edge pixels, deferred).
