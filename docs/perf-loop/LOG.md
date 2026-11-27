@@ -230,3 +230,13 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Grepped explorer, terminal, shell and task manager for fixed sub-50 ms timers and sleeps in non-test code. Hits and what they are: explorer `remote.rs` 50 ms `recv_timeout` (only inside a running remote transfer), explorer/terminal scroll `FRAME` 16 ms (only while a scroll animation runs), explorer `search.rs` 5 ms sleeps (only while a search is active), terminal `pty.rs` `HANGUP_POLL` 5 ms (only while a child is exiting; blocking wait is used where the kernel supports it). None run at idle. Task manager sampler already sleeps on a condvar while obscured.
 - Shell: the one idle-reachable poll (toast icon, 15 ms) is now bounded (u158).
 - Conclusion: app idle wakeups are not a ranked hotspot. The remaining measurable costs are the compositor capture residual (u162/u163). Next scout: RAM (caches without caps, duplicated assets) per app.
+
+## Apps: measured RAM and idle CPU (scripts/perf-clients, SETTLE=8, nested)
+| app | threads | RSS | idle CPU ticks in 2 s |
+|---|---|---|---|
+| explorer | 14 | 21.5 MB | 0 |
+| shell | 4 | 22.4 MB | 0 |
+| terminal | 3 | 29.4 MB | 0 |
+| task-manager | 2 | 30.8 MB | 5 (25 ms/s, ~2.5% of a core, 100% in the sampler thread) |
+- RAM is small and even (22-31 MB); no cache stands out, so no RAM unit is ranked. The only idle consumer is the task manager's 1 Hz sampler (581 processes): already buffer-reusing, one `stat` read per task (RSS from it), bounded `status` read, sleeps while obscured; the remaining ~25 ms/sample is the per-process open/read/close syscalls, which a visible process table needs. Not changed.
+- Ranking now: compositor capture residual (u162/u163) > task-manager sampler (~2.5% core while visible) > everything else at 0.
