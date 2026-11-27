@@ -291,3 +291,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## Reference pass: KWin and other desktops (user request)
 - Cloned `.vendor/kwin-master` (sparse) and compared KWin blur, scenefx optimized blur (mangowm) and COSMIC `ext_background_effect`. Findings and how they map to u162/u163 are in `docs/perf-loop/REFERENCE-TRANSPARENCY.md`. Our desktop-level cached backdrop already matches scenefx; the open gap is KWin's GPU pyramid + damage-clipped blur (u162).
+
+## Explorer thread count: parked, no change
+- 14 threads at idle are the job/scan worker pools (`workers.rs`): each blocks on `recv` of a shared queue (a send, not a spawn, starts work), and `perf-clients` measured 0 idle ticks in 2 s for the explorer. Threads cost stack address space, not CPU or resident RAM; RSS is 21.6 MB.
