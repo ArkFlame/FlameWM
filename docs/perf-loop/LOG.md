@@ -203,3 +203,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Measured, 2 runs: store 7.3 -> 4.05 / 4.03 ms. Caution: crop (untouched) also read lower (8.2 -> 5.5 ms) so the machine was quieter this run; treat total_us (35 -> 24 ms) as partly noise, the store drop as the change. Composition: dock_backdrops 87% -> 85% of frame time.
 - Frame check: titlebar band and window top-right corner 0 differing pixels vs the previous dump (fuzz 0); full-frame diff 1739 px vs 1715 px between two runs of the same build (live TM content).
 - Remaining per capture (ms, this run): map ~9.9 (renderer wait, see u162), crop ~5.5, store ~4.0, blur ~4, downscale ~2.6.
+
+## u160 capture blur reuses its float work buffers
+- `blur_reduced` built a fresh `BlurScratch` (several Vec<f32> work buffers) per capture. It now uses a thread-local scratch on the render thread (output identical, same library path; 457 tests green; titlebar band 0 differing pixels).
+- Measured: NOT distinguishable from noise. This run the whole machine was ~1.7x slower (crop 5.5 -> 9.7 ms, store 4.0 -> 7.0 ms, both untouched), blur read 3.6-3.7 ms vs ~4 before. Kept as harmless allocation-churn removal, not counted as a win.
+- Larger lever found while reading: the blur runs on a region padded by 2*radius on every side (~2x the area for small captures). Written up as u163.

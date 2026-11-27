@@ -268,6 +268,12 @@ pub(super) fn read_reduced(
     Ok(stored)
 }
 
+thread_local! {
+    /// Float work buffers reused by every capture blur on the render thread, so a burst of captures
+    /// (a window drag) does not reallocate them each time.
+    static BLUR_SCRATCH: std::cell::RefCell<BlurScratch> = std::cell::RefCell::new(BlurScratch::new());
+}
+
 /// Blurs a reduced capture by `blur_percent` of the surface blur radius. 100% is
 /// [`MAX_BLUR_RADIUS_PX`] at 1x, scaled to the reduced image.
 pub(super) fn blur_reduced(stored: Vec<u8>, (sw, sh): (usize, usize), blur_percent: u8) -> Vec<u8> {
@@ -277,18 +283,22 @@ pub(super) fn blur_reduced(stored: Vec<u8>, (sw, sh): (usize, usize), blur_perce
         height: sh as u32,
         pixels: stored,
     };
-    frosted_backdrop(
-        &source,
-        ImageRect {
-            x: 0,
-            y: 0,
-            width: sw as u32,
-            height: sh as u32,
-        },
-        radius,
-        None,
-    )
-    .pixels
+    BLUR_SCRATCH
+        .with_borrow_mut(|scratch| {
+            frosted_backdrop_with(
+                scratch,
+                &source,
+                ImageRect {
+                    x: 0,
+                    y: 0,
+                    width: sw as u32,
+                    height: sh as u32,
+                },
+                radius,
+                None,
+            )
+        })
+        .pixels
 }
 
 /// Box-averages `rows` full-width readback rows starting at output row `y0` into the stored image.
