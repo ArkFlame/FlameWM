@@ -158,9 +158,14 @@ impl Cursors {
                 }
                 self.named.insert(wanted, loaded);
             }
-            if self.named.get(&wanted).is_some_and(Option::is_some) {
-                return self.named[&wanted].as_ref().expect("checked above");
+            if let Some(named) = self.named.get(&wanted).and_then(Option::as_ref) {
+                return named;
             }
+            // A missing or undecodable theme icon already logged above; the builtin arrow covers it.
+            eprintln!(
+                "flamewm-wayland: cursor '{}' fell through to the builtin arrow",
+                wanted.name()
+            );
         }
         &self.fallback
     }

@@ -77,10 +77,12 @@ impl ShellLoop {
                 height: raster.height,
                 pixels: raster.pixels,
             });
+            // Cache at the drawn request edge, never the source raster's own
+            // (possibly larger) dimensions; the node paints at res.width x res.height.
             async_projection::note_icon_result(
                 &res.name,
-                raster.width,
-                raster.height,
+                res.width,
+                res.height,
                 image.clone(),
             );
             let surface = match res.target {

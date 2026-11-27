@@ -1,10 +1,11 @@
 //! Icon raster cache: decoded RGBA rasters under a count and byte LRU budget.
 use super::*;
 
-// Retain a large working set across taskbar, Start, and launcher views.
-// The icon resolver has already rasterized every image to its requested
-// physical display size; no extra downscale or lossy preview is necessary.
-pub(super) const ICON_CACHE_ENTRY_BUDGET: usize = 2048;
+// Every visible slot calls `cached_image` on each projection, so recency puts
+// all live icons ahead of stale, epoch-bumped keys. A 512-entry cap holds the
+// whole visible set (8 Start + 8 launcher + 8 task/output + 6 tray/output +
+// 24 dock, each at its own drawn edge) with headroom for old generations.
+pub(super) const ICON_CACHE_ENTRY_BUDGET: usize = 512;
 
 /// Maximum retained RGBA8 icon pixel payload (32 MiB, not a fixed allocation).
 pub(super) const ICON_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;
@@ -15,7 +16,9 @@ pub type IconCacheKey = (String, u32, u32);
 /// document showing the icon hold one allocation, so a hit clones an `Arc`.
 #[derive(Clone)]
 pub struct IconRaster {
-    pub source: String,
+    /// Shared with the cache key's `Arc<str>` on insert, so size variants and
+    /// every clone reuse one name allocation instead of a fresh `String`.
+    pub source: Arc<str>,
     pub width: u32,
     pub height: u32,
     pub pixels: Arc<Vec<u8>>,
@@ -24,7 +27,7 @@ pub struct IconRaster {
 impl From<RuntimeImage> for IconRaster {
     fn from(image: RuntimeImage) -> Self {
         Self {
-            source: image.source,
+            source: Arc::from(image.source),
             width: image.width,
             height: image.height,
             pixels: Arc::new(image.pixels),
@@ -123,7 +126,7 @@ impl IconCache {
         Some(raster)
     }
 
-    fn insert(&mut self, name: &str, size: SizeKey, raster: IconRaster) {
+    fn insert(&mut self, name: &str, size: SizeKey, mut raster: IconRaster) {
         self.remove(name, size);
         let bytes = raster.pixels.len();
         if bytes > self.byte_budget {
@@ -146,6 +149,8 @@ impl IconCache {
             .entries
             .get_key_value(name)
             .map_or_else(|| Arc::from(name), |(existing, _)| Arc::clone(existing));
+        // One name allocation per icon, shared by the key and every raster.
+        raster.source = Arc::clone(&key);
         self.bytes += bytes;
         self.len += 1;
         self.order.push_back((key.clone(), size, stamp));
@@ -263,7 +268,7 @@ mod tests {
             cache
                 .get(&first.0, (first.1, first.2))
                 .expect("first cache hit")
-                .source,
+                .source.as_ref(),
             "first"
         );
         cache.insert(&third.0, (third.1, third.2), test_image("third").into());
@@ -276,14 +281,14 @@ mod tests {
             cache
                 .get(&first.0, (first.1, first.2))
                 .expect("first retained")
-                .source,
+                .source.as_ref(),
             "first"
         );
         assert_eq!(
             cache
                 .get(&third.0, (third.1, third.2))
                 .expect("third retained")
-                .source,
+                .source.as_ref(),
             "third"
         );
     }
@@ -338,7 +343,7 @@ mod tests {
     #[test]
     fn default_icon_cache_is_bounded_for_an_idle_shell() {
         let cache = IconCache::new(ICON_CACHE_ENTRY_BUDGET);
-        assert_eq!(cache.entry_budget, 2048);
+        assert_eq!(cache.entry_budget, 512);
         assert_eq!(cache.byte_budget, 32 * 1024 * 1024);
     }
 

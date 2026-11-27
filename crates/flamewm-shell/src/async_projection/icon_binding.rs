@@ -147,7 +147,7 @@ pub(super) fn paint_raster(
 ) -> Result<(), String> {
     document.image_rgba8_shared(
         id,
-        raster.source,
+        raster.source.as_ref().to_owned(),
         raster.width,
         raster.height,
         raster.pixels,
