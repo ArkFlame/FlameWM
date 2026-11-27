@@ -225,3 +225,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 - Result, 2 runs: 33 frames, 0 backdrop captures, total compositor frame time 13 / 18 ms over 3 s (~0.5% of one core); composition draw 71-76%, elements 9-13%, submit 9%, dock_backdrops 1%.
 - Ranking of compositor states by cost (software GL, per second of that state): drag over a busy window (captures, ~25-35 ms each, bounded at ~1/3 wall time by u164 for stationary windows and by u156 reuse for moving ones) >> stationary translucent window over changing content (u164) >> idle (negligible). Remaining levers are all capture cost: map/readback (u162, needs a real GPU), blur padding (u163), crop/store residual.
 - Next ranked area: none in the compositor at idle; move to the apps' own idle wakeups and the capture residual on a real GPU session when one is available.
+
+## Apps' idle wakeups: scouted, nothing to fix
+- Grepped explorer, terminal, shell and task manager for fixed sub-50 ms timers and sleeps in non-test code. Hits and what they are: explorer `remote.rs` 50 ms `recv_timeout` (only inside a running remote transfer), explorer/terminal scroll `FRAME` 16 ms (only while a scroll animation runs), explorer `search.rs` 5 ms sleeps (only while a search is active), terminal `pty.rs` `HANGUP_POLL` 5 ms (only while a child is exiting; blocking wait is used where the kernel supports it). None run at idle. Task manager sampler already sleeps on a condvar while obscured.
+- Shell: the one idle-reachable poll (toast icon, 15 ms) is now bounded (u158).
+- Conclusion: app idle wakeups are not a ranked hotspot. The remaining measurable costs are the compositor capture residual (u162/u163). Next scout: RAM (caches without caps, duplicated assets) per app.
