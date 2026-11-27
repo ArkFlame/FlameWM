@@ -101,6 +101,9 @@ pub struct SettingsApplication<T: ControlTransport> {
     /// Gates key events so a stale capture armed by the core cannot commit later.
     hotkey_armed: bool,
     error: Option<String>,
+    /// True while the window is fully obscured. Authoritative state keeps arriving from the
+    /// reactor, but document writes are deferred to the first frame after the window is uncovered.
+    obscured: bool,
     pages: DisplayPages,
     themes: theme_picker::ThemeRegistry,
     /// The open theme picker, if any.

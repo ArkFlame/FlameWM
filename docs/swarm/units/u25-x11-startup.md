@@ -77,7 +77,7 @@ there is no remaining hard-fail to convert, so no code file was changed.
 | 5 | selection owner (`_NET_WM_CM_S<n>`) | wm/mod.rs:828-836 | `get_selection_owner` is an `.ok()` chain; failure degrades to "no automatic frame redirect", frames stay unredirected | already log-and-continue; no change |
 
 UNBUILT — no cargo, build, or test was run in this unit (unit rules forbid it).
-No code file was edited; `wm/pointer.rs` and `wm/counters.rs` were not touched.
+No code file was edited in Step 2; `wm/pointer.rs` and `wm/counters.rs` were not touched.
 
 PARTIAL — Step 1 is complete and the Step 2 audit covers all five requested
 startup categories, but zero conversions were made: each category is already
@@ -86,3 +86,19 @@ startup `?` calls are required invariants (atom set, root event-mask ownership)
 or are already wrapped by a logging guard. Converting those would change
 correct behavior, so the safe scope for this retry is empty; changes are
 UNBUILT and need orchestrator verification.
+
+## Step 3 — startup-fallback compile fix (UNBUILT)
+
+The Step 1 fallback edits left `flamewm-wm-x11` not compiling: x11rb request
+methods return `ConnectionError` while cookie `.reply()`/`.check()` return
+`ReplyError`, so `.and_then(|cookie| ...)` could not unify the error types
+(wm/construct.rs:10-33, lib.rs:959-976). The `Ok(resources)` match arm in
+`display_snapshot` also scoped `resources` too narrowly for the later
+`resources.modes` use (lib.rs:1002). Fixed by mapping the request error with
+`.map_err(ReplyError::from)` before each `.and_then`, importing `ReplyError`
+in lib.rs, and carrying the mode list out of the match as `resource_modes`.
+Failure behaviour is unchanged: an absent or failed RandR stage logs its
+blast-radius message and falls back to root geometry instead of aborting.
+
+UNBUILT — no cargo, build, or test was run in this unit (unit rules forbid it).
+The orchestrator must verify the fix with a build.

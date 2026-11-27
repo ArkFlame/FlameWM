@@ -91,7 +91,14 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
                 UiControllerEvent::Key(key) => application.handle_key_event(key, document),
                 UiControllerEvent::Resized { .. } => Ok(()),
                 UiControllerEvent::Drag(_) => Ok(()),
-                UiControllerEvent::Visibility { .. } => Ok(()),
+                UiControllerEvent::Visibility { obscured } => {
+                    // Document writes were deferred while the window was hidden. The uncover turn
+                    // repaints them once from the authoritative snapshots.
+                    if application.set_obscured(*obscured) {
+                        application.settle(document)?;
+                    }
+                    Ok(())
+                }
             };
             if let Err(message) = result {
                 application.report_error(document, message);

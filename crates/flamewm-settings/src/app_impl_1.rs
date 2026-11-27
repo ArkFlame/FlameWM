@@ -11,6 +11,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             pending_open: None,
             hotkey_armed: false,
             error: None,
+            obscured: false,
             pages: DisplayPages::default(),
             themes: theme_picker::ThemeRegistry::default(),
             theme_picker: None,
@@ -474,7 +475,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     pub fn poll_background(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let mut completion_errors: Vec<String> = self.poll_open_uri().err().into_iter().collect();
+        // Jobs and authoritative writes still land while hidden; only the invisible node writes
+        // move to the uncover frame.
         if self.poll_theme_jobs()
+            && !self.obscured
             && let Err(error) = self.sync(document)
         {
             completion_errors.push(error);

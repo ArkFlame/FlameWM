@@ -117,6 +117,7 @@ mod virtual_output;
 mod xwayland;
 
 use std::cell::RefCell;
+use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -127,6 +128,8 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::graphics::{DisplayProtocol, choose_provider};
 use flamewm_render_core::RenderAcceleration;
+use flamewm_session_core::diagnostics::{fallback_log_path, install_panic_hook, session_log_path};
+use rustix::process::getuid;
 use smithay::backend::renderer::glow::GlowRenderer;
 use smithay::backend::winit::{WinitEvent, init_from_attributes};
 use smithay::reexports::calloop::generic::Generic;
@@ -507,6 +510,13 @@ fn install_smithay_logger() {
 }
 
 fn main() {
+    let fallback = fallback_log_path(getuid().as_raw());
+    let home = env::var_os("HOME").map(PathBuf::from);
+    install_panic_hook(session_log_path(
+        env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    ));
     // The `t=` field of every stage line is measured from here, so the timer covers argument
     // parsing, the seat, DRM init and the socket, not just the event loop.
     let _ = START.set(Instant::now());
