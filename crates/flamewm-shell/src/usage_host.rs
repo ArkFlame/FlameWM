@@ -305,7 +305,7 @@ mod tests {
         drop(tx);
         host.tick(start, |_| rx);
         assert!(!host.due(start));
-        assert_eq!(host.next_deadline(), Some(start + USAGE_RETRY_MIN));
         assert!(!host.tick(start, |_| panic!("no immediate retry")));
+        assert_eq!(host.next_deadline(), Some(start + USAGE_RETRY_MIN));
     }
 }

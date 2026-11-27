@@ -60,6 +60,18 @@ if ! grep -qF 'run_minimal_mode()' "$MINIMAL"; then
     exit 1
 fi
 
+# run_safe_mode is the caller that hands a failed shell/desktop handoff to minimal mode.
+SAFE="$BASE/safe.inc"
+awk '
+    /^run_safe_mode\(\)/ { on=1 }
+    on { print }
+    on && /^}/ { exit }
+' "$WRAPPER" >"$SAFE" || exit 1
+if ! grep -qF 'run_safe_mode()' "$SAFE"; then
+    printf 'FAIL setup: could not extract run_safe_mode from %s\n' "$WRAPPER"
+    exit 1
+fi
+
 # Mechanical helpers the extracted functions call. They carry no behavior under test: timing is
 # pinned and blast-radius labels are fixed tokens.
 CHAIN_START_MS=0
@@ -77,7 +89,12 @@ chain_degraded() { case "$1" in
     *) printf 'unknown_component' ;;
 esac; }
 MINIMAL_RECORD="$BASE/minimal-record.log"
-chain_record() { printf '%s\n' "$*" >>"$MINIMAL_RECORD"; }
+# Mirror the wrapper's chain_record field layout so the minimal-mode records can be asserted on.
+chain_record() { # stage status cause code works degraded [extra]
+    local line="FLAMEWM-SESSION-CHAIN stage=$1 status=$2 cause=$3 code=$4 blast_radius=works:$5|degraded:$6 ms=$(chain_ms)"
+    [[ -n "${7:-}" ]] && line+=" detail=$7"
+    printf '%s\n' "$line" >>"$MINIMAL_RECORD"
+}
 
 CHAIN_LOG="$BASE/chain.log"
 export XDG_STATE_HOME="$STATE"
@@ -87,6 +104,8 @@ LOG="$STATE/flamewm/session.log"
 source "$EXTRACTED" || exit 1
 # shellcheck source=/dev/null
 source "$MINIMAL" || exit 1
+# shellcheck source=/dev/null
+source "$SAFE" || exit 1
 
 # Shadow ldd: it prints the preset FAKE_LDD_OUT file regardless of the binary argument.
 cat >"$BIN/ldd" <<'EOF'
@@ -135,6 +154,16 @@ record_names_lib() { # log-file
 no_log_write() { # log-file
     [[ ! -s "$1" ]];
 }
+marker_exists() { [[ -f "$1" ]]; }
+no_marker() { [[ ! -e "$1" ]]; }
+minimal_ok_record() { # record-file
+    grep -aqF 'minimal ok shell_desktop_failed 0' "$1" \
+        && grep -aqE 'wm_pid=[0-9]+' "$1"
+}
+minimal_fail_record() { # record-file
+    grep -aqF 'minimal fail no_wm 1' "$1" \
+        && grep -aqF 'no_display_or_wm' "$1"
+}
 
 # Case 1: one unresolved NEEDED library.
 start_case missing-library
@@ -162,6 +191,44 @@ preflight_libs "$BIN/fake-app" >"$BASE/case2.out" 2>"$BASE/case2.err"
 RC=$?
 assert_case "zero return when all NEEDED libraries resolve" zero_rc
 assert_case "no session log entry written" no_log_write "$LOG"
+end_case
+
+minimal_record_has() {
+    grep -aEq 'stage=minimal status=ok cause=shell_desktop_failed code=0 blast_radius=works:[^[:space:]|]+\|degraded:[^[:space:]|]+' "$MINIMAL_RECORD"
+}
+
+# Case 3: last-resort minimal mode with a WM available: only the WM is started and waited on.
+start_case minimal-wm-only
+WM_MARKER="$BASE/minimal-wm.marker"
+cat >"$BIN/fake-wm" <<'WM_EOF'
+#!/bin/sh
+printf 'minimal-wm\n' >>"${WM_MARKER_LOG:?}"
+: >"${WM_MARKER:?}"
+exit 0
+WM_EOF
+chmod 700 "$BIN/fake-wm"
+export FLAMEWM_SAFE_WM="$BIN/fake-wm"
+export DISPLAY=:99
+export WM_MARKER_LOG="$BASE/minimal-wm.log" WM_MARKER="$WM_MARKER"
+rm -f "$WM_MARKER" "$MINIMAL_RECORD"
+run_minimal_mode >"$BASE/case3.out" 2>"$BASE/case3.err"
+RC=$?
+assert_case "minimal mode returns 0 with a usable WM" zero_rc
+assert_case "minimal mode started the WM" test -f "$WM_MARKER"
+assert_case "minimal mode record has stage/cause/blast radius" minimal_record_has
+end_case
+
+# Case 4: no shell, no desktop and no WM: minimal mode reports failure instead of hanging.
+start_case minimal-no-wm
+rm -f "$MINIMAL_RECORD"
+(
+    export PATH="$BIN"
+    export FLAMEWM_SAFE_WM="no-such-wm"
+    run_minimal_mode
+) >"$BASE/case4.out" 2>"$BASE/case4.err"
+RC=$?
+assert_case "minimal mode returns non-zero with no WM" nonzero_rc
+assert_case "minimal mode failure record present" grep -aqF 'stage=minimal status=fail' "$MINIMAL_RECORD"
 end_case
 
 printf 'SUMMARY cases=%s passed=%s failed=%s\n' \

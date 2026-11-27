@@ -414,11 +414,15 @@ pub fn grab_or_shm<C: Connection>(
         .intersect(root_bounds(conn, screen))
         .ok_or("capture rectangle offscreen")?;
     if !state.disabled {
-        if let Ok(image) = grab_shm(conn, screen, rect, state) {
-            return Ok(image);
+        match grab_shm(conn, screen, rect, state) {
+            Ok(image) => return Ok(image),
+            Err(error) => {
+                // Report the failed shared-memory readback once, then keep capturing via GetImage.
+                eprintln!("FlameWM: shared-memory capture unavailable; using GetImage: {error}");
+                state.disabled = true;
+                state.segment = None;
+            }
         }
-        state.disabled = true;
-        state.segment = None;
     }
     grab(conn, screen, rect)
 }

@@ -469,8 +469,12 @@ fn run(args: &[String]) -> Result<(), String> {
     } else {
         backend.capture(rect)?
     };
-    if o.cursor {
-        capture::blend_cursor(&conn, &mut captured, rect)?;
+    // The pointer is optional: a failed XFixes readback is reported once and the image is saved
+    // without it, so a broken cursor extension cannot abort an otherwise valid capture.
+    if o.cursor
+        && let Err(error) = capture::blend_cursor(&conn, &mut captured, rect)
+    {
+        eprintln!("FlameWM: cursor unavailable; continuing without pointer: {error}");
     }
     let captured = if o.annotate {
         let Some(annotated) = ui::annotate(&conn, screen, captured)? else {

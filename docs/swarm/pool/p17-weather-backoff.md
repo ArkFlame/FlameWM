@@ -1,7 +1,12 @@
 # Unit p17-weather-backoff
-STATUS: OPEN
+STATUS: DONE
 
 Weather widget/tray (rg weather crates): network failure must back off exponentially with a cap and zero idle wakeups between attempts; audit timer logic and fix.
 
 ## Result
-STARTED
+crates/flamewm-shell/src/weather_host.rs:24 — finding: every fetch, including failures, used the fixed 30-minute `last_started + WEATHER_REFRESH_INTERVAL` deadline, so failures retried at the normal interval instead of backing off. Change (UNBUILT): added `WEATHER_RETRY_BASE` (30 s), `WEATHER_RETRY_MAX_SHIFT`, and `weather_retry_delay()` that doubles per consecutive failure and caps at 30 minutes, mirroring the canonical `flamewm-integrations-core/src/backoff.rs` schedule without adding a manifest dependency. Risk: additive local helper only; no visuals, gates, or shared config touched.
+crates/flamewm-shell/src/weather_host.rs:133 — finding: scheduler had no failure state, so a failed fetch could not shorten or defer the next attempt. Change (UNBUILT): added `consecutive_failures` and `retry_at`, reset on success, disable, and settings/location change; `fetch_due` now uses the one-shot retry deadline while failures are pending so the periodic interval cannot cut backoff short. Risk: while failures are pending the normal 30-minute refresh is intentionally suppressed until a success.
+crates/flamewm-shell/src/weather_host.rs:222 — finding: `next_deadline` always armed `last_started + 30 min`, including while a fetch was in flight and after failures. Change (UNBUILT): returns `None` in flight (the result socket is the only wake), a single one-shot retry deadline after failure, and the normal periodic deadline only after success; disabled/unconfigured still returns `None`. Risk: none visual; the wait between attempts has no idle wakeups, only the single one-shot wake at the retry instant.
+crates/flamewm-shell/src/weather_host.rs:558 — finding: no test covered failure scheduling. Change (UNBUILT): added `failures_back_off_exponentially_with_a_cap_and_no_idle_wake` covering 30/60/120/240/480/960/1800 s, capped at 1800 s, no in-flight wake, and reset to the normal interval after success. Risk: test not run (cargo forbidden by brief).
+
+PASS — Investigation and all edits are complete: the weather crate has no timers (its own docs say the shell owns fetching/refresh), and `WeatherHost` in `crates/flamewm-shell/src/weather_host.rs` was the canonical timer owner. Reference check: `.vendor/**` (kwin, smithay, xfdesktop) had no applicable weather-backoff precedent; the in-repo canonical doubling-and-cap schedule in `flamewm-integrations-core/src/backoff.rs` was mirrored locally to avoid a shared manifest edit. All edits above are UNBUILT: git, cargo, builds and python were forbidden by the brief, so no checks were run; the orchestrator must compile and test the shared checkout before release.

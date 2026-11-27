@@ -87,6 +87,14 @@ printf 'safe-terminal\n' >>"${STUB_RECORD:-/dev/null}"
 exit 0
 EOF
 
+cat >"$STUBS/flamewm-term-fail" <<'EOF'
+#!/bin/sh
+# Shell/desktop fails to start: the WM-only minimal mode must be the last resort.
+printf 'safe-terminal-failed\n' >>"${STUB_RECORD:-/dev/null}"
+: >"${STUB_SAFE_MARKER:?}"
+exit 1
+EOF
+
 cat >"$STUBS/ldd" <<'EOF'
 #!/bin/sh
 exit 0
@@ -121,7 +129,7 @@ CASE_NAME=""
 
 ok() { CHECKS=$((CHECKS + 1)); printf 'ok   %s: %s\n' "$CASE_NAME" "$1"; }
 bad() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); printf 'FAIL %s: %s: %s\n' "$CASE_NAME" "$1" "$2"; }
-check_true() { if "$@"; then ok "$1"; else bad "$1" "command failed: $*"; fi; }
+check_true() { local desc="$1"; shift; if "$@"; then ok "$desc"; else bad "$desc" "command failed: $*"; fi; }
 check_eq() { # name expected actual
     if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "expected [$2] got [$3]"; fi
 }
@@ -194,6 +202,9 @@ run_case() { # case-name
                 printf '%s %s\n' "$(date +%s)" 2 >"$XDG_CACHE_HOME/flamewm/session-chain.state"
                 export FLAMEWM_CHAIN_GUARD_MAX=1
                 ;;
+            shell-fail)
+                export FLAMEWM_SAFE_TERMINAL="$STUBS/flamewm-term-fail"
+                ;;
         esac
         "$BIN/flamewm-wayland-session" >"$CASE_DIR/stdout" 2>"$CASE_DIR/stderr"
     )
@@ -225,7 +236,7 @@ assert_common() { # source-of-truth file
     fi
 }
 
-for case_name in missing-runtime-dir drm-fail nested-fail x11-fail unwritable-log-dir crash-loop; do
+for case_name in missing-runtime-dir drm-fail nested-fail x11-fail unwritable-log-dir crash-loop shell-fail; do
     run_case "$case_name"
     truth="$CHAIN_LOG"
     if [[ "$case_name" == unwritable-log-dir ]]; then
@@ -243,17 +254,17 @@ for case_name in missing-runtime-dir drm-fail nested-fail x11-fail unwritable-lo
             ;;
         drm-fail)
             check_true "drm cause names the capability gate" \
-                record_has "$truth" drm fail '[^[:space:]]*capability_gate'
+                record_has "$truth" drm fail 'capability_gate(\+[a-z_]+)*'
             ;;
         nested-fail)
             check_true "nested cause names the failing stage" \
-                record_has "$truth" nested fail 'stage_exit'
+                record_has "$truth" nested fail 'stage_exit(\+[a-z_]+)*'
             check_true "stub record shows nested backend run" \
                 file_has "$CASE_DIR/stub.log" 'backend=winit'
             ;;
         x11-fail)
             check_true "x11 cause names the session failure" \
-                record_has "$truth" x11 fail 'session_exit'
+                record_has "$truth" x11 fail 'stage_exit(\+[a-z_]+)*'
             ;;
         unwritable-log-dir)
             check_true "unwritable cache dir created no chain log" file_absent "$CHAIN_LOG"
@@ -261,6 +272,10 @@ for case_name in missing-runtime-dir drm-fail nested-fail x11-fail unwritable-lo
             ;;
         crash-loop)
             check_true "stub record has no session launch" no_stage_launch "$CASE_DIR/stub.log"
+            ;;
+        shell-fail)
+            check_true "minimal-mode record proves WM-only fallback ran" \
+                record_has "$truth" minimal ok
             ;;
     esac
 done

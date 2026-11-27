@@ -321,6 +321,7 @@ pub fn trim_caches() -> bool {
         return false;
     };
     cache.glyphs.clear();
+    cache.glyph_bytes = 0;
     cache.advances.clear();
     cache.glyphs.shrink_to_fit();
     cache.advances.shrink_to_fit();
