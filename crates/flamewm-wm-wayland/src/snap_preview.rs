@@ -47,6 +47,9 @@ pub struct SnapPreview {
     /// Key of `strips`; `None` while no ring is cached.
     key: Option<RingKey>,
     strips: Vec<Strip>,
+    /// When the ring was last rasterised; resize drags change the size on every pointer event, so
+    /// rasterising is paced to one per frame interval.
+    last_raster: Option<std::time::Instant>,
     /// Raster passes performed; the tests assert that a translation-only drag costs none.
     #[cfg(test)]
     rasters: u32,
@@ -59,6 +62,7 @@ impl Default for SnapPreview {
             shown: None,
             key: None,
             strips: Vec::new(),
+            last_raster: None,
             #[cfg(test)]
             rasters: 0,
         }
@@ -83,6 +87,16 @@ impl SnapPreview {
     /// pure move reuses the cached strips. Returns whether the visible preview changed.
     pub fn show(&mut self, frame: Rect) -> bool {
         let before = (self.shown, self.key);
+        // A size change while a ring is cached is paced to ~60 Hz: raw pointer motion arrives at
+        // 1 kHz+, and each raster allocates strips and uploads new textures. The stale ring is
+        // replaced by the next due motion or hidden on release.
+        let paced = self.key.is_some_and(|k| (k.w, k.h) != (frame.w, frame.h))
+            && self
+                .last_raster
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(16));
+        if paced {
+            return false;
+        }
         self.ensure_ring((frame.w, frame.h));
         self.shown = Some(Shown { frame });
         before != (self.shown, self.key)
@@ -111,6 +125,7 @@ impl SnapPreview {
         }
         self.strips = ring_strips(Rect { x: 0, y: 0, w, h }, self.accent);
         self.key = Some(key);
+        self.last_raster = Some(std::time::Instant::now());
         #[cfg(test)]
         {
             self.rasters += 1;
@@ -199,6 +214,11 @@ mod tests {
             "a move with the same size re-rasterises nothing"
         );
         assert!(!preview.strips.is_empty());
+        assert!(
+            !preview.show(Rect { w: 301, ..FRAME }),
+            "a resize inside the frame interval is paced"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
         assert!(preview.show(Rect { w: 301, ..FRAME }));
         assert_eq!(preview.rasters, 2, "a resize re-rasterises once");
     }
