@@ -317,3 +317,6 @@ Capture total 26.5 -> 5.9 ms (quiet run) / 15.0 ms (busy run) per capture (crop 
 
 ## Capture re-rank after u166
 Quiet run total 5.9 ms: blur 2.2 ms (CPU separable blur on the 295x161 reduced image via `frosted_backdrop_with`), gpu_wait 1.4, map 0.6, store 0.3. Nothing left above ~2 ms that is not inherent GPU work; blur on the GPU would trade 2 ms of CPU for extra passes and is not worth it at this size. Capture is no longer a ranked hotspot; it only runs while a translucent window or dock moves.
+
+## u166 dock check
+Nested run with the real shell dock (`flamewm-shell` autostart): 172 backdrop captures, dock bar at the bottom renders with its dark translucent backdrop, no artifacts or missing backdrop (frame read). The dock here is a full-width bar with no pill radius and nothing under it, so the rounded pill clip on a dock is covered only by the shared clip shader and its tests, not by this frame.
