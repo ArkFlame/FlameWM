@@ -338,3 +338,6 @@ Profiler wake gated on enabled(); weather/usage/clock intervals are 5 min to 6 h
 
 ## Duplicate dependency scout: nothing ranked
 Duplicate crate versions (x11rb 0.13/0.14, rustix 0.38/1, thiserror 1/2) come from vendored smithay/winit/calloop; removing them means patching third_party, size gain small. No change.
+
+## Explorer filesystem scout: nothing ranked
+All fs calls (scan, trash list, copy/move/delete in jobs.rs, search, mime, thumbs) run on dedicated worker threads (flamewm-explorer-scan/io/mime/thumbs, refresh, search); no blocking disk work on the UI thread. No change.
