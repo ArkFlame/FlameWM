@@ -305,3 +305,6 @@ Capture total 83.4 -> 26.5 ms on real Intel GPU (map 35.8 -> 2.6 ms) by halving 
 
 ## Scout after u162
 Capture residual: crop 30%, store 23%, blur 12%, gpu_wait 13%, map 10%. Next unit u166 (GPU upscale of the blurred backing) written.
+
+## Task manager idle tick check
+`scripts/perf-clients` shows 3 ticks/2 s: the visible 1 s sampler cadence. Sampler parks with no timer when hidden (lib.rs wait_visible). No change needed.
