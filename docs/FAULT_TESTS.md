@@ -1,8 +1,10 @@
 # Fault-injection test index
 
-**Status: UNBUILT.** The index script and this document were written by static reading only.
-No `git`, `cargo`, build, test, Python or sleep loop was run in this unit. The orchestrator owns
-compilation, test execution and the commit after the batch lands.
+**Status: script checks verified; cargo suites UNBUILT.** The index script and this document were
+written by static reading, then checked at script level with `bash -n scripts/run-fault-tests`
+(SYNTAX_OK) and `bash scripts/run-fault-tests --list` (six cases printed, exit 0). No `git`,
+`cargo`, build, test, Python or sleep loop was run. The orchestrator owns compilation, test
+execution and the commit after the batch lands.
 
 ## Inventory
 
@@ -51,10 +53,13 @@ No vendor-specific harness precedent was needed: the local conventions in
 exit codes, `mktemp -d` isolation) were followed. `.vendor/**` was not used as a dependency or
 runtime input.
 
-Unverified here: `bash -n scripts/run-fault-tests` and `bash scripts/run-fault-tests --list` were
-not executed because shell permission was denied in this session after a restart; the script was
-checked by static read-back only. Unverified: every `cargo test` invocation and the `--features drm`
-variant; no Cargo runner was allowed in this unit.
+Verified here: `bash -n scripts/run-fault-tests` printed SYNTAX_OK and
+`bash scripts/run-fault-tests --list` printed all six inventory cases and exited 0 without running
+any build, cargo test or git. Verified by static read-back: the four `mod` declarations at
+`accel/mod.rs:3`, `settings.rs:258`, `wm/mod.rs:593` and `main.rs:121`, the crate `name` entries,
+the `drm` feature at `crates/flamewm-wm-wayland/Cargo.toml:78`, and the bare `rg` count of 88 files
+(matching `default`). Unverified: every `cargo test` invocation and the `--features drm` variant;
+no Cargo runner was allowed in this unit.
 
 ## Risks
 
