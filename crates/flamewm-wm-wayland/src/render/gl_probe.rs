@@ -16,6 +16,30 @@ pub(super) static BUFFER_AGE_REFUSED: std::sync::atomic::AtomicBool =
 pub(super) static FIRST_FRAME_SUBMITTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Set from the one post-present buffer-age query when the nested winit surface answers with a
+/// real age. A positive answer proves the EGL surface supports both `EGL_EXT_buffer_age` and a
+/// damage-based swap, so a cursor-only frame can report only the cursor rectangles. A refusal
+/// (or age 0, which smithay also returns when damage swaps are unavailable) leaves this clear and
+/// the full-repaint fallback in force.
+pub(super) static WINIT_DAMAGE_SWAP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Guards the post-present probe so a driver that refuses the query is never asked twice.
+static WINIT_PROBE_DONE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record the single post-present buffer-age answer. Later frames read [`WINIT_DAMAGE_SWAP`]
+/// directly, so the EGL query is never repeated on a driver that refused it.
+pub(super) fn note_winit_buffer_age(age: Option<usize>) {
+    if WINIT_PROBE_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    WINIT_DAMAGE_SWAP.store(
+        age.is_some_and(|age| age > 0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// Whether the buffer-age query may run: only once a frame was submitted and no driver refused it.
 pub(crate) const fn buffer_age_probe_allowed(first_frame_submitted: bool, refused: bool) -> bool {
     first_frame_submitted && !refused

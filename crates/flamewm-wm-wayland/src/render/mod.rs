@@ -749,7 +749,8 @@ pub fn render_frame(state: &mut State) {
     // byte-identical frame. Consume the scene flag and skip that paint: every path that changes
     // pixels calls `request_paint`/`request_redraw` and sets it again. A dump arms its own scene
     // flag through `request_redraw`, and the lock screen never takes this path.
-    if !state.take_scene_dirty()
+    let scene_dirty = state.take_scene_dirty();
+    if !scene_dirty
         && state.dump.is_none()
         && !state.session_locked
         && State::host_draws_pointer_status(&state.cursor_status)
@@ -760,8 +761,14 @@ pub fn render_frame(state: &mut State) {
         return;
     };
     state.flush_pending_configure();
-    if let Err(error) = render_into(state, &mut backend) {
+    if let Err(error) = render_into(state, &mut backend, scene_dirty) {
         eprintln!("flamewm-wayland: frame failed: {error}");
+    }
+    // The first submit has now bound and presented the surface. One query decides whether the
+    // swapchain can take damage at all; a refusal is latched by `note_winit_buffer_age` and never
+    // queried again, keeping the full-repaint fallback for drivers without damage swaps.
+    if FIRST_FRAME_SUBMITTED.load(std::sync::atomic::Ordering::Relaxed) {
+        note_winit_buffer_age(backend.buffer_age());
     }
     state.backend = Some(backend);
     // Work finished during the paint (a switcher thumbnail, a screencopy readback) calls
@@ -776,6 +783,7 @@ pub fn render_frame(state: &mut State) {
 fn render_into(
     state: &mut State,
     backend: &mut WinitGraphicsBackend<GlowRenderer>,
+    scene_dirty: bool,
 ) -> Result<(), Box<dyn Error>> {
     let size = backend.window_size();
     let mut lap = stage_timers::Lap::start();

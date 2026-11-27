@@ -370,10 +370,60 @@ pub(crate) fn stage_text(stage: Stage, status: StageStatus, detail: &str) -> Str
     )
 }
 
-/// Emits one structured startup line (see [`stage_text`]).
+/// The same session log the panic hook uses, so backend failures and crashes interleave in order.
+fn backend_failure_log_path() -> PathBuf {
+    let fallback = fallback_log_path(getuid().as_raw());
+    let home = env::var_os("HOME").map(PathBuf::from);
+    session_log_path(
+        env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    )
+}
+
+/// Appends one typed failure record for a backend init stage. `still_works` names what survives the
+/// fallback and `degraded` names what the failed stage took away; both are stable subsystem ids.
+pub(crate) fn record_backend_failure(
+    stage: &str,
+    cause: impl std::fmt::Display,
+    fallback_taken: bool,
+) {
+    use flamewm_session_core::diagnostics::{
+        BlastRadius, FailureCode, FailureRecord, append_record,
+    };
+    let record = FailureRecord::at_now(
+        stage,
+        FailureCode::SubsystemError,
+        cause.to_string(),
+        BlastRadius::new(
+            ["process", "session_log", "wayland_socket"],
+            ["compositor_backend", "hardware_outputs", "input_devices"],
+        ),
+        fallback_taken,
+    );
+    if let Err(error) = append_record(&backend_failure_log_path(), &record) {
+        eprintln!("flamewm-wayland: failure record write failed: {error}");
+    }
+}
+
+/// Emits one structured startup line (see [`stage_text`]). Every hard failure of a backend init
+/// stage also leaves a typed failure record, so a falling-back compositor is diagnosable even when
+/// the wrapper throws its stderr away.
 pub(crate) fn stage_line(stage: Stage, status: StageStatus, detail: &str) {
     REPORTED_STAGES.fetch_or(1u8 << stage.code(), Ordering::Relaxed);
     eprintln!("{}", stage_text(stage, status, detail));
+    if status == StageStatus::Fail
+        && matches!(
+            stage,
+            Stage::Seat | Stage::Drm | Stage::Outputs | Stage::Libinput
+        )
+    {
+        record_backend_failure(
+            stage.name(),
+            detail,
+            matches!(stage, Stage::Seat | Stage::Drm | Stage::Outputs),
+        );
+    }
 }
 
 fn stage_reported(stage: Stage) -> bool {
@@ -662,16 +712,18 @@ fn run() -> Result<i32, Box<dyn Error>> {
     // Backend first: the seat is taken here, and a failure must not leave a half-started
     // compositor holding the session. The guard owns the backend handle and finishes it on drop,
     // which also covers the error paths below.
+    // A failed native init is a recoverable BackendInitError (its stages already wrote failure
+    // records); fall through to the nested window, then to a headless/minimal compositor that still
+    // serves the Wayland socket instead of exiting the session.
     let native = match backend {
-        Backend::Native => Some(start_native(&mut state, &handle)?),
-        Backend::Nested => {
-            stage_line(Stage::Seat, StageStatus::Skip, "nested backend");
-            stage_line(Stage::Drm, StageStatus::Skip, "nested backend");
-            init_winit(&mut state, &handle)?;
-            stage_line(Stage::Outputs, StageStatus::Ok, "winit window");
-            stage_line(Stage::Libinput, StageStatus::Skip, "host input");
-            None
-        }
+        Backend::Native => match start_native(&mut state, &handle) {
+            Ok(native) => Some(native),
+            Err(error) => {
+                eprintln!("flamewm-wayland: {error}; falling back to nested");
+                start_nested_or_headless(&mut state, &handle)
+            }
+        },
+        Backend::Nested => start_nested_or_headless(&mut state, &handle),
     };
     fill_backend_stages();
     // Debug-only virtual outputs (env-gated); needs the primary size the backend just set.
@@ -909,26 +961,91 @@ impl Drop for NativeSession {
 #[cfg(not(feature = "drm"))]
 pub(crate) struct NativeSession;
 
+/// A recoverable backend-init failure. `run` matches this type to try the next backend; unrelated
+/// errors still propagate to `main` and abort startup.
+#[derive(Debug)]
+pub(crate) struct BackendInitError {
+    pub(crate) stage: String,
+    pub(crate) cause: String,
+}
+
+impl std::fmt::Display for BackendInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} backend init failed: {}", self.stage, self.cause)
+    }
+}
+
+impl Error for BackendInitError {}
+
 /// Starts the native (tty) backend. On failure the `drm` module already released its devices, the
-/// stage line names the failure and the process exits non-zero.
+/// failing stage wrote a failure record, and the distinct error lets `run` fall back.
 fn start_native(
     state: &mut State,
     handle: &LoopHandle<'static, State>,
-) -> Result<NativeSession, Box<dyn Error>> {
+) -> Result<NativeSession, BackendInitError> {
     #[cfg(feature = "drm")]
     {
         match drm::init(state, handle) {
             Ok(drm_handle) => Ok(NativeSession(Some(drm_handle))),
             Err(error) => {
-                stage_line(Stage::Drm, StageStatus::Fail, &format!("{error}"));
-                Err(format!("native backend init failed: {error}").into())
+                let cause = error.to_string();
+                stage_line(Stage::Drm, StageStatus::Fail, &cause);
+                Err(BackendInitError {
+                    stage: Stage::Drm.name().to_owned(),
+                    cause,
+                })
             }
         }
     }
     #[cfg(not(feature = "drm"))]
     {
         let _ = (state, handle);
-        Err("native backend requested but this build has no `drm` feature".into())
+        let cause = "native backend requested but this build has no `drm` feature";
+        record_backend_failure(Stage::Drm.name(), cause, true);
+        Err(BackendInitError {
+            stage: Stage::Drm.name().to_owned(),
+            cause: cause.to_owned(),
+        })
+    }
+}
+
+/// Try the nested winit window; if that fails too, keep the compositor alive headless/minimal.
+fn start_nested_or_headless(
+    state: &mut State,
+    handle: &LoopHandle<'static, State>,
+) -> Option<NativeSession> {
+    if !stage_reported(Stage::Seat) {
+        stage_line(Stage::Seat, StageStatus::Skip, "nested backend");
+    }
+    if !stage_reported(Stage::Drm) {
+        stage_line(Stage::Drm, StageStatus::Skip, "nested backend");
+    }
+    match init_winit(state, handle) {
+        Ok(()) => {
+            stage_line(Stage::Outputs, StageStatus::Ok, "winit window");
+            stage_line(Stage::Libinput, StageStatus::Skip, "host input");
+            None
+        }
+        Err(error) => {
+            record_backend_failure("nested_winit", &error, true);
+            eprintln!(
+                "flamewm-wayland: nested backend unavailable ({error}); continuing headless/minimal"
+            );
+            // `init_winit` installs the renderer before it registers the source, so a late failure
+            // can leave a half-started window behind. Drop it before the socket-only run.
+            state.backend = None;
+            for (stage, detail) in [
+                (Stage::Seat, "headless_fallback"),
+                (Stage::Drm, "headless_fallback"),
+                (Stage::Outputs, "headless_no_output"),
+                (Stage::Libinput, "headless_no_input"),
+            ] {
+                if !stage_reported(stage) {
+                    stage_line(stage, StageStatus::Skip, detail);
+                }
+            }
+            None
+        }
     }
 }
 
