@@ -310,13 +310,7 @@ pub fn output_lock_elements(
     }
 }
 
-pub fn build_elements(state: &State, renderer: &mut GlowRenderer) -> Vec<Elem> {
-    let mut out: Vec<Elem> = Vec::new();
-    build_elements_into(state, renderer, &mut out);
-    out
-}
-
-/// [`build_elements`] appending into `out`, so a frame builder keeps one element buffer instead of
+/// Appends the frame's scene elements to `out`, so a frame builder keeps one element buffer instead of
 /// allocating a second Vec and copying every element into it on each painted frame.
 pub fn build_elements_into(state: &State, renderer: &mut GlowRenderer, out: &mut Vec<Elem>) {
     let scale = state.output_scale();

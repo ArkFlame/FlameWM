@@ -358,7 +358,7 @@ impl Drm {
             }
             let cursor_len = cursor.len();
             let mut elements = cursor;
-            elements.extend(render::build_elements(state, &mut self.renderer));
+            render::build_elements_into(state, &mut self.renderer, &mut elements);
             SceneCache {
                 elements,
                 cursor_len,
