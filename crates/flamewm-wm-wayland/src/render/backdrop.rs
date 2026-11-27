@@ -57,6 +57,18 @@ impl PhaseClock {
         }
     }
 
+    /// Profiling only: closes the `render` bucket, then blocks until the GPU has finished the queued scene so
+    /// the wait lands in `gpu_wait` and `copy`/`map` measure the readback alone. A disabled clock returns at
+    /// once and the pipeline is never stalled.
+    pub(super) fn gpu_wait(&mut self, sync: &smithay::backend::renderer::sync::SyncPoint) {
+        if self.last.is_none() {
+            return;
+        }
+        self.split("render");
+        let _ = sync.wait();
+        self.split("gpu_wait");
+    }
+
     /// Emits the breakdown and restarts the clock, so time spent outside the split calls is not hidden.
     pub(super) fn report(&self, rows: usize) {
         let Some(start) = self.start else { return };
@@ -454,7 +466,8 @@ pub(crate) fn refresh_desktop_backdrop(
     let mut tracker = OutputDamageTracker::from_output(&state.output);
     {
         let mut target = renderer.bind(&mut texture)?;
-        tracker.render_output(renderer, &mut target, 0, &elements, CLEAR)?;
+        let rendered = tracker.render_output(renderer, &mut target, 0, &elements, CLEAR)?;
+        clock.gpu_wait(&rendered.sync);
     }
     clock.split("render");
     let stored = read_reduced(renderer, &mut texture, dims, &mut clock)?;

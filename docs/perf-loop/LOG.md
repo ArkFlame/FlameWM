@@ -294,3 +294,8 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 
 ## Explorer thread count: parked, no change
 - 14 threads at idle are the job/scan worker pools (`workers.rs`): each blocks on `recv` of a shared queue (a send, not a spawn, starts work), and `perf-clients` measured 0 idle ticks in 2 s for the explorer. Threads cost stack address space, not CPU or resident RAM; RSS is 21.6 MB.
+
+## u162 measured on real hardware: the readback is the top capture cost
+- Correction: the nested harness runs on the machine's Intel GPU (`FLAMEWM_GL_RENDERER ... Mesa Intel(R) UHD Graphics (TGL GT1) class=hardware`), not llvmpipe, so u162 is measurable here. Earlier notes calling it software GL were wrong.
+- New profile-only split: `PhaseClock::gpu_wait` waits on the render's `SyncPoint` (never when profiling is off) so `gpu_wait` is the GPU finishing the scene and `copy`/`map` are the readback alone.
+- 90-step drag, 48 phase lines (busy machine, read the shares): total 83.4 ms; map 35.8 (43%), crop 20.9, store 11.7, blur 6.4, gpu_wait 5.0, downscale 2.1, copy 1.5, render 0.4. `gpu_wait` is small, so `map` is the transfer of the full-size readback, not waiting for the scene. Reading 16x fewer bytes is the lever.

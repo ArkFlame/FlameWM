@@ -320,7 +320,8 @@ fn capture_dock(
     {
         let mut target = renderer.bind(&mut texture)?;
         let mut tracker = OutputDamageTracker::new(target_size, 1.0, Transform::Normal);
-        tracker.render_output(renderer, &mut target, 0, &shifted, CLEAR)?;
+        let rendered = tracker.render_output(renderer, &mut target, 0, &shifted, CLEAR)?;
+        clock.gpu_wait(&rendered.sync);
     }
     clock.split("render");
     let stored = read_reduced(renderer, &mut texture, dims, &mut clock)?;
