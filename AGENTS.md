@@ -26,3 +26,11 @@ git-ignored, read-only reference, never a dependency or runtime input. Record
 the precedent (path + choice) in the commit message or docs.
 
 Commit and push every verified slice automatically; do not leave work uncommitted.
+
+## Scripts and tooling (user order, permanent, all agents and subagents)
+
+Never run `python`, `python3`, `ctx_execute`, `/tmp/ctx-exec-*` scripts, or `sleep` polling loops: they overload the machine. Use `rg`, `fd`, `sed`, `jq` and the Edit tool. Anything repeated twice becomes a documented bash or Rust script in `./scripts/` that every agent reuses (`scripts/perf-loop status|wait|sync|check|built` already exists; read `ls scripts/` first). Details: `.agents/skills/no-adhoc-scripts/SKILL.md`, `.agents/NO-ADHOC-SCRIPTS.md`.
+
+## Performance tests (user order, permanent)
+
+Perf tests are SMALL and SCOPED: one component, one second of simulated usage, never whole-system CPU. The output is a composition (what share of the sample each subsystem uses in normal use), not an absolute CPU number. Fix the largest share first, then re-rank. Details: `.agents/skills/scoped-perf-tests/SKILL.md`.

@@ -26,6 +26,5 @@ LOOP:
  4. If less than 30 minutes since the last build, return to SCOUT (next-worst hotspot; research via exa/context7/.vendor). Land at least 10-20 optimizations between builds.
  5. If 30+ minutes passed: run ONE cargo build/check (scripts per repo), collect all red errors, plan fixes together with the next batch, dispatch fixers + new optimizations, commit, push. Only then test the OS/desktop for real, and re-rank the composition.
  6. Repeat forever. There is no final state; when a pass finishes, the nearest remaining hotspot is the next unit.
-
 ## Done-ness
 A unit counts only if it cuts work in a ranked hot path and keeps visuals/features. Log area, change, expected composition shift, commit in docs/perf-loop/LOG.md.
