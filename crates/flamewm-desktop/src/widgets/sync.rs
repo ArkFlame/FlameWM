@@ -64,7 +64,11 @@ pub(super) fn sync_clock(
         time_text.chars().count(),
         widget.rect.width as f32,
     );
-    let date_text = format_date(time, widget.flag("showWeekday"), widget.flag("showYear"));
+    // The date nodes stay hidden when `showDate` is off; formatting their text on every
+    // seconds tick would allocate a string for content nobody can see.
+    let date_text = show_date.then(|| {
+        format_date(time, widget.flag("showWeekday"), widget.flag("showYear"))
+    });
     let time_color = color(widget.color("textColor"), 255);
     let date_color = color(widget.color_or_accent("accentColor", accent), 255);
     let weight = if widget.flag("bold") { 700 } else { 400 };
@@ -79,7 +83,9 @@ pub(super) fn sync_clock(
         ),
     ] {
         document.text_ref(&time_id, &time_text)?;
-        document.text_ref(&date_id, &date_text)?;
+        if let Some(date_text) = date_text.as_deref() {
+            document.text_ref(&date_id, date_text)?;
+        }
         document.font_size(&time_id, time_size)?;
         document.font_size(&date_id, WIDGET_DATE_SIZE)?;
         document.font_weight(&time_id, weight)?;

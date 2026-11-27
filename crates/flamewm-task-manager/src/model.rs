@@ -112,8 +112,9 @@ pub fn hot_pids_into(hot: &mut Vec<u32>, ranked: &mut Vec<(f64, u32)>, processes
     hot.sort_unstable();
 }
 
-/// Static-per-process fields are re-read on first sight, on a rename (comm changed), and at
-/// most every `STATIC_REFRESH_TICKS` samples, which catches same-name exec and setuid.
+/// Static-per-process fields are re-read on first sight, on a rename (comm changed), on PID
+/// reuse, and at most every `STATIC_REFRESH_TICKS * 4` samples, which bounds stale setuid and
+/// same-name exec without paying for an identity probe on every tick.
 const STATIC_REFRESH_TICKS: u64 = 5;
 /// Discover new processes every five samples; known processes are still sampled each tick.
 const DISCOVERY_TICKS: u64 = 5;
@@ -383,7 +384,7 @@ fn proc_path<'a>(path: &'a mut String, pid: u32, leaf: &str) -> &'a str {
 fn stat_mtime(path: &str) -> Option<(u64, u64)> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     let since = modified.duration_since(UNIX_EPOCH).ok()?;
-    Some((since.as_secs(), since.subsec_nanos()))
+    Some((since.as_secs(), u64::from(since.subsec_nanos())))
 }
 fn sanitize(text: &str, max_chars: usize) -> String {
     text.chars()
@@ -642,20 +643,18 @@ impl Sampler {
         }
         cached.read_total = total;
         // `start` is the kernel starttime and the stat inode mtime is stamped at task creation:
-        // together they say whether a pid is still the same process. Probe the mtime only where
-        // a static refresh was already due: one `stat` replaces the `status` + `cmdline`
-        // open/read/close pairs that an unchanged pid used to pay every refresh interval.
-        let refresh_due = tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS;
-        // Bound the skip: even a pid whose identity token never moves gets one full static
-        // refresh every 20 ticks, so a setuid or same-comm exec cannot stay stale forever.
+        // together they say whether a pid is still the same process. Probe the mtime on first
+        // sight or at the hard deadline only: one `stat` replaces the `status` + `cmdline`
+        // open/read/close pairs an unchanged pid used to pay on every refresh interval, and a
+        // setuid or same-comm exec cannot stay stale for more than 20 ticks.
         let hard_due = tick.saturating_sub(cached.refreshed) >= STATIC_REFRESH_TICKS * 4;
-        let mtime = if !known || refresh_due {
+        let mtime = if !known || hard_due {
             stat_mtime(&self.path)
         } else {
             cached.stat_mtime
         };
         let identity_changed = !known || cached.stat_mtime != mtime;
-        let stale = identity_changed || hard_due || (refresh_due && cached.name != task.name);
+        let stale = identity_changed || hard_due || cached.name != task.name;
         if stale {
             if identity_changed || hard_due {
                 let status = read_proc_prefix(

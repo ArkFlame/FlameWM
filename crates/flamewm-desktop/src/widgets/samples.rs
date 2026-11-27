@@ -24,11 +24,14 @@ pub(super) fn parse_net_dev(text: &str) -> Option<(u64, u64)> {
         if name.trim() == "lo" {
             continue;
         }
-        let fields: Vec<u64> = fields
+        // Only the first and ninth parseable fields are read; collecting every interface field
+        // into a Vec allocated once per network sample was wasted work on an idle desktop.
+        let mut parsed = fields
             .split_whitespace()
-            .filter_map(|field| field.parse().ok())
-            .collect();
-        if let (Some(rx), Some(tx)) = (fields.first(), fields.get(8)) {
+            .filter_map(|field| field.parse::<u64>().ok());
+        let rx = parsed.next();
+        let tx = parsed.nth(7);
+        if let (Some(rx), Some(tx)) = (rx, tx) {
             let (sum_rx, sum_tx) = totals.unwrap_or((0u64, 0u64));
             totals = Some((sum_rx + rx, sum_tx + tx));
         }

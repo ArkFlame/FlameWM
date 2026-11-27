@@ -252,11 +252,11 @@ for case_name in missing-runtime-dir drm-fail nested-fail x11-fail unwritable-lo
                 record_has "$truth" x11 fail 'session_exit'
             ;;
         unwritable-log-dir)
-            check_true "unwritable cache dir created no chain log" [[ ! -e "$CHAIN_LOG" ]]
+            check_true "unwritable cache dir created no chain log" file_absent "$CHAIN_LOG"
             check_true "records still reached stderr" file_has "$truth" 'stage=safe status=ok'
             ;;
         crash-loop)
-            check_true "stub record has no session launch" [[ ! -s "$CASE_DIR/stub.log" ]]
+            check_true "stub record has no session launch" no_stage_launch "$CASE_DIR/stub.log"
             ;;
     esac
 done

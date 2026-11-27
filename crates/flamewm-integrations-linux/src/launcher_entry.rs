@@ -288,7 +288,7 @@ fn handle_message(
             }
             Err(()) => {
                 eprintln!(
-                    "flamewm: malformed launcher .desktop Update from {owner}; progress ignored"
+                    "flamewm: malformed launcher .desktop Update from {owner}; progress ignored; blast_radius=works:taskbar,other-launchers|degraded:progress-bar"
                 );
             }
         }
