@@ -133,9 +133,15 @@ pub fn post_process(
     }
     if dim_percent > 0 {
         let keep = 1.0 - f64::from(dim_percent.min(80)) / 100.0;
+        // Only 256 inputs exist, so the f64 multiply-and-round runs 256 times instead of once per
+        // channel of every pixel (about 6 million at 1080p).
+        let mut table = [0_u8; 256];
+        for (value, entry) in table.iter_mut().enumerate() {
+            *entry = (value as f64 * keep).round() as u8;
+        }
         for pixel in pixels.as_chunks_mut::<4>().0 {
             for channel in &mut pixel[..3] {
-                *channel = (f64::from(*channel) * keep).round() as u8;
+                *channel = table[usize::from(*channel)];
             }
         }
     }
@@ -338,6 +344,23 @@ mod tests {
         let mut buf = original.clone();
         post_process(&mut buf, 32, 18, 0, 0).expect("process");
         assert_eq!(buf, original);
+    }
+
+    #[test]
+    fn the_dim_table_matches_the_direct_formula_for_every_value() {
+        for dim in [1_u8, 10, 25, 33, 50, 80, 99] {
+            let keep = 1.0 - f64::from(dim.min(80)) / 100.0;
+            let mut buf: Vec<u8> = (0..=255_u8).flat_map(|v| [v, v, v, 255]).collect();
+            post_process(&mut buf, 256, 1, 0, dim).expect("process");
+            for (value, pixel) in buf.as_chunks::<4>().0.iter().enumerate() {
+                let direct = (value as f64 * keep).round() as u8;
+                assert_eq!(
+                    pixel,
+                    &[direct, direct, direct, 255],
+                    "dim {dim} value {value}"
+                );
+            }
+        }
     }
 
     #[test]
