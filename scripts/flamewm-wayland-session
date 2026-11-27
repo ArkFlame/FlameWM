@@ -87,9 +87,195 @@
 #   FLAMEWM_WAYLAND_READY_TIMEOUT_MS     budget for the compositor's `stage=presented status=ok
 #                                        code=8` (default 25000, counted from the compositor start)
 #
-# Not done here: falling back to the X11 session when the Wayland backend fails. A lightdm
-# wayland-type session has no X server to exec into, so this wrapper does not start Xorg.
+# Session startup fallback chain (display-manager sessions only): drm -> nested winit -> X11
+# session -> minimal safe mode. Each stage re-enters this script or the X11 wrapper with
+# FLAMEWM_SESSION_ATTEMPT set, so the single-attempt path below — including the capability gate and
+# its exit codes — is unchanged for diagnostics and tests. A failed stage writes one
+# `FLAMEWM-SESSION-CHAIN ... stage=<s> cause=<tokens> blast_radius=works:<tokens>|degraded:<tokens>` record to
+# session-chain.log; only an exhausted chain returns non-zero. A time-boxed state file stops a
+# display manager that keeps restarting a crashing session from looping through the chain forever.
+# UNBUILT: no cargo/build/test was run in this unit; verification belongs to the orchestrator.
 set -uo pipefail
+
+CHAIN_CACHE_DIR=""
+if [[ -n "${HOME:-}${XDG_CACHE_HOME:-}" ]]; then
+    CHAIN_CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/flamewm"
+fi
+CHAIN_LOG=""
+CHAIN_STATE=""
+if [[ -n "$CHAIN_CACHE_DIR" ]] && mkdir -p "$CHAIN_CACHE_DIR" 2>/dev/null \
+    && [[ -d "$CHAIN_CACHE_DIR" && -w "$CHAIN_CACHE_DIR" ]]; then
+    if ( umask 077; : >>"$CHAIN_CACHE_DIR/session-chain.log" ) 2>/dev/null; then
+        CHAIN_LOG="$CHAIN_CACHE_DIR/session-chain.log"
+        chmod 600 "$CHAIN_LOG" 2>/dev/null || :
+    fi
+    CHAIN_STATE="$CHAIN_CACHE_DIR/session-chain.state"
+fi
+CHAIN_GUARD_WINDOW_S="${FLAMEWM_CHAIN_GUARD_WINDOW_S:-60}"
+CHAIN_GUARD_MAX="${FLAMEWM_CHAIN_GUARD_MAX:-3}"
+[[ "$CHAIN_GUARD_WINDOW_S" =~ ^[0-9]+$ ]] || CHAIN_GUARD_WINDOW_S=60
+[[ "$CHAIN_GUARD_MAX" =~ ^[0-9]+$ ]] || CHAIN_GUARD_MAX=3
+CHAIN_ATTEMPTS=0
+CHAIN_CHILD=""
+CHAIN_BINDIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+chain_now_ms() {
+    local value sec frac
+    if [[ -r /proc/uptime ]] && read -r value _ < /proc/uptime 2>/dev/null; then
+        sec="${value%%.*}"; frac="${value#*.}000"
+        printf '%s' "$(( 10#${sec:-0} * 1000 + 10#${frac:0:3} ))"
+    else
+        printf '%s' "$(( $(date +%s) * 1000 ))"
+    fi
+}
+CHAIN_START_MS="$(chain_now_ms)"
+chain_ms() { printf '%s' "$(( $(chain_now_ms) - CHAIN_START_MS ))"; }
+
+# One machine-readable record per stage outcome. Always written to stderr (the VT) and to the
+# private chain log when the log directory is writable; an unwritable log dir never blocks startup.
+chain_record() { # stage status cause code works degraded [extra]
+    local line prefix
+    prefix="$(date '+%F %T' 2>/dev/null)"
+    line="$prefix FLAMEWM-SESSION-CHAIN stage=$1 status=$2 cause=$3 code=$4 blast_radius=works:$5|degraded:$6 ms=$(chain_ms)"
+    [[ -n "${7:-}" ]] && line+=" detail=$7"
+    printf '%s\n' "$line" >&2
+    [[ -n "$CHAIN_LOG" ]] && printf '%s\n' "$line" >>"$CHAIN_LOG" 2>/dev/null || :
+}
+
+chain_guard_trip() {
+    local now last
+    CHAIN_ATTEMPTS=1
+    [[ -n "$CHAIN_STATE" ]] || return 1
+    now="$(date +%s)"
+    if [[ -r "$CHAIN_STATE" ]]; then
+        read -r last CHAIN_ATTEMPTS < "$CHAIN_STATE" 2>/dev/null || { last=0; CHAIN_ATTEMPTS=1; }
+        [[ "$last" =~ ^[0-9]+$ ]] || last=0
+        [[ "$CHAIN_ATTEMPTS" =~ ^[0-9]+$ ]] || CHAIN_ATTEMPTS=1
+        if (( now - last <= CHAIN_GUARD_WINDOW_S )); then
+            CHAIN_ATTEMPTS=$(( CHAIN_ATTEMPTS + 1 ))
+        else
+            CHAIN_ATTEMPTS=1
+        fi
+    fi
+    ( umask 077; printf '%s %s\n' "$now" "$CHAIN_ATTEMPTS" > "$CHAIN_STATE" ) 2>/dev/null || :
+    (( CHAIN_ATTEMPTS > CHAIN_GUARD_MAX ))
+}
+chain_clear_guard() { [[ -n "$CHAIN_STATE" ]] && rm -f "$CHAIN_STATE" 2>/dev/null || :; }
+
+chain_forward() {
+    local sig="$1"
+    [[ -n "$CHAIN_CHILD" ]] && kill -s "$sig" "$CHAIN_CHILD" 2>/dev/null || :
+}
+
+# `wait` is re-entered so a forwarded signal cannot be mistaken for the child's final status.
+chain_wait() {
+    local pid="$1" rc=0
+    while :; do
+        wait "$pid"; rc=$?
+        kill -s 0 "$pid" 2>/dev/null || break
+    done
+    return "$rc"
+}
+
+# Named causes combine the stage's exit code with the hard-fail evidence left in its session log:
+# runtime dir, seat/DRM, D-Bus, socket and presentation are all visible there without a trace tool.
+chain_cause() {
+    local stage="$1" rc="$2" cause clog
+    case "$rc" in
+        2) cause="capability_gate" ;;
+        3) cause="xwayland_unavailable" ;;
+        124) cause="presentation_timeout" ;;
+        126) cause="binary_not_executable" ;;
+        127) cause="binary_missing" ;;
+        129|130|143) cause="signal_logout" ;;
+        *) cause="stage_exit" ;;
+    esac
+    clog="$CHAIN_CACHE_DIR/wayland-session.log"
+    if [[ -n "$CHAIN_CACHE_DIR" && -f "$clog" ]]; then
+        grep -aqF 'stage=runtime status=fail' "$clog" && cause+="+runtime_dir"
+        grep -aqF 'dbus_session_bus=absent' "$clog" && cause+="+dbus_absent"
+        grep -aqF 'stage=socket fail' "$clog" && cause+="+socket_not_detected"
+        grep -aqF 'stage=presented fail' "$clog" && cause+="+no_first_frame"
+    fi
+    if [[ -n "${XDG_RUNTIME_DIR:-}" && -e "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" \
+        && ! -S "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" ]]; then
+        cause+="+stale_socket"
+    fi
+    [[ -z "${XDG_SEAT:-}" ]] && cause+="+no_seat"
+    if ! compgen -G '/dev/dri/card*' >/dev/null 2>&1; then cause+="+no_gpu"; fi
+    printf '%s' "$cause"
+}
+
+chain_works() { case "$1" in
+    drm) printf 'vt+login+diagnostics' ;;
+    nested) printf 'host_display+x11_clients' ;;
+    x11) printf 'x_server+x11_clients' ;;
+    safe) printf 'shell+diagnostics' ;;
+esac; }
+chain_degraded() { case "$1" in
+    drm) printf 'wayland_compositor+shell+desktop+kms_presentation' ;;
+    nested) printf 'native_drm+vt_master+fullscreen_compositor' ;;
+    x11) printf 'wayland_native+compositor+kms_presentation' ;;
+    safe) printf 'gui+shell+desktop+compositor' ;;
+esac; }
+
+chain_supervisor() {
+    local stage rc cause
+    trap 'chain_forward TERM' TERM
+    trap 'chain_forward INT' INT
+    trap 'chain_forward HUP' HUP
+    if chain_guard_trip; then
+        chain_record guard fail crash_loop 0 "$(chain_works safe)" "$(chain_degraded safe)" \
+            "attempts=$CHAIN_ATTEMPTS"
+        env FLAMEWM_SESSION_ATTEMPT=safe "$CHAIN_BINDIR/flamewm-session-wrapper" & CHAIN_CHILD=$!
+        chain_wait "$CHAIN_CHILD"; rc=$?
+        CHAIN_CHILD=""
+        chain_clear_guard
+        return "$rc"
+    fi
+    # A crashed run can leave a regular file at our private socket name; the bounded wait in each
+    # attempt only checks `-e`, so it would mistake that file for a live compositor. Clean it here,
+    # in the chain only: a single-attempt diagnostic must see the environment exactly as given.
+    # A real socket is left alone: it may belong to a still-running session.
+    if [[ -n "${XDG_RUNTIME_DIR:-}" && -e "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" \
+        && ! -S "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" ]]; then
+        printf '%s flamewm-wayland-session: removed stale socket path %s\n' \
+            "$(date '+%F %T' 2>/dev/null)" "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" >&2
+        rm -f "$XDG_RUNTIME_DIR/${FLAMEWM_WAYLAND_SOCKET:-wayland-flame}" 2>/dev/null || :
+    fi
+    for stage in drm nested x11 safe; do
+        case "$stage" in
+            drm|nested) env FLAMEWM_SESSION_ATTEMPT="$stage" "$0" "$@" --backend="$stage" & CHAIN_CHILD=$! ;;
+            x11|safe) env FLAMEWM_SESSION_ATTEMPT="$stage" "$CHAIN_BINDIR/flamewm-session-wrapper" & CHAIN_CHILD=$! ;;
+        esac
+        chain_wait "$CHAIN_CHILD"; rc=$?
+        CHAIN_CHILD=""
+        if (( rc == 0 || rc == 129 || rc == 130 || rc == 143 )); then
+            chain_record "$stage" ok none 0 "$(chain_works "$stage")" "none" "chain_stopped"
+            chain_clear_guard
+            return 0
+        fi
+        cause="$(chain_cause "$stage" "$rc")"
+        chain_record "$stage" fail "$cause" "$rc" "$(chain_works "$stage")" \
+            "$(chain_degraded "$stage")" "next=$stage"
+    done
+    return "$rc"
+}
+
+CHAIN_WANTED=0
+if [[ -z "${FLAMEWM_SESSION_ATTEMPT:-}" ]]; then
+    case "${FLAMEWM_SESSION_FALLBACK:-auto}" in
+        1|yes|true|on) CHAIN_WANTED=1 ;;
+        0|no|false|off) CHAIN_WANTED=0 ;;
+        # A display manager sets at least one of these; a bare diagnostic invocation does not.
+        *) [[ -n "${XDG_SESSION_ID:-}${DESKTOP_SESSION:-}${XDG_SESSION_CLASS:-}${XDG_SESSION_TYPE:-}" ]] \
+            && CHAIN_WANTED=1 ;;
+    esac
+fi
+if (( CHAIN_WANTED )); then
+    chain_supervisor "$@"
+    exit $?
+fi
 
 # A signal during preflight (before the compositor exists) must not kill the wrapper with the shell's
 # default action: record it and exit with the conventional code. The full handler below replaces these

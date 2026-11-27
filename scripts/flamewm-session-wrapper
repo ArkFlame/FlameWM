@@ -1,6 +1,213 @@
 #!/usr/bin/env bash
 # Lifecycle companion: no display/wallet policy changes, no extra session bus.
+# Session startup fallback tail: x11 session -> minimal safe mode. A display-manager launch runs the
+# tail through the supervisor below; FLAMEWM_SESSION_ATTEMPT=x11 re-enters the original single-attempt
+# path unchanged, so the lifecycle contract (one bridge, no extra bus) stays intact.
+# UNBUILT: no cargo/build/test was run in this unit; verification belongs to the orchestrator.
 set -uo pipefail
+
+CHAIN_CACHE_DIR=""
+if [[ -n "${HOME:-}${XDG_CACHE_HOME:-}" ]]; then
+    CHAIN_CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/flamewm"
+fi
+CHAIN_LOG=""
+CHAIN_STATE=""
+if [[ -n "$CHAIN_CACHE_DIR" ]] && mkdir -p "$CHAIN_CACHE_DIR" 2>/dev/null \
+    && [[ -d "$CHAIN_CACHE_DIR" && -w "$CHAIN_CACHE_DIR" ]]; then
+    if ( umask 077; : >>"$CHAIN_CACHE_DIR/session-chain.log" ) 2>/dev/null; then
+        CHAIN_LOG="$CHAIN_CACHE_DIR/session-chain.log"
+        chmod 600 "$CHAIN_LOG" 2>/dev/null || :
+    fi
+    CHAIN_STATE="$CHAIN_CACHE_DIR/session-chain.state"
+fi
+CHAIN_GUARD_WINDOW_S="${FLAMEWM_CHAIN_GUARD_WINDOW_S:-60}"
+CHAIN_GUARD_MAX="${FLAMEWM_CHAIN_GUARD_MAX:-3}"
+[[ "$CHAIN_GUARD_WINDOW_S" =~ ^[0-9]+$ ]] || CHAIN_GUARD_WINDOW_S=60
+[[ "$CHAIN_GUARD_MAX" =~ ^[0-9]+$ ]] || CHAIN_GUARD_MAX=3
+CHAIN_ATTEMPTS=0
+CHAIN_CHILD=""
+
+chain_now_ms() {
+    local value sec frac
+    if [[ -r /proc/uptime ]] && read -r value _ < /proc/uptime 2>/dev/null; then
+        sec="${value%%.*}"; frac="${value#*.}000"
+        printf '%s' "$(( 10#${sec:-0} * 1000 + 10#${frac:0:3} ))"
+    else
+        printf '%s' "$(( $(date +%s) * 1000 ))"
+    fi
+}
+CHAIN_START_MS="$(chain_now_ms)"
+chain_ms() { printf '%s' "$(( $(chain_now_ms) - CHAIN_START_MS ))"; }
+
+chain_record() { # stage status cause code works degraded [extra]
+    local line prefix
+    prefix="$(date '+%F %T' 2>/dev/null)"
+    line="$prefix FLAMEWM-SESSION-CHAIN stage=$1 status=$2 cause=$3 code=$4 blast_radius=works:$5|degraded:$6 ms=$(chain_ms)"
+    [[ -n "${7:-}" ]] && line+=" detail=$7"
+    printf '%s\n' "$line" >&2
+    [[ -n "$CHAIN_LOG" ]] && printf '%s\n' "$line" >>"$CHAIN_LOG" 2>/dev/null || :
+}
+
+# The state file is shared with flamewm-wayland-session, so a display manager that bounces between
+# the two session entries cannot multiply the number of attempts.
+chain_guard_trip() {
+    local now last
+    CHAIN_ATTEMPTS=1
+    [[ -n "$CHAIN_STATE" ]] || return 1
+    now="$(date +%s)"
+    if [[ -r "$CHAIN_STATE" ]]; then
+        read -r last CHAIN_ATTEMPTS < "$CHAIN_STATE" 2>/dev/null || { last=0; CHAIN_ATTEMPTS=1; }
+        [[ "$last" =~ ^[0-9]+$ ]] || last=0
+        [[ "$CHAIN_ATTEMPTS" =~ ^[0-9]+$ ]] || CHAIN_ATTEMPTS=1
+        if (( now - last <= CHAIN_GUARD_WINDOW_S )); then
+            CHAIN_ATTEMPTS=$(( CHAIN_ATTEMPTS + 1 ))
+        else
+            CHAIN_ATTEMPTS=1
+        fi
+    fi
+    ( umask 077; printf '%s %s\n' "$now" "$CHAIN_ATTEMPTS" > "$CHAIN_STATE" ) 2>/dev/null || :
+    (( CHAIN_ATTEMPTS > CHAIN_GUARD_MAX ))
+}
+chain_clear_guard() { [[ -n "$CHAIN_STATE" ]] && rm -f "$CHAIN_STATE" 2>/dev/null || :; }
+
+chain_forward() {
+    local sig="$1"
+    [[ -n "$CHAIN_CHILD" ]] && kill -s "$sig" "$CHAIN_CHILD" 2>/dev/null || :
+}
+chain_wait() {
+    local pid="$1" rc=0
+    while :; do
+        wait "$pid"; rc=$?
+        kill -s 0 "$pid" 2>/dev/null || break
+    done
+    return "$rc"
+}
+
+chain_cause() {
+    local rc="$2" cause slog
+    case "$rc" in
+        126) cause="binary_not_executable" ;;
+        127) cause="binary_missing" ;;
+        129|130|143) cause="signal_logout" ;;
+        1) cause="session_preflight" ;;
+        *) cause="session_exit" ;;
+    esac
+    slog="${XDG_STATE_HOME:-${HOME:-}/.local/state}/flamewm/session.log"
+    if [[ -f "$slog" ]]; then
+        grep -aqi 'fatal' "$slog" && cause+="+preflight_fatal"
+        grep -aqF 'DEGRADED' "$slog" && cause+="+degraded_components"
+    fi
+    [[ -n "${XDG_RUNTIME_DIR:-}" && ! -d "$XDG_RUNTIME_DIR" ]] && cause+="+runtime_dir"
+    [[ -z "${DISPLAY:-}" ]] && cause+="+no_display"
+    printf '%s' "$cause"
+}
+
+chain_works() { case "$1" in
+    x11) printf 'x_server+x11_clients' ;;
+    safe) printf 'shell+diagnostics' ;;
+esac; }
+chain_degraded() { case "$1" in
+    x11) printf 'wayland_native+compositor+kms_presentation' ;;
+    safe) printf 'gui+shell+desktop+compositor' ;;
+esac; }
+
+# Minimal safe mode: one usable display, a light window manager if one is installed, and one
+# terminal (or xmessage). With no X server and no Xvfb, drop to a recovery shell on the VT so the
+# user is never returned to a black greeter screen with no way to diagnose the failure.
+run_safe_mode() {
+    local candidate child pid rc=0
+    local -a children=()
+    if [[ -z "${DISPLAY:-}" ]]; then
+        for candidate in /tmp/.X11-unix/X*; do
+            [[ -S "$candidate" ]] || continue
+            export DISPLAY=":${candidate##*X}"
+            break
+        done
+    fi
+    if [[ -z "${DISPLAY:-}" ]] && command -v Xvfb >/dev/null 2>&1; then
+        Xvfb :99 -screen 0 1024x768x24 >/dev/null 2>&1 &
+        children+=($!)
+    fi
+    if [[ -n "${DISPLAY:-}" ]]; then
+        for candidate in ${FLAMEWM_SAFE_WM:-} openbox fluxbox xfwm4 icewm matchbox-window-manager twm; do
+            [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1 \
+                && { "$candidate" >/dev/null 2>&1 & children+=($!); break; }
+        done
+        for candidate in ${FLAMEWM_SAFE_TERMINAL:-} xterm x-terminal-emulator alacritty xfce4-terminal konsole; do
+            [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1 \
+                && { "$candidate" -e /bin/sh >/dev/null 2>&1 & child=$!; children+=($child); break; }
+        done
+        if [[ -z "${child:-}" ]] && command -v xmessage >/dev/null 2>&1; then
+            xmessage -center 'FlameWM safe mode: no terminal is installed. Check ~/.cache/flamewm/session-chain.log.' \
+                >/dev/null 2>&1 & child=$!; children+=($child)
+        fi
+        [[ -n "${child:-}" ]] || rc=1
+    else
+        rc=1
+    fi
+    if (( rc == 0 )); then
+        wait "$child"; rc=$?
+    else
+        printf 'FlameWM safe mode: no usable X display; starting a recovery shell.\n' >&2
+        printf 'FlameWM safe mode: no usable X display; see ~/.cache/flamewm/session-chain.log\n' \
+            >/dev/tty 2>/dev/null || :
+        if [[ -t 0 ]]; then /bin/sh -i; rc=0; fi
+    fi
+    if (( ${#children[@]} > 0 )); then
+        for pid in "${children[@]}"; do kill -TERM "$pid" 2>/dev/null || :; done
+    fi
+    return "$rc"
+}
+
+chain_supervisor() {
+    local stage rc cause
+    trap 'chain_forward TERM' TERM
+    trap 'chain_forward INT' INT
+    trap 'chain_forward HUP' HUP
+    if chain_guard_trip; then
+        chain_record guard fail crash_loop 0 "$(chain_works safe)" "$(chain_degraded safe)" \
+            "attempts=$CHAIN_ATTEMPTS"
+        run_safe_mode; rc=$?
+        chain_clear_guard
+        return "$rc"
+    fi
+    for stage in x11 safe; do
+        if [[ "$stage" == x11 ]]; then
+            env FLAMEWM_SESSION_ATTEMPT=x11 "$0" "$@" & CHAIN_CHILD=$!
+            chain_wait "$CHAIN_CHILD"; rc=$?
+            CHAIN_CHILD=""
+        else
+            run_safe_mode; rc=$?
+        fi
+        if (( rc == 0 || rc == 129 || rc == 130 || rc == 143 )); then
+            chain_record "$stage" ok none 0 "$(chain_works "$stage")" "none" "chain_stopped"
+            chain_clear_guard
+            return 0
+        fi
+        cause="$(chain_cause "$stage" "$rc")"
+        chain_record "$stage" fail "$cause" "$rc" "$(chain_works "$stage")" \
+            "$(chain_degraded "$stage")" "next=$stage"
+    done
+    return "$rc"
+}
+
+if [[ "${FLAMEWM_SESSION_ATTEMPT:-}" == safe ]]; then
+    run_safe_mode
+    exit $?
+fi
+CHAIN_WANTED=0
+if [[ -z "${FLAMEWM_SESSION_ATTEMPT:-}" && "${1:-}" != "--check" ]]; then
+    case "${FLAMEWM_SESSION_FALLBACK:-auto}" in
+        1|yes|true|on) CHAIN_WANTED=1 ;;
+        0|no|false|off) CHAIN_WANTED=0 ;;
+        *) [[ -n "${XDG_SESSION_ID:-}${DESKTOP_SESSION:-}${XDG_SESSION_CLASS:-}${XDG_SESSION_TYPE:-}" ]] \
+            && CHAIN_WANTED=1 ;;
+    esac
+fi
+if (( CHAIN_WANTED )); then
+    chain_supervisor "$@"
+    exit $?
+fi
 # Keep Plasma/KDE isolation: set FlameWM identity only when SDDM did not.
 if [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then export XDG_CURRENT_DESKTOP=FlameWM; fi
 export XDG_MENU_PREFIX=flamewm-
