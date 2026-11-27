@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::load::corrupt_name;
-use super::{load_settings, persist_settings, LoadOutcome, PersistOutcome, ProductSettings};
+use super::{LoadOutcome, PersistOutcome, ProductSettings, load_settings, persist_settings};
 
 /// Fixed epoch keeps the quarantine name deterministic without reading the clock.
 const EPOCH: u64 = 1_764_200_000;
@@ -18,10 +18,8 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "flamewm-load-tests-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-load-tests-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         Self(dir)
@@ -68,12 +66,20 @@ fn corrupt_json_is_quarantined_once_and_defaults_are_used() {
     assert_eq!(backup.parent(), path.parent());
     assert!(notice.contains(&backup_text), "{notice}");
     assert_eq!(fs::read(&backup).expect("quarantined bytes"), bad.to_vec());
-    assert_eq!(scratch.entries(), vec![backup], "exactly one quarantine file");
+    assert_eq!(
+        scratch.entries(),
+        vec![backup],
+        "exactly one quarantine file"
+    );
 
     // The original path is gone, so a repeat load is silent: one notice in total.
     let repeat = load_settings(&path, EPOCH);
     assert_eq!(repeat.settings, ProductSettings::default());
-    assert!(repeat.notice.is_none(), "no second notice: {:?}", repeat.notice);
+    assert!(
+        repeat.notice.is_none(),
+        "no second notice: {:?}",
+        repeat.notice
+    );
 }
 
 /// Case 2: absence is a normal fresh install, not a fault.
