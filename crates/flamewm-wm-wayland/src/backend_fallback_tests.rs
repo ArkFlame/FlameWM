@@ -4,7 +4,10 @@
 //! failure-record side effect is tested against an injected log path. No DRM device, display, event
 //! loop or session service is started.
 
-use super::{BackendFallbackOutcome, NextBackend, append_backend_failure_record, next_backend};
+use super::{
+    Backend, BackendFallbackOutcome, NextBackend, append_backend_failure_record,
+    native_unavailable_falls_back, next_backend, select_backend,
+};
 
 #[test]
 fn native_ok_keeps_the_native_backend() {
@@ -35,6 +38,20 @@ fn native_fails_nested_fails_goes_headless() {
     assert_eq!(
         next_backend(BackendFallbackOutcome::NestedFailed),
         NextBackend::Headless
+    );
+}
+
+/// A native request in a build without the DRM feature must never abort the session: the helper
+/// marks it as a fallback case and the pure rule supplies the nested step.
+#[test]
+fn native_without_drm_feature_falls_through_to_nested() {
+    assert!(native_unavailable_falls_back(Backend::Native, false));
+    assert!(!native_unavailable_falls_back(Backend::Native, true));
+    assert!(!native_unavailable_falls_back(Backend::Nested, false));
+    assert_eq!(select_backend(Some("drm")), Backend::Native);
+    assert_eq!(
+        next_backend(BackendFallbackOutcome::NativeFailed),
+        NextBackend::Nested
     );
 }
 

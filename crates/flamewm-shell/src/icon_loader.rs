@@ -279,49 +279,51 @@ impl IconLoader {
         let spawned = std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
-                flamewm_integrations_linux::background::lower_current_thread();
-                let mut resolver = IconResolver::from_environment_with_theme(
-                    packaged_root,
-                    0,
-                    Some(&initial_theme),
-                );
-                let rebuilder = ThemeRebuilder::new();
-                while let Ok(msg) = req_rx.recv() {
-                    let req = match msg {
-                        WorkerMsg::Icon(req) => req,
-                        // Off the UI thread: the index scan runs here.
-                        WorkerMsg::Theme(name) => {
-                            resolver.set_preferred_theme(Some(&name));
-                            continue;
+                let _ = flamewm_session_core::diagnostics::guard("shell-icons", move || {
+                    flamewm_integrations_linux::background::lower_current_thread();
+                    let mut resolver = IconResolver::from_environment_with_theme(
+                        packaged_root,
+                        0,
+                        Some(&initial_theme),
+                    );
+                    let rebuilder = ThemeRebuilder::new();
+                    while let Ok(msg) = req_rx.recv() {
+                        let req = match msg {
+                            WorkerMsg::Icon(req) => req,
+                            // Off the UI thread: the index scan runs here.
+                            WorkerMsg::Theme(name) => {
+                                resolver.set_preferred_theme(Some(&name));
+                                continue;
+                            }
+                        };
+                        // Throttled (5s) mtime check runs off this thread; a finished
+                        // rebuilt index is applied here and advances the resolver's
+                        // theme generation when themes change.
+                        refresh_icon_index(&mut resolver, &rebuilder);
+                        // Generic app miss must never rasterize brand artwork:
+                        // no empty-name retry (it resolves to the brand
+                        // fallback) and any brand fallback raster is dropped to
+                        // None. Miss -> caller keeps last valid or the
+                        // transparent empty placeholder. Applies to every
+                        // request type/role uniformly.
+                        let size = IconSize::new(req.width, req.height);
+                        let raster = resolve_icon_raster(&mut resolver, &req.name, size);
+                        let res = IconResult {
+                            target: req.target,
+                            generation: req.generation,
+                            name: req.name,
+                            width: req.width,
+                            height: req.height,
+                            raster,
+                        };
+                        // Blocking send: a dropped result left its key pending
+                        // forever. Only a closed receiver ends the worker.
+                        if res_tx.send(res).is_err() {
+                            break;
                         }
-                    };
-                    // Throttled (5s) mtime check runs off this thread; a finished
-                    // rebuilt index is applied here and advances the resolver's
-                    // theme generation when themes change.
-                    refresh_icon_index(&mut resolver, &rebuilder);
-                    // Generic app miss must never rasterize brand artwork:
-                    // no empty-name retry (it resolves to the brand
-                    // fallback) and any brand fallback raster is dropped to
-                    // None. Miss -> caller keeps last valid or the
-                    // transparent empty placeholder. Applies to every
-                    // request type/role uniformly.
-                    let size = IconSize::new(req.width, req.height);
-                    let raster = resolve_icon_raster(&mut resolver, &req.name, size);
-                    let res = IconResult {
-                        target: req.target,
-                        generation: req.generation,
-                        name: req.name,
-                        width: req.width,
-                        height: req.height,
-                        raster,
-                    };
-                    // Blocking send: a dropped result left its key pending
-                    // forever. Only a closed receiver ends the worker.
-                    if res_tx.send(res).is_err() {
-                        break;
+                        let _ = wake_writer.write_all(&[1]);
                     }
-                    let _ = wake_writer.write_all(&[1]);
-                }
+                });
             });
         if spawned.is_err() {
             #[allow(clippy::items_after_statements)]

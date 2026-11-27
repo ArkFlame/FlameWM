@@ -1,4 +1,19 @@
 # Unit p42-gpu-software-fallback
-STATUS: OPEN
+STATUS: DONE
 
 Crates flamewm-render-x11 and flamewm-wm-wayland: GPU init failure (no EGL, no GBM, driver crash): fall back to software/CPU raster with one report. Audit and fix any path that aborts instead.
+
+## Result
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| crates/flamewm-render-x11/src/accel/mod.rs:378-413 | open_gpu_with tries hardware GL then software GL and returns GpuSlot::Failed; both helper children are spawned out of process. No abort: every failure is an Err. | None — audit only (already implemented in u09). | None (audit only). |
+| crates/flamewm-render-x11/src/accel/mod.rs:341-355,388-409 | gpu_failure_record emits exactly one FLAMEWM-GPU-FALLBACK line per failed stage (hardware-gl, software-gl); record_fallback records InitFailed for the CPU hand-off. | None — audit only. | None (audit only). |
+| crates/flamewm-render-x11/src/accel/mod.rs:418-455,464-472,530-541 | try_gpu_with leaves the frame untouched on GPU op error, sets GpuSlot::Failed, and blur_rgba/paint_batch rerun the same op on the CPU raster. | None — audit only. | None (audit only). |
+| crates/flamewm-render-x11/src/accel/helper.rs:46-83,100-129; bin/flamewm-gpu-helper.rs:4-9 | Helper spawn has a 1000 ms write+read deadline; a driver crash or hang is contained in the child and surfaced as Err, never a parent abort. | None — audit only (already implemented in p22). | None (audit only). |
+| crates/flamewm-wm-wayland/src/drm/init.rs:70-108 | GbmDevice::new, EGLDisplay::new, EGLContext::new and GlowRenderer::new are ?-propagated; no panic/exit on no GBM or no EGL. | None — audit only. | None (audit only). |
+| crates/flamewm-wm-wayland/src/main.rs:794-808,1077-1102 | start_native turns the GPU init error into BackendInitError; run falls through to nested winit and then headless/minimal, so the Wayland socket survives. | None — audit only (already implemented in u36). | None (audit only). |
+| crates/flamewm-wm-wayland/src/main.rs:466-481,430-461 | One typed FailureRecord per failed backend stage in the session log; stage_line(Seat/Drm/Outputs, Fail) is the only report for a GPU init failure (no duplicate from drm::init, which writes no stage line for those stages). | None — audit only. | Residual: a seat or connector failure gets both its own stage record and the generic Drm record in start_native; outside the GPU-init scope and left for the concurrent backend-ladder worker. |
+| crates/flamewm-wm-wayland/src/drm/resume.rs:60-85,92-135 | Driver loss/resume rebuild failure is logged and leaves the compositor paused; no abort path. | None — audit only. | None (audit only). |
+| production edits | No gap remained, so zero production edits were made in this unit. | None. | UNBUILT — no cargo/build/test was run (worker rules); verification belongs to the orchestrator. |
+
+PASS — no abort path remains for GPU init failure in either crate: flamewm-render-x11 degrades hardware GL -> software GL -> CPU raster with one failure record per failed stage and a bounded helper deadline, while flamewm-wm-wayland propagates GBM/EGL/GLES errors into the native -> nested -> headless ladder with one typed failure record for the failed GPU stage. No production edit was needed, so visuals are unchanged and no new failure-report format was introduced. Reference-first: .vendor/smithay-master/src/backend/renderer/gles/mod.rs:853-856 treats a software renderer as a capability flag rather than a fatal error, matching the active software-device handling; no .vendor code was used as a dependency. Loaded skills: flamewm-source-first, flamewm-rust-systems, flamewm-reference-mining, flamewm-semantic-modularization. No git, cargo, python, build or runtime check was run; the audit is static and all prior changes it relies on remain UNBUILT until the orchestrator verifies them.

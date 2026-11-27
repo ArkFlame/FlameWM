@@ -225,6 +225,12 @@ pub(crate) fn next_backend(outcome: BackendFallbackOutcome) -> NextBackend {
     }
 }
 
+/// A native request in a build without the `drm` feature is a recoverable init failure, not a
+/// reason to end the session: the nested backend can still own a window and serve the socket.
+pub(crate) fn native_unavailable_falls_back(backend: Backend, drm_compiled: bool) -> bool {
+    backend == Backend::Native && !drm_compiled
+}
+
 /// The `--capabilities` payload. Exactly three lines, in this order, never embellished: the
 /// packaging gate greps `drm_compiled=true` literally.
 pub(crate) fn capabilities_text() -> String {
@@ -746,11 +752,10 @@ fn run() -> Result<i32, Box<dyn Error>> {
             backend.name()
         );
     }
-    if backend == Backend::Native && !cfg!(feature = "drm") {
+    if native_unavailable_falls_back(backend, cfg!(feature = "drm")) {
         eprintln!(
-            "flamewm-wayland: the native backend needs a build with `--features drm`; this build only has the nested backend"
+            "flamewm-wayland: the native backend needs a build with `--features drm`; falling back to nested"
         );
-        return Ok(2);
     }
 
     let socket_name =

@@ -201,15 +201,17 @@ fn find_font() -> Option<Font> {
     // Last resort: a permissively licensed font shipped with the binary. The bytes are referenced
     // only on this failure path, so a machine with system fonts never faults them into RAM; keeping
     // the include_bytes! here avoids an eagerly used static as well. The parse is cached behind the
-    // OnceLock so a font-less machine pays for it once, and only here.
+    // OnceLock so a font-less machine pays for it once. One report per process covers this path
+    // even when the bundled font fails to parse.
+    static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
+    NO_FONT_LOG.call_once(|| {
+        eprintln!(
+            "flamewm: no system font found; using bundled DejaVuSansMono fallback; blast_radius=works:non-text-ui|degraded:text"
+        );
+    });
+
     static FALLBACK: std::sync::OnceLock<Option<Font>> = std::sync::OnceLock::new();
     let font = FALLBACK.get_or_init(|| {
-        static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
-        NO_FONT_LOG.call_once(|| {
-            eprintln!(
-                "flamewm: no system font found; using bundled DejaVuSansMono fallback; blast_radius=works:non-text-ui|degraded:text"
-            );
-        });
         Font::from_bytes(
             &include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf")[..],
             FontSettings::default(),

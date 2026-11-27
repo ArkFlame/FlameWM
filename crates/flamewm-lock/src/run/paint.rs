@@ -30,6 +30,11 @@ impl LockLoop {
 
     /// A failed paint keeps the previous frame: `shown` moves only after a full paint, so the
     /// next turn sees the content still differs and retries.
+    ///
+    /// Idle cost: every tick reaches this function, but no surface is projected or redrawn unless
+    /// a paint key changed. The clock key carries no seconds, so it changes only at the minute
+    /// boundary; the password caret is steady while the field is empty and never blinks; and a
+    /// non-Visible screensaver phase skips projection. An idle locked session has no periodic redraw.
     pub(super) fn repaint(&mut self, runtime: &mut SurfaceRuntime) {
         // While the screensaver runs the lock UI stays hidden: no content is projected.
         if self.saver.phase() != Phase::Visible {

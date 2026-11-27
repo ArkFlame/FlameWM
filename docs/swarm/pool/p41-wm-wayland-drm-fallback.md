@@ -1,4 +1,15 @@
 # Unit p41-wm-wayland-drm-fallback
-STATUS: OPEN
+STATUS: PARTIAL
 
 Crate flamewm-wm-wayland: backend selection (DRM, nested, winit, X11): when the preferred backend fails to init, fall through to the next with one failure record (stage, cause, blast radius); never abort while any backend can work. Audit main.rs backend ladder; add a fault test where cheap.
+
+## Result
+
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| crates/flamewm-wm-wayland/src/main.rs:755 | An explicit native/DRM request on a build without the `drm` feature returned `Ok(2)` before any backend attempt, aborting while nested could still run. | Removed the early return; the diagnostic now says it is falling back to nested, and the existing recoverable `BackendInitError` plus `next_backend(NativeFailed)` takes the nested step. | UNBUILT - the old exit code 2 is gone; no caller in scripts/ or docs/ was found relying on it. |
+| crates/flamewm-wm-wayland/src/main.rs:228-232 | The fall-through condition was inline in `run` and could not be fault-tested. | Added pure `native_unavailable_falls_back(backend, drm_compiled)` next to `next_backend`, with a doc comment stating the nested step follows. | UNBUILT - new `pub(crate)` item; no I/O, no ownership or lifetime change. |
+| crates/flamewm-wm-wayland/src/main.rs:755 | `run` still used the raw expression, so the decision had no single testable owner. | Call site now reads `native_unavailable_falls_back(backend, cfg!(feature = "drm"))`; everything after it (event loop, handle, `start_native`, `start_nested_or_headless`) is unchanged. | UNBUILT - the warning line is now emitted on a non-aborting path only. |
+| crates/flamewm-wm-wayland/src/backend_fallback_tests.rs:7-10,44-56 | Only the ladder rule and record writer had fault tests; no check covered the no-DRM native request. | Imported `Backend`, `select_backend` and the new helper; added `native_without_drm_feature_falls_through_to_nested`, asserting a native selection, a fallback flag without DRM, and `NextBackend::Nested`. | UNBUILT - pure assertions only; no device, display or session started. |
+
+PARTIAL: the three production edits and one fault test are in place but every edit is UNBUILT, because this worker brief forbids cargo, builds and tests; a full `run()` fault injection is not cheap (it needs a live event loop, Wayland display and session), so the test locks the pure decision instead. The audit found the native-without-DRM early return at main.rs:749-754 (now 755) as the only abort while another backend could work; the nested-to-headless step (main.rs:1110-1151) and XWayland non-fatal handling (main.rs:861-885) were already correct, so X11 needed no edit. Failure records already carry stage, cause and `BlastRadius::new` with still-works/degraded sets (main.rs:436-467); a residual risk is that a DRM init failure which already wrote a stage record can be recorded a second time by `start_native`, left unchanged here to stay in scope. Reference evidence: `.vendor/smithay-master/anvil/src/main.rs:37-68` selects one backend with no fallback and `.vendor/smithay-master/anvil/src/udev.rs:285-291` returns locally on udev init failure; following that recoverability pattern while keeping FlameWM's typed `next_backend` chain, no vendor code was copied or made a dependency.

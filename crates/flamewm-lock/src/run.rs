@@ -343,24 +343,26 @@ impl FramePacer {
         thread::Builder::new()
             .name("flamewm-lock-frames".to_string())
             .spawn(move || {
-                let (flag, changed) = &*shared;
-                loop {
-                    let mut on = flag.lock().unwrap_or_else(PoisonError::into_inner);
-                    while !*on {
-                        on = changed.wait(on).unwrap_or_else(PoisonError::into_inner);
+                let _ = flamewm_session_core::diagnostics::guard("frame-pacer", move || {
+                    let (flag, changed) = &*shared;
+                    loop {
+                        let mut on = flag.lock().unwrap_or_else(PoisonError::into_inner);
+                        while !*on {
+                            on = changed.wait(on).unwrap_or_else(PoisonError::into_inner);
+                        }
+                        drop(on);
+                        thread::sleep(FRAME_INTERVAL);
+                        // The animation may have stopped during the sleep. Going back to the
+                        // condvar without a wake avoids a needless reactor turn after the
+                        // last Ribbons frame; while running, the cadence is unchanged.
+                        if !*flag.lock().unwrap_or_else(PoisonError::into_inner) {
+                            continue;
+                        }
+                        if !thread_waker.wake() {
+                            return;
+                        }
                     }
-                    drop(on);
-                    thread::sleep(FRAME_INTERVAL);
-                    // The animation may have stopped during the sleep. Going back to the
-                    // condvar without a wake avoids a needless reactor turn after the
-                    // last Ribbons frame; while running, the cadence is unchanged.
-                    if !*flag.lock().unwrap_or_else(PoisonError::into_inner) {
-                        continue;
-                    }
-                    if !thread_waker.wake() {
-                        return;
-                    }
-                }
+                });
             })
             .map_err(|error| format!("frame pacer thread: {error}"))?;
         Ok(Self { running, waker })
