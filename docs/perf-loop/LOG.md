@@ -314,3 +314,6 @@ Capture residual: crop 30%, store 23%, blur 12%, gpu_wait 13%, map 10%. Next uni
 
 ## u166 GPU upscale of the backdrop backing (done)
 Capture total 26.5 -> 5.9 ms (quiet run) / 15.0 ms (busy run) per capture (crop 7.9 ms and store 6.1 ms removed; load-dependent GPU waits dominate the busy figure) by drawing the reduced blurred capture at full size on the GPU with the surface clip program. 459 wm-wayland tests, clippy -D warnings pass; frame compared with the CPU-path frame.
+
+## Capture re-rank after u166
+Quiet run total 5.9 ms: blur 2.2 ms (CPU separable blur on the 295x161 reduced image via `frosted_backdrop_with`), gpu_wait 1.4, map 0.6, store 0.3. Nothing left above ~2 ms that is not inherent GPU work; blur on the GPU would trade 2 ms of CPU for extra passes and is not worth it at this size. Capture is no longer a ranked hotspot; it only runs while a translucent window or dock moves.
