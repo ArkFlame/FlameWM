@@ -267,3 +267,6 @@ Published XWayland compositor backdrop capability and read, clamped, cached, and
 ## Explorer scroll/thumbnail scout: nothing ranked
 - Thumbnail cache is bounded three ways (256 entries, byte cap, source <= 25 MB / 25 Mpx). Projection ids are pre-built once per slot (no per-frame `format!`). No change.
 - CI note: the run for 37d8407c failed in "Install native build dependencies" (apt exit 100, runner flake, no build or test ran); later commits carry the same code and are the evidence.
+
+## u161 follow-up: titlebar reuse rule is unit tested
+- The moved-titlebar reuse decision is now the pure `stale_reuse_allowed(age, reused)`; `ChromeBuffer::reused_ok` calls it (with `saturating_duration_since`, so a clock step cannot panic). New test covers young, over-budget and past-both cases. No behaviour change. 459 compositor tests green, clippy clean.

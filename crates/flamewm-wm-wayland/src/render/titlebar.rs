@@ -117,10 +117,16 @@ pub(super) struct ChromeBuffer {
 const MAX_STALE_FRAMES: u8 = 2;
 const STALE_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// A moved-only titlebar may reuse its baked crop while it is younger than `STALE_WINDOW` or has been
+/// reused fewer than `MAX_STALE_FRAMES` times. Past both, the next frame rebuilds it.
+fn stale_reuse_allowed(age: std::time::Duration, reused: u8) -> bool {
+    age < STALE_WINDOW || reused < MAX_STALE_FRAMES
+}
+
 impl ChromeBuffer {
     /// A titlebar that only moved may keep its baked desktop crop for a bounded time.
     pub(super) fn reused_ok(&self, now: std::time::Instant) -> bool {
-        now.duration_since(self.built_at) < STALE_WINDOW || self.reused < MAX_STALE_FRAMES
+        stale_reuse_allowed(now.saturating_duration_since(self.built_at), self.reused)
     }
 
     /// Repaints the controls whose hover or pressed state differs from the cached bar. Only those
@@ -1125,5 +1131,28 @@ mod translucent_backdrop_tests {
         // Left of the empty centred title and clear of the controls on the right.
         let at = ((h / 2) * width + 20) * 4;
         assert_eq!(&pixels[at..at + 4], &[4, 0, 60, 255]);
+    }
+}
+
+#[cfg(test)]
+mod stale_reuse_tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn stale_reuse_is_bounded_by_age_and_by_frame_count() {
+        let young = Duration::from_millis(1);
+        // Young bars keep being reused however many frames they served.
+        assert!(stale_reuse_allowed(young, 0));
+        assert!(stale_reuse_allowed(young, MAX_STALE_FRAMES));
+        // Old bars are reused only while under the frame budget.
+        assert!(stale_reuse_allowed(STALE_WINDOW, MAX_STALE_FRAMES - 1));
+        // Past both limits the bar must rebuild.
+        assert!(!stale_reuse_allowed(STALE_WINDOW, MAX_STALE_FRAMES));
+        assert!(!stale_reuse_allowed(
+            STALE_WINDOW + Duration::from_secs(1),
+            u8::MAX
+        ));
     }
 }
