@@ -5,6 +5,13 @@ use crate::settings::{self, Command, Mode, SettingsView};
 use crate::store::FOLLOW_FLAMEWM;
 use crate::store::TerminalConfig;
 use crate::theme;
+use std::path::Path;
+
+/// Reloads the saved configuration. Corrupt bytes are quarantined by `store::load_config` with one
+/// notice and the terminal runs on defaults, the same as at startup.
+fn saved_config(path: &Path) -> TerminalConfig {
+    crate::store::load_config(path)
+}
 
 impl App {
     pub fn toggle_settings(&mut self) {
@@ -25,10 +32,7 @@ impl App {
 
     /// Leaves settings. Unsaved previews are dropped: the saved configuration is reloaded from disk.
     pub(super) fn close_settings(&mut self) {
-        self.config = std::fs::read_to_string(&self.config_path)
-            .ok()
-            .and_then(|text| TerminalConfig::from_toml(&text).ok())
-            .unwrap_or_default();
+        self.config = saved_config(&self.config_path);
         self.refresh_metrics();
         let (width, height) = self.window;
         self.set_window(width, height);
@@ -145,5 +149,46 @@ impl App {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::write(&self.config_path, self.config.to_toml());
+    }
+}
+
+#[cfg(test)]
+mod corrupt_file_tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        std::env::temp_dir().join(format!(
+            "flamewm-terminal-prefs-{tag}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn corrupt_saved_config_is_quarantined_and_defaults_used() {
+        let dir = temp_dir("corrupt");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("terminal.toml");
+        let bad = b"this line has no equals sign\n".to_vec();
+        fs::write(&path, &bad).expect("write bad config");
+
+        assert_eq!(saved_config(&path), TerminalConfig::default());
+        assert!(!path.exists());
+        let copies: Vec<PathBuf> = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("terminal.corrupt-"))
+            })
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(fs::read(&copies[0]).expect("read copy"), bad);
+        fs::remove_dir_all(&dir).ok();
     }
 }
