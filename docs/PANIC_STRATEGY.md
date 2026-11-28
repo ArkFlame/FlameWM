@@ -8,10 +8,11 @@ Unit: `docs/swarm/pool/p88-panic-abort-decision.md`. Nothing here is built or me
 ### 1.1 The conflict
 
 - `Cargo.toml:66-71` sets `[profile.release] panic = "abort"` (with `lto = "fat"`, `codegen-units = 1`, `strip = "symbols"`).
-- `crates/flamewm-session-core/src/diagnostics/failure.rs:249` defines `guard()`, which wraps the operation in `std::panic::catch_unwind`.
+- `crates/flamewm-session-core/src/diagnostics/failure.rs:273-293` defines `guard()`, which wraps the operation in `std::panic::catch_unwind`.
 - Under `panic = "abort"`, `catch_unwind` never returns `Err`. A panic runs the panic hook and then aborts the process with SIGABRT. So every `guard()` is a pass-through in release builds: it only adds the subsystem-name thread-local bookkeeping.
-- The panic hook (`install_panic_hook`, `failure.rs:226-243`) still runs before the abort. It appends one `FailureRecord` with code `panic` to the session log and then calls the previous hook. So a release panic is logged, then the process dies.
-- Unit tests of `guard` (`failure.rs:378-400`) pass only because `cargo test` uses the default `unwind` strategy. The tests do not exercise the release configuration.
+- The panic hook (`install_panic_hook`, `failure.rs:250-267`) still runs before the abort. It appends one `FailureRecord` with code `panic` to the session log and then calls the previous hook. So a release panic is logged, then the process dies.
+- Unit tests of `guard` (`failure.rs:425-453`) pass only because `cargo test` uses the default `unwind` strategy. The tests do not exercise the release configuration.
+- Reference precedent in `.vendor/` (read-only evidence): COSMIC release profiles (`cosmic-settings`, `cosmic-applets`, `cosmic-osd`, `cosmic-screenshot`, `pop-launcher`) set `panic = "abort"`, so the shipped-abort posture matches desktop peers; `catch_unwind` appears there in helper/library code, not as a supervisor-level recovery path. No KDE, xfce or smithay corpus is present in `.vendor/`.
 
 ### 1.2 Call sites of `guard`
 
@@ -27,7 +28,7 @@ Unit: `docs/swarm/pool/p88-panic-abort-decision.md`. Nothing here is built or me
 | `crates/flamewm-shell/src/icon_loader.rs:282` | `shell-icons` | Icon resolve/load work. |
 | `crates/flamewm-wm-wayland/src/main.rs:776-777` | `guard_startup(subsystem, ...)` | Wrapper used for WM startup steps; it forwards to `guard`. |
 
-Test-only call sites: `failure.rs:379, 385, 397-399`.
+Test-only call sites: `failure.rs:427, 433, 445-447`.
 
 Intent of every production site: a panic in an optional feature (paste, drop, trash, wallpaper, icons, settings, pacing) should drop only that feature and keep the process alive. Under abort, that intent is not met: any of these panics kills the whole component.
 
@@ -84,6 +85,16 @@ Run only after the decision is chosen to test Option B or C. Do not run as a gat
    - Read `VmRSS` and `RssAnon` from `/proc/<pid>/status` at 10 s and 30 s. Use `scripts/proc-smaps-top` if it covers the process; do not add an ad-hoc script.
    - Report the median of three runs per variant.
 3. Acceptance for choosing B or C: the binary-size delta and RSS delta are reported as numbers with the variant names; no numeric threshold is set here. Choose after reading the numbers.
+
+### 3.1 Tool: `scripts/measure-panic-profile`
+
+The script builds nothing. Build each variant through the normal release path first, then:
+
+- `scripts/measure-panic-profile dirs <abort_target_dir> <unwind_target_dir>` prints, for every `flamewm-*` binary in `<dir>/release`, the abort bytes, unwind bytes and delta.
+- `scripts/measure-panic-profile size <variant>=<binary> ...` prints file bytes and the `.text + .eh_frame + .gcc_except_table` total from `size -A`.
+- `scripts/measure-panic-profile rss <variant> 10 30 -- <command> [args...]` launches `<command>` three times. It samples `VmRSS` and `RssAnon` from `/proc/<pid>/status` at 10 s and 30 s, records `Private_Dirty` through `scripts/proc-smaps-top`, sends TERM, and prints the median `VmRSS` per sample time. Run it once per variant and per binary (shell, desktop). Pass the real binary, not a wrapper that forks and exits.
+
+Exit codes: 64 for usage, 1 for a missing file, a bad argument, or a process that exits before a sample. A run that exits early is not a result; fix the cause and rerun.
 
 ## 4. Recommendation
 

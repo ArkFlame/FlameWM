@@ -50,6 +50,9 @@ pub struct SnapPreview {
     /// When the ring was last rasterised; resize drags change the size on every pointer event, so
     /// rasterising is paced to one per frame interval.
     last_raster: Option<std::time::Instant>,
+    /// Latest frame deferred by pacing; applied by `settle` on the next painted frame so the ring
+    /// never stays behind the pointer once motion stops.
+    pending: Option<Rect>,
     /// Raster passes performed; the tests assert that a translation-only drag costs none.
     #[cfg(test)]
     rasters: u32,
@@ -63,6 +66,7 @@ impl Default for SnapPreview {
             key: None,
             strips: Vec::new(),
             last_raster: None,
+            pending: None,
             #[cfg(test)]
             rasters: 0,
         }
@@ -95,8 +99,11 @@ impl SnapPreview {
                 .last_raster
                 .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(16));
         if paced {
-            return false;
+            // Defer to the next frame (one raster per frame at most) and ask for that paint.
+            self.pending = Some(frame);
+            return true;
         }
+        self.pending = None;
         self.ensure_ring((frame.w, frame.h));
         self.shown = Some(Shown { frame });
         before != (self.shown, self.key)
@@ -104,12 +111,22 @@ impl SnapPreview {
 
     /// Hides the preview and drops its buffers. Returns whether it was visible.
     pub fn hide(&mut self) -> bool {
+        self.pending = None;
         if self.shown.take().is_none() {
             return false;
         }
         self.strips.clear();
         self.key = None;
         true
+    }
+
+    /// Applies the frame that pacing deferred. Called once per painted frame, so it costs at most
+    /// one raster per frame and leaves the ring on the pointer's final position.
+    pub fn settle(&mut self) {
+        if let Some(frame) = self.pending.take() {
+            self.ensure_ring((frame.w, frame.h));
+            self.shown = Some(Shown { frame });
+        }
     }
 
     /// Rasterises the ring only when its key (size, accent, radius) differs from the cache.
@@ -215,11 +232,12 @@ mod tests {
         );
         assert!(!preview.strips.is_empty());
         assert!(
-            !preview.show(Rect { w: 301, ..FRAME }),
-            "a resize inside the frame interval is paced"
+            preview.show(Rect { w: 301, ..FRAME }),
+            "a paced resize still requests a paint"
         );
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        assert!(preview.show(Rect { w: 301, ..FRAME }));
+        assert_eq!(preview.rasters, 1, "but defers the raster");
+        preview.settle();
+        assert_eq!(preview.rasters, 2, "the next frame settles it");
         assert_eq!(preview.rasters, 2, "a resize re-rasterises once");
     }
 

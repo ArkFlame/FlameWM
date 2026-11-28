@@ -708,6 +708,8 @@ impl State {
     /// Sends the configure a resize grab deferred. Called once per paint, so a burst of pointer
     /// motion between frames costs one configure.
     pub fn flush_pending_configure(&mut self) {
+        // Same once-per-frame point: apply a ring frame the resize pacing deferred.
+        self.snap_preview.settle();
         if let Some(id) = self.pending_configure.take() {
             self.apply_geometry(id);
         }

@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Panic-strategy measurement: binary size and idle RSS per variant (no builds, no python).
+# Builds are NOT run here. Build each variant through the normal release path first,
+# then point this script at the resulting binaries.
+#
+# Usage:
+#   scripts/measure-panic-profile size <variant>=<binary> [<variant>=<binary> ...]
+#       Prints file size (bytes) and the .text + .eh_frame + .gcc_except_table total (bytes).
+#
+#   scripts/measure-panic-profile dirs <abort_target_dir> <unwind_target_dir>
+#       Sizes every flamewm-* binary in <dir>/release for both variants and the delta.
+#
+#   scripts/measure-panic-profile rss <variant> <t_a> <t_b> -- <command> [args...]
+#       Runs <command> 3 times. In each run it samples VmRSS and RssAnon from
+#       /proc/<pid>/status at t_a and t_b seconds after launch, then sends TERM.
+#       Prints per-run lines and the median of the 3 runs per sample time.
+#       Start the session in the normal way; <command> must be the real process
+#       (e.g. the shell or desktop binary), not a wrapper that forks and exits.
+#
+# Output is a composition/size report with variant names; no pass/fail threshold is set here.
+set -Eeuo pipefail
+
+usage() {
+  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  exit 64
+}
+
+median() {
+  # median of stdin numbers (one per line); empty input prints 0
+  sort -n | awk '{v[NR]=$1} END{ if(NR==0){print 0; exit} if(NR%2){print v[(NR+1)/2]} else {print int((v[NR/2]+v[NR/2+1])/2)} }'
+}
+
+proc_field() {
+  # proc_field <pid> <key>  -> value in kB, or "NA" if the process is gone
+  awk -v k="$2:" '$1==k{print $2; found=1} END{if(!found) print "NA"}' "/proc/$1/status" 2>/dev/null || echo NA
+}
+
+cmd_size() {
+  (( $# >= 1 )) || usage
+  printf '%-16s %14s %14s\n' variant file_bytes code_eh_bytes
+  for pair in "$@"; do
+    variant="${pair%%=*}"; bin="${pair#*=}"
+    [[ "$variant" != "$pair" && -f "$bin" ]] || { echo "measure-panic-profile: bad argument or missing file: $pair" >&2; exit 1; }
+    bytes="$(stat -c '%s' "$bin")"
+    code="$(size -A "$bin" | awk '$1==".text"||$1==".eh_frame"||$1==".gcc_except_table"{s+=$2} END{print s+0}')"
+    printf '%-16s %14d %14d\n' "$variant" "$bytes" "$code"
+  done
+}
+
+cmd_rss() {
+  (( $# >= 4 )) || usage
+  variant="$1"; ta="$2"; tb="$3"; shift 3
+  [[ "$1" == "--" ]] || usage
+  shift
+  (( $# >= 1 )) || usage
+  [[ "$ta" =~ ^[0-9]+$ && "$tb" =~ ^[0-9]+$ ]] || { echo "measure-panic-profile: t_a and t_b must be whole seconds" >&2; exit 1; }
+  (( tb > ta )) || { echo "measure-panic-profile: t_b must be greater than t_a" >&2; exit 1; }
+
+  runs_a=(); runs_b=()
+  for run in 1 2 3; do
+    "$@" >/dev/null 2>&1 &
+    pid=$!
+    # fixed waits only: one sleep to t_a, one sleep for the gap to t_b
+    sleep "$ta"
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "measure-panic-profile: run $run exited before t_a=${ta}s" >&2; exit 1
+    fi
+    a_rss="$(proc_field "$pid" VmRSS)"; a_anon="$(proc_field "$pid" RssAnon)"
+    sleep $(( tb - ta ))
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "measure-panic-profile: run $run exited before t_b=${tb}s" >&2; exit 1
+    fi
+    b_rss="$(proc_field "$pid" VmRSS)"; b_anon="$(proc_field "$pid" RssAnon)"
+    pd="$("$(dirname "$0")/proc-smaps-top" "$pid" 0 2>/dev/null | awk '/Private_Dirty/{for(i=1;i<=NF;i++) if($i=="Private_Dirty") print $(i+1)}')" || pd=NA
+    echo "pdirty variant=$variant run=$run t=${tb}s Private_Dirty_kB=${pd:-NA}"
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    echo "rss variant=$variant run=$run t=${ta}s VmRSS_kB=$a_rss RssAnon_kB=$a_anon"
+    echo "rss variant=$variant run=$run t=${tb}s VmRSS_kB=$b_rss RssAnon_kB=$b_anon"
+    runs_a+=("$a_rss"); runs_b+=("$b_rss")
+  done
+
+  med_a_rss="$(printf '%s\n' "${runs_a[@]}" | median)"
+  med_b_rss="$(printf '%s\n' "${runs_b[@]}" | median)"
+  echo "median variant=$variant t=${ta}s VmRSS_kB=$med_a_rss"
+  echo "median variant=$variant t=${tb}s VmRSS_kB=$med_b_rss"
+}
+
+cmd_dirs() {
+  # dirs <abort_target_dir> <unwind_target_dir>: size of every flamewm-* release binary in both dirs
+  (( $# == 2 )) || usage
+  printf '%-24s %14s %14s %14s\n' binary abort_bytes unwind_bytes delta_bytes
+  for bin_a in "$1"/release/flamewm-*; do
+    [[ -f "$bin_a" && -x "$bin_a" ]] || continue
+    name="$(basename "$bin_a")"
+    bin_u="$2/release/$name"
+    [[ -f "$bin_u" ]] || { echo "measure-panic-profile: missing in unwind dir: $name" >&2; continue; }
+    a="$(stat -c '%s' "$bin_a")"; u="$(stat -c '%s' "$bin_u")"
+    printf '%-24s %14d %14d %14d\n' "$name" "$a" "$u" "$(( u - a ))"
+  done
+}
+
+case "${1:-}" in
+  size) shift; cmd_size "$@" ;;
+  dirs) shift; cmd_dirs "$@" ;;
+  rss)  shift; cmd_rss "$@" ;;
+  *)    usage ;;
+esac
