@@ -104,16 +104,26 @@ pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
                 }
                 thread::sleep(delay);
                 restarts.push_back(Instant::now());
-                match spawn_lock_process(&program, &[]) {
-                    Ok(next) => child = next,
-                    Err(error) => {
-                        eprintln!(
-                            "flamewm: lock screen respawn failed: {error}; falling back to loginctl"
-                        );
-                        let _ = Command::new("loginctl").arg("lock-session").status();
-                        return;
+                // Fail closed: with no lock client the desktop would be exposed, so a failed
+                // respawn is retried at the crash-loop delay instead of ending supervision.
+                // `loginctl lock-session` only signals a client, which is gone, so it is asked
+                // once for any other locker that is listening.
+                let mut asked_loginctl = false;
+                child = loop {
+                    match spawn_lock_process(&program, &[]) {
+                        Ok(next) => break next,
+                        Err(error) => {
+                            eprintln!(
+                                "flamewm: lock screen respawn failed: {error}; retrying in {LOCK_CRASH_LOOP_DELAY:?}; blast_radius=works:session|degraded:lock-screen (the desktop may be unlocked until the lock client starts)"
+                            );
+                            if !asked_loginctl {
+                                asked_loginctl = true;
+                                let _ = Command::new("loginctl").arg("lock-session").status();
+                            }
+                            thread::sleep(LOCK_CRASH_LOOP_DELAY);
+                        }
                     }
-                }
+                };
             }
         }
     }
