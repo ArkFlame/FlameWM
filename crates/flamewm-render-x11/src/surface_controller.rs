@@ -588,6 +588,11 @@ impl SurfaceController {
                 unsafe { instance.app.refresh_shape_mask(&instance.document) };
                 instance.app.clear_surface_backdrop();
                 instance.app.clear_node_backdrops();
+                // A landed slide-out keeps the window and document but drops its enlarged
+                // backbuffer, matching the immediate-close path in `hide`. `mark_full`
+                // inside the release repaints every pixel on the next show.
+                // SAFETY: the app owns its backbuffer; the window stays alive (only unmapped).
+                let _ = unsafe { instance.app.release_backbuffer_on_unmap() };
                 if landing_releases_grab(active.opening, instance.app.pointer_grabbed) {
                     drop_popup_grab(
                         display,

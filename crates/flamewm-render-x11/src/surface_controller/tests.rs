@@ -1078,6 +1078,26 @@ mod slide_exit_shape_regression {
                     .unwrap()
         );
     }
+
+    #[test]
+    fn every_close_path_releases_the_backbuffer() {
+        let controller = include_str!("../surface_controller.rs");
+        let end = controller
+            .split_once("// Never restore the full shape while still mapped")
+            .unwrap()
+            .1;
+        let close = end.split_once("if landing_releases_grab").unwrap().0;
+        assert!(
+            close.find("clear_node_backdrops()").unwrap()
+                < close.find("release_backbuffer_on_unmap()").unwrap(),
+            "slide-out landing must drop the enlarged backbuffer after clearing backdrops"
+        );
+        let hide = include_str!("../surface_controller/window_state.rs");
+        assert!(
+            hide.contains("release_backbuffer_on_unmap()"),
+            "immediate close in hide() must release the backbuffer too"
+        );
+    }
 }
 
 mod raise_targets_tests {

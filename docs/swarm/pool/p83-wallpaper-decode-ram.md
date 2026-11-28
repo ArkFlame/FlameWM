@@ -1,10 +1,18 @@
 # Unit p83-wallpaper-decode-ram
-STATUS: OPEN
+STATUS: DONE
 
 Crates flamewm-desktop wallpaper_loader and flamewm-lock backgrounds: decode once to output size, drop the full-resolution source right after, no second copy retained; bound the per-output cache. Output identical. Max 3 edits.
 
 ## Result
-STARTED
 
-## Result
-STARTED
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| `crates/flamewm-lock/src/document.rs:194-215` (was 194-213) | Two natural-size caches kept full-resolution sources for the whole process: `BUILTIN_CACHE` (`OnceLock<Mutex<Option<Arc<RgbaImage>>>>`, ~17 MiB) and `decode_file_shared`'s process map (up to ~31 MiB). | Replaced both with `OutputRasterKey` (source path, byte length, mtime, width, height) and a `MAX_OUTPUT_RASTERS = 8` LRU of output-sized `RuntimeImage`s; file identity keeps edited custom wallpapers from serving stale pixels. **UNBUILT** | Cache holds only presented-size rasters; a hit clones one `RuntimeImage` (its `pixels` is a plain `Vec`), so cache and caller each hold an output-sized copy. No full-resolution copy is retained. |
+| `crates/flamewm-lock/src/document.rs:220-248` | Cover scaling used to borrow a retained arc/once-lock source; the decoded source could outlive the composed raster. | Added `cached_cover`: check cache, decode on miss into an owned `RgbaImage`, cover-scale, then drop `natural` on return; insert the output-sized raster and evict the oldest past 8 entries. **UNBUILT** | Lock ordering: cache is released before decode and re-locked only to insert, so no lock is held across decode or cover. Pixel composition path (`cover_rgba`, `post_process`) is unchanged. |
+| `crates/flamewm-lock/src/document.rs:264-308` | Custom path used `decode_file_shared` (Arc retained in the process map); default path used the natural-size `OnceLock`. | Both paths now call `cached_cover` with owned decode closures (`flamewm_image_core::wallpaper::decode_file` / `decode_bytes(BUILTIN_BACKGROUND, Webp)`); `release_wallpaper_caches` clears the bounded cache and still drops the shared decode handle. **UNBUILT** | First decode per (source, output size) still reads the same on-disk cache entry and uses the same `cover_rgba` filter, so presented pixels are identical; repeat outputs and re-shows reuse the output-sized raster. |
+| `crates/flamewm-lock/src/document.rs:771-805` | No test covered cache reuse or its bound. | Added `output_raster_cache_reuses_pixels_and_stays_bounded`: a hit never decodes, pixels match, entries never exceed 8. **UNBUILT** | Test clears the process-wide cache at start/end; parallel tests only re-decode, so pixels are unaffected. |
+| `crates/flamewm-desktop/src/wallpaper_loader.rs:483-506, 283-295` | `decode_bytes_at` already composed to output size and moved the natural source into `compose_decoded`, but the drop point was implicit and the doc comment still described a natural-size decode. | Scoped the decode in a block so the full-resolution source is dropped at the block end, immediately after composition and before any raster is retained, and corrected the doc comment. **UNBUILT** | None: identical decode and identical `compose_decoded` call, so pixels, fit and the one output-sized `Arc<Vec<u8>>` stored by `poll()` are unchanged. The desktop still holds a single composed raster and never populates the shared full-resolution map; adding a release call would be dead code. |
+
+Reference-first: `.vendor/kwin-master/src` has only `scene/backgroundeffectitem.cpp` (no wallpaper decode/cache), `.vendor/xfdesktop-master` has only background settings, and `.vendor/sddm-develop/src` has no wallpaper-cache precedent (per p01); no upstream clone was needed. No `git`, `cargo`, build, test, Python or sleep-loop command was run.
+
+PASS — the lock backgrounds now keep a bounded (8-entry) cache of cover-scaled, output-sized rasters keyed by source identity and output size, drop the full-resolution decode as soon as the cover is built, and no longer retain a natural-size `Arc`/`OnceLock`; the desktop loader's one structural edit makes its existing drop-after-compose contract explicit, and its single output-sized raster was already bounded. Composition, fit, blur/dim and presented dimensions are unchanged, so visuals stay pixel-identical. Every edit is marked UNBUILT because the shared-checkout brief forbids builds; the orchestrator must compile `flamewm-lock` and `flamewm-desktop` and run their scoped tests before treating the slice as verified.

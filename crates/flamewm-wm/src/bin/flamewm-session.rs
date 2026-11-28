@@ -259,7 +259,9 @@ fn execute() -> Result<(), String> {
         .map(|finding| format!("{}: {}", finding.check, finding.message))
         .collect::<Vec<_>>();
     if !fatal.is_empty() {
-        return Err(format!("preflight failed: {}", fatal.join("; ")));
+        let cause = format!("preflight failed: {}", fatal.join("; "));
+        record_startup_failure("preflight", cause.as_str(), &[], &["session"], false);
+        return Err(cause);
     }
     let existing = env::vars().collect::<BTreeMap<_, _>>();
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -268,16 +270,24 @@ fn execute() -> Result<(), String> {
     // Generate only FlameWM-owned XDG overlays; never mutate existing Brave
     // profiles, wallet contents, Plasma configuration, or desktop identities.
     if let Err(error) = session_app_compat::configure(&home, &mut plan.processes) {
-        eprintln!("{SESSION_LOG_PREFIX}: KDE app compatibility degraded: {error}");
+        let cause = format!("KDE app compatibility degraded: {error}");
+        record_startup_failure(
+            "app compatibility",
+            cause.as_str(),
+            &["window manager", "desktop", "shell"],
+            &["kde app compatibility"],
+            false,
+        );
     }
     if plan.processes.len() != 3
         || plan.processes[0].role != SessionRole::WindowManager
         || plan.processes[1].role != SessionRole::Desktop
         || plan.processes[2].role != SessionRole::Shell
     {
-        return Err(
-            "session launch plan does not contain WM, Desktop, Shell in required order".to_owned(),
-        );
+        let cause =
+            "session launch plan does not contain WM, Desktop, Shell in required order".to_owned();
+        record_startup_failure("launch plan", cause.as_str(), &[], &["session"], false);
+        return Err(cause);
     }
     let (installed5, installed6) = installed_kwallet_generations();
     let keyring_environment = start_session_keyring(select_keyring(

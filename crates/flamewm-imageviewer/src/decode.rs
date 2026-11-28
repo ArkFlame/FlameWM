@@ -11,14 +11,29 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
-use flamewm_image_core::{ImageSourceFormat, RgbaImage, decode_bytes};
+use flamewm_image_core::{ImageSourceFormat, RgbaImage, decode_bytes, decode_bytes_at};
 
 /// Refuse source files larger than this before reading them.
 pub const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 /// Refuse decoded images above this pixel count (RGBA is 4 bytes per pixel).
 pub const MAX_PIXELS: u64 = 100_000_000;
+/// Longest edge of a decoded raster. A 100 MP source would hold ~400 MiB of RGBA; decoding at
+/// this cap instead keeps one modest raster, without changing the natural size of small images.
+const MAX_DECODE_EDGE: u32 = 4096;
 /// Decoded images kept: the current one and its two neighbours.
 const CACHE_SLOTS: usize = 3;
+
+/// Reduced decode dimensions from header dimensions, or `None` when the source is already within
+/// `MAX_DECODE_EDGE` and must be decoded at natural size so small images stay pixel-identical.
+fn decode_target(width: u64, height: u64) -> Option<(u32, u32)> {
+    let longest = width.max(height).max(1);
+    if longest <= u64::from(MAX_DECODE_EDGE) {
+        return None;
+    }
+    let factor = f64::from(MAX_DECODE_EDGE) / longest as f64;
+    let shrink = |edge: u64| ((edge as f64) * factor).round().max(1.0) as u32;
+    Some((shrink(width), shrink(height)))
+}
 
 /// A visible part of the displayed image: top-left and size, in displayed-image pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,13 +149,13 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
         ));
     }
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    // Check the header dimensions before decoding. The post-decode guard below is too late:
-    // a small file can declare an enormous raster and make the decoder allocate it first.
-    if let Ok(size) = imagesize::blob_size(&bytes) {
-        let declared = (size.width as u64).saturating_mul(size.height as u64);
-        if declared > MAX_PIXELS {
-            return Err("image has too many pixels to show".into());
-        }
+    // Probe the header once. The result rejects a pixel bomb before any allocation and supplies
+    // the dimensions for the reduced decode below; the post-decode guard alone is too late.
+    let declared = imagesize::blob_size(&bytes)
+        .ok()
+        .map(|size| (size.width as u64, size.height as u64));
+    if declared.is_some_and(|(width, height)| width.saturating_mul(height) > MAX_PIXELS) {
+        return Err("image has too many pixels to show".into());
     }
     let format = ImageSourceFormat::from_magic(&bytes)
         .or_else(|| ImageSourceFormat::from_extension(path))
@@ -149,7 +164,12 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
     if declared_pixels(&bytes, format).is_some_and(|pixels| pixels > MAX_PIXELS) {
         return Err("image has too many pixels to show".into());
     }
-    let image = decode_bytes(&bytes, format)?;
+    let reduced = declared.and_then(|(width, height)| decode_target(width, height));
+    let image = match reduced {
+        // Reduce at decode time: never build a full 100 MP RGBA just to scale it down afterwards.
+        Some((width, height)) => decode_bytes_at(&bytes, format, width, height, ScaleFilter::Area)?,
+        None => decode_bytes(&bytes, format)?,
+    };
     if u64::from(image.width) * u64::from(image.height) > MAX_PIXELS {
         return Err("image has too many pixels to show".into());
     }
@@ -276,10 +296,16 @@ impl Worker {
         }
     }
 
-    /// Makes `path` the active image and drops the prefetches queued for the previous one.
+    /// Makes `path` the active image, frees the pixels of the one navigated away from and drops
+    /// the prefetches queued for it.
     fn activate(&mut self, path: &Path) {
         let (state, _) = &*self.shared;
         let mut state = lock(state);
+        if state.active.as_deref() != Some(path) {
+            // A large decoded image must not stay resident after the user navigates on.
+            state.cache.retain(|(cached, _)| cached == path);
+            self.reduced = None;
+        }
         state.active = Some(path.to_path_buf());
         state.queued.clear();
     }
@@ -482,6 +508,35 @@ mod tests {
     fn decodes_a_jpeg_fixture_by_magic() {
         let image = decode_file(&fixture("baseline-16x16.jpg")).expect("jpeg decodes");
         assert_eq!((image.width, image.height), (16, 16));
+    }
+
+    #[test]
+    fn large_header_selects_a_reduced_decode_target() {
+        // 10 000 x 10 000 is 100 MP: the header probe must choose a bounded decode edge.
+        let Some((width, height)) = decode_target(10_000, 10_000) else {
+            panic!("a 100 MP header must select a reduced target");
+        };
+        assert!(width.max(height) <= MAX_DECODE_EDGE);
+        assert!(width > 0 && height > 0);
+        // Small images decode at natural size so their pixels stay identical.
+        assert_eq!(decode_target(16, 16), None);
+    }
+
+    #[test]
+    fn activate_frees_cached_images_except_the_new_active_one() {
+        let dir = std::env::temp_dir().join(format!("imgv-free-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let first = write_ppm(&dir, "first.ppm");
+        let second = write_ppm(&dir, "second.ppm");
+        let mut worker = Worker::new(decode_file);
+        worker.activate(&first);
+        worker.image(&first).expect("first ppm decodes");
+        worker.activate(&second);
+        let state = lock(&worker.shared.0);
+        assert!(state.cache.iter().all(|(cached, _)| cached == &second));
+        assert!(worker.reduced.is_none());
+        drop(state);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

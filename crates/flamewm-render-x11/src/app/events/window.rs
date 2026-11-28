@@ -138,6 +138,20 @@ impl X11App {
         }
     }
 
+    /// Close-time release: once the popup is unmapped, shrink an oversized backbuffer to the
+    /// window's own size. The window is not destroyed; reopen re-grows through the same path and
+    /// marks the whole surface dirty so the first map repaints every pixel.
+    pub(crate) unsafe fn release_backbuffer_on_unmap(&mut self) -> Result<(), String> {
+        let need = (self.width, self.height);
+        if need.0 == 0 || need.1 == 0 || self.backbuffer_cap == need {
+            return Ok(());
+        }
+        // SAFETY: forwarded caller contract; the swap owns the display-live handles.
+        unsafe { self.swap_backbuffer(need) }?;
+        self.mark_full();
+        Ok(())
+    }
+
     /// Replaces the backbuffer pixmap with one of `capacity` pixels.
     pub(super) unsafe fn swap_backbuffer(&mut self, capacity: (u32, u32)) -> Result<(), String> {
         // Resize retarget lifecycle: checked replacement first, retarget

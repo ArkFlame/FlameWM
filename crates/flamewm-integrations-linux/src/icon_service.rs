@@ -271,7 +271,9 @@ impl<R: IconResolve> IconService<R> {
             let builder = thread::Builder::new().name(format!("icon-resolver-{number}"));
             if let Some(handle) = spawn_background(builder, move || {
                 background::lower_current_thread();
-                worker_loop(shared, result_tx, wake_tx, cache, completed, factory());
+                worker_loop(shared, result_tx, wake_tx, cache, completed, move || {
+                    factory()
+                });
             }) {
                 workers.push(handle);
             }
@@ -751,14 +753,18 @@ impl<R> Drop for IconService<R> {
     }
 }
 
-fn worker_loop<R: IconResolve>(
+fn worker_loop<R: IconResolve, F: Fn() -> R>(
     shared: Arc<SharedQueue>,
     result_tx: SyncSender<IconResult>,
     wake_tx: Option<Arc<Mutex<UnixStream>>>,
     result_cache: Arc<Mutex<ResultCache>>,
     completed: Arc<AtomicU64>,
-    mut resolver: R,
+    factory: F,
 ) {
+    // Build the resolver on the first icon job, not when the worker thread starts:
+    // a client that owns a wake FD but never requests icons must not pay for a
+    // resolver (theme index and private caches), as in the shell icon loader.
+    let mut resolver: Option<R> = None;
     // Epoch of the theme index this worker last adopted (0 = construction).
     let mut applied_epoch: u64 = 0;
     loop {
@@ -828,6 +834,7 @@ fn worker_loop<R: IconResolve>(
                 }
             }
             Some(Next::Resolve(key)) => {
+                let resolver = resolver.get_or_insert_with(&factory);
                 // Adopt a theme swap before resolving: the epoch check is one
                 // atomic load; the index Arc is cloned under a short lock that
                 // the UI thread also holds only for the swap itself.

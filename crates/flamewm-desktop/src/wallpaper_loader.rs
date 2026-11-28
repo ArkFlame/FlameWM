@@ -480,7 +480,9 @@ fn is_supported_wallpaper(path: &Path) -> bool {
     )
 }
 
-/// Decodes at natural size, then composes per output or onto the shared root canvas.
+/// Decodes once, composes to output size, then drops the full-resolution source: the block
+/// ends before any raster is retained, so no second, source-sized copy stays resident beside
+/// the composed output pixels.
 fn decode_bytes_at(
     path: &Path,
     fit: WallpaperFit,
@@ -488,9 +490,11 @@ fn decode_bytes_at(
     monitors: &[Rect],
     share: bool,
 ) -> Result<Rgba8Raster, String> {
-    let natural = flamewm_image_core::wallpaper::decode_file(path)?;
-    let image = compose_decoded(natural, target, monitors, fit, share)
-        .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
+    let image = {
+        let natural = flamewm_image_core::wallpaper::decode_file(path)?;
+        compose_decoded(natural, target, monitors, fit, share)
+    }
+    .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
     Ok(Rgba8Raster {
         source: path.to_string_lossy().into_owned(),
         width: image.width,

@@ -210,18 +210,25 @@ impl ShellLoop {
     /// Re-arms the panel clock cadence from the current settings: every second when
     /// `taskbarShowSeconds` is on, otherwise every minute. A hidden taskbar clock re-arms to
     /// `None`, so it costs neither wakeups nor panel repaints.
-    pub(super) fn rearm_clock(&mut self, now: Instant) {
+    pub(super) fn rearm_clock(&mut self, _now: Instant) {
         let display = self
             .settings_cache
             .as_ref()
             .map(crate::entry::settings_projection::clock_display)
             .unwrap_or_default();
-        let shown =
-            crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref()).clock;
-        // The epoch read inside the delay runs after `now` was captured, so arm one millisecond
-        // past the boundary: the tick then never paints the second/minute that is ending.
+        // A disabled taskbar hides every panel surface (`apply_taskbar_enabled`), so no clock
+        // deadline or panel repaint is armed while the panel is hidden. `taskbar.enabled` is a
+        // settings key, so re-enabling bumps `settings_revision` and re-arms on the next tick.
+        let taskbar_on = self.settings_cache.as_ref().is_none_or(taskbar_enabled);
+        let shown = taskbar_on
+            && crate::entry::settings_projection::taskbar_items(self.settings_cache.as_ref()).clock;
+        // Anchor the monotonic deadline after the wall-clock read inside `clock_boundary_delay`.
+        // Reading it first can land the deadline microseconds before the displayed boundary, so
+        // the tick paints the previous value and stays stale until the following minute/second.
+        // A hidden clock still re-arms to `None`: no epoch read, wakeup or panel repaint.
         self.clock_next_at = shown.then(|| {
-            now + clock_boundary_delay(display.show_seconds) + std::time::Duration::from_millis(1)
+            let delay = clock_boundary_delay(display.show_seconds);
+            Instant::now() + delay
         });
     }
 

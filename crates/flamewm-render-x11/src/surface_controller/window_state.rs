@@ -94,6 +94,8 @@ impl SurfaceController {
         // The snapshot is recaptured on the next show, so a closed popup keeps no stale pixels.
         instance.app.clear_surface_backdrop();
         instance.app.clear_node_backdrops();
+        // SAFETY: the app owns its backbuffer; the window stays alive (only unmapped).
+        unsafe { instance.app.release_backbuffer_on_unmap()? };
         self.forget_live_composition();
         Ok(())
     }

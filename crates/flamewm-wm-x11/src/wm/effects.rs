@@ -70,9 +70,31 @@ impl<C: Connection> Wm<'_, C> {
             live_resize && has_configure && !resize_configure_due(self.resize_configure_at, now);
         if commit.ungrab {
             self.resize_configure_at = None;
+            self.resize_deferred = None;
         }
         if paced {
             resize_counters().record_configure_throttled(1);
+            // Latest batch wins: configure rects are absolute, so the newest skipped batch supersedes older ones.
+            let deferred: Vec<FrameEffect> = commit
+                .effects
+                .iter()
+                .copied()
+                .filter(|effect| {
+                    matches!(
+                        *effect,
+                        FrameEffect::ConfigureFrameRoot { .. }
+                            | FrameEffect::ConfigureClientLocal { .. }
+                            | FrameEffect::NotifyClientRoot { .. }
+                            | FrameEffect::LayoutInput
+                            | FrameEffect::PaintChrome
+                            | FrameEffect::ApplyShape
+                    )
+                })
+                .collect();
+            self.resize_deferred = Some((client, deferred));
+        } else if live_resize {
+            // A fresh unpaced live batch carries newer rects; drop the stale deferred one.
+            self.resize_deferred = None;
         }
         let result: Result<(), ReplyError> = (|| {
             for effect in &commit.effects {
@@ -397,6 +419,45 @@ impl<C: Connection> Wm<'_, C> {
         // A cancelled resize must not leave a stale gate for the next grab.
         self.resize_configure_at = None;
         self.release_pointer();
+    }
+
+    /// Replays the latest paced resize batch once its interval elapsed (trailing edge).
+    /// Drops the stored batch when the resize session is gone, so release stays unthrottled.
+    pub(super) fn flush_deferred_resize(
+        &mut self,
+        now: std::time::Instant,
+    ) -> Result<(), ReplyError> {
+        let Some(client) = self.resize_deferred.as_ref().map(|(client, _)| *client) else {
+            return Ok(());
+        };
+        if !matches!(self.session_of(client), InteractionSession::Resize(_)) {
+            self.resize_deferred = None;
+            return Ok(());
+        }
+        if !resize_configure_due(self.resize_configure_at, now) {
+            return Ok(());
+        }
+        let Some((_, effects)) = self.resize_deferred.take() else {
+            return Ok(());
+        };
+        self.execute_effects(client, &interaction::PointerCommit::plan(effects))
+    }
+
+    /// Caps the reactor wait at the next resize pacing tick while a batch is stored.
+    pub(super) fn resize_deferred_wait(
+        &self,
+        wait: Option<std::time::Duration>,
+    ) -> Option<std::time::Duration> {
+        if self.resize_deferred.is_none() {
+            return wait;
+        }
+        let deadline = self
+            .resize_configure_at
+            .map_or_else(std::time::Instant::now, |last| {
+                last + RESIZE_CONFIGURE_INTERVAL
+            });
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        Some(wait.map_or(remaining, |wait| wait.min(remaining)))
     }
 
     pub(super) fn reduce_and_execute(

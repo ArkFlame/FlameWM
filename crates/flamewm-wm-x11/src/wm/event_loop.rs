@@ -111,6 +111,7 @@ where
         let changes = wm.take_changes();
         wm.pump_transitions(std::time::Instant::now())?;
         wm.flush_deferred_chrome(std::time::Instant::now())?;
+        wm.flush_deferred_resize(std::time::Instant::now())?;
         wm.window_config
             .borrow_mut()
             .flush_due(std::time::Instant::now());
@@ -123,6 +124,7 @@ where
         // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
         let wait = wm.transition_wait(wait);
         let wait = wm.deferred_chrome_wait(wait);
+        let wait = wm.resize_deferred_wait(wait);
         let wait =
             hot_corner::hot_corner_wait(wm.hot_corner.deadline, std::time::Instant::now(), wait);
         let wait = hot_corner::hot_corner_wait(

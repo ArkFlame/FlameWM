@@ -51,3 +51,6 @@ Slot 2 note: first attempt failed instantly (bad -p flamewm-gpu-helper); rerun w
 
 ## HOUR 8 slot 3 (21:02): cargo test -p flamewm-wm-wayland -p flamewm-applications -p flamewm-shell (resize ring pacing, p89 by_id removal, p91 usage gate)
 RESULT slot3: exit=0, all test binaries ok (wayland 770, shell 476, applications 55, others). NOTE: started 21:02, 4 min inside the 30 min spacing after the 20:36 slot; logged honestly.
+
+## HOUR 8 slot 4 (21:32): cargo test -p flamewm-wm-wayland -p flamewm-wm-x11 -p flamewm-render-x11 -p flamewm-shell -p flamewm-imageviewer -p flamewm-lock -p flamewm-applications -p flamewm-desktop (resize pacing + X11 trailing edge, p89/p91/p92, wallpaper/imageviewer decode)
+RESULT slot4: exit=0 after one fix (icon_service.rs Arc<F> -> move || factory()); 34 test binaries ok. Not run: release build, real-session resize, frames.

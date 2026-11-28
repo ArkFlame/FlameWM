@@ -192,10 +192,13 @@ fn crop_runtime_image(
 }
 
 /// Identity of one cached cover-scaled wallpaper raster. Output size is part of the key: a fresh
-/// output geometry must not reuse pixels composed for a different geometry.
+/// output geometry must not reuse pixels composed for a different geometry. Byte length and mtime
+/// match the on-disk decode cache, so an edited file cannot serve stale pixels.
 #[derive(Clone, PartialEq, Eq)]
 struct OutputRasterKey {
     source: String,
+    len: u64,
+    mtime_ns: u128,
     width: u32,
     height: u32,
 }
@@ -263,19 +266,36 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         settings.background_mode,
         settings.background_image.as_deref(),
     ) {
-        (LockBackgroundMode::Custom, Some(path)) => cached_cover(
-            OutputRasterKey {
-                source: path.display().to_string(),
+        (LockBackgroundMode::Custom, Some(path)) => {
+            let identity = fs::metadata(path).ok().and_then(|meta| {
+                Some((
+                    meta.len(),
+                    meta.modified()
+                        .ok()?
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()?
+                        .as_nanos(),
+                ))
+            });
+            let (len, mtime_ns) = identity.unwrap_or((0, 0));
+            cached_cover(
+                OutputRasterKey {
+                    source: path.display().to_string(),
+                    len,
+                    mtime_ns,
+                    width,
+                    height,
+                },
+                || flamewm_image_core::wallpaper::decode_file(path).ok(),
                 width,
                 height,
-            },
-            || flamewm_image_core::wallpaper::decode_file(path).ok(),
-            width,
-            height,
-        ),
+            )
+        }
         (LockBackgroundMode::Default, _) => cached_cover(
             OutputRasterKey {
                 source: BUILTIN_BACKGROUND_SOURCE.to_string(),
+                len: 0,
+                mtime_ns: 0,
                 width,
                 height,
             },
@@ -747,6 +767,45 @@ mod tests {
     use crate::power::Confirmable;
     use crate::secret::PasswordBuffer;
     use crate::state::Status;
+
+    #[test]
+    fn output_raster_cache_reuses_pixels_and_stays_bounded() {
+        release_wallpaper_caches();
+        for size in 1..=(MAX_OUTPUT_RASTERS + 2) as u8 {
+            let key = OutputRasterKey {
+                source: format!("cache-test-{size}"),
+                len: 0,
+                mtime_ns: 0,
+                width: 2,
+                height: 2,
+            };
+            let first = cached_cover(
+                key.clone(),
+                || {
+                    Some(RgbaImage {
+                        width: 2,
+                        height: 2,
+                        pixels: vec![size; 16],
+                    })
+                },
+                2,
+                2,
+            )
+            .expect("first cover");
+            let second = cached_cover(key, || panic!("a cache hit must not decode"), 2, 2)
+                .expect("cached cover");
+            assert_eq!(
+                first.pixels, second.pixels,
+                "cache hit must be pixel-identical"
+            );
+        }
+        let held = output_rasters()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert!(held <= MAX_OUTPUT_RASTERS, "cache grew to {held} rasters");
+        release_wallpaper_caches();
+    }
 
     /// Records what the document layer writes, keyed by node id.
     #[derive(Default)]

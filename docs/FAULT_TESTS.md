@@ -68,3 +68,37 @@ Cargo filters are substring matches on test names: renaming a module requires up
 the orchestrator host; if unavailable, that case fails while the other four can still pass. The
 wrapper test asserts preflight behavior in-process only and does not drive the wrapper supervisor;
 `scripts/test-session-fallbacks` covers that path.
+
+## Fallback -> test matrix (p80)
+
+Built from `rg 'fn .*(fallback|missing|corrupt|degrad|absent)' crates/*/src` plus a targeted read of
+each named test. A test path is `file:line` (test function); fixture runners use the filters in
+`scripts/run-fault-tests:31`. `GAP` means no test injects that condition. Nothing in this matrix was
+built or executed. `.vendor/**` holds kwin, smithay and xfwm4 references; no vendor precedent is
+needed for a docs-only inventory of already-existing local tests, and no vendor code is a dependency
+or runtime input.
+
+| Goal fallback | Test path | Coverage |
+| --- | --- | --- |
+| Backend: DRM (native) | `crates/flamewm-wm-wayland/src/backend_fallback_tests.rs:14` `native_ok_keeps_the_native_backend`; `:48` `native_without_drm_feature_falls_through_to_nested`; runner `cargo test -p flamewm-wm-wayland -- backend_fallback_tests` (also `--features drm`) | Covered: pure init-outcome mapping, feature gate |
+| Backend: nested (winit) | `crates/flamewm-wm-wayland/src/backend_fallback_tests.rs:22` `native_fails_nested_ok_keeps_the_nested_backend`; `:34` `native_fails_nested_fails_goes_headless` | Covered: native -> nested step |
+| Backend: X11 (capture chain) | `crates/flamewm-screenshot/src/portal.rs:456` `choose_chain_keeps_only_x11_when_others_unavailable`; `:469` `choose_chain_order_is_portal_then_screencopy_then_x11` | Covered as pure chain; no live X11 connection |
+| Backend: minimal / headless | `crates/flamewm-wm-wayland/src/backend_fallback_tests.rs:34` (`NestedFailed` -> `Headless`; `main.rs:213-214` "socket alive with no rendering backend") | Partial: mapping only, no runner-state test |
+| GPU: hw | `crates/flamewm-render-x11/src/accel/fault_tests.rs:105` `helper_exiting_nonzero_at_start_fails_hardware_then_keeps_software_device`; `:71`, `:142` | Covered via helper-binary injection |
+| GPU: sw | `crates/flamewm-render-x11/src/accel/fault_tests.rs:105` (software device kept); `:71` (software tier exhausted -> CPU) | Covered |
+| GPU: cpu | `crates/flamewm-render-x11/src/accel/fault_tests.rs:71` `missing_helper_binary_falls_through_both_tiers_to_cpu`; `:142` `helper_timeout_or_death_mid_session_falls_back_to_cpu` | Covered |
+| Missing lib | `scripts/test-wrapper-faults:14` (fake `ldd` in `mktemp -d`); `crates/flamewm-session-core/src/diagnostics.rs:590` `fallback_plan_keeps_role_environment_and_stays_alive`; `:605` `shell_fallback_has_no_dialog` | Partial: preflight in-process only; supervisor not driven |
+| Missing font | `crates/flamewm-render-core/src/glyphs.rs:559` `bundled_font_fallback_parses_and_inks_a_glyph`; `crates/flamewm-render-x11/src/xft/default_measure_tests.rs:9` | Partial: bundled asset tested directly; `find_font` (`glyphs.rs:145`) never injected with absent candidates |
+| Missing icon | `crates/flamewm-shell/src/icon_loader.rs:647` `task_icon_miss_with_empty_theme_still_yields_bundled_glyph` | Covered |
+| Missing theme | `crates/flamewm-session-core/src/lib.rs:998` `cursor_theme_core_and_library_fallback_are_explicit`; `:1092` `cursor_theme_resolution_order_and_fallback_chain`; `:1212` `cursor_alias_fallback_covers_standard_names_only_through_targets`; `appearance.rs:512`, `:586` | Covered: theme name/path resolution, no invented theme |
+| Missing portal | `crates/flamewm-integrations-linux/src/portal_file_chooser.rs:468` `missing_portal_maps_to_one_clear_message_and_keeps_other_errors`; `crates/flamewm-screenshot/src/portal.rs:440` `choose_chain_skips_unavailable_portal` | Covered as pure map; no live D-Bus injection |
+| Corrupt settings | `crates/flamewm-platform/src/settings/load_tests.rs:53` `corrupt_json_is_quarantined_once_and_defaults_are_used`; `:151` truncated; `:176` binary junk; `:196` huge | Covered: quarantine + defaults |
+| Panic restart | `crates/flamewm-session-core/src/diagnostics/failure.rs:384` `guard_captures_panic_as_a_failure_record`; `:408` `crash_loop_stops_after_the_window_limit`; `:430`; `src/lib.rs:1267`, `:1285` | Partial: record and bounded-policy tests only; no supervised restart |
+
+### Top 5 gaps - next units
+
+1. p81-missing-font-path: inject zero system font candidates and assert `find_font` (`glyphs.rs:145`) selects the bundled fallback; `glyphs.rs:559` only parses the asset.
+2. p82-panic-restart-e2e: drive `install_panic_hook` (`failure.rs:226`) through a supervised child panic and assert the bounded restart plan actually restarts, not just records.
+3. p83-wrapper-missing-lib-supervisor: extend `scripts/test-wrapper-faults` beyond the in-process `ldd` shadow to run the wrapper main tail inside a `mktemp -d` sandbox.
+4. p84-headless-backend-runner: assert `NextBackend::Headless` (`main.rs:213-214`) keeps the socket alive after `NestedFailed` with no rendering backend, not only the pure mapping.
+5. p85-portal-absent-bus: inject an absent xdg-desktop-portal over a fake bus and assert both chains degrade live (`portal_file_chooser.rs:468`, `portal.rs:440` are pure maps).
