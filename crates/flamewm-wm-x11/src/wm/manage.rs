@@ -22,15 +22,25 @@ impl<C: Connection> Wm<'_, C> {
             };
             if attrs.map_state != MapState::UNMAPPED {
                 let kind = self.window_kind(window, attrs.override_redirect)?;
-                match kind {
-                    WindowKind::Popup => {
-                        self.conn.map_window(window)?;
-                    }
-                    WindowKind::Desktop => self.map_unframed(window, StackMode::BELOW)?,
-                    WindowKind::Dock => self.map_dock(window)?,
+                let outcome = match kind {
+                    WindowKind::Popup => self
+                        .conn
+                        .map_window(window)
+                        .map(|_| ())
+                        .map_err(ReplyOrIdError::from),
+                    WindowKind::Desktop => self
+                        .map_unframed(window, StackMode::BELOW)
+                        .map_err(ReplyOrIdError::from),
+                    WindowKind::Dock => self.map_dock(window),
                     WindowKind::Normal | WindowKind::Utility => {
-                        self.manage(window, &geometry, true, kind)?;
+                        self.manage(window, &geometry, true, kind)
                     }
+                };
+                // A client destroyed after the tree query is skipped; the scan keeps going.
+                match outcome {
+                    Ok(()) => {}
+                    Err(error) if is_destroyed_window_race(&error) => {}
+                    Err(error) => return Err(error),
                 }
             }
         }

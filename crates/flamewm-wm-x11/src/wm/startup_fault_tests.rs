@@ -6,7 +6,13 @@ use super::{
     StartupReport, connection_lost_fault, core_fallback_fault, missing_extension_fault,
     randr_event_fault, second_wm_fault,
 };
+use super::{ExtensionQuery, is_destroyed_window_race, optional_extension_fault, renderer_fault};
+use crate::startup_failure::{
+    connect_cause, startup_failure_line, startup_failure_report, startup_stage,
+};
 use crate::{empty_randr_resources, randr_resource_fault};
+use x11rb::errors::ReplyOrIdError;
+use x11rb::x11_utils::X11Error;
 
 fn record(fault: Option<StartupFault>) -> StartupFault {
     fault.expect("degrading stage must produce a failure record")
@@ -68,7 +74,7 @@ fn second_wm_on_root_selection_is_fatal_with_a_clear_record() {
     assert_eq!(fault.stage, "root-selection");
     assert_eq!(
         fault.message,
-        "flamewm: another window manager is already running on this display"
+        "flamewm: another window manager is already running on this display; blast radius: this session has no WM and exits 1"
     );
     assert_eq!(fault.exit_code, Some(1));
 }
@@ -199,4 +205,119 @@ fn startup_report_renders_one_message_with_every_blast_radius() {
     assert!(rendered.starts_with("flamewm: startup degradation report"));
     assert_eq!(rendered.lines().count(), 4);
     assert_eq!(rendered.matches("blast radius").count(), 3);
+}
+
+fn x11_error(kind: ErrorKind) -> ReplyOrIdError {
+    ReplyOrIdError::X11Error(X11Error {
+        error_kind: kind,
+        error_code: 3,
+        sequence: 1,
+        bad_value: 0,
+        minor_opcode: 0,
+        major_opcode: 8,
+        extension_name: None,
+        request_name: Some("MapWindow"),
+    })
+}
+
+#[test]
+fn startup_scan_skips_only_destroyed_window_races() {
+    assert!(is_destroyed_window_race(&x11_error(ErrorKind::Window)));
+    assert!(is_destroyed_window_race(&x11_error(ErrorKind::Drawable)));
+    assert!(is_destroyed_window_race(&x11_error(ErrorKind::Match)));
+    assert!(!is_destroyed_window_race(&x11_error(ErrorKind::Access)));
+    assert!(!is_destroyed_window_race(&ReplyOrIdError::IdsExhausted));
+}
+
+#[test]
+fn renderer_open_failure_pushes_a_renderer_record() {
+    let fault = renderer_fault("no font");
+    assert_eq!(fault.stage, "renderer");
+    assert!(
+        fault
+            .message
+            .contains("decoration renderer unavailable: no font")
+    );
+    assert!(
+        fault
+            .message
+            .contains("decorations and cursors use core frames")
+    );
+    assert_eq!(fault.exit_code, None);
+}
+
+#[test]
+fn failed_extension_query_is_unknown_not_absent() {
+    let fault = record(optional_extension_fault(
+        "SHAPE",
+        "no input shapes",
+        ExtensionQuery::Unknown("Broken pipe".into()),
+    ));
+    assert_eq!(fault.stage, "extension-query");
+    assert!(!fault.message.contains("absent"));
+    assert!(fault.message.contains("query failed: Broken pipe"));
+    assert_eq!(fault.exit_code, None);
+}
+
+#[test]
+fn present_and_absent_extensions_follow_the_query_result() {
+    assert_eq!(
+        optional_extension_fault("SHAPE", "no input shapes", ExtensionQuery::Present),
+        None
+    );
+    let fault = record(optional_extension_fault(
+        "SHAPE",
+        "no input shapes",
+        ExtensionQuery::Absent,
+    ));
+    assert_eq!(fault.stage, "extension");
+    assert!(fault.message.starts_with("flamewm: SHAPE absent"));
+}
+
+#[test]
+fn lost_connection_report_has_no_absent_extension_records() {
+    let mut report = StartupReport::default();
+    report.push(connection_lost_fault("Broken pipe"));
+    let rendered = report.render();
+    assert!(!rendered.contains("absent"));
+    assert_eq!(rendered.matches("blast radius").count(), 1);
+}
+
+#[test]
+fn startup_failure_line_names_each_stage() {
+    for stage in ["connect", "integrations", "catalog", "become-wm", "scan"] {
+        let line = startup_failure_line(stage, "boom");
+        assert!(
+            line.starts_with(&format!(
+                "FLAMEWM-X11-STARTUP-FAIL stage={stage} cause=boom blast_radius="
+            )),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn unknown_startup_stage_is_unclassified() {
+    assert!(startup_failure_line("paint", "boom").contains("stage=unclassified"));
+}
+
+#[test]
+fn missing_display_is_named_in_the_connect_cause() {
+    let line = startup_failure_line("connect", &connect_cause("Can't parse DISPLAY"));
+    assert!(line.contains("cause=DISPLAY unset or unreachable: Can't parse DISPLAY"));
+}
+
+#[test]
+fn tagged_startup_error_keeps_its_stage_and_cause() {
+    let error = startup_stage("catalog", "no apps");
+    assert_eq!(
+        startup_failure_report(error.as_ref()),
+        startup_failure_line("catalog", "no apps")
+    );
+}
+
+#[test]
+fn untagged_startup_error_is_unclassified() {
+    let error = std::io::Error::other("boom");
+    assert!(startup_failure_report(&error).contains("stage=unclassified cause=boom"));
 }

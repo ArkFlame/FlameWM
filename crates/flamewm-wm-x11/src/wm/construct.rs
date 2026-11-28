@@ -59,6 +59,57 @@ pub(crate) fn core_fallback_fault(name: &str, detail: &str, present: bool) -> Op
     (!present).then(|| missing_extension_fault(name, detail))
 }
 
+/// Outcome of one optional-extension query. A failed query is `Unknown`, never `Absent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExtensionQuery {
+    Present,
+    Absent,
+    Unknown(String),
+}
+
+/// Pure: an optional extension yields a record only when it is absent or its query failed.
+/// A failed query must not be reported as a missing extension.
+pub(crate) fn optional_extension_fault(
+    name: &str,
+    detail: &str,
+    query: ExtensionQuery,
+) -> Option<StartupFault> {
+    match query {
+        ExtensionQuery::Present => None,
+        ExtensionQuery::Absent => Some(missing_extension_fault(name, detail)),
+        ExtensionQuery::Unknown(error) => Some(StartupFault {
+            stage: "extension-query",
+            message: format!(
+                "flamewm: {name} query failed: {error}; support is unknown; blast radius: {detail}"
+            ),
+            exit_code: None,
+        }),
+    }
+}
+
+/// Pure: the decoration renderer failed to open. Decorations and cursors use core frames.
+pub(crate) fn renderer_fault(error: &str) -> StartupFault {
+    StartupFault {
+        stage: "renderer",
+        message: format!(
+            "flamewm: decoration renderer unavailable: {error}; blast radius: decorations and cursors use core frames"
+        ),
+        exit_code: None,
+    }
+}
+
+fn query_optional_extension<C: Connection>(conn: &C, name: &[u8]) -> ExtensionQuery {
+    match conn
+        .query_extension(name)
+        .map_err(ReplyError::from)
+        .and_then(|cookie| cookie.reply())
+    {
+        Ok(reply) if reply.present => ExtensionQuery::Present,
+        Ok(_) => ExtensionQuery::Absent,
+        Err(error) => ExtensionQuery::Unknown(error.to_string()),
+    }
+}
+
 /// Pure: resolve the RandR event stage to live events or a root-geometry fallback,
 /// recording the reason whenever it degrades.
 pub(crate) fn randr_event_fault(
@@ -92,7 +143,7 @@ pub(crate) fn randr_event_fault(
 pub(crate) fn second_wm_fault(error_kind: Option<ErrorKind>) -> Option<StartupFault> {
     (error_kind == Some(ErrorKind::Access)).then_some(StartupFault {
         stage: "root-selection",
-        message: "flamewm: another window manager is already running on this display".into(),
+        message: "flamewm: another window manager is already running on this display; blast radius: this session has no WM and exits 1".into(),
         exit_code: Some(1),
     })
 }
@@ -165,6 +216,13 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
             Err(ReplyError::ConnectionError(error))
         }
     };
+    // A lost connection cannot answer extension queries; stop here so no false "absent" records follow.
+    if matches!(result, Err(ReplyError::ConnectionError(_))) {
+        if !report.is_empty() {
+            eprintln!("{}", report.render());
+        }
+        return result;
+    }
     // RandR is optional: a server without it still gets a working WM. Losing this
     // selection means no live SCREEN_CHANGE/OUTPUT_CHANGE/CRTC_CHANGE notifications;
     // output geometry falls back to the root window until the next start.
@@ -198,22 +256,14 @@ pub(super) fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), 
     // the plain core-protocol path when one is absent; report each absence once so the
     // degraded session is observable rather than silent.
     for &(name, display_name, detail) in CORE_FALLBACK_EXTENSIONS {
-        let present = conn
-            .query_extension(name)
-            .map_err(ReplyError::from)
-            .and_then(|cookie| cookie.reply())
-            .is_ok_and(|reply| reply.present);
-        if let Some(fault) = core_fallback_fault(display_name, detail, present) {
+        let query = query_optional_extension(conn, name);
+        if let Some(fault) = optional_extension_fault(display_name, detail, query) {
             report.push(fault);
         }
     }
     for &(name, display_name, detail) in INPUT_FALLBACK_EXTENSIONS {
-        let present = conn
-            .query_extension(name)
-            .map_err(ReplyError::from)
-            .and_then(|cookie| cookie.reply())
-            .is_ok_and(|reply| reply.present);
-        if let Some(fault) = core_fallback_fault(display_name, detail, present) {
+        let query = query_optional_extension(conn, name);
+        if let Some(fault) = optional_extension_fault(display_name, detail, query) {
             report.push(fault);
         }
     }
@@ -266,9 +316,17 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .map(std::path::Path::to_path_buf),
             ),
         ));
-        let renderer = flamewm_render_x11::ExternalDecorationRenderer::open("IBM Plex Sans")
-            .ok()
-            .map(flamewm_render_x11::ExternalDecorationRenderer::into_cursor_shared);
+        let mut renderer_report = StartupReport::default();
+        let renderer = match flamewm_render_x11::ExternalDecorationRenderer::open("IBM Plex Sans") {
+            Ok(renderer) => Some(renderer.into_cursor_shared()),
+            Err(error) => {
+                renderer_report.push(renderer_fault(&error));
+                None
+            }
+        };
+        if !renderer_report.is_empty() {
+            eprintln!("{}", renderer_report.render());
+        }
         // Root gets the theme cursor at start; the renderer records it, so a live
         // cursor-theme reload re-defines it with the frames.
         if let Some(renderer) = renderer.as_ref() {

@@ -49,3 +49,16 @@ Read-only static audit of the X11 WM no-start failure class. No crate edits, no 
 - No runtime reproduction: no X server was started, no `DISPLAY` was unset in a live run, no screenshot was taken.
 - Composite, Damage, Render, XFixes and XInput record paths were not read in their test files.
 - Fix specs are not implemented; this file is docs only.
+
+## Result
+
+UNBUILT. No cargo, no tests, no X server run; no frame or runtime evidence. All three specs are implemented as source edits only.
+
+- Spec 3: `wm/manage.rs` `scan_existing` skips `is_destroyed_window_race` errors from `manage`, `map_unframed`, `map_dock` and `map_window` and continues; other errors still `?`. `wm/construct.rs` `new` replaces `.ok()` with a match that pushes `renderer_fault` (stage `renderer`, blast radius core frames) and prints it.
+- Spec 2: `wm/construct.rs` `become_wm` returns early when the change-window-attributes result is `ConnectionError`. Optional extension queries use tri-state `ExtensionQuery` (Present, Absent, Unknown); a failed query yields stage `extension-query`, never `extension`. Second-WM message gains the blast-radius clause (test updated).
+- Spec 1: new `crates/flamewm-wm-x11/src/startup_failure.rs` (`X11StartupFailure`, `startup_stage`, `connect_cause`, `startup_failure_line`, `startup_failure_report`). Stages tagged in `wm/event_loop.rs` `run_with_hook` (connect, become-wm, scan) and `runtime/mod.rs` `run_session` (integrations, catalog). `crates/flamewm-wm/src/main.rs` prints one `FLAMEWM-X11-STARTUP-FAIL` line after the existing `flamewm:` line, exit code still 1. Untagged errors are `stage=unclassified`.
+- Tests: `wm/startup_fault_tests.rs` gains cases for scan skip predicate, renderer record, Unknown vs Absent, lost-connection report, one classifier case per stage, no-DISPLAY cause, tagged and untagged errors. The lost-connection test checks the report only; the early return itself needs a live X connection to exercise.
+
+Files: `crates/flamewm-wm-x11/src/startup_failure.rs` (new), `crates/flamewm-wm-x11/src/lib.rs`, `crates/flamewm-wm-x11/src/wm/manage.rs`, `crates/flamewm-wm-x11/src/wm/construct.rs`, `crates/flamewm-wm-x11/src/wm/event_loop.rs`, `crates/flamewm-wm-x11/src/runtime/mod.rs`, `crates/flamewm-wm-x11/src/wm/startup_fault_tests.rs`, `crates/flamewm-wm/src/main.rs`.
+
+Open: `VERIFY-REAL-REGRESSIONS.md` not updated for the second-WM message change. Startup window-scan skip and renderer record need a live X capture. Other fatal stages (audio, provider registration after the first) are wrapped only where noted; `AudioHelper` and `UnixStream` errors still print as `unclassified`.

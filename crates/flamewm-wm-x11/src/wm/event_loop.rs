@@ -51,7 +51,12 @@ where
     ) -> Result<Option<std::time::Duration>, AnyError>,
 {
     use std::os::fd::AsRawFd;
-    let (conn, screen_num) = x11rb::connect(None)?;
+    let (conn, screen_num) = x11rb::connect(None).map_err(|error| {
+        crate::startup_failure::startup_stage(
+            "connect",
+            crate::startup_failure::connect_cause(&error.to_string()),
+        )
+    })?;
     let conn = Rc::new(conn);
     // Dropped on every return from this function (exit, `?` error, unwind): restores identity.
     let _zoom_reset = crate::zoom_transform::ResetOnExit::new(
@@ -63,7 +68,8 @@ where
         conn.setup().roots[screen_num].root,
     );
     let screen = &conn.setup().roots[screen_num];
-    become_wm(conn.as_ref(), screen)?;
+    become_wm(conn.as_ref(), screen)
+        .map_err(|error| crate::startup_failure::startup_stage("become-wm", error))?;
     if let Err(error) = flamewm_clipboard::spawn_keeper(None) {
         eprintln!("flamewm: clipboard keeper unavailable: {error}");
     }
@@ -74,9 +80,11 @@ where
         config,
         std::sync::Arc::clone(catalog),
         icon_service,
-    )?;
+    )
+    .map_err(|error| crate::startup_failure::startup_stage("become-wm", error))?;
     wm.publish_desktop_state()?;
-    wm.scan_existing()?;
+    wm.scan_existing()
+        .map_err(|error| crate::startup_failure::startup_stage("scan", error))?;
     if let Err(error) = wm.select_raw_keys() {
         eprintln!("flamewm: raw escape-key feed unavailable: {error}");
     }

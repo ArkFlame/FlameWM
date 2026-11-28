@@ -51,6 +51,10 @@ pub fn main() {
     };
     if let Err(error) = result {
         eprintln!("flamewm: {error}");
+        eprintln!(
+            "{}",
+            flamewm_wm_x11::startup_failure::startup_failure_report(error.as_ref())
+        );
         std::process::exit(1);
     }
 }

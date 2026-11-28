@@ -141,15 +141,21 @@ fn run_session(
     // is retried lazily with capped backoff from the hook (see `refresh_control`).
     let mut control_retry = BusRetry::new();
     let control: ControlSlot = Rc::new(RefCell::new(connect_control_session(&mut control_retry)));
-    let reactor = Rc::new(RefCell::new(Reactor::new()?));
-    let integrations = Rc::new(RefCell::new(LinuxIntegrationRuntime::connect()?));
+    let reactor = Rc::new(RefCell::new(Reactor::new().map_err(|error| {
+        crate::startup_failure::startup_stage("integrations", error)
+    })?));
+    let integrations = Rc::new(RefCell::new(
+        LinuxIntegrationRuntime::connect()
+            .map_err(|error| crate::startup_failure::startup_stage("integrations", error))?,
+    ));
     if let Err(error) = integrations.borrow_mut().start() {
         integrations.borrow_mut().stop();
-        return Err(error.into());
+        return Err(crate::startup_failure::startup_stage("integrations", error));
     }
     let provider_error = Rc::new(RefCell::new(None));
     let register = |source| {
         register_provider(&reactor, &integrations, &provider_error, source)
+            .map_err(|error| crate::startup_failure::startup_stage("integrations", error))
             .inspect_err(|_| integrations.borrow_mut().stop())
     };
     let mut network_registration = register(LinuxIntegrationSource::NetworkManager)?;
@@ -256,7 +262,8 @@ fn run_session(
         None
     };
     let _startup_guard = flamewm_profiler::start("wm.startup.catalog");
-    let catalog = discover_catalog_once()?;
+    let catalog = discover_catalog_once()
+        .map_err(|error| crate::startup_failure::startup_stage("catalog", error))?;
     drop(_startup_guard);
     // One worker is sufficient for this single WM; the shared index is built
     // before the event loop and all cold reads/decodes remain off-loop.

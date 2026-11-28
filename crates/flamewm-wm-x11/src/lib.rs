@@ -17,6 +17,7 @@ pub mod output_scale;
 mod runtime;
 mod size_hints;
 pub(crate) mod snap_preview;
+pub mod startup_failure;
 mod window_config;
 mod wm;
 mod zoom;
