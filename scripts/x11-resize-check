@@ -45,7 +45,7 @@ done
 [[ -x "$DRIVER_BIN" ]] || fail "driver binary not executable: $DRIVER_BIN"
 
 # -noreset keeps the server alive across client probes (same rule as scripts/break/lib.sh).
-Xvfb "$DISPLAY_NAME" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RANDR \
+Xvfb "$DISPLAY_NAME" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RANDR +extension Composite \
   >"$LOG_DIR/xvfb.log" 2>&1 &
 xvfb_pid=$!
 

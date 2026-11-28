@@ -12,27 +12,50 @@ RUNS="${1:-3}"
 NUM="${X11_RESIZE_DISPLAY_NUM:-95}"
 D=":$NUM"
 [[ -x "$WM" && -x "$DRV" ]] || { echo "FAIL: missing $WM or $DRV" >&2; exit 1; }
+PIDS=""
+trap 'for p in $PIDS; do kill "$p" 2>/dev/null || true; done' EXIT
 cpu() { awk '{print $14+$15}' "/proc/$1/stat"; }
 for run in $(seq 1 "$RUNS"); do
   LOG="$(mktemp -d "${TMPDIR:-/tmp}/flamewm-resize-cpu.XXXXXX")"
-  Xvfb "$D" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RANDR >"$LOG/xvfb.log" 2>&1 &
+  Xvfb "$D" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RANDR +extension Composite >"$LOG/xvfb.log" 2>&1 &
   xp=$!
   timeout 10 bash -c 'until xprop -display "$1" -root >/dev/null 2>&1; do :; done' _ "$D"
   mkdir -p "$LOG/debug"
-  env -u WAYLAND_DISPLAY DISPLAY="$D" FLAMEWM_DEBUG=1 FLAMEWM_DEBUG_DIR="$LOG/debug" "$WM" >"$LOG/wm.log" 2>&1 &
+  # STRACE=1 starts the WM under `strace -c -f` (ptrace_scope=1 forbids attaching later); the
+  # flamewm CPU column then shows strace's own CPU, so read only the syscall table in that mode.
+  tracer=()
+  [[ "${STRACE:-0}" == 1 ]] && tracer=(strace -c -f -o "$LOG/strace.txt")
+  [[ "${STATX:-0}" == 1 ]] && tracer=(strace -f -e trace=statx -o "$LOG/statx.txt")
+  env -u WAYLAND_DISPLAY DISPLAY="$D" FLAMEWM_DEBUG=1 FLAMEWM_DEBUG_DIR="$LOG/debug" \
+    "${tracer[@]}" "$WM" >"$LOG/wm.log" 2>&1 &
   wp=$!
   env -u WAYLAND_DISPLAY DISPLAY="$D" xterm -T Chk -n Chk -geometry 80x24+120+120 >"$LOG/xterm.log" 2>&1 &
   tp=$!
+  PIDS="$xp $wp $tp"
   timeout 10 bash -c 'until xwininfo -display "$2" -name "$1" 2>/dev/null | grep -q "Map State: IsViewable"; do :; done' _ Chk "$D"
+  # Settle: the startup icon-theme scan (thousands of stats) overlaps the first seconds and would
+  # be billed to the drag. Wait, bounded at 20 s, until WM CPU is unchanged for two 0.5 s reads.
+  quiet=0; prev=$(cpu "$wp"); waited=0
+  while (( quiet < 2 && waited < 40 )); do
+    read -r -t 0.5 _ < <(:) || true
+    cur=$(cpu "$wp"); waited=$((waited + 1))
+    if [[ "$cur" == "$prev" ]]; then quiet=$((quiet + 1)); else quiet=0; fi
+    prev=$cur
+  done
+  settle_ms=$((waited * 500))
   w0=$(cpu "$wp"); x0=$(cpu "$xp"); t0=$(cpu "$tp")
-  out="$(DISPLAY="$D" timeout 15 "$DRV" Chk --mode corner --steps 600 --duration-ms 1000 2>&1 || true)"
+  out="no-drive"
+  [[ "${NODRIVE:-0}" == 1 ]] || out="$(DISPLAY="$D" timeout 15 "$DRV" Chk --mode corner --steps 600 --duration-ms 1000 2>&1 || true)"
   w1=$(cpu "$wp"); x1=$(cpu "$xp"); t1=$(cpu "$tp")
   size="$(DISPLAY="$D" xwininfo -name Chk 2>/dev/null | awk '/Width/{w=$2}/Height/{h=$2}END{print w"x"h}')"
   sum="$(grep -rhoE 'wm.resize.summary.*' "$LOG/debug" 2>/dev/null | tail -1 || true)"
   alive=dead; kill -0 "$wp" 2>/dev/null && alive=alive
-  printf 'run=%s flamewm=%s Xvfb=%s xterm=%s size=%s wm=%s | %s | %s\n' \
-    "$run" "$((w1 - w0))" "$((x1 - x0))" "$((t1 - t0))" "$size" "$alive" "$out" "$sum"
-  kill "$tp" "$wp" "$xp" 2>/dev/null || true
+  printf 'run=%s settle_ms=%s flamewm=%s Xvfb=%s xterm=%s size=%s wm=%s | %s | %s\n' \
+    "$run" "$settle_ms" "$((w1 - w0))" "$((x1 - x0))" "$((t1 - t0))" "$size" "$alive" "$out" "$sum"
+  kill -INT "$wp" 2>/dev/null || true
+  kill "$tp" "$xp" 2>/dev/null || true
   wait 2>/dev/null || true
+  if [[ "${STATX:-0}" == 1 ]]; then echo "statx total=$(grep -c statx "$LOG/statx.txt")"; tail -n "${STATX_TAIL:-100000}" "$LOG/statx.txt" | grep -oE "statx\([A-Z_0-9-]+, \"[^\"]*\"" | sort | uniq -c | sort -rn | head -n "${STATX_TOP:-12}"; fi
+  if [[ "${STRACE:-0}" == 1 ]]; then head -n "${STRACE_TOP:-16}" "$LOG/strace.txt" 2>/dev/null || true; fi
   rm -rf "$LOG"
 done
