@@ -383,10 +383,8 @@ mod try_exec_path_index_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-tryexec-{}-{unique}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-tryexec-{}-{unique}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let first = root.join("first");
         let second = root.join("second");
