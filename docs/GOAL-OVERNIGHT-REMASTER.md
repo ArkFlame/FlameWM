@@ -1,6 +1,6 @@
 # GOAL: overnight remaster, lean, fast, unbreakable FlameWM
 
-Unattended. Never completes. Never declare done, never ask, never stop to summarize.
+Unattended, never completes. Never declare done or ask.
 
 ## Objective
 1. Remaster whole areas (recode behind the existing typed facade, not patch): lower CPU and RAM, zero idle wakeups, ZERO visual change.

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# Bounded X11 startup-fault harness for the FlameWM X11 WM binary.
+# Usage: scripts/x11-startup-faults [built-binary-dir]
+#        default built-binary-dir = /home/linsaftw/.cache/cargo-target/debug
+#
+# Four cases, each under `timeout` and each writing into its own mktemp -d dir:
+#   1 DISPLAY unset                 -> stage=connect,   exit 1
+#   2 DISPLAY=:97, no X server      -> stage=connect,   exit 1
+#   3 private Xvfb, WM twice        -> stage=become-wm, exit 1 (the second WM)
+#   4 private Xvfb, healthy 3 s     -> timeout exit 124/137, no startup-fail line
+#
+# Asserts the exit status and one `FLAMEWM-X11-STARTUP-FAIL stage=...` line carrying the
+# expected `blast_radius` (format: crates/flamewm-wm/src/main.rs and
+# crates/flamewm-wm-x11/src/startup_failure.rs). The Xvfb is always killed, even on FAIL.
+# No cargo, git, network, host display or host config is used. Exit 0 only if all cases pass.
+set -uo pipefail
+
+usage() { printf 'usage: %s [built-binary-dir]\n' "$0" >&2; exit 2; }
+(( $# <= 1 )) || usage
+[[ "${1:-}" == --help || "${1:-}" == -h ]] && usage
+
+BIN_DIR="${1:-/home/linsaftw/.cache/cargo-target/debug}"
+WM="$BIN_DIR/flamewm"
+[[ -x "$WM" ]] || { printf 'ENV_BLOCKED: flamewm not executable: %s\n' "$WM" >&2; exit 3; }
+XVFB=/usr/bin/Xvfb
+[[ -x "$XVFB" ]] || { printf 'ENV_BLOCKED: Xvfb missing: %s\n' "$XVFB" >&2; exit 3; }
+command -v timeout >/dev/null || { printf 'ENV_BLOCKED: timeout utility missing\n' >&2; exit 3; }
+
+# A private session bus keeps the healthy case from failing on integrations; it is optional.
+WM_LAUNCH=("$WM")
+if command -v dbus-run-session >/dev/null 2>&1; then
+  WM_LAUNCH=(dbus-run-session -- "$WM")
+fi
+
+BASE="$(mktemp -d "${TMPDIR:-/tmp}/flamewm-x11-startup-faults.XXXXXX")" || exit 3
+XPID=""
+WMPID=""
+case_name=""
+failed=0
+
+kill_xvfb() {
+  if [[ -n "$XPID" ]]; then
+    kill "$XPID" 2>/dev/null || true
+    wait "$XPID" 2>/dev/null || true
+    XPID=""
+  fi
+}
+cleanup() {
+  if [[ -n "$WMPID" ]]; then
+    kill "$WMPID" 2>/dev/null || true
+    wait "$WMPID" 2>/dev/null || true
+    WMPID=""
+  fi
+  kill_xvfb
+  rm -rf "$BASE"
+}
+trap cleanup EXIT
+
+report_pass() { printf 'PASS %s\n' "$case_name"; }
+report_fail() { printf 'FAIL %s: %s\n' "$case_name" "$1"; failed=$((failed + 1)); }
+
+# One isolated output dir per case; private HOME/XDG keeps the WM off host config.
+case_dir() {
+  local dir
+  dir="$(mktemp -d "$BASE/${case_name}.XXXXXX")" || exit 3
+  mkdir -p "$dir/home" "$dir/runtime" "$dir/config" "$dir/cache"
+  chmod 700 "$dir/runtime"
+  export HOME="$dir/home" XDG_RUNTIME_DIR="$dir/runtime" \
+    XDG_CONFIG_HOME="$dir/config" XDG_CACHE_HOME="$dir/cache" \
+    FLAMEWM_CONFIG_DIR="$dir/config/flamewm"
+  printf '%s\n' "$dir"
+}
+
+# Both flags must hold on the SAME classified line, not merely somewhere in the log.
+assert_failure_line() {
+  local log="$1" stage="$2" blast="$3" line
+  line="$(grep -F "FLAMEWM-X11-STARTUP-FAIL stage=$stage " "$log" 2>/dev/null | head -n 1)"
+  [[ -n "$line" ]] || { report_fail "missing FLAMEWM-X11-STARTUP-FAIL stage=$stage line"; return 1; }
+  [[ "$line" == *"blast_radius=$blast"* ]] || { report_fail "wrong blast_radius: $line"; return 1; }
+  return 0
+}
+
+# Private Xvfb with a display number outside the common :0-:99 range.
+start_xvfb() {
+  local dir="$1" num tries
+  num=$(( 600 + ($$ % 300) ))
+  while [[ -e "/tmp/.X11-unix/X$num" ]]; do num=$((num + 1)); done
+  export DISPLAY=":$num"
+  "$XVFB" "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -noreset \
+    >"$dir/xvfb.log" 2>&1 &
+  XPID=$!
+  # Bounded 5 s readiness handshake, same pattern as scripts/look-capture.
+  for tries in $(seq 1 50); do
+    [[ -e "/tmp/.X11-unix/X$num" ]] && return 0
+    sleep 0.1
+  done
+  report_fail "private Xvfb not ready on $DISPLAY"
+  return 1
+}
+
+# Case 1: no DISPLAY at all -> connect stage.
+case_name="display-unset"
+dir="$(case_dir)"
+log="$dir/wm.log"
+env -u DISPLAY timeout --signal=TERM --kill-after=2s 8s "${WM_LAUNCH[@]}" >"$log" 2>&1
+rc=$?
+if [[ $rc -ne 1 ]]; then
+  report_fail "exit=$rc (expected 1)"
+elif assert_failure_line "$log" connect 'WM cannot start; no X11 session is managed'; then
+  report_pass
+fi
+
+# Case 2: DISPLAY set but unreachable -> same connect stage, different trigger.
+case_name="display-97-no-server"
+dir="$(case_dir)"
+log="$dir/wm.log"
+if [[ -e /tmp/.X11-unix/X97 ]]; then
+  report_fail 'DISPLAY=:97 already has an X server socket; no-server fault not injectable'
+else
+  DISPLAY=:97 timeout --signal=TERM --kill-after=2s 8s "${WM_LAUNCH[@]}" >"$log" 2>&1
+  rc=$?
+  if [[ $rc -ne 1 ]]; then
+    report_fail "exit=$rc (expected 1)"
+  elif assert_failure_line "$log" connect 'WM cannot start; no X11 session is managed'; then
+    report_pass
+  fi
+fi
+
+# Case 3: first WM owns the root, second must fail at become-wm with another-WM.
+case_name="second-wm-on-private-xvfb"
+dir="$(case_dir)"
+if start_xvfb "$dir"; then
+  timeout --signal=TERM --kill-after=2s 8s "${WM_LAUNCH[@]}" >"$dir/wm1.log" 2>&1 &
+  WMPID=$!
+  sleep 2
+  if ! kill -0 "$WMPID" 2>/dev/null; then
+    report_fail 'first WM exited before the second was started'
+  else
+    timeout --signal=TERM --kill-after=2s 8s "${WM_LAUNCH[@]}" >"$dir/wm2.log" 2>&1
+    rc=$?
+    if [[ $rc -ne 1 ]]; then
+      report_fail "second WM exit=$rc (expected 1)"
+    elif assert_failure_line "$dir/wm2.log" become-wm 'root window not claimed; WM cannot operate'; then
+      report_pass
+    fi
+  fi
+  kill "$WMPID" 2>/dev/null || true
+  wait "$WMPID" 2>/dev/null || true
+  WMPID=""
+fi
+kill_xvfb
+
+# Case 4: healthy WM survives three seconds and is terminated by timeout, no fault line.
+case_name="healthy-wm-3s"
+dir="$(case_dir)"
+if start_xvfb "$dir"; then
+  timeout --signal=TERM --kill-after=2s 3s "${WM_LAUNCH[@]}" >"$dir/wm.log" 2>&1
+  rc=$?
+  if [[ $rc -ne 124 && $rc -ne 137 ]]; then
+    report_fail "exit=$rc (expected timeout 124/137)"
+  elif grep -qF 'FLAMEWM-X11-STARTUP-FAIL stage=' "$dir/wm.log"; then
+    report_fail "startup-fail line present: $(grep -F 'FLAMEWM-X11-STARTUP-FAIL stage=' "$dir/wm.log" | head -n 1)"
+  else
+    report_pass
+  fi
+fi
+kill_xvfb
+
+printf 'SUMMARY cases=4 failed=%d\n' "$failed"
+[[ $failed -eq 0 ]]

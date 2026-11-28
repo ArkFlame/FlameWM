@@ -336,12 +336,30 @@ pub fn shell_quote(text: &str) -> String {
 
 /// Script run by the replacement for a missing desktop or shell component. It paints a plain
 /// root background (when `xsetroot` exists), prints the reason to stderr (the session log), shows
-/// an `xmessage` notice for the desktop role, and then stays alive so the supervisor's role
-/// indexing and WM readiness are unchanged.
+/// an `xmessage` notice for the desktop and window-manager roles, and then stays alive so the
+/// supervisor's role indexing and WM readiness are unchanged.
 #[must_use]
 pub fn fallback_script(role: &str, binary: &str, log: &str, dialog: bool) -> String {
+    fallback_script_with_cause(role, binary, log, dialog, "is missing or failed")
+}
+
+/// Same fallback script with an explicit cause clause, so a restart-budget give-up is not
+/// reported to the user as a missing binary.
+#[must_use]
+pub fn fallback_script_with_cause(
+    role: &str,
+    binary: &str,
+    log: &str,
+    dialog: bool,
+    cause: &str,
+) -> String {
+    let state = if role == "window manager" {
+        "A plain background is shown instead."
+    } else {
+        "The window manager is running without it."
+    };
     let message = format!(
-        "FlameWM: the {role} component ({binary}) is missing or failed. The window manager is running without it. Details: {log}. Run flamewm-session --check for a full report."
+        "FlameWM: the {role} component ({binary}) {cause}. {state} Details: {log}. Run flamewm-session --check for a full report."
     );
     let quoted = shell_quote(&message);
     let mut script = format!(
@@ -361,13 +379,19 @@ pub fn fallback_script(role: &str, binary: &str, log: &str, dialog: bool) -> Str
 /// Replacement plan for a non-critical component that cannot run.
 #[must_use]
 pub fn fallback_plan(original: &ProcessPlan, log: &str) -> ProcessPlan {
+    fallback_plan_with_cause(original, log, "is missing or failed")
+}
+
+/// Replacement plan whose on-screen and log notice names the concrete failure cause.
+#[must_use]
+pub fn fallback_plan_with_cause(original: &ProcessPlan, log: &str, cause: &str) -> ProcessPlan {
     let (role_name, dialog) = match original.role {
         SessionRole::Desktop => ("desktop", true),
         SessionRole::Shell => ("shell", false),
-        SessionRole::WindowManager => ("window manager", false),
+        SessionRole::WindowManager => ("window manager", true),
     };
     let binary = original.program.display().to_string();
-    let script = fallback_script(role_name, &binary, log, dialog);
+    let script = fallback_script_with_cause(role_name, &binary, log, dialog, cause);
     ProcessPlan {
         role: original.role,
         program: PathBuf::from("/bin/sh"),
@@ -607,6 +631,18 @@ mod tests {
         let fallback = fallback_plan(&original, "/log");
         assert!(!fallback.arguments[1].contains("xmessage"));
         assert!(fallback.arguments[1].contains("the shell component"));
+    }
+
+    #[test]
+    fn window_manager_fallback_shows_a_truthful_notice() {
+        let original = plan(SessionRole::WindowManager, "/usr/bin/flamewm");
+        let fallback = fallback_plan(&original, "/log");
+        assert_eq!(fallback.role, SessionRole::WindowManager);
+        let script = &fallback.arguments[1];
+        assert!(script.contains("xmessage -center"));
+        assert!(script.contains("A plain background is shown instead."));
+        assert!(!script.contains("The window manager is running without it"));
+        assert!(script.contains("Details: /log"));
     }
 
     #[test]

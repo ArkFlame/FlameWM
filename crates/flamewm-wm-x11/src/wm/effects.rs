@@ -589,4 +589,49 @@ mod resize_configure_pacing_tests {
         let later = now + std::time::Duration::from_millis(17);
         assert!(resize_configure_due(Some(last), later));
     }
+
+    // The real replay path (flush_deferred_resize) needs a live Wm and native
+    // connection; drive the pure pacing decision with an injected clock instead.
+    #[test]
+    fn one_second_of_1khz_resize_stays_budgeted_and_flushes_last_batch() {
+        let start = std::time::Instant::now();
+        let mut last_configure: Option<std::time::Instant> = None;
+        let mut configure_batches = 0usize;
+        let mut deferred_pending = false;
+
+        for millis in 0..1_000u64 {
+            let now = start + std::time::Duration::from_millis(millis);
+            if resize_configure_due(last_configure, now) {
+                last_configure = Some(now);
+                configure_batches += 1;
+                deferred_pending = false;
+            } else {
+                // Paced motion: latest batch wins and waits for a due tick.
+                deferred_pending = true;
+            }
+        }
+        assert!(
+            configure_batches <= 70,
+            "1 kHz resize sent {configure_batches} configure batches, budget is 70"
+        );
+        assert!(
+            deferred_pending,
+            "last motion at 999 ms was paced, so a trailing batch is stored"
+        );
+
+        let last_event = start + std::time::Duration::from_millis(999);
+        let mut flush_at = start + std::time::Duration::from_millis(1_000);
+        while !resize_configure_due(last_configure, flush_at) {
+            flush_at += std::time::Duration::from_millis(1);
+        }
+        assert!(
+            flush_at > last_event,
+            "final deferred configure at {flush_at:?} must follow last event {last_event:?}"
+        );
+        configure_batches += 1; // trailing flush replays the stored configure
+        assert!(
+            configure_batches <= 70,
+            "trailing flush pushed configure batches to {configure_batches}"
+        );
+    }
 }

@@ -1,5 +1,7 @@
 use super::*;
 
+use flamewm_session_core::diagnostics::{BlastRadius, FailureCode, FailureRecord};
+
 pub(super) const LOCK_SCREEN_BINARY: &str = "flamewm-lock";
 
 /// What the Lock session action runs.
@@ -75,6 +77,40 @@ pub(super) fn spawn_lock_process(program: &Path, args: &[&str]) -> std::io::Resu
         .spawn()
 }
 
+/// One typed failure record for a lock-supervision fault. The blast radius is the same on every
+/// path: the session, shell and WM keep working while the lock screen is degraded until the client
+/// returns. `fallback_taken` records whether supervision took its respawn/loginctl fallback.
+fn lock_failure_record(
+    stage: &str,
+    cause: impl Into<String>,
+    fallback_taken: bool,
+) -> FailureRecord {
+    FailureRecord::at_now(
+        stage,
+        FailureCode::SubsystemError,
+        cause,
+        BlastRadius::new(["session", "shell", "wm"], ["lock_screen"]),
+        fallback_taken,
+    )
+}
+
+/// Appends one lock failure record to the shared session log. Mirrors the PAM recorder in
+/// `flamewm-lock` so faults from both lock paths land in the same file. Diagnostics only: it never
+/// changes a supervision decision.
+fn append_lock_failure(record: FailureRecord) {
+    use flamewm_session_core::diagnostics::{append_record, session_log_path};
+    let fallback = PathBuf::from("/tmp/flamewm-session.log");
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let log = session_log_path(
+        std::env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    );
+    if let Err(error) = append_record(&log, &record) {
+        eprintln!("flamewm: lock failure record write failed: {error}");
+    }
+}
+
 /// Owns the lock child for the lifetime of the lock screen: respawns it per
 /// [`decide`] and returns once supervision stops.
 pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
@@ -98,6 +134,11 @@ pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
             LockSupervision::Stop => return,
             LockSupervision::Respawn { delay } => {
                 if delay == LOCK_CRASH_LOOP_DELAY {
+                    append_lock_failure(lock_failure_record(
+                        "x11-lock-crash-loop",
+                        format!("lock screen exited ({status}) in a crash loop"),
+                        true,
+                    ));
                     eprintln!(
                         "flamewm: lock screen exited ({status}) in a crash loop; respawning after {delay:?}"
                     );
@@ -114,30 +155,45 @@ pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
                         let _ = Command::new("loginctl").arg("lock-session").status();
                     },
                     thread::sleep,
+                    append_lock_failure,
                 );
             }
         }
     }
 }
 
-/// Retries `spawn` until it yields a child. Each failure logs, calls `ask_loginctl` once for the
-/// whole retry run, then waits [`LOCK_CRASH_LOOP_DELAY`] through `sleep` before the next attempt.
+/// Retries `spawn` until it yields a child. Each failure writes a typed failure record through
+/// `record`, calls `ask_loginctl` once for the whole retry run (also recorded), then waits
+/// [`LOCK_CRASH_LOOP_DELAY`] through `sleep` before the next attempt.
 pub(super) fn respawn_until_started<T>(
     mut spawn: impl FnMut() -> std::io::Result<T>,
     mut ask_loginctl: impl FnMut(),
     mut sleep: impl FnMut(Duration),
+    mut record: impl FnMut(FailureRecord),
 ) -> T {
     let mut asked_loginctl = false;
     loop {
         match spawn() {
             Ok(child) => return child,
             Err(error) => {
+                record(lock_failure_record(
+                    "x11-lock-respawn",
+                    format!(
+                        "lock screen respawn failed: {error}; retrying in {LOCK_CRASH_LOOP_DELAY:?}; the desktop may be unlocked until the lock client starts"
+                    ),
+                    true,
+                ));
                 eprintln!(
                     "flamewm: lock screen respawn failed: {error}; retrying in {LOCK_CRASH_LOOP_DELAY:?}; blast_radius=works:session|degraded:lock-screen (the desktop may be unlocked until the lock client starts)"
                 );
                 if !asked_loginctl {
                     asked_loginctl = true;
                     ask_loginctl();
+                    record(lock_failure_record(
+                        "x11-lock-loginctl",
+                        "no lock client; asked loginctl lock-session for another locker",
+                        true,
+                    ));
                 }
                 sleep(LOCK_CRASH_LOOP_DELAY);
             }
@@ -464,13 +520,15 @@ mod lock_supervision_tests {
     }
 
     /// Three failed spawns then success: the child comes back after exactly three sleeps of the
-    /// crash-loop delay, and loginctl is asked once. No real sleeping or processes: the spawn
-    /// result is a token and the sleep and loginctl hooks only record calls.
+    /// crash-loop delay, loginctl is asked once, and every retry plus the loginctl fallback emits
+    /// a typed failure record. No real sleeping, processes or log writes: the spawn result is a
+    /// token and the sleep, loginctl and record hooks only capture calls.
     #[test]
     fn failed_respawns_retry_at_crash_loop_delay_and_ask_loginctl_once() {
         let mut attempts = 0;
         let mut sleeps = Vec::new();
         let mut loginctl_calls = 0;
+        let mut records = Vec::new();
         let started = respawn_until_started(
             || {
                 attempts += 1;
@@ -482,20 +540,61 @@ mod lock_supervision_tests {
             },
             || loginctl_calls += 1,
             |delay| sleeps.push(delay),
+            |record| records.push(record),
         );
         assert_eq!(started, 4);
         assert_eq!(sleeps, vec![LOCK_CRASH_LOOP_DELAY; 3]);
         assert_eq!(loginctl_calls, 1);
+        assert_eq!(
+            records.iter().map(|r| r.stage.as_str()).collect::<Vec<_>>(),
+            [
+                "x11-lock-respawn",
+                "x11-lock-loginctl",
+                "x11-lock-respawn",
+                "x11-lock-respawn"
+            ]
+        );
+        for record in &records {
+            assert_eq!(record.code, FailureCode::SubsystemError);
+            assert!(record.fallback_taken);
+            assert_eq!(record.blast_radius.still_works, ["session", "shell", "wm"]);
+            assert_eq!(record.blast_radius.degraded, ["lock_screen"]);
+        }
+        assert!(records[0].cause.contains("spawn failed"));
+        assert!(records[1].cause.contains("loginctl"));
     }
 
     #[test]
-    fn immediate_respawn_skips_sleep_and_loginctl() {
+    fn immediate_respawn_skips_sleep_loginctl_and_records() {
         let mut sleeps = 0;
         let mut loginctl_calls = 0;
-        let started =
-            respawn_until_started(|| Ok("child"), || loginctl_calls += 1, |_| sleeps += 1);
+        let mut records = Vec::new();
+        let started = respawn_until_started(
+            || Ok("child"),
+            || loginctl_calls += 1,
+            |_| sleeps += 1,
+            |record| records.push(record),
+        );
         assert_eq!(started, "child");
         assert_eq!(sleeps, 0);
         assert_eq!(loginctl_calls, 0);
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn lock_failure_record_carries_stage_cause_blast_radius_and_fallback() {
+        let record = lock_failure_record("x11-lock-crash-loop", "lock screen died", true);
+        assert_eq!(record.stage, "x11-lock-crash-loop");
+        assert_eq!(record.cause, "lock screen died");
+        assert_eq!(record.code, FailureCode::SubsystemError);
+        assert_eq!(
+            record.blast_radius,
+            BlastRadius::new(["session", "shell", "wm"], ["lock_screen"])
+        );
+        assert!(record.fallback_taken);
+        let line = record.to_log_line();
+        assert!(line.contains("stage=\"x11-lock-crash-loop\""));
+        assert!(line.contains("code=subsystem_error"));
+        assert!(line.contains("degraded=\"lock_screen\""));
     }
 }

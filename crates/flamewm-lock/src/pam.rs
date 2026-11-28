@@ -83,11 +83,21 @@ pub trait PamSession {
     fn end(&mut self, status: c_int);
 }
 
+/// Pure decision for a PAM backend failure: authentication is the only lost capability, the lock
+/// surface keeps covering the screen, and the session, shell and other windows keep working.
+#[must_use]
+pub fn pam_failure_blast_radius() -> flamewm_session_core::diagnostics::BlastRadius {
+    flamewm_session_core::diagnostics::BlastRadius::new(
+        ["session", "shell", "wm", "lock_surface"],
+        ["lock_auth"],
+    )
+}
+
 /// Appends one typed failure record for a PAM or session-lock backend failure. This is pure
 /// diagnostics: it never changes the lock decision and never writes the typed password.
 pub fn record_failure(stage: &str, cause: impl std::fmt::Display) {
     use flamewm_session_core::diagnostics::{
-        BlastRadius, FailureCode, FailureRecord, append_record, session_log_path,
+        FailureCode, FailureRecord, append_record, session_log_path,
     };
     let fallback = std::path::PathBuf::from("/tmp/flamewm-session.log");
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -100,9 +110,7 @@ pub fn record_failure(stage: &str, cause: impl std::fmt::Display) {
         stage,
         FailureCode::SubsystemError,
         cause.to_string(),
-        // Authentication is the only degraded capability; the session, shell and other windows
-        // keep working. No fallback is taken: the screen stays locked.
-        BlastRadius::new(["session", "shell", "wm"], ["lock_auth", "lock_surface"]),
+        pam_failure_blast_radius(),
         false,
     );
     if let Err(error) = append_record(&log, &record) {
@@ -488,6 +496,18 @@ mod tests {
     #[test]
     fn missing_libpam_stays_locked() {
         assert!(DynamicPam::load_from(&["libflamewm-no-such-pam.so.0"]).is_err());
+    }
+
+    /// Pure decision recorded for a dlopen miss: the cover stays up with the rest of the session,
+    /// and only authentication is degraded. No record write or real PAM load is needed.
+    #[test]
+    fn pam_load_failure_decision_keeps_the_cover_and_loses_only_auth() {
+        let blast = pam_failure_blast_radius();
+        assert_eq!(
+            blast.still_works,
+            vec!["session", "shell", "wm", "lock_surface"]
+        );
+        assert_eq!(blast.degraded, vec!["lock_auth"]);
     }
 
     /// dlopen miss, end to end through the reducer: the load fails, `authenticate` maps that

@@ -51,11 +51,43 @@ pub fn main() {
     };
     if let Err(error) = result {
         eprintln!("flamewm: {error}");
-        eprintln!(
-            "{}",
-            flamewm_wm_x11::startup_failure::startup_failure_report(error.as_ref())
-        );
+        let line = flamewm_wm_x11::startup_failure::startup_failure_report(error.as_ref());
+        eprintln!("{line}");
+        // p105: a fatal X11 startup must leave a durable record, not only a stderr line.
+        append_startup_failure_record(&startup_failure_log_path(), &line);
         std::process::exit(1);
+    }
+}
+
+/// The same session log the X11 panic hook installs (see `bin/flamewm.rs`), so a fatal startup and
+/// any panic interleave in one durable file.
+fn startup_failure_log_path() -> PathBuf {
+    let fallback =
+        flamewm_session_core::diagnostics::fallback_log_path(rustix::process::getuid().as_raw());
+    let home = env::var_os("HOME").map(PathBuf::from);
+    flamewm_session_core::diagnostics::session_log_path(
+        env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    )
+}
+
+/// Append one durable failure record for a fatal X11 startup error to `path`, reusing the shared
+/// `append_record` helper the Wayland compositor and the session use. Taking the path as an
+/// argument keeps the write testable without touching the session environment.
+fn append_startup_failure_record(path: &Path, line: &str) {
+    use flamewm_session_core::diagnostics::{
+        BlastRadius, FailureCode, FailureRecord, append_record,
+    };
+    let record = FailureRecord::at_now(
+        "startup",
+        FailureCode::SubsystemError,
+        line.to_owned(),
+        BlastRadius::new([], ["wm"]),
+        false,
+    );
+    if let Err(error) = append_record(path, &record) {
+        eprintln!("flamewm: startup failure record write failed: {error}");
     }
 }
 
@@ -432,6 +464,27 @@ fn xsettings_owner(
 mod tests {
     use super::*;
     use flamewm_session_core::{Toolkit, ToolkitStatus};
+
+    #[test]
+    fn startup_failure_record_appends_to_temp_dir_file() {
+        let dir = env::temp_dir().join(format!(
+            "flamewm-x11-startup-failure-{}",
+            std::process::id()
+        ));
+        let path = dir.join("session.log");
+        let _ = std::fs::remove_file(&path);
+        let line = "FLAMEWM-X11-STARTUP-FAIL stage=connect cause=DISPLAY unset or unreachable blast_radius=none";
+        append_startup_failure_record(&path, line);
+        let contents = std::fs::read_to_string(&path).expect("failure record file");
+        let record = contents.lines().next().expect("one record");
+        assert!(record.contains("stage=\"startup\""), "{record}");
+        assert!(record.contains("code=subsystem_error"), "{record}");
+        assert!(record.contains(line), "{record}");
+        assert!(record.contains("degraded=\"wm\""), "{record}");
+        assert!(record.ends_with("fallback_taken=false"), "{record}");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 
     fn snapshot_with(entries: &[(&str, SettingValue)]) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);

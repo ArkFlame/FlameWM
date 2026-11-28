@@ -336,4 +336,31 @@ mod tests {
         assert_eq!(names(&dir), ["bbbb-2222.rgba"]);
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// Repeated wallpaper changes must not grow the directory past the entry cap. Distinct owner
+    /// prefixes keep `prune` from removing these as stale siblings; a generous byte budget leaves
+    /// the entry count as the only bound that can evict.
+    #[test]
+    fn entry_count_cap_evicts_least_recently_used() {
+        let dir = scratch("entry-cap");
+        let total = MAX_CACHE_ENTRIES + 4;
+        let name = |index: usize| format!("{index:04x}-{index:04x}.rgba");
+        for index in 0..total {
+            put(&dir, &name(index), 8, (total - index) as u64);
+        }
+        let keep = dir.join(name(total - 1));
+        let keep_name = name(total - 1);
+        prune(&dir, &keep, MAX_CACHE_BYTES);
+        let held = names(&dir);
+        assert!(
+            held.len() <= MAX_CACHE_ENTRIES,
+            "cache held {} entries",
+            held.len()
+        );
+        assert!(held.contains(&keep_name), "written entry was evicted");
+        for index in 0..4 {
+            assert!(!held.contains(&name(index)), "oldest entry survived");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

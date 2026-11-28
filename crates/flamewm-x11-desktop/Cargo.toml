@@ -9,6 +9,8 @@ repository.workspace = true
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-applications = { path = "../flamewm-applications" }
+# Lock supervision appends typed FailureRecords to the shared session log.
+flamewm-session-core = { path = "../flamewm-session-core" }
 rustix = { workspace = true, features = ["process"] }
 # RandR is the output/refresh path in src/lib.rs and src/shared.rs.
 x11rb = { workspace = true, features = ["randr"] }

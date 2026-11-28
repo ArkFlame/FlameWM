@@ -21,7 +21,15 @@ impl<C: Connection> Wm<'_, C> {
                 continue;
             };
             if attrs.map_state != MapState::UNMAPPED {
-                let kind = self.window_kind(window, attrs.override_redirect)?;
+                let kind = match self.window_kind(window, attrs.override_redirect) {
+                    Ok(kind) => kind,
+                    Err(error) => {
+                        // The client can die between QueryTree and the type query; skip it
+                        // instead of failing the whole startup scan.
+                        ignore_destroyed_window_race(Err(error))?;
+                        continue;
+                    }
+                };
                 let outcome = match kind {
                     WindowKind::Popup => self
                         .conn
