@@ -50,7 +50,7 @@ Xvfb "$DISPLAY_NAME" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RAN
 xvfb_pid=$!
 
 # A real X round-trip, bounded by timeout; no sleep loop.
-timeout 10s bash -c 'until xprop -root >/dev/null 2>&1; do :; done' \
+timeout 10s bash -c 'until xprop -display "$1" -root >/dev/null 2>&1; do :; done' _ "$DISPLAY_NAME" \
   || fail "Xvfb $DISPLAY_NAME did not accept clients (see $LOG_DIR/xvfb.log)"
 
 mkdir -p "$LOG_DIR/debug"
@@ -64,7 +64,7 @@ env -u WAYLAND_DISPLAY DISPLAY="$DISPLAY_NAME" \
 xterm_pid=$!
 
 # Wait for the mapped client window by title, again bounded by timeout.
-timeout 10s bash -c 'until xprop -name "$1" WM_NAME >/dev/null 2>&1; do :; done' _ "$TITLE" \
+timeout 10s bash -c 'until xprop -display "$2" -name "$1" WM_NAME >/dev/null 2>&1; do :; done' _ "$TITLE" "$DISPLAY_NAME" \
   || fail "xterm window $TITLE did not appear (see $LOG_DIR/xterm.log)"
 
 set +e

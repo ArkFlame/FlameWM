@@ -22,7 +22,7 @@ use x11rb::protocol::xproto::{
     KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, Window,
 };
 use x11rb::protocol::xtest::ConnectionExt as XtestExt;
-use x11rb::RustConnection;
+use x11rb::rust_connection::RustConnection;
 
 /// Standard X11 keysyms (`Alt_L`, `Control_L`) used to locate keycodes via the keyboard mapping.
 const XK_CONTROL_L: u32 = 0xFFE3;
@@ -116,6 +116,7 @@ fn run() -> Result<String, Box<dyn Error>> {
     let root = connection.setup().roots[0].root;
     let client = find_window(&connection, &title)?
         .ok_or_else(|| format!("no top-level window named {title:?}"))?;
+    wait_framed(&connection, client, root)?;
     let (frame_x, frame_y, width, height) = frame_rect(&connection, client)?;
     let start_x = clamp_coord(i32::from(frame_x) + i32::from(width) - CORNER_INSET);
     let start_y = clamp_coord(i32::from(frame_y) + i32::from(height) - CORNER_INSET);
@@ -244,6 +245,34 @@ fn find_window(connection: &RustConnection, title: &str) -> Result<Option<Window
 }
 
 /// Return the reparented frame's root-relative rectangle, or the client's own when unframed.
+/// Wait (bounded, 5 s) until the window manager has reparented the client into a mapped frame.
+/// The title can exist on the server well before the WM frames it, and a press before that lands
+/// on the root window instead of the resize grip.
+fn wait_framed(
+    connection: &RustConnection,
+    client: Window,
+    root: Window,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let parent = connection.query_tree(client)?.reply()?.parent;
+        if parent != root && parent != 0 {
+            let attributes = connection.get_window_attributes(parent)?.reply()?;
+            let geometry = connection.get_geometry(parent)?.reply()?;
+            if attributes.map_state == x11rb::protocol::xproto::MapState::VIEWABLE
+                && geometry.width > 1
+                && geometry.height > 1
+            {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("window was never framed and mapped by the window manager".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn frame_rect(connection: &RustConnection, client: Window) -> Result<(i16, i16, u16, u16), Box<dyn Error>> {
     let root = connection.setup().roots[0].root;
     let parent = connection.query_tree(client)?.reply()?.parent;
