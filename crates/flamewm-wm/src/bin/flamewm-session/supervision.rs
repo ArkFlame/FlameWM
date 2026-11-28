@@ -117,6 +117,18 @@ pub(super) fn spawn(plan: ProcessPlan) -> Result<Running, String> {
         .stdout(stdout)
         .stderr(stderr);
     apply_session_environment(&mut command, &plan.environment);
+    // HOME was unset: the session resolved it from passwd, so children get it too instead of
+    // each guessing a different home.
+    if env::var_os("HOME").is_none_or(|home| home.is_empty())
+        && !plan.environment.contains_key("HOME")
+        && let Ok(resolved) = super::resolve_home(
+            None,
+            std::path::Path::new(super::PASSWD_PATH),
+            std::path::Path::new(super::PROC_STATUS_PATH),
+        )
+    {
+        command.env("HOME", resolved.path);
+    }
     if plan.role == SessionRole::WindowManager {
         command.env("FLAMEWM_SESSION_LOGOUT_OWNER", "1");
     }
