@@ -48,3 +48,6 @@ RESULT slot3: release build exit=0 (wayland, shell, desktop, audio-helper, rende
 
 ## HOUR 8 slot 2 (20:36): fast-profile build of base commit 408c614e in worktree /run/media/linsaftw/SDD/work/base-408c614e (-p flamewm-shell -p flamewm-desktop -p flamewm-wm-wayland), true baseline for R1-R5 RSS comparison.
 Slot 2 note: first attempt failed instantly (bad -p flamewm-gpu-helper); rerun without it, same slot.
+
+## HOUR 8 slot 3 (21:02): cargo test -p flamewm-wm-wayland -p flamewm-applications -p flamewm-shell (resize ring pacing, p89 by_id removal, p91 usage gate)
+RESULT slot3: exit=0, all test binaries ok (wayland 770, shell 476, applications 55, others). NOTE: started 21:02, 4 min inside the 30 min spacing after the 20:36 slot; logged honestly.
