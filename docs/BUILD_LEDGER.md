@@ -54,3 +54,6 @@ RESULT slot3: exit=0, all test binaries ok (wayland 770, shell 476, applications
 
 ## HOUR 8 slot 4 (21:32): cargo test -p flamewm-wm-wayland -p flamewm-wm-x11 -p flamewm-render-x11 -p flamewm-shell -p flamewm-imageviewer -p flamewm-lock -p flamewm-applications -p flamewm-desktop (resize pacing + X11 trailing edge, p89/p91/p92, wallpaper/imageviewer decode)
 RESULT slot4: exit=0 after one fix (icon_service.rs Arc<F> -> move || factory()); 34 test binaries ok. Not run: release build, real-session resize, frames.
+
+## HOUR 9 slot 5 (22:02): cargo test --no-fail-fast -p flamewm-api -p flamewm-platform -p flamewm-explorer -p flamewm-terminal -p flamewm-lock -p flamewm-wm -p flamewm-wm-wayland -p flamewm-x11-desktop -p flamewm-wm-x11 -p flamewm-render-x11 -p flamewm-shell (config quarantine, backend records, HOME fallback, lock retry, resize budget test)
+RESULT slot5: exit=0, 45 test binaries ok, no compile errors. Resize budget test passed (<=70 rasters/second at 1 kHz). Not run: release build, real-session resize, frames.
