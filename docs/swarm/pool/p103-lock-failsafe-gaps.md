@@ -39,3 +39,7 @@ Audit only. No crate edits, no git, no cargo. Evidence is static (source reads a
 
 - Runtime behaviour of every row. This audit is static. Needs a capture run of the lock with each fault injected.
 - Wayland respawn path, GPU reset while locked, and the exact font and wallpaper files.
+
+## Orchestrator review (read fail_safe.rs)
+- G1 is downgraded: `decide` returns a constant (`show_lock=true`, `unlock=false`; only `solid_colour` varies). Wiring it into the paint path would add no safety. The real checks are runtime ones: a wallpaper/font/PAM fault must still paint a cover (p01 covers wallpaper) and never release. Replace the G1 fix with one runtime fault test per fault (render, PAM dlopen miss, wallpaper) asserting the lock stays covered.
+- G2 fixed UNBUILT in `crates/flamewm-x11-desktop/src/lock.rs` (retry the respawn every LOCK_CRASH_LOOP_DELAY instead of ending supervision). A test needs an injectable spawn function.
