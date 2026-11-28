@@ -108,22 +108,38 @@ pub(super) fn supervise_lock(program: PathBuf, mut child: Child) {
                 // respawn is retried at the crash-loop delay instead of ending supervision.
                 // `loginctl lock-session` only signals a client, which is gone, so it is asked
                 // once for any other locker that is listening.
-                let mut asked_loginctl = false;
-                child = loop {
-                    match spawn_lock_process(&program, &[]) {
-                        Ok(next) => break next,
-                        Err(error) => {
-                            eprintln!(
-                                "flamewm: lock screen respawn failed: {error}; retrying in {LOCK_CRASH_LOOP_DELAY:?}; blast_radius=works:session|degraded:lock-screen (the desktop may be unlocked until the lock client starts)"
-                            );
-                            if !asked_loginctl {
-                                asked_loginctl = true;
-                                let _ = Command::new("loginctl").arg("lock-session").status();
-                            }
-                            thread::sleep(LOCK_CRASH_LOOP_DELAY);
-                        }
-                    }
-                };
+                child = respawn_until_started(
+                    || spawn_lock_process(&program, &[]),
+                    || {
+                        let _ = Command::new("loginctl").arg("lock-session").status();
+                    },
+                    thread::sleep,
+                );
+            }
+        }
+    }
+}
+
+/// Retries `spawn` until it yields a child. Each failure logs, calls `ask_loginctl` once for the
+/// whole retry run, then waits [`LOCK_CRASH_LOOP_DELAY`] through `sleep` before the next attempt.
+pub(super) fn respawn_until_started<T>(
+    mut spawn: impl FnMut() -> std::io::Result<T>,
+    mut ask_loginctl: impl FnMut(),
+    mut sleep: impl FnMut(Duration),
+) -> T {
+    let mut asked_loginctl = false;
+    loop {
+        match spawn() {
+            Ok(child) => return child,
+            Err(error) => {
+                eprintln!(
+                    "flamewm: lock screen respawn failed: {error}; retrying in {LOCK_CRASH_LOOP_DELAY:?}; blast_radius=works:session|degraded:lock-screen (the desktop may be unlocked until the lock client starts)"
+                );
+                if !asked_loginctl {
+                    asked_loginctl = true;
+                    ask_loginctl();
+                }
+                sleep(LOCK_CRASH_LOOP_DELAY);
             }
         }
     }
@@ -445,5 +461,41 @@ mod lock_supervision_tests {
         };
         assert_eq!(decide(killed(9), LOCK_RESPAWN_CAP), backoff);
         assert_eq!(decide(exited(1), LOCK_RESPAWN_CAP + 3), backoff);
+    }
+
+    /// Three failed spawns then success: the child comes back after exactly three sleeps of the
+    /// crash-loop delay, and loginctl is asked once. No real sleeping or processes: the spawn
+    /// result is a token and the sleep and loginctl hooks only record calls.
+    #[test]
+    fn failed_respawns_retry_at_crash_loop_delay_and_ask_loginctl_once() {
+        let mut attempts = 0;
+        let mut sleeps = Vec::new();
+        let mut loginctl_calls = 0;
+        let started = respawn_until_started(
+            || {
+                attempts += 1;
+                if attempts <= 3 {
+                    Err(std::io::Error::other("spawn failed"))
+                } else {
+                    Ok(attempts)
+                }
+            },
+            || loginctl_calls += 1,
+            |delay| sleeps.push(delay),
+        );
+        assert_eq!(started, 4);
+        assert_eq!(sleeps, vec![LOCK_CRASH_LOOP_DELAY; 3]);
+        assert_eq!(loginctl_calls, 1);
+    }
+
+    #[test]
+    fn immediate_respawn_skips_sleep_and_loginctl() {
+        let mut sleeps = 0;
+        let mut loginctl_calls = 0;
+        let started =
+            respawn_until_started(|| Ok("child"), || loginctl_calls += 1, |_| sleeps += 1);
+        assert_eq!(started, "child");
+        assert_eq!(sleeps, 0);
+        assert_eq!(loginctl_calls, 0);
     }
 }

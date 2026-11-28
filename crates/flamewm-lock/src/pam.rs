@@ -489,4 +489,23 @@ mod tests {
     fn missing_libpam_stays_locked() {
         assert!(DynamicPam::load_from(&["libflamewm-no-such-pam.so.0"]).is_err());
     }
+
+    /// dlopen miss, end to end through the reducer: the load fails, `authenticate` maps that
+    /// failure to `Unavailable` (the only non-unlocking outcome for a missing backend), and the
+    /// lock state stays locked with a visible status and input still accepted.
+    #[test]
+    fn dlopen_miss_leaves_the_reducer_locked_with_a_cover() {
+        use std::time::Instant;
+
+        use crate::state::{Key, LockState, Status};
+
+        assert!(DynamicPam::load_from(&["libflamewm-no-such-pam.so.0"]).is_err());
+        let now = Instant::now();
+        let mut state = LockState::default();
+        state.key(Key::Char('x'), now);
+        state.begin_authentication();
+        assert!(!state.finish(Outcome::Unavailable, now));
+        assert_eq!(state.status(), Status::Unavailable);
+        assert!(state.accepts_input(now));
+    }
 }

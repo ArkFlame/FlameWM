@@ -98,6 +98,34 @@ mod tests {
         }
     }
 
+    /// Render-failure flag, end to end through the pure reducer: the degraded presentation keeps
+    /// a cover, the reducer keeps the session locked on every non-success outcome, and input
+    /// still works so the user can retry. Only `Outcome::Unlocked` releases.
+    #[test]
+    fn render_fault_keeps_a_cover_and_the_reducer_stays_locked() {
+        use std::time::Instant;
+
+        use crate::pam::Outcome;
+        use crate::state::{Key, LockState, Status};
+
+        let faults = Faults {
+            render: true,
+            ..Default::default()
+        };
+        let cover = decide(faults);
+        assert!(cover.show_lock && cover.solid_colour && !cover.unlock);
+
+        let now = Instant::now();
+        let mut state = LockState::default();
+        for outcome in [Outcome::Denied, Outcome::Unavailable] {
+            state.key(Key::Char('x'), now);
+            state.begin_authentication();
+            assert!(!state.finish(outcome, now), "{outcome:?} released the lock");
+        }
+        assert_eq!(state.status(), Status::Unavailable);
+        assert!(state.finish(Outcome::Unlocked, now));
+    }
+
     #[test]
     fn a_healthy_lock_keeps_the_normal_background_and_stays_locked() {
         assert_eq!(

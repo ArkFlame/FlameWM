@@ -1345,4 +1345,34 @@ mod tests {
         assert_eq!(crop.pixels, vec![2, 0, 0, 255, 4, 0, 0, 255]);
         assert!(crop_runtime_image(&image, 2, 0, 1, 1).is_none());
     }
+
+    /// Runtime path for an undecodable wallpaper: a file no decoder accepts and a missing file
+    /// both fall back to the navy gradient. The cover must stay full size and fully opaque.
+    #[test]
+    fn undecodable_wallpaper_still_yields_an_opaque_full_size_cover() {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-lock-wallpaper-fallback-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let garbage = dir.join("not-an-image.png");
+        std::fs::write(&garbage, b"this is not an image").expect("write garbage");
+        let missing = dir.join("missing.png");
+        for path in [garbage, missing] {
+            let settings = crate::settings::LockSettings {
+                background_mode: crate::settings::LockBackgroundMode::Custom,
+                background_image: Some(path.clone()),
+                ..crate::settings::LockSettings::default()
+            };
+            let image = background_image(&settings, 64, 48);
+            assert_eq!((image.width, image.height), (64, 48), "{}", path.display());
+            assert_eq!(image.pixels.len(), 64 * 48 * 4, "{}", path.display());
+            assert!(
+                image.pixels.chunks_exact(4).all(|px| px[3] == 255),
+                "cover not opaque for {}",
+                path.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

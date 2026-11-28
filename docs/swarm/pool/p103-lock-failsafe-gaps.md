@@ -43,3 +43,11 @@ Audit only. No crate edits, no git, no cargo. Evidence is static (source reads a
 ## Orchestrator review (read fail_safe.rs)
 - G1 is downgraded: `decide` returns a constant (`show_lock=true`, `unlock=false`; only `solid_colour` varies). Wiring it into the paint path would add no safety. The real checks are runtime ones: a wallpaper/font/PAM fault must still paint a cover (p01 covers wallpaper) and never release. Replace the G1 fix with one runtime fault test per fault (render, PAM dlopen miss, wallpaper) asserting the lock stays covered.
 - G2 fixed UNBUILT in `crates/flamewm-x11-desktop/src/lock.rs` (retry the respawn every LOCK_CRASH_LOOP_DELAY instead of ending supervision). A test needs an injectable spawn function.
+
+## Result
+
+UNBUILT. No cargo, tests or gates were run; evidence is source only.
+- X11 respawn (G2, G3): `respawn_until_started<T>` in `crates/flamewm-x11-desktop/src/lock.rs` takes spawn, loginctl and sleep closures; `supervise_lock` calls it with the same logic. Tests `failed_respawns_retry_at_crash_loop_delay_and_ask_loginctl_once` (3 failures then success: 3 sleeps of LOCK_CRASH_LOOP_DELAY, loginctl once) and `immediate_respawn_skips_sleep_and_loginctl`.
+- Runtime-level tests in `crates/flamewm-lock` (no GUI): `render_fault_keeps_a_cover_and_the_reducer_stays_locked` (fail_safe.rs), `dlopen_miss_leaves_the_reducer_locked_with_a_cover` (pam.rs), `undecodable_wallpaper_still_yields_an_opaque_full_size_cover` (document.rs, garbage file and missing file both give an opaque 64x48 navy cover).
+- Not covered without GUI or side effects: the dlopen miss through `authenticate()` itself (it selects libpam by fixed name, and a miss there writes a real failure record to the session log), so the test asserts `DynamicPam::load_from` failing plus the `Unavailable` reducer outcome. Render fault is a flag only: no lock producer sets `Faults.render` at runtime, so the test proves the decision, not a real GPU failure (G7 stays open). G1 stays downgraded per the review above.
+- Re-verify: `flamewm-x11-desktop` lock supervision tests and `flamewm-lock` tests, each with `echo $?`, after a build is allowed.
