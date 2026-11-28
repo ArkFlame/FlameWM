@@ -56,6 +56,9 @@ pub struct SnapPreview {
     /// Raster passes performed; the tests assert that a translation-only drag costs none.
     #[cfg(test)]
     rasters: u32,
+    /// Test-only clock override; `None` reads the real monotonic clock.
+    #[cfg(test)]
+    clock: Option<std::time::Instant>,
 }
 
 impl Default for SnapPreview {
@@ -69,11 +72,24 @@ impl Default for SnapPreview {
             pending: None,
             #[cfg(test)]
             rasters: 0,
+            #[cfg(test)]
+            clock: None,
         }
     }
 }
 
 impl SnapPreview {
+    /// Monotonic time used for pacing; tests inject it so they never sleep.
+    fn now(&self) -> std::time::Instant {
+        #[cfg(test)]
+        {
+            if let Some(now) = self.clock {
+                return now;
+            }
+        }
+        std::time::Instant::now()
+    }
+
     /// Records the accent from the shared settings owner. Returns whether it changed; a visible
     /// preview is re-rasterised in place, so the next frame paints the new colour.
     pub fn set_accent(&mut self, rgb: u32) -> bool {
@@ -95,9 +111,9 @@ impl SnapPreview {
         // 1 kHz+, and each raster allocates strips and uploads new textures. The stale ring is
         // replaced by the next due motion or hidden on release.
         let paced = self.key.is_some_and(|k| (k.w, k.h) != (frame.w, frame.h))
-            && self
-                .last_raster
-                .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(16));
+            && self.last_raster.is_some_and(|t| {
+                self.now().saturating_duration_since(t) < std::time::Duration::from_millis(16)
+            });
         if paced {
             // Defer to the next frame (one raster per frame at most) and ask for that paint.
             self.pending = Some(frame);
@@ -142,7 +158,7 @@ impl SnapPreview {
         }
         self.strips = ring_strips(Rect { x: 0, y: 0, w, h }, self.accent);
         self.key = Some(key);
-        self.last_raster = Some(std::time::Instant::now());
+        self.last_raster = Some(self.now());
         #[cfg(test)]
         {
             self.rasters += 1;
@@ -260,6 +276,50 @@ mod tests {
         );
         assert_eq!(preview.strips.len(), strips_before);
         assert_eq!(preview.shown.map(|s| s.frame.x), Some(FRAME.x + 100));
+    }
+
+    #[test]
+    fn one_second_of_outline_resize_stays_within_raster_budget() {
+        let mut preview = SnapPreview::default();
+        let base = std::time::Instant::now();
+        preview.clock = Some(base);
+        preview.show(FRAME);
+        let rasters_before = preview.rasters;
+        let at = |ms: u64| Some(base + std::time::Duration::from_millis(ms));
+        let frame_for = |i: i32| Rect {
+            w: FRAME.w + i + 1,
+            h: FRAME.h + i + 1,
+            ..FRAME
+        };
+        // 1000 resize events at 1 ms spacing = one simulated second; settle once per 16 ms.
+        for i in 0..1000i32 {
+            preview.clock = at(i as u64);
+            preview.show(frame_for(i));
+            if i % 16 == 15 {
+                preview.settle();
+            }
+        }
+        let rasters = preview.rasters - rasters_before;
+        assert!(
+            rasters <= 70,
+            "one second of outline resize: {rasters} rasters (budget 70)"
+        );
+        // Final settle after the last event: the ring must land on the last frame.
+        preview.clock = at(1008);
+        preview.settle();
+        let last = frame_for(999);
+        assert_eq!(
+            preview
+                .shown
+                .map(|s| (s.frame.x, s.frame.y, s.frame.w, s.frame.h)),
+            Some((last.x, last.y, last.w, last.h)),
+            "no stale trailing edge after the final event ({rasters} rasters)"
+        );
+        assert_eq!(
+            preview.key.map(|k| (k.w, k.h)),
+            Some((last.w, last.h)),
+            "cached ring matches the last frame ({rasters} rasters)"
+        );
     }
 
     #[test]
