@@ -517,6 +517,11 @@ impl<R: IconResolve> IconService<R> {
         if let Ok(mut cache) = self.result_cache.lock() {
             // Final shared result cache: bounded by entries and bytes.
             let cost = result_memory(&result.result);
+            // A single decoded result larger than the whole budget is handed
+            // back to the caller but never retained, so the bound is absolute.
+            if cost > RESULT_CACHE_BYTES {
+                return;
+            }
             while (cache.entries.len() >= RESULT_CACHE_ENTRIES
                 || cache.bytes + cost > RESULT_CACHE_BYTES)
                 && !cache.entries.is_empty()
@@ -1387,6 +1392,29 @@ mod tests {
         let cache = small.result_cache.lock().expect("cache");
         let recomputed: usize = cache.entries.values().map(result_memory).sum();
         assert_eq!(cache.bytes, recomputed, "running total matches map");
+    }
+
+    #[test]
+    fn oversized_result_is_not_cached_and_byte_bound_stays_absolute() {
+        use std::time::Instant;
+
+        let service = IconService::new(1, 8, || FakeResolver(Arc::new(AtomicUsize::new(0))));
+        // One 1024x1024 RGBA raster (4 MiB) exceeds the 2 MiB result budget.
+        let oversized = IconResult {
+            key: Arc::new(key("oversized")),
+            result: Ok(Rgba8Raster {
+                source: "oversized".into(),
+                width: 1024,
+                height: 1024,
+                pixels: vec![0; 1024 * 1024 * 4],
+                origin: IconOrigin::PackagedFlame,
+                fallback_reason: None,
+            }),
+            completed_at: Instant::now(),
+        };
+        service.finish(&oversized);
+        assert_eq!(service.result_cache_len(), 0, "oversized result not cached");
+        assert_eq!(service.result_cache_bytes(), 0, "byte bound stays absolute");
     }
 
     #[test]

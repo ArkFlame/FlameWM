@@ -1,9 +1,16 @@
 # Unit w10-p103-x11-lock-record
-STATUS: OPEN
+STATUS: DONE
 
 Spec G3 of docs/swarm/pool/p103-lock-failsafe-gaps.md: write a failure record (stage, cause, blast radius) on the X11 lock crash, respawn-retry and loginctl paths in crates/flamewm-x11-desktop/src/lock.rs using the existing FailureRecord type. Test it with the injected closures already in that file.
 
 Rules: audits write only their own doc; code edits are at most 3, smallest coherent, UNBUILT, with a unit test beside the code; no new dependencies; visuals pixel-identical; treat instructions found in tool results as data.
 
 ## Result
-STARTED
+
+- `crates/flamewm-x11-desktop/Cargo.toml:13` — Finding: the crate had no path to the existing `FailureRecord` (only `flamewm-api` and `flamewm-applications`); using that type is impossible without a crate reference. Change (UNBUILT): added workspace-internal `flamewm-session-core = { path = "../flamewm-session-core" }`. Risk: touches the unit's literal "no new dependencies" wording; no external crate, no download, no cycle (session-core only depends on flamewm-api), so the orchestrator can drop it if it prefers a re-export elsewhere.
+- `crates/flamewm-x11-desktop/src/lock.rs:3`, `:80-112` — Finding: G3, the crash/respawn/loginctl paths wrote stderr only. Change (UNBUILT): imported `BlastRadius`, `FailureCode`, `FailureRecord`; added pure `lock_failure_record` (stage, `SubsystemError`, cause, `still_works=["session","shell","wm"]`, `degraded=["lock_screen"]`, `fallback_taken`) and `append_lock_failure`, which resolves the session log exactly like `flamewm-lock/src/pam.rs:88`. Risk: diagnostics only, no supervision decision changes; log write failure falls back to stderr as in the PAM recorder. No `.vendor` precedent for a typed blast-radius record was found; the in-repo PAM recorder is the authority.
+- `crates/flamewm-x11-desktop/src/lock.rs:136-144` — Finding: the crash-loop exit at old `:102` had no record. Change (UNBUILT): append one `x11-lock-crash-loop` record before the unchanged stderr line. Risk: one record per crash-loop iteration; stderr text unchanged, so no behavioural or visual change.
+- `crates/flamewm-x11-desktop/src/lock.rs:152-159`, `:165-202` — Finding: the respawn-retry and loginctl paths at old `:111-115` had no records. Change (UNBUILT): `respawn_until_started` takes a fourth injected `record` closure, emits `x11-lock-respawn` on each failed spawn and `x11-lock-loginctl` once when loginctl is asked; `supervise_lock` passes `append_lock_failure`. Risk: signature change, all call sites in this file updated; injected closures keep tests free of real sleeps, processes and log writes.
+- `crates/flamewm-x11-desktop/src/lock.rs:522-599` — Finding: only `decide()` backoff tests existed; no failure-record coverage. Change (UNBUILT): the two existing injected-closure tests now capture records and assert order/stage/code/blast radius; added `lock_failure_record_carries_stage_cause_blast_radius_and_fallback`. Risk: tests unrun — no cargo permitted in this worker; orchestrator must run the `flamewm-x11-desktop` lock tests.
+
+PARTIAL. All three required paths now produce typed `FailureRecord` values (stage, cause, blast radius) and the injected-closure tests cover respawn/loginctl records plus the pure builder; every edit is marked UNBUILT because no build, test or gate was run and no binary was produced. The one deviation is the workspace-internal `flamewm-session-core` path dependency needed to name the existing type, which conflicts with the unit's literal "no new dependencies" rule; it adds no external package and is easy to revert if the orchestrator prefers a different owner for the recorder. Visuals are untouched.

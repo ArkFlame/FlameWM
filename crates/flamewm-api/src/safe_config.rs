@@ -6,8 +6,10 @@
 //! Only the newest [`KEEP_QUARANTINED`] copies per file are kept.
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Upper bound for a config snapshot. A larger file is a fault, never read into memory whole.
@@ -40,7 +42,7 @@ pub fn failure_reason(failure: ReadFailure) -> &'static str {
 pub fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
     let mut file = fs::File::open(path)?;
     let mut bytes = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(MAX_CONFIG_BYTES + 1)
         .read_to_end(&mut bytes)?;
     Ok(bytes)
@@ -204,6 +206,68 @@ pub fn quarantine_before_save(path: &Path, is_valid: impl FnOnce(&str) -> bool) 
         Ok(text) if is_valid(&text) => Ok(()),
         _ => quarantine(path, now_epoch_secs()).map(|_| ()),
     }
+}
+
+/// Collision counter for unique sibling temps owned by this process.
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Write `text` to `path` atomically: a unique sibling temp is created with mode `0600`, fully
+/// written and `sync_all`ed, then renamed over `path`; the parent directory is `sync_all`ed on a
+/// best-effort basis so the rename entry is durable.
+///
+/// `create_new` means a competing writer's temp is never reused and readers only ever observe a
+/// whole file. Directory fsync is deliberately best effort: some filesystems reject it, and a
+/// rejection must not fail an otherwise committed write. The write-temp-rename and fsync policy is
+/// ported from `.vendor/kensaku-master/src-tauri/src/config.rs:500-526`.
+pub fn atomic_write_text(path: &Path, text: &str) -> io::Result<()> {
+    let Some(file_name) = path.file_name() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "atomic write path must name a file",
+        ));
+    };
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    for _ in 0..16 {
+        let mut temp_name = file_name.to_os_string();
+        temp_name.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temp = parent.join(temp_name);
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = (|| {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temp, path)
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve a unique atomic-write temporary file",
+    ))
 }
 
 #[cfg(test)]

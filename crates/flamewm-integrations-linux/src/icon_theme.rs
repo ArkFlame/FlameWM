@@ -15,6 +15,8 @@ mod index;
 pub use index::*;
 mod caches;
 pub use caches::*;
+mod lru;
+pub use lru::*;
 mod walk;
 pub use walk::*;
 mod lookup;

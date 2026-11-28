@@ -648,13 +648,15 @@ mod tests {
     #[test]
     fn restart_exhaustion_fallback_notice_names_the_cause() {
         let original = plan(SessionRole::WindowManager, "/usr/bin/flamewm");
-        let default_script = &fallback_plan(&original, "/log").arguments[1];
-        assert!(default_script.contains("is missing or failed"));
+        let default_plan = fallback_plan(&original, "/log");
+        assert!(default_plan.arguments[1].contains("is missing or failed"));
 
         let cause = "kept crashing and exhausted the restart budget";
         let exhausted = fallback_plan_with_cause(&original, "/log", cause);
         let script = &exhausted.arguments[1];
-        assert!(script.contains(&format!("component (/usr/bin/flamewm) {cause}.")));
+        assert!(script.contains(
+            "component (/usr/bin/flamewm) kept crashing and exhausted the restart budget."
+        ));
         assert!(!script.contains("is missing or failed"));
         assert!(script.contains("xsetroot -solid '#1e1e1e'"));
         assert!(script.contains("xmessage -center"));

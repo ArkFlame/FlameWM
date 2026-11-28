@@ -81,6 +81,70 @@ pub fn ring_coverage(width: u32, height: u32, radius: u32, thickness: u32, x: u3
     ((hits * 255 + SAMPLES * SAMPLES / 2) / (SAMPLES * SAMPLES)) as u8
 }
 
+/// Sign of the signed distance field of a rounded rectangle: negative inside, positive outside.
+/// The decision is `radial <= corner`, the exact expression [`inside_rounded`] uses; returning a
+/// sign instead of `radial - corner` avoids subtraction rounding drift, so a GPU port can compare
+/// distances without diverging from the rasteriser's pixels.
+fn rounded_rect_sdf(px: f32, py: f32, w: f32, h: f32, radius: f32) -> f32 {
+    if px < 0.0 || py < 0.0 || px >= w || py >= h {
+        return 1.0;
+    }
+    if radius <= 0.0 {
+        return -1.0;
+    }
+    let dx = px - px.clamp(radius, w - radius);
+    let dy = py - py.clamp(radius, h - radius);
+    let radial = dx * dx + dy * dy;
+    let corner = radius * radius;
+    if radial <= corner { -1.0 } else { 1.0 }
+}
+
+/// Distance-field form of [`ring_coverage`]: same arguments, same per-pixel coverage, no raster
+/// buffer. For each of the 4x4 sub-samples the outer silhouette SDF must be inside and the silhouette
+/// inset by `thickness` must be outside; the hit count is rounded identically. Kept additive: no
+/// production caller yet, so pixels cannot change. Step 1 of the resize-ring remaster.
+#[must_use]
+pub fn ring_coverage_sdf(
+    width: u32,
+    height: u32,
+    radius: u32,
+    thickness: u32,
+    x: u32,
+    y: u32,
+) -> u8 {
+    if width == 0 || height == 0 || x >= width || y >= height {
+        return 0;
+    }
+    let half = width.min(height) / 2;
+    let thickness = thickness.min(half);
+    if thickness == 0 {
+        return 0;
+    }
+    let radius = radius.min(half);
+    if radius <= 1 {
+        let border =
+            x < thickness || y < thickness || x + thickness >= width || y + thickness >= height;
+        return if border { 255 } else { 0 };
+    }
+    let (w, h) = (width as f32, height as f32);
+    let (outer, inner) = (radius as f32, radius.saturating_sub(thickness) as f32);
+    let band = thickness as f32;
+    let mut hits = 0;
+    for sy in 0..SAMPLES {
+        for sx in 0..SAMPLES {
+            let px = x as f32 + (sx as f32 + 0.5) / SAMPLES as f32;
+            let py = y as f32 + (sy as f32 + 0.5) / SAMPLES as f32;
+            if rounded_rect_sdf(px, py, w, h, outer) <= 0.0
+                && rounded_rect_sdf(px - band, py - band, w - 2.0 * band, h - 2.0 * band, inner)
+                    > 0.0
+            {
+                hits += 1;
+            }
+        }
+    }
+    ((hits * 255 + SAMPLES * SAMPLES / 2) / (SAMPLES * SAMPLES)) as u8
+}
+
 /// `width * height * 4` straight-alpha RGBA of the ring, zero where the coverage is 0.
 #[must_use]
 pub fn outline_rgba(
@@ -420,6 +484,31 @@ mod tests {
                 reconstruct(w, h, r, 2, 0x00ff_ffff, 255),
                 outline_rgba(w, h, r, 2, 0x00ff_ffff, 255)
             );
+        }
+    }
+
+    /// Step 1 parity: the distance-field form must equal the supersampled raster pixel for pixel.
+    #[test]
+    fn sdf_coverage_matches_the_supersampled_raster() {
+        for (w, h, r) in [
+            (120_u32, 80_u32, 12_u32),
+            (200, 200, 6),
+            (64, 40, 3),
+            (40, 64, 16),
+            (31, 31, 9),
+            (80, 24, 1),
+        ] {
+            for thickness in [1_u32, 2, 4, u32::MAX] {
+                for y in 0..h {
+                    for x in 0..w {
+                        assert_eq!(
+                            ring_coverage_sdf(w, h, r, thickness, x, y),
+                            ring_coverage(w, h, r, thickness, x, y),
+                            "{w}x{h} r{r} t{thickness} at {x},{y}"
+                        );
+                    }
+                }
+            }
         }
     }
 }

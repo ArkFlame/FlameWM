@@ -89,6 +89,32 @@ struct FontCache {
     uses: u64,
 }
 
+/// The glyph eviction policy, kept independent of [`FontCache`] so the LRU and byte-cap rules can
+/// be tested without parsing a font. Callers keep ownership of the table and its byte count; this
+/// function only restores the invariant that `incoming` bytes fit under both caps.
+fn evict_for_glyph(
+    glyphs: &mut HashMap<(char, u32), GlyphEntry>,
+    glyph_bytes: &mut usize,
+    incoming: usize,
+) -> bool {
+    if incoming > GLYPH_BYTE_CAP {
+        return false;
+    }
+    while glyphs.len() >= CACHE_LIMIT || glyph_bytes.saturating_add(incoming) > GLYPH_BYTE_CAP {
+        let Some(key) = glyphs
+            .iter()
+            .min_by_key(|(_, entry)| entry.used)
+            .map(|(key, _)| *key)
+        else {
+            break;
+        };
+        if let Some(entry) = glyphs.remove(&key) {
+            *glyph_bytes = glyph_bytes.saturating_sub(entry.mask.coverage.len());
+        }
+    }
+    true
+}
+
 impl FontCache {
     fn tick(&mut self) -> u64 {
         self.uses = self.uses.wrapping_add(1);
@@ -100,25 +126,7 @@ impl FontCache {
     /// its freshly rasterized mask, so pixels stay identical and one entry cannot blow the cap.
     /// A sustained stream of new sizes costs one re-raster instead of a full visible-set reset.
     fn make_room_for_glyph(&mut self, incoming: usize) -> bool {
-        if incoming > GLYPH_BYTE_CAP {
-            return false;
-        }
-        while self.glyphs.len() >= CACHE_LIMIT
-            || self.glyph_bytes.saturating_add(incoming) > GLYPH_BYTE_CAP
-        {
-            let Some(key) = self
-                .glyphs
-                .iter()
-                .min_by_key(|(_, entry)| entry.used)
-                .map(|(key, _)| *key)
-            else {
-                break;
-            };
-            if let Some(entry) = self.glyphs.remove(&key) {
-                self.glyph_bytes = self.glyph_bytes.saturating_sub(entry.mask.coverage.len());
-            }
-        }
-        true
+        evict_for_glyph(&mut self.glyphs, &mut self.glyph_bytes, incoming)
     }
 
     /// Same policy for the advance table, whose entries are much smaller but just as cold.
@@ -141,6 +149,13 @@ static FONT: Mutex<Option<Option<FontCache>>> = Mutex::new(None);
 
 /// Caps the cache so a hostile stream of distinct sizes cannot grow memory without bound.
 const CACHE_LIMIT: usize = 1024;
+
+/// One line for the single report when the bundled font cannot be parsed: text is skipped.
+fn bundled_font_failure_notice(cause: &str) -> String {
+    format!(
+        "flamewm: no system font found and bundled DejaVuSansMono fallback is unreadable ({cause}); skipping text; blast_radius=works:non-text-ui|degraded:text"
+    )
+}
 
 fn find_font() -> Option<Font> {
     /// Collects every candidate font file under `dir`, at most `depth` levels deep, in readdir
@@ -201,24 +216,31 @@ fn find_font() -> Option<Font> {
     // Last resort: a permissively licensed font shipped with the binary. The bytes are referenced
     // only on this failure path, so a machine with system fonts never faults them into RAM; keeping
     // the include_bytes! here avoids an eagerly used static as well. The parse is cached behind the
-    // OnceLock so a font-less machine pays for it once. One report per process covers this path
-    // even when the bundled font fails to parse.
-    static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
-    NO_FONT_LOG.call_once(|| {
-        eprintln!(
-            "flamewm: no system font found; using bundled DejaVuSansMono fallback; blast_radius=works:non-text-ui|degraded:text"
-        );
-    });
-
-    static FALLBACK: std::sync::OnceLock<Option<Font>> = std::sync::OnceLock::new();
-    let font = FALLBACK.get_or_init(|| {
+    // OnceLock so a font-less machine pays for it once. One report per process names the actual
+    // outcome: fallback in use, or text skipped when the bundled font is unreadable too.
+    static FALLBACK: std::sync::OnceLock<Result<Font, String>> = std::sync::OnceLock::new();
+    let fallback = FALLBACK.get_or_init(|| {
         Font::from_bytes(
             &include_bytes!("../../../assets/fonts/DejaVuSansMono.ttf")[..],
             FontSettings::default(),
         )
-        .ok()
+        .map_err(|error| error.to_string())
     });
-    (*font).clone()
+    static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
+    match fallback {
+        Ok(font) => {
+            NO_FONT_LOG.call_once(|| {
+                eprintln!(
+                    "flamewm: no system font found; using bundled DejaVuSansMono fallback; blast_radius=works:non-text-ui|degraded:text"
+                );
+            });
+            Some(font.clone())
+        }
+        Err(cause) => {
+            NO_FONT_LOG.call_once(|| eprintln!("{}", bundled_font_failure_notice(cause)));
+            None
+        }
+    }
 }
 
 /// One font at one pixel size: the only source of glyph advances and kerning.
@@ -544,6 +566,14 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
 mod tests {
     use super::*;
 
+    #[test]
+    fn bundled_font_failure_notice_names_cause_and_blast_radius() {
+        let notice = bundled_font_failure_notice("bad table");
+        assert!(notice.contains("bundled DejaVuSansMono fallback is unreadable (bad table)"));
+        assert!(notice.contains("skipping text"));
+        assert!(notice.contains("blast_radius=works:non-text-ui|degraded:text"));
+    }
+
     /// The font file is walked, read and parsed once per test binary. Every test asks for it, and
     /// the reference sums ask once per sample string, so an uncached lookup dominated the run.
     fn test_font() -> Option<&'static Font> {
@@ -793,5 +823,86 @@ mod tests {
             before.coverage, after.coverage,
             "reloaded font draws the same"
         );
+    }
+
+    /// Synthetic cached glyph: `bytes` coverage bytes, last used at tick `used`. No font parse.
+    fn fake_glyph(bytes: usize, used: u64) -> GlyphEntry {
+        GlyphEntry {
+            mask: Arc::new(GlyphMask {
+                advance: 0.0,
+                left: 0,
+                top: 0,
+                width: 1,
+                height: 1,
+                coverage: vec![0; bytes],
+            }),
+            used,
+        }
+    }
+
+    #[test]
+    fn glyph_cache_evicts_coldest_entry_first() {
+        let mut glyphs = HashMap::new();
+        let mut bytes = 0;
+        let px = 12.0f32.to_bits();
+        for (ch, used) in [('a', 10u64), ('b', 20), ('c', 30)] {
+            let entry = fake_glyph(4, used);
+            bytes += entry.mask.coverage.len();
+            glyphs.insert((ch, px), entry);
+        }
+        // One byte over the cap once the payload is counted: a single eviction must restore it.
+        let incoming = GLYPH_BYTE_CAP - bytes + 1;
+        assert!(evict_for_glyph(&mut glyphs, &mut bytes, incoming));
+        assert!(!glyphs.contains_key(&('a', px)), "coldest entry evicted");
+        assert!(glyphs.contains_key(&('b', px)));
+        assert!(glyphs.contains_key(&('c', px)));
+        assert_eq!(bytes, 8, "byte count drops by the evicted coverage");
+        assert!(bytes + incoming <= GLYPH_BYTE_CAP, "byte cap restored");
+    }
+
+    #[test]
+    fn glyph_cache_evicts_repeatedly_until_bytes_fit() {
+        let mut glyphs = HashMap::new();
+        let mut bytes = 0;
+        let px = 14.0f32.to_bits();
+        for (index, used) in [('a', 1u64), ('b', 2), ('c', 3), ('d', 4)] {
+            let entry = fake_glyph(3, used);
+            bytes += entry.mask.coverage.len();
+            glyphs.insert((index, px), entry);
+        }
+        let incoming = GLYPH_BYTE_CAP - 5; // only 5 bytes of cached coverage may remain
+        assert!(evict_for_glyph(&mut glyphs, &mut bytes, incoming));
+        assert_eq!(glyphs.len(), 1, "three cold entries evicted");
+        assert!(glyphs.contains_key(&('d', px)), "hottest entry survives");
+        assert_eq!(bytes, 3);
+        assert!(bytes + incoming <= GLYPH_BYTE_CAP);
+    }
+
+    #[test]
+    fn glyph_cache_entry_cap_evicts_coldest() {
+        let mut glyphs = HashMap::new();
+        let mut bytes = 0;
+        for index in 0..CACHE_LIMIT {
+            let entry = fake_glyph(1, index as u64);
+            bytes += entry.mask.coverage.len();
+            glyphs.insert(('a', index as u32), entry);
+        }
+        assert!(evict_for_glyph(&mut glyphs, &mut bytes, 1));
+        assert_eq!(glyphs.len(), CACHE_LIMIT - 1, "entry cap restored");
+        assert!(!glyphs.contains_key(&('a', 0)), "lowest tick evicted");
+        assert!(glyphs.contains_key(&('a', 1)));
+        assert_eq!(bytes, CACHE_LIMIT - 1);
+    }
+
+    #[test]
+    fn glyph_cache_keeps_oversized_glyph_uncached() {
+        let mut glyphs = HashMap::new();
+        let mut bytes = 0;
+        assert!(
+            !evict_for_glyph(&mut glyphs, &mut bytes, GLYPH_BYTE_CAP + 1),
+            "a glyph larger than the whole budget is not admitted"
+        );
+        assert!(glyphs.is_empty(), "no entries touched");
+        assert_eq!(bytes, 0, "byte count untouched");
     }
 }

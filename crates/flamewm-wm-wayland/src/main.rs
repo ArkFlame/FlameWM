@@ -559,6 +559,27 @@ fn append_headless_entry_record(path: &std::path::Path) {
     );
 }
 
+/// Appends the typed record for a failed XWayland spawn. X11 is optional: the Wayland socket,
+/// compositor and input keep working, so only X11 clients and autostart are degraded and the record
+/// says a fallback was taken. Taking the path as an argument keeps the write testable.
+fn append_xwayland_unavailable_record(path: &std::path::Path, cause: impl std::fmt::Display) {
+    append_failure_record(
+        path,
+        "xwayland",
+        cause,
+        [
+            "process",
+            "session_log",
+            "wayland_socket",
+            "compositor_backend",
+            "hardware_outputs",
+            "input_devices",
+        ],
+        ["x11_clients", "autostart"],
+        true,
+    );
+}
+
 /// Whether a failed startup stage leaves a fallback running. A missing logind seat exits with
 /// [`EXIT_NO_SEAT`] and takes no fallback, so it records `false`; a DRM or output gap falls through
 /// to the nested window and records `true`.
@@ -973,11 +994,9 @@ fn run() -> Result<i32, Box<dyn Error>> {
             Some(client)
         }
         Some(Err(error)) => {
-            stage_line(
-                Stage::Xwayland,
-                StageStatus::Fail,
-                &xwayland_unavailable_detail(&error),
-            );
+            let detail = xwayland_unavailable_detail(&error);
+            stage_line(Stage::Xwayland, StageStatus::Fail, &detail);
+            append_xwayland_unavailable_record(&backend_failure_log_path(), &detail);
             eprintln!(
                 "flamewm-wayland: XWayland unavailable ({error}); continuing without X11 clients"
             );
@@ -986,6 +1005,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
         }
         None => {
             stage_line(Stage::Xwayland, StageStatus::Fail, "panic");
+            append_xwayland_unavailable_record(&backend_failure_log_path(), "panic");
             state.autostart.clear();
             None
         }

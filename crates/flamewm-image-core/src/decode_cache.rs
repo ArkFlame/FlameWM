@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::RgbaImage;
+use crate::wallpaper::{WallpaperFit, compose};
 
 const MAGIC: &[u8; 8] = b"FWRGBA01";
 const HEADER_LEN: usize = 16;
@@ -37,6 +38,45 @@ pub fn decode_file_cached(path: &Path) -> Result<RgbaImage, String> {
         write_entry(entry, &image);
     }
     Ok(image)
+}
+
+/// Decodes `path`, composes it to exactly `width` x `height` with `fit`, and reuses a bounded
+/// on-disk entry keyed by source identity *and* requested output. The natural-size source lives
+/// only inside this call and is dropped before return, so a cache hit returns output-sized
+/// pixels without ever materialising a full-resolution buffer.
+pub fn decode_file_composed_cached(
+    path: &Path,
+    width: u32,
+    height: u32,
+    fit: WallpaperFit,
+) -> Result<RgbaImage, String> {
+    let entry = entry_for(path).map(|base| composed_entry(&base, width, height, fit));
+    if let Some(image) = entry.as_deref().and_then(read_entry) {
+        return Ok(image);
+    }
+    let natural = crate::wallpaper::decode_file_uncached(path)?;
+    let composed = compose(&natural, width, height, fit)
+        .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
+    if let Some(entry) = entry.as_deref() {
+        write_entry(entry, &composed);
+    }
+    Ok(composed)
+}
+
+/// Derives the output-sized entry name from a source-identity entry. `prune` keeps the same
+/// path-hash owner prefix, so older variants for this source remain bounded like any other entry.
+fn composed_entry(base: &Path, width: u32, height: u32, fit: WallpaperFit) -> PathBuf {
+    let stem = base
+        .file_stem()
+        .map_or_else(|| "entry".to_string(), |s| s.to_string_lossy().into_owned());
+    let fit_code = match fit {
+        WallpaperFit::Fill => 0,
+        WallpaperFit::Fit => 1,
+        WallpaperFit::Stretch => 2,
+        WallpaperFit::Center => 3,
+        WallpaperFit::Tile => 4,
+    };
+    base.with_file_name(format!("{stem}-{width}x{height}-{fit_code}.rgba"))
 }
 
 /// Identity of one decoded raster in this process. The same tuple that selects the on-disk
@@ -301,6 +341,40 @@ mod tests {
         bytes.pop();
         fs::write(&entry, &bytes).unwrap();
         assert!(read_entry(&entry).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn composed_entry_is_keyed_by_output_and_fit() {
+        let dir = scratch("composed-key");
+        let base = dir.join("abcd-1234.rgba");
+        let full_hd = composed_entry(&base, 1920, 1080, WallpaperFit::Fill);
+        let smaller = composed_entry(&base, 1280, 720, WallpaperFit::Fill);
+        let other_fit = composed_entry(&base, 1920, 1080, WallpaperFit::Fit);
+        assert_ne!(
+            full_hd, smaller,
+            "target size must select a different entry"
+        );
+        assert_ne!(full_hd, other_fit, "fit must select a different entry");
+        let image = RgbaImage::from_rgba8(2, 1, vec![9, 8, 7, 6, 5, 4, 3, 2]).unwrap();
+        write_entry(&full_hd, &image);
+        let back = read_entry(&full_hd).expect("composed entry reads back");
+        assert_eq!((back.width, back.height), (2, 1));
+        assert_eq!(back.pixels, image.pixels);
+        assert!(read_entry(&smaller).is_none(), "other target has no entry");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn composed_entry_stays_bounded_by_owner_prefix() {
+        let dir = scratch("composed-owner");
+        let base = dir.join("abcd-1234.rgba");
+        let old = composed_entry(&base, 800, 600, WallpaperFit::Fill);
+        let new = composed_entry(&base, 1920, 1080, WallpaperFit::Fill);
+        let image = RgbaImage::from_rgba8(1, 1, vec![1, 2, 3, 4]).unwrap();
+        write_entry(&old, &image);
+        write_entry(&new, &image);
+        assert_eq!(names(&dir).len(), 1, "older output variant was not bounded");
         let _ = fs::remove_dir_all(&dir);
     }
 

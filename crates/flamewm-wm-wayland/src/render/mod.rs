@@ -784,10 +784,14 @@ pub fn render_frame(state: &mut State) {
     // pixels calls `request_paint`/`request_redraw` and sets it again. A dump arms its own scene
     // flag through `request_redraw`, and the lock screen never takes this path.
     let scene_dirty = state.take_scene_dirty();
-    if !scene_dirty
-        && state.dump.is_none()
-        && !state.session_locked
-        && State::host_draws_pointer_status(&state.cursor_status)
+    // The gate now comes from the typed frame-pacing facade shared with the tty backend. Its four
+    // inputs are the ones the inline condition read, so the decision and the pixels stay identical.
+    if crate::state::nested_frame(
+        scene_dirty,
+        state.dump.is_some(),
+        state.session_locked,
+        State::host_draws_pointer_status(&state.cursor_status),
+    ) == crate::state::NestedFrame::Idle
     {
         return;
     }

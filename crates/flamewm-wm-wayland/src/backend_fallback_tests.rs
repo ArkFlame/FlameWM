@@ -7,8 +7,8 @@
 use super::{
     Backend, BackendFallbackOutcome, EXIT_NO_SEAT, NativeAvailability, NativeFallbackDecision,
     NextBackend, Stage, append_backend_failure_record, append_headless_entry_record,
-    choose_native_fallback, native_unavailable_falls_back, next_backend, select_backend,
-    stage_failure_fallback,
+    append_xwayland_unavailable_record, choose_native_fallback, native_unavailable_falls_back,
+    next_backend, select_backend, stage_failure_fallback,
 };
 
 #[test]
@@ -172,6 +172,137 @@ fn headless_entry_appends_a_record() {
     assert_eq!(lines.len(), 1, "one headless record: {text}");
     assert!(lines[0].contains("stage=\"headless\""), "{}", lines[0]);
     assert!(lines[0].contains("fallback_taken=true"), "{}", lines[0]);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// An inactive logind session fails closed with `EXIT_NO_SEAT`: the seat record must keep the
+/// `reason=inactive_after_activate` cause while saying no fallback was taken. This mirrors the
+/// `stage_line(Stage::Seat, Fail, detail)` write with the same pure fallback decision.
+#[test]
+fn inactive_session_record_fails_closed_without_fallback() {
+    let path = std::env::temp_dir().join(format!(
+        "flamewm-p100-inactive-record-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    let detail = "reason=inactive_after_activate: session /org/freedesktop/login1/session/_3 is still not active";
+    append_backend_failure_record(
+        &path,
+        Stage::Seat.name(),
+        detail,
+        stage_failure_fallback(Stage::Seat),
+    );
+
+    let text = std::fs::read_to_string(&path).expect("inactive session record log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "one seat record: {text}");
+    assert!(lines[0].contains("stage=\"seat\""), "{}", lines[0]);
+    assert!(
+        lines[0].contains("cause=\"reason=inactive_after_activate"),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].contains("fallback_taken=false"), "{}", lines[0]);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// XWayland is optional: a spawn failure leaves one `xwayland` record that keeps the Wayland socket,
+/// compositor and input in `still_works`, degrades only X11 clients and autostart, and marks the
+/// degraded X11 path as the fallback that was taken.
+#[test]
+fn xwayland_failure_appends_a_record() {
+    let path = std::env::temp_dir().join(format!(
+        "flamewm-p100-xwayland-record-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    append_xwayland_unavailable_record(&path, "injected xwayland spawn failure");
+
+    let text = std::fs::read_to_string(&path).expect("xwayland failure record log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "one xwayland record: {text}");
+    assert!(lines[0].contains("stage=\"xwayland\""), "{}", lines[0]);
+    assert!(lines[0].contains("code=subsystem_error"), "{}", lines[0]);
+    assert!(
+        lines[0].contains("cause=\"injected xwayland spawn failure\""),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].contains("still_works=\"process,session_log,wayland_socket,compositor_backend,hardware_outputs,input_devices\""), "{}", lines[0]);
+    assert!(
+        lines[0].contains("degraded=\"x11_clients,autostart\""),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].contains("fallback_taken=true"), "{}", lines[0]);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Row 3: a native GL/EGL failure is wrapped by `start_native` as a Drm stage failure, so its record
+/// must keep the EGL cause and say the nested fallback was taken. The pure chooser then picks the
+/// nested window. No EGL display, device or event loop is created.
+#[test]
+fn native_gl_failure_records_a_drm_fallback() {
+    let path = std::env::temp_dir().join(format!(
+        "flamewm-p100-gl-native-record-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let cause = "EGLDisplay::new failed: EGL_BAD_ALLOC";
+
+    append_backend_failure_record(
+        &path,
+        Stage::Drm.name(),
+        cause,
+        stage_failure_fallback(Stage::Drm),
+    );
+
+    let text = std::fs::read_to_string(&path).expect("native GL failure record log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "one native GL record: {text}");
+    assert!(lines[0].contains("stage=\"drm\""), "{}", lines[0]);
+    assert!(lines[0].contains("code=subsystem_error"), "{}", lines[0]);
+    assert!(lines[0].contains(cause), "{}", lines[0]);
+    assert!(lines[0].contains("fallback_taken=true"), "{}", lines[0]);
+    assert_eq!(
+        choose_native_fallback(NativeAvailability::from_failed_stage("drm")),
+        NativeFallbackDecision::NestedWinit
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Row 4: a nested winit GL/EGL failure leaves one `nested_winit` record with `fallback_taken=true`,
+/// matching the `record_backend_failure` call in `start_nested_or_headless`. The test only writes to
+/// an injected log path; no window surface, EGL context or session service is started.
+#[test]
+fn nested_gl_failure_records_a_winit_fallback() {
+    let path = std::env::temp_dir().join(format!(
+        "flamewm-p100-gl-nested-record-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let cause = "init_winit failed: no EGL surface (software renderer)";
+
+    append_backend_failure_record(&path, "nested_winit", cause, true);
+
+    let text = std::fs::read_to_string(&path).expect("nested GL failure record log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "one nested GL record: {text}");
+    assert!(lines[0].contains("stage=\"nested_winit\""), "{}", lines[0]);
+    assert!(lines[0].contains("code=subsystem_error"), "{}", lines[0]);
+    assert!(lines[0].contains(cause), "{}", lines[0]);
+    assert!(lines[0].contains("fallback_taken=true"), "{}", lines[0]);
+
+    assert_eq!(
+        next_backend(BackendFallbackOutcome::NestedFailed),
+        NextBackend::Headless
+    );
 
     let _ = std::fs::remove_file(&path);
 }

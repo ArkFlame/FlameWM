@@ -8,6 +8,7 @@ pub(crate) use frame_pacing::{
     FrameDecision, GpuProbe, OutputFrames, SYNC_WAIT_BUDGET, SceneBuild, SyncWait, pick_gpu,
     retry_owed, scan_failed, scene_build, sync_wait_decision,
 };
+pub(crate) use frame_pacing::{NestedFrame, nested_frame};
 mod outputs;
 mod process;
 mod redraw;

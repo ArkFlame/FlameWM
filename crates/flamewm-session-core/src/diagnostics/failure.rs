@@ -207,16 +207,37 @@ pub fn unix_seconds_now() -> u64 {
 }
 
 /// Append one failure record to a log file, creating the file (and its parent directory) if
-/// needed. The session log path comes from [`super::session_log_path`]; this helper never rotates
-/// or truncates it. Failure to write is returned to the caller, never raised as a panic.
+/// needed. The session log path comes from [`super::session_log_path`]. When the log has reached
+/// [`super::LOG_ROTATE_BYTES`], the current file is moved to [`super::rotated_log_path`] first,
+/// replacing any older rotated copy, so this record starts a fresh bounded log. Failure to write
+/// is returned to the caller, never raised as a panic.
 pub fn append_record(path: &Path, record: &FailureRecord) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
+    rotate_if_oversized(path)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{}", record.to_log_line())
+}
+
+/// Move `path` to its `.1` sibling when the file has reached the size cap. An existing rotated
+/// copy is removed first so the newest generation is one complete file, matching LightDM's
+/// backup-and-truncate pattern (`.vendor/lightdm-main/src/log-file.c`). A missing file means there
+/// is nothing to rotate.
+fn rotate_if_oversized(path: &Path) -> io::Result<()> {
+    let len = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    if len < super::LOG_ROTATE_BYTES {
+        return Ok(());
+    }
+    let rotated = super::rotated_log_path(path);
+    match fs::remove_file(&rotated) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    fs::rename(path, &rotated)
 }
 
 thread_local! {
@@ -502,5 +523,40 @@ mod tests {
         let policy = RestartPolicy::default();
         assert_eq!(policy.restarts(), 0);
         assert!(!policy.gave_up());
+    }
+
+    #[test]
+    fn append_record_rotates_a_full_log_and_starts_a_fresh_one() {
+        let dir =
+            std::env::temp_dir().join(format!("flamewm-log-retention-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test dir");
+        let path = dir.join("session.log");
+        let rotated = super::super::rotated_log_path(&path);
+        std::fs::write(&path, vec![b'x'; super::super::LOG_ROTATE_BYTES as usize])
+            .expect("seed a full log");
+        std::fs::write(&rotated, "stale").expect("seed an old rotation");
+
+        let record = FailureRecord::new(
+            "wm",
+            FailureCode::Panic,
+            "boom",
+            BlastRadius::default(),
+            false,
+            9,
+        );
+        append_record(&path, &record).expect("append after rotation");
+
+        assert_eq!(
+            std::fs::metadata(&rotated)
+                .expect("rotated log exists")
+                .len(),
+            super::super::LOG_ROTATE_BYTES
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("fresh log"),
+            format!("{}\n", record.to_log_line())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

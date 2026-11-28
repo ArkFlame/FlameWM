@@ -31,6 +31,33 @@ pub(super) fn notify_root(frame: RootRect, extents: FrameExtents) -> FrameEffect
     }
 }
 
+/// Fill a caller-owned plan buffer with the full configure triad.
+///
+/// `out` is cleared first: capacity is retained across events so a caller can keep one
+/// buffer for the whole motion path instead of allocating a fresh `Vec` per event.
+/// Values and order match [`configure_effects`] exactly.
+pub(super) fn configure_effects_into(
+    out: &mut Vec<FrameEffect>,
+    frame: RootRect,
+    extents: FrameExtents,
+) {
+    out.clear();
+    let local = frame_to_client_local(frame, extents);
+    out.push(FrameEffect::ConfigureFrameRoot {
+        x: frame.x,
+        y: frame.y,
+        w: frame.w,
+        h: frame.h,
+    });
+    out.push(FrameEffect::ConfigureClientLocal {
+        x: local.x,
+        y: local.y,
+        w: local.w.max(1) as u32,
+        h: local.h.max(1) as u32,
+    });
+    out.push(notify_root(frame, extents));
+}
+
 /// Full plan split: frame root rect + client local size + client root notify.
 pub(super) fn configure_effects(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
     let local = frame_to_client_local(frame, extents);
@@ -55,7 +82,10 @@ pub(super) fn configure_effects(frame: RootRect, extents: FrameExtents) -> Vec<F
 /// The old order painted at the old size, then resized the X window: the
 /// server exposed dark/black new titlebar pixels until an unrelated Expose.
 pub(super) fn full_configure(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
-    let mut effects = configure_effects(frame, extents);
+    // Reserve once and fill through the reusable helper: the same six effects in the
+    // same order, without the old 3 -> 6 reallocation.
+    let mut effects = Vec::with_capacity(6);
+    configure_effects_into(&mut effects, frame, extents);
     effects.extend([
         FrameEffect::LayoutInput,
         FrameEffect::PaintChrome,
@@ -307,5 +337,52 @@ mod snap_vector_tests {
             expect(SnapTarget::BottomRight),
             RootRect::new(644, 406, 640, 400)
         );
+    }
+}
+
+#[cfg(test)]
+mod reusable_buffer_tests {
+    use super::*;
+
+    /// Step 1 equivalence: a reused caller-owned buffer yields exactly the same
+    /// effects, in the same order, as the original allocating helper.
+    #[test]
+    fn configure_effects_into_matches_allocating_original() {
+        let extents = FrameExtents::new(31, 1);
+        let cases = [
+            RootRect::new(100, 100, 400, 300),
+            RootRect::new(0, 0, 1, 1),
+            RootRect::new(-7, 12, 0, -3),
+            RootRect::new(1920, 1080, 1366, 768),
+        ];
+        let mut buffer = Vec::new();
+        for frame in cases {
+            let expected = configure_effects(frame, extents);
+            configure_effects_into(&mut buffer, frame, extents);
+            assert_eq!(buffer, expected);
+            // A second fill overwrites; it never appends to the previous plan.
+            configure_effects_into(&mut buffer, frame, extents);
+            assert_eq!(buffer, expected);
+        }
+        // Capacity survives a refill: no per-event reallocation after warm-up.
+        let capacity = buffer.capacity();
+        configure_effects_into(&mut buffer, cases[0], extents);
+        assert_eq!(buffer.capacity(), capacity);
+    }
+
+    /// `full_configure` keeps the six-effect order while using the reusable helper.
+    #[test]
+    fn full_configure_keeps_configure_triad_before_tails() {
+        let extents = FrameExtents::new(31, 1);
+        let frame = RootRect::new(100, 100, 400, 300);
+        let mut triad = Vec::new();
+        configure_effects_into(&mut triad, frame, extents);
+        let mut expected = triad;
+        expected.extend([
+            FrameEffect::LayoutInput,
+            FrameEffect::PaintChrome,
+            FrameEffect::ApplyShape,
+        ]);
+        assert_eq!(full_configure(frame, extents), expected);
     }
 }

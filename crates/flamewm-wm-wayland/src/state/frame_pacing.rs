@@ -247,3 +247,62 @@ impl OutputFrames {
         self.sync_waited_ms = 0;
     }
 }
+
+/// What the nested winit path should do with one host frame opportunity.
+///
+/// The tty backend already decides zero-frame versus paint through [`FrameDecision`]. The nested
+/// path had the same rule spelled out as an inline condition in `render_frame`; keeping the rule
+/// here makes it testable without a window system and gives both backends one typed facade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NestedFrame {
+    /// No pixels are owed: do not bind, draw, submit or send frame callbacks.
+    Idle,
+    /// Paint this frame.
+    Paint,
+}
+
+/// The nested frame gate, pure on its four inputs.
+///
+/// A scene change, a pending dump, a locked output or a compositor-drawn client cursor all owe a
+/// frame. With none of them and a host-drawn pointer, pointer motion needs no paint at all, so the
+/// opportunity is spent without touching the backend. This is the same rule `render_frame` applied
+/// inline; expressing it as data is step 1 of the damage-tracking design and does not change what
+/// any frame draws.
+pub const fn nested_frame(
+    scene_dirty: bool,
+    dump_pending: bool,
+    locked: bool,
+    host_draws_pointer: bool,
+) -> NestedFrame {
+    if scene_dirty || dump_pending || locked || !host_draws_pointer {
+        NestedFrame::Paint
+    } else {
+        NestedFrame::Idle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host-drawn pointer with nothing else pending is the one case that spends no frame.
+    #[test]
+    fn idle_nested_opportunity_paints_nothing() {
+        assert_eq!(nested_frame(false, false, false, true), NestedFrame::Idle);
+    }
+
+    /// Each of the four inputs on its own forces a paint, including a client cursor surface.
+    #[test]
+    fn every_owed_change_forces_a_nested_paint() {
+        assert_eq!(nested_frame(true, false, false, true), NestedFrame::Paint);
+        assert_eq!(nested_frame(false, true, false, true), NestedFrame::Paint);
+        assert_eq!(nested_frame(false, false, true, true), NestedFrame::Paint);
+        assert_eq!(nested_frame(false, false, false, false), NestedFrame::Paint);
+    }
+
+    /// Several owed changes collapse to one paint, never to an idle frame.
+    #[test]
+    fn combined_nested_changes_still_paint_once() {
+        assert_eq!(nested_frame(true, true, true, false), NestedFrame::Paint);
+    }
+}

@@ -14,6 +14,7 @@ pub mod color;
 pub mod display;
 pub mod error;
 pub mod events;
+pub mod failure_record;
 pub mod format;
 pub mod geometry;
 pub mod graphics;

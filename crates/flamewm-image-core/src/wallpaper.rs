@@ -42,6 +42,18 @@ pub fn decode_file_shared(path: &Path) -> Result<std::sync::Arc<RgbaImage>, Stri
     crate::decode_cache::decode_file_shared(path)
 }
 
+/// Decodes `path` and caches the composed output-sized raster for `width` x `height` and `fit`.
+/// A cache hit returns only output-sized pixels; the full-resolution source is neither decoded
+/// nor retained. Pixels are identical to [`compose`] of the natural-size decode.
+pub fn decode_file_composed(
+    path: &Path,
+    width: u32,
+    height: u32,
+    fit: WallpaperFit,
+) -> Result<RgbaImage, String> {
+    crate::decode_cache::decode_file_composed_cached(path, width, height, fit)
+}
+
 /// Decodes `path` without consulting the decode cache.
 pub fn decode_file_uncached(path: &Path) -> Result<RgbaImage, String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
