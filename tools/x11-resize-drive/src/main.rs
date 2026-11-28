@@ -114,8 +114,17 @@ fn run() -> Result<String, Box<dyn Error>> {
     // `None` selects the DISPLAY environment variable, as required by the brief.
     let (connection, _) = x11rb::connect(display.as_deref())?;
     let root = connection.setup().roots[0].root;
-    let client = find_window(&connection, &title)?
-        .ok_or_else(|| format!("no top-level window named {title:?}"))?;
+    // The title can be set a moment after the window is created or reparented; retry briefly.
+    let find_deadline = Instant::now() + Duration::from_secs(5);
+    let client = loop {
+        if let Some(window) = find_window(&connection, &title)? {
+            break window;
+        }
+        if Instant::now() >= find_deadline {
+            return Err(format!("no top-level window named {title:?}").into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
     wait_framed(&connection, client, root)?;
     let (frame_x, frame_y, width, height) = frame_rect(&connection, client)?;
     let start_x = clamp_coord(i32::from(frame_x) + i32::from(width) - CORNER_INSET);
@@ -229,15 +238,31 @@ fn find_window(connection: &RustConnection, title: &str) -> Result<Option<Window
     let root = connection.setup().roots[0].root;
     let net_name = atom(connection, "_NET_WM_NAME")?;
     let wm_name = atom(connection, "WM_NAME")?;
-    for window in connection.query_tree(root)?.reply()?.children {
-        for property in [net_name, wm_name] {
-            // Type 0 (ANY) accepts UTF8_STRING and legacy STRING alike.
-            let value = connection
-                .get_property(false, window, property, 0u32, 0, 256)?
-                .reply()?
-                .value;
-            if value == title.as_bytes() {
-                return Ok(Some(window));
+    // Depth-first: after the WM reparents a client, the titled window is a child of its frame.
+    let mut pending = vec![root];
+    let mut visited = 0_usize;
+    while let Some(parent) = pending.pop() {
+        let Ok(tree) = connection.query_tree(parent)?.reply() else {
+            continue;
+        };
+        for window in tree.children {
+            visited += 1;
+            if visited > 4096 {
+                return Ok(None);
+            }
+            pending.push(window);
+            for property in [net_name, wm_name] {
+                // Type 0 (ANY) accepts UTF8_STRING and legacy STRING alike. A window destroyed
+                // mid-scan answers with an error; skip it.
+                let Ok(reply) = connection
+                    .get_property(false, window, property, 0u32, 0, 256)?
+                    .reply()
+                else {
+                    continue;
+                };
+                if reply.value == title.as_bytes() {
+                    return Ok(Some(window));
+                }
             }
         }
     }
