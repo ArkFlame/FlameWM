@@ -9,7 +9,7 @@ use std::env;
 use std::io::{ErrorKind, Read};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -137,11 +137,26 @@ fn session_paths() -> Result<(flamewm_session_core::SessionPaths, PathBuf), Stri
         .parent()
         .ok_or_else(|| "session executable has no parent directory".to_owned())?
         .to_path_buf();
-    let home = match home_from_env(env::var_os("HOME")) {
-        Ok(home) => home,
+    let home = match resolve_home(
+        env::var_os("HOME"),
+        Path::new(PASSWD_PATH),
+        Path::new(PROC_STATUS_PATH),
+    ) {
+        Ok(resolved) => {
+            if resolved.from_passwd {
+                session_diagnostics::log(
+                    "session-paths",
+                    &format!(
+                        "notice: HOME unset; using passwd home {} (blast_radius: session config and state paths follow this home; child processes keep the inherited environment)",
+                        resolved.path.display()
+                    ),
+                );
+            }
+            resolved.path
+        }
         Err(cause) => {
-            record_startup_failure("session-paths", cause, &[], &["session"], false);
-            return Err(cause.to_owned());
+            record_startup_failure("session-paths", &cause, &[], &["session"], false);
+            return Err(cause);
         }
     };
     let mut paths = default_paths_from_home(&bindir, home.clone());
@@ -151,28 +166,176 @@ fn session_paths() -> Result<(flamewm_session_core::SessionPaths, PathBuf), Stri
     Ok((paths, home))
 }
 
-/// The user's home from `HOME`. Unset or empty fails the stage: guessing `/root` would point the
-/// session at another account's config and state.
-fn home_from_env(home: Option<std::ffi::OsString>) -> Result<PathBuf, &'static str> {
-    match home {
-        Some(home) if !home.is_empty() => Ok(PathBuf::from(home)),
-        _ => Err("HOME is unset; refusing to fall back to /root"),
+const PASSWD_PATH: &str = "/etc/passwd";
+const PROC_STATUS_PATH: &str = "/proc/self/status";
+
+/// A resolved home directory and whether it came from the passwd fallback rather than `HOME`.
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedHome {
+    path: PathBuf,
+    from_passwd: bool,
+}
+
+/// The user's home: `HOME` when set and non-empty, else the passwd home of the current real uid
+/// (read from `status`, looked up in `passwd`). Fails only when both are unusable. `/root` is never
+/// guessed; it is used only when the passwd entry itself names it.
+fn resolve_home(
+    home: Option<std::ffi::OsString>,
+    passwd: &Path,
+    status: &Path,
+) -> Result<ResolvedHome, String> {
+    if let Some(home) = home.filter(|home| !home.is_empty()) {
+        return Ok(ResolvedHome {
+            path: PathBuf::from(home),
+            from_passwd: false,
+        });
+    }
+    let status_text = std::fs::read_to_string(status).map_err(|error| {
+        format!(
+            "HOME is unset and {} is unreadable: {error}",
+            status.display()
+        )
+    })?;
+    let uid = uid_from_status(&status_text)
+        .ok_or_else(|| format!("HOME is unset and no Uid line in {}", status.display()))?;
+    let passwd_text = std::fs::read_to_string(passwd).map_err(|error| {
+        format!(
+            "HOME is unset and {} is unreadable: {error}",
+            passwd.display()
+        )
+    })?;
+    match home_from_passwd(&passwd_text, uid) {
+        Some(path) => Ok(ResolvedHome {
+            path,
+            from_passwd: true,
+        }),
+        None => Err(format!(
+            "HOME is unset and {} has no home for uid {uid}",
+            passwd.display()
+        )),
     }
 }
 
+/// The real uid from the `Uid:` line of a `/proc/<pid>/status` body (first field).
+fn uid_from_status(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|real| real.parse().ok())
+}
+
+/// The home field of the first passwd entry (`name:x:uid:gid:gecos:home:shell`) for `uid`.
+/// Entries with an empty or relative home are skipped.
+fn home_from_passwd(passwd: &str, uid: u32) -> Option<PathBuf> {
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let _name = fields.next()?;
+        let _password = fields.next()?;
+        let entry_uid: u32 = fields.next()?.parse().ok()?;
+        if entry_uid != uid {
+            return None;
+        }
+        let _gid = fields.next()?;
+        let _gecos = fields.next()?;
+        let home = fields.next()?;
+        (home.starts_with('/')).then(|| PathBuf::from(home))
+    })
+}
+
 #[cfg(test)]
-mod home_from_env_tests {
-    use super::home_from_env;
-    use std::path::PathBuf;
+mod home_resolution_tests {
+    use super::{ResolvedHome, home_from_passwd, resolve_home, uid_from_status};
+    use std::path::{Path, PathBuf};
+
+    const STATUS: &str = "Name:\tsession\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\n";
+
+    fn temp_file(name: &str, body: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("flamewm-session-{}-{name}", std::process::id()));
+        std::fs::write(&path, body).expect("write temp file");
+        path
+    }
 
     #[test]
-    fn unset_or_empty_home_fails_instead_of_using_root() {
-        assert!(home_from_env(None).is_err());
-        assert!(home_from_env(Some(std::ffi::OsString::new())).is_err());
+    fn env_home_wins_and_is_not_a_fallback() {
+        let passwd = temp_file("env-wins-passwd", "");
+        let status = temp_file("env-wins-status", STATUS);
         assert_eq!(
-            home_from_env(Some("/home/user".into())),
-            Ok(PathBuf::from("/home/user"))
+            resolve_home(Some("/home/user".into()), &passwd, &status),
+            Ok(ResolvedHome {
+                path: PathBuf::from("/home/user"),
+                from_passwd: false,
+            })
         );
+        let _ = std::fs::remove_file(passwd);
+        let _ = std::fs::remove_file(status);
+    }
+
+    #[test]
+    fn unset_or_empty_home_uses_passwd_entry_for_current_uid() {
+        let passwd = temp_file(
+            "uid-match-passwd",
+            "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000::/home/user:/bin/sh\n",
+        );
+        let status = temp_file("uid-match-status", STATUS);
+        let expected = Ok(ResolvedHome {
+            path: PathBuf::from("/home/user"),
+            from_passwd: true,
+        });
+        assert_eq!(resolve_home(None, &passwd, &status), expected);
+        assert_eq!(
+            resolve_home(Some(std::ffi::OsString::new()), &passwd, &status),
+            expected
+        );
+        let _ = std::fs::remove_file(passwd);
+        let _ = std::fs::remove_file(status);
+    }
+
+    #[test]
+    fn fails_when_passwd_has_no_usable_home_and_never_guesses_root() {
+        let passwd = temp_file("no-entry-passwd", "root:x:0:0:root:/root:/bin/sh\n");
+        let status = temp_file("no-entry-status", STATUS);
+        assert!(resolve_home(None, &passwd, &status).is_err());
+        let _ = std::fs::remove_file(passwd);
+        let _ = std::fs::remove_file(status);
+    }
+
+    #[test]
+    fn fails_when_status_is_unreadable() {
+        let passwd = temp_file("no-status-passwd", "user:x:1000:1000::/home/user:/bin/sh\n");
+        let missing = Path::new("/nonexistent/flamewm-status");
+        assert!(resolve_home(None, &passwd, missing).is_err());
+        let _ = std::fs::remove_file(passwd);
+    }
+
+    #[test]
+    fn passwd_parsing_matches_uid_exactly_and_skips_unusable_homes() {
+        let passwd = "a:x:10:10::/home/a:/bin/sh\n\
+                      b:x:1000:1000::relative:/bin/sh\n\
+                      c:x:1000:1000::/home/c:/bin/sh\n\
+                      d:x:100:100::/home/d:/bin/sh\n";
+        assert_eq!(home_from_passwd(passwd, 10), Some(PathBuf::from("/home/a")));
+        assert_eq!(
+            home_from_passwd(passwd, 100),
+            Some(PathBuf::from("/home/d"))
+        );
+        assert_eq!(
+            home_from_passwd(passwd, 1000),
+            Some(PathBuf::from("/home/c"))
+        );
+        assert_eq!(home_from_passwd(passwd, 1), None);
+        assert_eq!(
+            home_from_passwd("x:x:5:5::/:/bin/sh\n", 5),
+            Some(PathBuf::from("/"))
+        );
+        assert_eq!(home_from_passwd("x:x:5:5::", 5), None);
+    }
+
+    #[test]
+    fn real_uid_is_the_first_uid_field() {
+        assert_eq!(uid_from_status(STATUS), Some(1000));
+        assert_eq!(uid_from_status("Name:\tx\n"), None);
     }
 }
 
