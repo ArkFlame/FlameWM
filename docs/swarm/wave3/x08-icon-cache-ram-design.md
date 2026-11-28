@@ -27,9 +27,10 @@
   `IconService::finish`, which posts decoded results into the shared cache;
   `icon_service.rs:539-573` — `ResultCache` with a running `bytes` total,
   `result_memory` and `empty_index`.
-- `crates/flamewm-integrations-linux/src/icon_service.rs:1359-1396` —
-  `result_cache_eviction_honours_byte_and_entry_limits` (original budget test)
-  and the new `oversized_result_is_not_cached_and_byte_bound_stays_absolute`.
+- `crates/flamewm-integrations-linux/src/icon_service.rs:1358-1395` —
+  `result_cache_eviction_honours_byte_and_entry_limits` (original budget test);
+  `icon_service.rs:1397-1418` — the new
+  `oversized_result_is_not_cached_and_byte_bound_stays_absolute`.
 
 ## Counted problems
 

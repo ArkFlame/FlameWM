@@ -1,71 +1,77 @@
-# w19 — Settings app heap/RSS audit
+# w19 — Settings app RSS / heap audit
+STATUS: DONE
 
-**Status: UNBUILT.** No `git`, `cargo`, Python, build, test or sleep-loop command was run in this
-shared checkout; the orchestrator builds, tests and commits after the batch lands. Every figure
-below is a code budget or a value already cited in `docs/PERF_HOTLIST.md` or
-`docs/PERFORMANCE.md`, never a fresh runtime sample. Production edits applied: **0** (this is an
-audit; the three-edit cap was not needed).
+Scope: the `flamewm-settings` crate (`crates/flamewm-settings`, plus the
+`flamewm-settings-core` facade it calls). Static inspection only: no build, no
+runtime sample, no `git`. All byte figures are **code-budget estimates**, not
+measured RSS. Ranked by estimated retained bytes in a long-lived Settings
+process; transient scan peaks are called out separately.
 
-## Route and evidence ledger
+Reference-first check: `.vendor/` (xfdesktop, kwin) had no settings-preview
+cache precedent for this path. The precedent used is internal and already in
+`docs/PERF_HOTLIST.md`: bounded icon rasters (row 4, u75) and lazy tier decode
+(row 2). No upstream dependency was added.
 
-- Route: `flamewm-source-first` and `flamewm-reference-mining` loaded. Workspace `AGENTS.md`,
-  `scripts/version` (read, never run — it calls Python), `.opencode/HARNESS.md`,
-  `.opencode/ROUTES.md` and `.agents/README.md` read. `STATUS: OPEN` in the unit was already
-  accompanied by `## Result` / `STARTED`, so that step was not repeated.
-- Commands/tools: `rg` on `Cargo.toml` resolved the crate to `crates/flamewm-settings` (plus
-  `flamewm-settings-core` and `flamewm-xsettings`); `rg` over both `src/` trees for
-  `include_bytes!`, `include_str!`, `with_capacity`, `HashMap`, `BTreeMap`, `OnceCell`,
-  `thread_local`, `Box::leak`, `Rc` and `Arc`; `read` of each site named in the rows below;
-  `rg`/`read` of `docs/PERF_HOTLIST.md` before ranking, to avoid duplicate rows.
-- Reference-first: `.vendor/smithay-master/anvil/src/cursor.rs:9,26-40` loads one cursor theme and
-  keeps a single embedded fallback raster rather than a decoded catalog; that is the precedent for
-  the settings picker keeping one preview per hidden theme. `.vendor/**` is read-only evidence,
-  never a dependency or runtime input. No clone was needed.
-- De-dup: hotlist row 10 (`docs/PERF_HOTLIST.md:24`, coalesced settings writes, u134) and row 37
-  (`:58`, `p38-settings-app-idle.md`) already cover idle wakeups; row 11 (`:25`) covers embedded
-  lock/desktop assets and `w22-result-embedded-assets.md:61` covers the settings RWR embed by disk
-  size. This audit ranks settings **heap**, so those rows are not repeated here.
+## Ranked findings
 
-## Rows — file:line, estimated bytes, finding, change, risk
+| rank | site | estimated bytes | cause | disposition |
+| --- | --- | --- | --- | --- |
+| 1 | `crates/flamewm-settings/src/view.rs:8,15-17` | one decoded `UiDocument`; binary size of `settings.html` + `settings.css` is not measured here | `include_bytes!` compiled document decoded once at startup (`runtime.rs:25`); keyboard focus/backdrop wrap it in place | CLOSED — one decode per process, no duplicate rows with hotlist rows 2/11 (those cover terminal tiers and lock/desktop assets); any reduction changes pixels |
+| 2 | `crates/flamewm-settings/src/theme_picker.rs:138-172,286-321` | visible rows: up to 32 × 4 × 2,304 B ≈ 288 KiB retained (unchanged); hidden themes: 1 × 2,304 B retained, but 3 × 2,304 B ≈ 6,912 B decoded and freed per hidden theme at scan | `icon_previews` decoded all four 24×24 RGBA examples before `with_bundled_icon_themes` sorted the themes, then the old code truncated previews 2-4 for rows past `THEME_ROW_SLOTS` | CUT 1 implemented (below) |
+| 3 | `crates/flamewm-settings/src/xdg_cache.rs:24-39,62-80` | ~225 installed apps × (id + name) ≈ 10-15 KiB, plus raw autostart `.desktop` text | `StartupView` retains all rows and all picker candidates while the Startup page is open | CLOSED — built only when that page repaints (`app_impl_2.rs:770`, `app_impl_1.rs:840`), replaced on stamp move and cleared on writes |
+| 4 | `crates/flamewm-settings/src/xdg_cache.rs:83-105`, `default_apps_page.rs:16-83` | 7 `String` labels + one transient handler index | `defaults()` memoizes the seven fixed rows | CLOSED — fixed-size, already memoized |
+| 5 | `crates/flamewm-settings/src/tables.rs:6-24,48`, `consts.rs`, `default_apps_page.rs:16-52`, `theme_picker.rs:28-40` | 0 B heap | `const` tables and fixed arrays live in rodata | CLOSED — no heap contribution |
 
-Ranked by estimated retained or transient bytes; "code budget" means no live RSS was sampled.
+Already covered in `docs/PERF_HOTLIST.md`; **not re-ranked here** (no duplicate
+rows): catalog parse of ~225 desktop files (`flamewm-settings-core/src/xdg_applications.rs:83-90`,
+`xdg_startup.rs:42-76`) is hotlist row 21/29; the wake `Vec` reused by
+`std::mem::take` (`runtime.rs:37,115`) is row 10; icon raster pixels are row 4.
+The shared `DirListings` in `theme_picker::scan` is a local `Arc` dropped at the
+end of the scan, so it is not retained heap.
 
-| file:line | estimated bytes | finding | change | risk |
-| --- | ---: | --- | --- | --- |
-| `crates/flamewm-settings/src/theme_picker.rs:274-306`, `:276`, `:310-327`; `crates/flamewm-integrations-linux/src/icon_theme/walk.rs:21-41`; `crates/flamewm-settings/src/app_impl_2.rs:28-38` | Scan-thread transient; potentially the largest single budget on a host with many icon themes (one directory-entry map, one `IconLookupIndex` per theme, up to 4 × 24×24×4 B example rasters per icon theme) | The launch scan (`runtime.rs:54`) builds one lookup index per discovered icon theme. Directory reads go through a shared `DirListings` whose `by_dir` `HashMap` has no entry cap, so it grows with every directory visited until `scan()` returns; it is then dropped and the scan thread's free heap is trimmed by `release_free_heap()` when the result lands (`app_impl_2.rs:34-36`). | None. The map is scoped to the scan and already released; `icon_previews` drops each index at return. Deferring the whole scan until the picker opens would change when thumbnails appear. | Medium if made lazy (empty rows until the scan resolves); low for the already-landed retention cut below. No fresh peak sample exists, so no further cut is justified. UNBUILT. |
-| `crates/flamewm-settings/src/view.rs:8,15-16` | One compiled document decode (on-disk source `ui/settings.html` is 171,328 B per `w22-result-embedded-assets.md:50`; decoded node heap unmeasured) | `COMPILED_UI` is embedded once and decoded once at launch for first paint; there is no per-page template set to parse. | None — a single decode cannot be deferred without an empty first window. | n/a — out of scope for a zero-visual-change cut. Already listed as an embed in w22; ranked here as heap, not as binary disk. |
-| `crates/flamewm-settings/src/runtime.rs:21-26`; `crates/flamewm-settings-core/src/lib.rs:192-297` | Unmeasured; protocol-level | `refresh_all()` loads the authoritative Settings/Displays/Shortcuts/Panels snapshots for first paint. | None — making unseen pages lazy needs a protocol change in another crate and changes first-paint behaviour. | High for any change; recorded as a protocol cost, consistent with `u21-app-rss.md:34` and `u21b-app-rss.md:34`. |
-| `crates/flamewm-settings/src/theme_picker.rs:28-38,125-153,189-199,300-304` | ~0.28 MiB for 32 rows × 4 × 24×24×4 B visible icon previews, plus one retained raster per hidden theme after the landed cut | Pixels are shared through `Arc<Vec<u8>>`, so document refreshes hand out handles instead of copying. Only slots `0..THEME_ROW_SLOTS` (32) upload, and the selected-value image reads `previews.first()`. The earlier u21b cut truncates hidden themes to one preview (`theme_picker.rs:300-304`); cursor themes build only one `left_ptr` each, so there is nothing further to trim. | None — visible rows and the selected image are load-bearing and pixel-identical. | Low for the landed cut; no visual change. UNBUILT (not recompiled here). |
-| `crates/flamewm-settings/src/xdg_cache.rs:23-105`; `crates/flamewm-settings-core/src/xdg_applications.rs:354-377` | <0.01 MiB in a typical XDG tree | Startup rows, candidate list and default-application labels are memoized per `XdgStamp`; the facade and watched path list are built once. The launch `refresh()` clears the projections for freshness (`app_impl_1.rs:61-69`). | None — already lazy and stamp-invalidated. | n/a — no uncapped document cache in this owner. |
-| `crates/flamewm-settings/src/display_layout.rs:82`; `crates/flamewm-settings-core/src/xdg_applications.rs:360-377` | <0.01 MiB | `Vec::with_capacity(active.len())` reserves exactly one entry per active RandR output; `XdgWatch` reserves exactly the number of paths it pushes. These are the only production `with_capacity` sites in the two crates. | None — exact reservations, no growth hazard. | n/a — no change. |
-| `crates/flamewm-settings/src/theme_picker.rs:43-48`; `crates/flamewm-integrations-linux/src/icon_theme/lookup.rs:69,139` | Static tables: 4 legacy themes, 4 preview names, 1 bundled theme; memo cap 2048 entries | The constant tables are tiny. `IconLookupIndex::memo` is capped at 2048 names, so repeated lookups do not grow without bound. | None — bounded already. | n/a — no change. |
+## Zero-visual-change cut specs
 
-## Zero-visual-change cut specs (at most two, not applied here)
+1. **Implemented (UNBUILT).** Sort icon themes with `with_bundled_icon_themes`
+   first, then decode only `preview_budget(slot)` example rasters: four for the
+   first `THEME_ROW_SLOTS` rows, one for the rest. The loop takes the *first N
+   successful* names in the original order, so a hidden row keeps exactly the
+   preview the old `truncate(1)` kept. Pixels per theme are unchanged; only the
+   discarded decode work disappears. Files: `theme_picker.rs:44`,
+   `theme_picker.rs:286-348` (scan 286-321, decoder 325-348), test at
+   `theme_picker.rs:494-503`.
+2. **Spec only (not implemented).** Replace `StartupEntry.text` (raw `.desktop`
+   text) in the memoized `StartupView` with derived row fields (`display_name`,
+   `enabled`, `delay_text`) computed once per stamp. This drops the retained
+   file text without changing any projected string. Not implemented because it
+   spans `flamewm-settings-core`'s `StartupEntry` type, which other crates use.
 
-1. **Landed precedent — hidden-theme preview truncation** (`theme_picker.rs:300-304`). After the
-   icon order is fixed, keep only `previews.first()` for themes past row slot 32. Picker rows
-   0..31 and `selected_preview()` are untouched, so pixels are identical. Applied by u21b before
-   this unit; re-read in current source and confirmed still present. No new edit was made.
-2. **Spec only — bound the scan's `DirListings` transient** (`walk.rs:21-41`, called from
-   `theme_picker.rs:276,315`). Drop directory entries once the last theme that resolves through
-   them has been indexed, or cap the map with a disk-read fallback. This changes no raster and no
-   row order, but it needs a unit test in `flamewm-integrations-linux`, which is outside this
-   unit's settings-app scope. It is deferred: the map already dies with `scan()`, the scan thread's
-   free heap is trimmed on completion, and there is no live peak measurement to justify the
-   extra state (the same allocation-gap caveat as hotlist row 15, `PERF_HOTLIST.md:36`).
+## Verification status
 
-## Verification
+No build, test run, screenshot or RSS sample was permitted in this unit. The
+single edit is UNBUILT; pixel identity is argued from the code path (same first
+successful preview per hidden theme, same values for visible rows), not from a
+rendered comparison. Re-rank rank 2 only after a scoped before/after smoke test.
 
-UNBUILT by contract: no compiler, test runner, `git` or Python was invoked. Visual identity is
-argued from the two consumers named in row 4 (`app_impl_2.rs:125-153` and `theme_picker.rs:189-199`),
-not from a running window. Table figures are code budgets and previously cited table values; the
-orchestrator's build, tests and visual check must confirm them before any RSS claim is made.
+## Result
 
-PASS — all requested categories were checked for the settings app: static tables are tiny,
-`include_bytes!` pulls one compiled document that cannot be deferred, the only caches are
-stamp-invalidated or entry-capped, both `Vec::with_capacity` sites reserve exact counts, and
-per-widget preview buffers are shared through `Arc` with only 32 rows uploaded. The one earlier
-zero-visual-change cut is already in the source; the remaining candidate is a transient, already
-released scan map whose bounding would need an out-of-scope crate edit and a live peak measurement,
-so it is recorded as a spec rather than guessed at. No production edits were made and no runtime
-RSS was sampled; the slice is UNBUILT and awaits the orchestrator.
+STARTED
+
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| `crates/flamewm-settings/src/theme_picker.rs:40-50,285-348`; test `:493-503` | The scan decoded four 24×24 RGBA examples for every icon theme before sorting; hidden rows then discarded three of them, so those rasters were decoded and freed for nothing. | Sort icon themes with `with_bundled_icon_themes` first, then decode only `preview_budget(slot)` rasters (four for rows 0..`THEME_ROW_SLOTS`, one for hidden rows), taking the first N successful names in the original order. Unit test added beside the code. **UNBUILT.** | Low — visible rows and `selected_preview()` still receive the same first raster; hidden rows keep exactly the raster the old `truncate(1)` kept. No new dependency; pixels unchanged. |
+| `crates/flamewm-settings/src/view.rs:8,15-17`; `runtime.rs:25` | One compiled `settings.rwr` document is decoded once at startup for first paint. | None — a single decode cannot be deferred without an empty first window. | n/a — out of scope for a zero-visual-change cut. |
+| `crates/flamewm-settings/src/xdg_cache.rs:24-105`; `default_apps_page.rs:16-83` | Startup rows, picker candidates and seven default-app labels are memoized per `XdgStamp`; reservations are exact. | None — already lazy and stamp-invalidated. | n/a — no uncapped document cache in this owner. |
+| `crates/flamewm-integrations-linux/src/icon_theme/walk.rs:21-41` (the scan's `DirListings`) | Uncapped directory-entry map transient, scoped to one scan and dropped at return. | None — heap is trimmed by `release_free_heap()` on completion; bounding it would need an out-of-scope crate edit and a live peak sample. | Medium if made lazy; recorded as a spec, not guessed at. |
+
+Every production edit above (the single `theme_picker.rs` change and its unit test) is **UNBUILT**:
+no `git`, `cargo`, Python, build, test or sleep-loop command was run in this shared checkout; the
+orchestrator builds, tests and commits after the batch lands. No new dependencies were added and
+visuals stay pixel-identical.
+
+PASS — the settings-app heap/RSS audit is complete with one zero-visual-change production edit
+(hidden-theme preview decode budget plus its unit test), present in `theme_picker.rs` and marked
+UNBUILT here. The remaining allocated sites are a single un-deferrable document decode,
+stamp-invalidated startup data, exact-capacity reservations, and a scan-scoped directory map that
+is released and heap-trimmed on completion; none justifies a further cut without a live peak
+sample. No runtime RSS was sampled and no build was run, so the slice awaits the orchestrator's
+verification.

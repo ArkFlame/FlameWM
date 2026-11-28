@@ -26,12 +26,13 @@ X11 motion path:
 3. `src/wm/interaction.rs:87-91` `step_owned` -> `reduce_owned` -> `PointerCommit::plan`.
 4. `src/frame/controller/reducer.rs:14-17` `reduce_owned`; `FrameEvent::Motion` at `:112-118`
    dispatches to `move_step` or `resize_step` without cloning state.
-5. `src/frame/controller/planning.rs`:
-   - `:35-52` `configure_effects`: `vec!` of 3 (one allocation).
-   - `:57-65` `full_configure`: buffer of 3 then `extend` of 3 (allocation + reallocation).
-   - `:70-78` `move_effects`: `vec!` of 2 (one allocation).
-   - `:81-99` `release_effects` / `release_tail`: `insert(0, ..)` on release only.
-   - `:145-219` `move_step`, `:221-281` `resize_step`: every early return builds a new `Vec`.
+5. `src/frame/controller/planning.rs` (line numbers after step 1 landed):
+   - `:62-79` `configure_effects`: `vec!` of 3, retained as the equivalence oracle.
+   - `:39-59` `configure_effects_into`: step 1's caller-owned buffer fill.
+   - `:84-95` `full_configure`: reserved buffer then `extend` of 3 (one allocation).
+   - `:100-108` `move_effects`: `vec!` of 2 (one allocation).
+   - `:111-129` `release_effects` / `release_tail`: `insert(0, ..)` on release only.
+   - `:175-249` `move_step`, `:251-311` `resize_step`: every early return builds a new `Vec`.
 6. `src/wm/interaction.rs:19-29` `PointerCommit.effects: Vec<FrameEffect>`; `:31-53` `plan`
    iterates by reference and moves the `Vec` (no clone, no extra allocation).
 7. `src/wm/effects.rs:69-98` pacing filter collects a fresh `Vec` when a live resize batch
@@ -51,7 +52,8 @@ Wayland motion path:
 
 Counts come from `docs/swarm/pool/p96-reduce-alloc-audit.md:33-45` (static count of heap
 sites on the live path). No allocator counter or profiler was run here, so these are
-counts, not performance measurements.
+counts, not performance measurements. The `planning.rs` line numbers in this table are
+the pre-step-1 numbers recorded by p96, before the new helper shifted them by 25 lines.
 
 | Case | Heap allocations per motion (p96) |
 | --- | --- |

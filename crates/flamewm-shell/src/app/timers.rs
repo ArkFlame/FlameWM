@@ -251,8 +251,14 @@ impl ShellLoop {
             self.dock_stage
                 .autohide
                 .and_then(|model| model.deadline(now)),
-            self.dock_bounce
-                .and_then(|(_, bounce)| bounce.deadline(now)),
+            dock_bounce_deadline(
+                self.dock_bounce.map(|(_, bounce)| bounce),
+                self.dock_stage
+                    .autohide
+                    .as_ref()
+                    .is_some_and(|model| model.is_hidden()),
+                now,
+            ),
             self.bluetooth_agent
                 .as_ref()
                 .and_then(|agent| agent.borrow().next_deadline()),
@@ -345,6 +351,20 @@ fn clock_boundary_delay(with_seconds: bool) -> std::time::Duration {
     std::time::Duration::from_millis(flamewm_reactor::wall_clock_delay_ms(now_ms, with_seconds))
 }
 
+/// Animation gate for a pending launch hop. `tick_dock_bounce` writes no icon position while the
+/// dock is hidden, so a hidden hop must not keep the reactor waking every frame. Re-showing the
+/// dock republishes this deadline from `dock_pointer`/`publish_wake`, so the rest of the hop still
+/// paints at the same times and the visible result is unchanged.
+fn dock_bounce_deadline(
+    bounce: Option<flamewm_shell_core::dock::LaunchBounce>,
+    hidden: bool,
+    now: Instant,
+) -> Option<Instant> {
+    bounce
+        .filter(|_| !hidden)
+        .and_then(|bounce| bounce.deadline(now))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -376,5 +396,26 @@ mod tests {
             super::earliest_wake([None, None, None, Some(soon), None, None]),
             Some(soon)
         );
+    }
+
+    #[test]
+    fn dock_bounce_frames_stop_while_the_dock_is_hidden() {
+        use flamewm_shell_core::dock::{LaunchBounce, BOUNCE_FRAME, BOUNCE_PERIOD};
+        use std::time::Instant;
+
+        let t0 = Instant::now();
+        let bounce = LaunchBounce::start(t0, 0);
+        // A visible hop keeps its frame cadence; a hidden one is not painting, so it is idle.
+        assert_eq!(
+            super::dock_bounce_deadline(Some(bounce), false, t0),
+            Some(t0 + BOUNCE_FRAME)
+        );
+        assert_eq!(super::dock_bounce_deadline(Some(bounce), true, t0), None);
+        // The hop's own end and an absent bounce still arm nothing, even when visible.
+        assert_eq!(
+            super::dock_bounce_deadline(Some(bounce), false, t0 + BOUNCE_PERIOD),
+            None
+        );
+        assert_eq!(super::dock_bounce_deadline(None, false, t0), None);
     }
 }

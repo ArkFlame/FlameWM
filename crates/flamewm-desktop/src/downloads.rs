@@ -227,6 +227,12 @@ impl Organizer {
             }
         }
 
+        // Bound the ignore set for long-running sessions: a name whose path has
+        // vanished can no longer affect a move. Present files (baseline or failed
+        // moves) stay ignored so they are not retried on every settle pass.
+        self.ignored
+            .retain(|name| fs::symlink_metadata(self.dir.join(name)).is_ok());
+
         for name in due.into_iter().take(MAX_MOVES_PER_TICK) {
             self.tracked.remove(&name);
             let Some(category) = classify(&name) else {
@@ -510,5 +516,27 @@ mod tests {
             !restarted.take_notice(),
             "persisted latch must suppress the second notice"
         );
+    }
+
+    #[test]
+    fn vanished_ignored_names_are_pruned_on_settle() {
+        let mut harness = Harness::new("prune", true);
+        let gone = harness.root.join("gone.pdf");
+        let present = harness.root.join(".present.pdf");
+        fs::write(&gone, b"gone").unwrap();
+        fs::write(&present, b"present").unwrap();
+        fs::remove_file(&gone).unwrap();
+        // Drain the create/delete notes before seeding the set so the settle
+        // prune, not the gone-note path, is what drops the vanished name.
+        harness.pump();
+
+        harness.organizer.ignored.insert("gone.pdf".to_owned());
+        harness.organizer.ignored.insert(".present.pdf".to_owned());
+        harness
+            .organizer
+            .tick(Instant::now() + POLL + Duration::from_secs(1));
+
+        assert!(!harness.organizer.ignored.contains("gone.pdf"));
+        assert!(harness.organizer.ignored.contains(".present.pdf"));
     }
 }

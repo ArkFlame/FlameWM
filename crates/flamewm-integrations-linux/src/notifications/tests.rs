@@ -609,3 +609,81 @@ fn transient_skips_history_and_markup_is_stripped_on_notify() {
     assert_eq!(view.summary, "hi");
     assert!(inbox.notifications[&1].resident);
 }
+
+fn notify_id(disposition: MessageDisposition) -> Option<u32> {
+    let MessageDisposition::Reply(reply) = disposition else {
+        return None;
+    };
+    (reply.msg_type() == MessageType::MethodReturn).then(|| reply.read1::<u32>().expect("one id"))
+}
+
+#[test]
+fn duplicate_id_matches_only_exact_content() {
+    let view = NotificationView {
+        id: 1,
+        app_name: "mail".to_owned(),
+        summary: "hello".to_owned(),
+        body: "body".to_owned(),
+        urgency: NotificationUrgency::Normal,
+        progress: None,
+        actions: Vec::new(),
+        default_action: false,
+        image: None,
+        icon_name: None,
+    };
+    let notification = |view| Notification {
+        view,
+        expires_at: None,
+        resident: false,
+    };
+    let active = BTreeMap::from([(7, notification(view.clone()))]);
+    assert_eq!(duplicate_id(&active, &view), Some(7));
+    let mut different = view.clone();
+    different.summary = "other".to_owned();
+    assert_eq!(duplicate_id(&active, &different), None);
+    different = view.clone();
+    different.urgency = NotificationUrgency::Critical;
+    assert_eq!(duplicate_id(&active, &different), None);
+    different = view.clone();
+    different.actions.push(NotificationAction {
+        key: "open".to_owned(),
+        label: "Open".to_owned(),
+    });
+    assert_eq!(duplicate_id(&active, &different), None);
+    assert_eq!(duplicate_id(&BTreeMap::new(), &view), None);
+}
+
+#[test]
+fn notify_coalesces_an_exact_duplicate_without_growing_the_queue() {
+    let mut inbox = Inbox::new(NotificationHistory::new(10));
+    let first = notify_id(inbox.notify("mail", "hello", 1)).expect("first reply");
+    let again = notify_id(inbox.notify("mail", "hello", 1)).expect("duplicate reply");
+    assert_eq!(again, first, "a duplicate keeps the original toast id");
+    assert_eq!(inbox.notifications.len(), 1, "no second active toast");
+    assert_eq!(inbox.updates.len(), 2, "both notifications are upserts");
+    assert!(
+        matches!(&inbox.updates[1], NotificationUiUpdate::Upsert(view) if view.id == first),
+        "the repeat updates the existing toast"
+    );
+    let distinct = notify_id(inbox.notify("mail", "different", 1)).expect("distinct reply");
+    assert_ne!(distinct, first, "different content gets a new toast");
+    assert_eq!(inbox.notifications.len(), 2);
+}
+
+#[test]
+fn duplicate_bypasses_the_active_queue_cap() {
+    let mut inbox = Inbox::new(NotificationHistory::new(MAX_NOTIFICATIONS + 2));
+    for index in 0..MAX_NOTIFICATIONS {
+        let summary = format!("message {index}");
+        assert!(
+            notify_id(inbox.notify("mail", &summary, 1)).is_some(),
+            "distinct notification {index} is accepted"
+        );
+    }
+    assert_eq!(inbox.notifications.len(), MAX_NOTIFICATIONS);
+    assert!(
+        notify_id(inbox.notify("mail", "message 0", 1)).is_some(),
+        "a duplicate must not be refused by the full queue"
+    );
+    assert_eq!(inbox.notifications.len(), MAX_NOTIFICATIONS);
+}

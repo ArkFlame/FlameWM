@@ -587,6 +587,34 @@ pub(crate) fn stage_failure_fallback(stage: Stage) -> bool {
     matches!(stage, Stage::Drm | Stage::Outputs)
 }
 
+/// Marks a native init failure caused by EGL/GL setup, so a no-GL start is diagnosable as such
+/// instead of reading as a generic DRM failure. The decision is unchanged: the Drm stage still falls
+/// through to the nested window. Smithay classifies EGL setup failures as typed errors for the same
+/// reason (`.vendor/smithay-master/src/backend/egl/mod.rs`).
+pub(crate) fn native_init_failure_detail(cause: &str) -> String {
+    let lower = cause.to_ascii_lowercase();
+    if ["egl", "gles", "glow", "gl context"]
+        .iter()
+        .any(|token| lower.contains(token))
+    {
+        format!("egl_unavailable,error={cause}")
+    } else {
+        cause.to_owned()
+    }
+}
+
+/// Marks a logind seat refusal that stayed inactive after explicit activation as fail-closed. The
+/// seat stage takes no fallback (see [`stage_failure_fallback`]); the marker makes that decision
+/// visible in the startup line and the failure record without reading the whole message.
+pub(crate) fn seat_failure_detail(cause: &dyn std::fmt::Display) -> String {
+    let detail = cause.to_string();
+    if detail.contains("inactive_after_activate") {
+        format!("fail_closed,reason=inactive_after_activate,{detail}")
+    } else {
+        detail
+    }
+}
+
 /// Emits one structured startup line (see [`stage_text`]). Every hard failure of a backend init
 /// stage also leaves a typed failure record, so a falling-back compositor is diagnosable even when
 /// the wrapper throws its stderr away.
@@ -1212,7 +1240,7 @@ fn start_native(
         match drm::init(state, handle) {
             Ok(drm_handle) => Ok(NativeSession(Some(drm_handle))),
             Err(error) => {
-                let cause = error.to_string();
+                let cause = native_init_failure_detail(&error.to_string());
                 stage_line(Stage::Drm, StageStatus::Fail, &cause);
                 Err(BackendInitError {
                     stage: Stage::Drm.name().to_owned(),

@@ -527,31 +527,12 @@ fn notify(
     } else {
         history.popup_decision(app_name, urgency)
     };
-    if decision == PopupDecision::Show && !replacing && notifications.len() >= MAX_NOTIFICATIONS {
-        return error_reply(
-            message,
-            "org.freedesktop.DBus.Error.LimitsExceeded",
-            "too many active notifications",
-        );
-    }
-    let id = if replacing {
-        *replaces_id
-    } else {
-        let Some(id) = allocate_id(notifications, next_id) else {
-            return error_reply(
-                message,
-                "org.freedesktop.DBus.Error.LimitsExceeded",
-                "notification identifiers exhausted",
-            );
-        };
-        id
-    };
     let image = parsed
         .image
         .clone()
         .or_else(|| parsed.image_path.as_deref().and_then(image_path_hint));
-    let view = NotificationView {
-        id,
+    let mut view = NotificationView {
+        id: 0,
         app_name: app_name.clone(),
         summary: sanitize_markup(summary),
         body: sanitize_markup(body),
@@ -566,6 +547,40 @@ fn notify(
             icon_name_for(&parsed, app_icon)
         },
     };
+    // A repeat of the same content without an explicit target coalesces into the
+    // active toast instead of consuming another bounded slot. Explicit replaces_id
+    // stays authoritative and is handled by `replacing` above.
+    let coalesce_id = if decision == PopupDecision::Show && !replacing {
+        duplicate_id(notifications, &view)
+    } else {
+        None
+    };
+    if decision == PopupDecision::Show
+        && !replacing
+        && coalesce_id.is_none()
+        && notifications.len() >= MAX_NOTIFICATIONS
+    {
+        return error_reply(
+            message,
+            "org.freedesktop.DBus.Error.LimitsExceeded",
+            "too many active notifications",
+        );
+    }
+    let id = if replacing {
+        *replaces_id
+    } else if let Some(id) = coalesce_id {
+        id
+    } else {
+        let Some(id) = allocate_id(notifications, next_id) else {
+            return error_reply(
+                message,
+                "org.freedesktop.DBus.Error.LimitsExceeded",
+                "notification identifiers exhausted",
+            );
+        };
+        id
+    };
+    view.id = id;
     // Transient notifications never enter history; a replacement is not a new history entry.
     if !replacing && !parsed.transient {
         history.record(view.clone(), epoch_millis());
@@ -652,6 +667,48 @@ fn allocate_id(notifications: &BTreeMap<u32, Notification>, next_id: &mut u32) -
         }
     }
     None
+}
+
+/// Content identity of an active toast, used only to coalesce an unaddressed repeat.
+/// Explicit `replaces_id` always wins; this key never overrides a client-chosen target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DuplicateKey<'a> {
+    app_name: &'a str,
+    summary: &'a str,
+    body: &'a str,
+    urgency: NotificationUrgency,
+    progress: Option<u8>,
+    actions: &'a [NotificationAction],
+    default_action: bool,
+    icon_name: Option<&'a str>,
+}
+
+impl<'a> DuplicateKey<'a> {
+    fn of(view: &'a NotificationView) -> Self {
+        Self {
+            app_name: &view.app_name,
+            summary: &view.summary,
+            body: &view.body,
+            urgency: view.urgency,
+            progress: view.progress,
+            actions: &view.actions,
+            default_action: view.default_action,
+            icon_name: view.icon_name.as_deref(),
+        }
+    }
+}
+
+/// Id of the active toast whose content matches `view`, for coalescing repeats.
+/// Decoded image bytes are intentionally excluded: icon identity is already carried by
+/// `icon_name`, and text metadata is enough to recognize a repeated notification.
+fn duplicate_id(
+    notifications: &BTreeMap<u32, Notification>,
+    view: &NotificationView,
+) -> Option<u32> {
+    let key = DuplicateKey::of(view);
+    notifications
+        .iter()
+        .find_map(|(&id, active)| (DuplicateKey::of(&active.view) == key).then_some(id))
 }
 
 fn closed_signal(id: u32, reason: NotificationCloseReason) -> Message {

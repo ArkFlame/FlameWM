@@ -11,6 +11,7 @@ pub mod capabilities;
 pub mod clipboard;
 pub mod clock;
 pub mod color;
+pub mod config_store;
 pub mod display;
 pub mod error;
 pub mod events;

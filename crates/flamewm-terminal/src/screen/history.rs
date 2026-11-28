@@ -31,6 +31,13 @@ pub(super) enum History {
     },
 }
 
+/// Bytes charged by a packed form: UTF-8 text plus one `StyleRun` per style stretch. Both admission
+/// checks in `pack` use this one model, so a future RAM budget cannot make the decision and the
+/// ledger drift apart.
+fn packed_cost(text_len: usize, runs: usize) -> usize {
+    text_len + runs * size_of::<StyleRun>()
+}
+
 impl History {
     /// Packs `line` (already trimmed, see `history_len`) into the smaller of the three forms. Borrowed so the live row's buffer is reused.
     pub(super) fn pack(line: &[Cell]) -> Self {
@@ -67,7 +74,7 @@ impl History {
         // One style across the whole line: shell and build output, stored as text with no run list.
         if runs.is_empty() {
             if let Some(current) = style {
-                let packed = text.len() + size_of::<StyleRun>();
+                let packed = packed_cost(text.len(), 1);
                 if packed < std::mem::size_of_val(line) {
                     return Self::Uniform {
                         text: text.into_boxed_str(),
@@ -87,7 +94,7 @@ impl History {
                 attrs: current.2,
             });
         }
-        let packed = text.len() + runs.len() * size_of::<StyleRun>();
+        let packed = packed_cost(text.len(), runs.len());
         if packed < std::mem::size_of_val(line) {
             Self::Packed {
                 text: text.into_boxed_str(),
@@ -106,6 +113,16 @@ impl History {
             let mut out = Line::new();
             self.cells_into(&mut out);
             Cow::Owned(out)
+        }
+    }
+
+    /// Exact bytes this retained line charges to scrollback RAM, by stored form. Shares `packed_cost` with `pack`
+    /// so what admission compares is what the account reports.
+    pub(super) fn charged_bytes(&self) -> usize {
+        match self {
+            Self::Plain(line) => std::mem::size_of_val(line.as_slice()),
+            Self::Uniform { text, .. } => packed_cost(text.len(), 1),
+            Self::Packed { text, runs } => packed_cost(text.len(), runs.len()),
         }
     }
 
@@ -148,6 +165,7 @@ impl History {
 mod tests {
     use super::*;
     use crate::screen::attr;
+    use crate::screen::cell::history_len;
 
     fn cell(ch: char, fg: Color, attrs: u16) -> Cell {
         Cell {
@@ -187,5 +205,58 @@ mod tests {
         let history = History::pack(&line);
         assert!(matches!(history, History::Plain(_)));
         assert_eq!(*history.cells(), line);
+    }
+
+    #[test]
+    fn charged_bytes_uses_the_same_cost_model_as_pack() {
+        // The account must charge exactly the cost `pack` compared against the plain-cell size.
+        let charged = |history: &History| match history {
+            History::Plain(line) => std::mem::size_of_val(line.as_slice()),
+            History::Uniform { text, .. } => packed_cost(text.len(), 1),
+            History::Packed { text, runs } => packed_cost(text.len(), runs.len()),
+        };
+
+        let uniform_line: Line = "abcdefgh"
+            .chars()
+            .map(|c| cell(c, Color::Default, 0))
+            .collect();
+        let uniform = History::pack(&uniform_line);
+        assert!(matches!(uniform, History::Uniform { .. }));
+        assert_eq!(uniform.charged_bytes(), charged(&uniform));
+        assert!(uniform.charged_bytes() < std::mem::size_of_val(uniform_line.as_slice()));
+
+        let mut two_style: Line = "abcdefgh"
+            .chars()
+            .map(|c| cell(c, Color::Default, 0))
+            .collect();
+        for c in &mut two_style[4..] {
+            c.fg = Color::Indexed(1);
+        }
+        let packed = History::pack(&two_style);
+        assert!(matches!(packed, History::Packed { .. }));
+        assert_eq!(packed.charged_bytes(), charged(&packed));
+        assert!(packed.charged_bytes() < std::mem::size_of_val(two_style.as_slice()));
+
+        let churn: Line = (0..40)
+            .map(|i| cell('x', Color::Indexed((i % 2) as u8), 0))
+            .collect();
+        let plain = History::pack(&churn);
+        assert!(matches!(plain, History::Plain(_)));
+        assert_eq!(plain.charged_bytes(), charged(&plain));
+    }
+
+    #[test]
+    fn trimmed_blank_tail_is_not_charged_to_scrollback() {
+        let full: Line = "ccc     "
+            .chars()
+            .map(|c| cell(c, Color::Default, 0))
+            .collect();
+        let kept = &full[..history_len(&full)];
+        assert_eq!(kept.len(), 3);
+        let history = History::pack(kept);
+        assert!(matches!(history, History::Uniform { .. }));
+        // Eight plain cells would cost more than the packed three-character line.
+        assert!(history.charged_bytes() < std::mem::size_of_val(full.as_slice()));
+        assert_eq!(history.cells().as_slice(), kept);
     }
 }

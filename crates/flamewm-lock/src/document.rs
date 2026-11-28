@@ -20,6 +20,15 @@ const BACKGROUND_ID: &str = "lock-bg";
 /// Lock background used when `lockBackgroundImage` is empty (Unsplash License, see LICENSES/).
 const BUILTIN_BACKGROUND: &[u8] = include_bytes!("../../../assets/wallpapers/fitz-roy-laguna.webp");
 const BUILTIN_BACKGROUND_SOURCE: &str = "builtin:fitz-roy-laguna.webp";
+/// Lazily decoded built-in wallpaper. Ported from
+/// `.vendor/coconut-main/crates/core/src/geo.rs:18-24`: the `include_bytes!` blob stays on the
+/// cold path and `get_or_init` parses it once, only when a default background is first requested.
+fn builtin_background_rgba() -> Option<&'static RgbaImage> {
+    static DECODED: OnceLock<Option<RgbaImage>> = OnceLock::new();
+    DECODED
+        .get_or_init(|| decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok())
+        .as_ref()
+}
 const POWER_ICONS: [&[u8]; 4] = [
     include_bytes!("../../../assets/web/breeze/lock/system-suspend.svg"),
     include_bytes!("../../../assets/web/breeze/lock/system-reboot.svg"),
@@ -299,7 +308,7 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
                 width,
                 height,
             },
-            || decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok(),
+            || builtin_background_rgba().cloned(),
             width,
             height,
         ),
@@ -1118,6 +1127,18 @@ mod tests {
         };
         let flat = background_image(&custom, 4, 4);
         assert_eq!(&flat.pixels[..4], &[1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn builtin_background_decode_is_cached_and_pixel_identical() {
+        let cached = super::builtin_background_rgba().expect("builtin wallpaper decodes");
+        let direct = decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp)
+            .expect("direct wallpaper decode");
+        assert_eq!(cached.width, direct.width);
+        assert_eq!(cached.height, direct.height);
+        assert_eq!(cached.pixels, direct.pixels);
+        let again = super::builtin_background_rgba().expect("cached wallpaper decode");
+        assert!(std::ptr::eq(cached, again), "decode must be reused");
     }
 
     #[test]

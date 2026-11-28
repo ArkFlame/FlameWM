@@ -6,12 +6,14 @@
 //! (`GetLayout`) and sends menu clicks (`Event`). Not implemented here: panel projection (owned
 //! by `flamewm-shell`).
 
+pub mod icon_cache;
 pub mod item;
 pub mod menu;
 pub mod overflow;
 pub mod registry;
 mod watcher;
 
+pub use icon_cache::{ICON_CACHE_BUDGET_BYTES, IconCache, IconCacheKey};
 pub use item::{
     DEFAULT_ITEM_PATH, ITEM_INTERFACE, IconPixmap, ItemKey, ItemProps, PropValue,
     RegistrationError, Status, parse_registration,

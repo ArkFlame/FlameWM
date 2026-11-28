@@ -671,9 +671,16 @@ impl Thumbnails {
         self.pending.remove(&key);
         self.next_id += 1;
         self.clock += 1;
+        // A canvas larger than the whole pixel budget is refused instead of held: one oversized
+        // decode must not break the byte bound, so it is cached as a failure and the row keeps its
+        // type icon. Real thumbnails are at most `THUMB_SIZE * THUMB_SIZE * 4` bytes, so no visible
+        // row changes (FileWheel's hard-cap-at-insertion precedent).
+        let pixels = pixels
+            .filter(|canvas| canvas.len() <= CACHE_BYTES)
+            .map(Arc::new);
         let slot = Slot {
             id: self.next_id,
-            pixels: pixels.map(Arc::new),
+            pixels,
             used: self.clock,
         };
         self.bytes += slot.size();

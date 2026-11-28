@@ -263,6 +263,26 @@ fn shrinking_grid_obeys_scrollback_cap() {
 }
 
 #[test]
+fn capped_ring_keeps_two_newest_compressed_lines_and_trims_blank_tails() {
+    // Eight columns, but each captured line keeps only its non-blank prefix before packing. A decode of "ccc"
+    // rather than "ccc     " proves the blank tail was trimmed and the compact form round-trips through the cap.
+    let mut screen = Screen::new(8, 1, 2);
+    feed(&mut screen, b"a\r\nbb\r\nccc\r\ndddd\r\n");
+    assert_eq!(screen.scrollback_len(), 2);
+    assert_eq!(screen.scrollback_drops(), 2);
+    let decode = |index| {
+        screen
+            .line_abs(index)
+            .unwrap()
+            .iter()
+            .map(|c| c.ch)
+            .collect::<String>()
+    };
+    assert_eq!(decode(0), "ccc");
+    assert_eq!(decode(1), "dddd");
+}
+
+#[test]
 fn rewriting_identical_cells_leaves_rows_clean() {
     let mut screen = Screen::new(10, 3, 0);
     feed(&mut screen, b"\x1b[31mab\x1b[0m");

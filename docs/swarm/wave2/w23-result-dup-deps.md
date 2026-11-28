@@ -36,7 +36,7 @@ the three-edit cap was not needed — see §4 for why every candidate edit is un
 | `syn` | `2.0.119`, `3.0.5` | `thiserror-impl`, `pin-project-internal`, `tracing-attributes`, `windows-implement`, `zerocopy-derive`, … | none at runtime (proc-macro/build only) |
 | `thiserror`, `thiserror-impl` | `1.0.69`, `2.0.21` | `calloop 0.13`, `ndk`, `smithay-client-toolkit` (workspace `2.0.21`) | none at runtime (derive only) |
 | `windows-sys` | `0.48.0`, `0.52.0`, `0.59.0`, `0.61.2` | Windows-only transitive deps | none on Linux |
-| `windows-targets`, `windows_*` (8 crates) | `0.48.5`, `0.52.6` | `windows-sys` | none on Linux |
+| `windows-targets`, `windows_*` (7 crates) | `0.48.5`, `0.52.6` | `windows-sys` | none on Linux |
 | `hermit-abi`, `redox_syscall`, `r-efi`, `jni-sys` | `0.3.9`/`0.5.3`, `0.4.1`/`0.9.5`, `5.3.0`/`6.0.0`, `0.3.1`/`0.4.1` | target-specific (hermit/Redox/UEFI/Android) | none on Linux production |
 
 All 29 duplicate names in the lock are accounted for above. No duplicate is introduced by a

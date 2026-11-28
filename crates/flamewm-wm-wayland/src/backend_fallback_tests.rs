@@ -7,8 +7,9 @@
 use super::{
     Backend, BackendFallbackOutcome, EXIT_NO_SEAT, NativeAvailability, NativeFallbackDecision,
     NextBackend, Stage, append_backend_failure_record, append_headless_entry_record,
-    append_xwayland_unavailable_record, choose_native_fallback, native_unavailable_falls_back,
-    next_backend, select_backend, stage_failure_fallback,
+    append_xwayland_unavailable_record, choose_native_fallback, native_init_failure_detail,
+    native_unavailable_falls_back, next_backend, seat_failure_detail, select_backend,
+    stage_failure_fallback,
 };
 
 #[test]
@@ -232,7 +233,13 @@ fn xwayland_failure_appends_a_record() {
         "{}",
         lines[0]
     );
-    assert!(lines[0].contains("still_works=\"process,session_log,wayland_socket,compositor_backend,hardware_outputs,input_devices\""), "{}", lines[0]);
+    assert!(
+        lines[0].contains(
+            "still_works=\"process,session_log,wayland_socket,compositor_backend,hardware_outputs,input_devices\""
+        ),
+        "{}",
+        lines[0]
+    );
     assert!(
         lines[0].contains("degraded=\"x11_clients,autostart\""),
         "{}",
@@ -305,4 +312,38 @@ fn nested_gl_failure_records_a_winit_fallback() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// Row 3 notice: an EGL/GL init failure is labeled `egl_unavailable` before it reaches the Drm
+/// record, while an unrelated DRM failure keeps its original cause. Pure string work, no GPU.
+#[test]
+fn native_init_failure_labels_egl_and_keeps_other_causes() {
+    let egl = native_init_failure_detail("EGLDisplay::new failed: EGL_BAD_ALLOC");
+    assert!(egl.starts_with("egl_unavailable,error="), "{egl}");
+    assert!(egl.contains("EGL_BAD_ALLOC"), "{egl}");
+    assert_eq!(
+        native_init_failure_detail("cannot open render node"),
+        "cannot open render node"
+    );
+    assert!(stage_failure_fallback(Stage::Drm));
+}
+
+/// Row 9 notice: the inactive-after-activate refusal is marked fail-closed in the seat detail and
+/// the seat stage still takes no fallback. Other logind reasons keep their original detail.
+#[test]
+fn seat_failure_marks_inactive_as_fail_closed() {
+    let inactive = seat_failure_detail(&"reason=inactive_after_activate: session still inactive");
+    assert!(
+        inactive.starts_with("fail_closed,reason=inactive_after_activate,"),
+        "{inactive}"
+    );
+    assert_eq!(
+        seat_failure_detail(&"reason=greeter: another session is active"),
+        "reason=greeter: another session is active"
+    );
+    assert!(!stage_failure_fallback(Stage::Seat));
+    assert_eq!(
+        choose_native_fallback(NativeAvailability::from_failed_stage("seat")),
+        NativeFallbackDecision::ExitWithCode(EXIT_NO_SEAT)
+    );
 }

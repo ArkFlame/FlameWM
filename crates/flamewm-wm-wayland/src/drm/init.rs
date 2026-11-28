@@ -27,7 +27,11 @@ pub(super) fn init_backend(
     let session = match LogindSession::new() {
         Ok(session) => session,
         Err(error) => {
-            stage_line(Stage::Seat, StageStatus::Fail, &format!("{error}"));
+            stage_line(
+                Stage::Seat,
+                StageStatus::Fail,
+                &crate::seat_failure_detail(&error),
+            );
             return Err(error.into());
         }
     };

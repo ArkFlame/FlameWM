@@ -15,13 +15,43 @@ pub(crate) fn fade_ghost_pixels(pixels: &mut [u8]) {
 /// cache miss; the worker result overwrites it. Not a placeholder shape: a
 /// real RGBA8 raster in the tile's selected semantic slot.
 pub(crate) fn flame_fallback_raster() -> Rgba8Raster {
-    let pixels = [239_u8, 64, 72, 255].repeat(ICON_TILE_PX as usize * ICON_TILE_PX as usize);
-    Rgba8Raster {
-        source: "flamewm-fallback".to_owned(),
-        width: ICON_TILE_PX,
-        height: ICON_TILE_PX,
-        pixels,
-        origin: IconOrigin::PackagedFallback,
-        fallback_reason: None,
+    static CACHED: std::sync::OnceLock<Rgba8Raster> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let pixels =
+                [239_u8, 64, 72, 255].repeat(ICON_TILE_PX as usize * ICON_TILE_PX as usize);
+            Rgba8Raster {
+                source: "flamewm-fallback".to_owned(),
+                width: ICON_TILE_PX,
+                height: ICON_TILE_PX,
+                pixels,
+                origin: IconOrigin::PackagedFallback,
+                fallback_reason: None,
+            }
+        })
+        .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_raster_is_cached_and_clones_are_independent() {
+        let first = flame_fallback_raster();
+        let second = flame_fallback_raster();
+        assert_eq!(first.pixels, second.pixels);
+        assert_eq!(first.source, second.source);
+        assert_eq!(first.width, second.width);
+        assert_eq!(first.height, second.height);
+        assert_eq!(first.origin, second.origin);
+
+        let mut faded = first.clone();
+        fade_ghost_pixels(&mut faded.pixels);
+        assert_ne!(
+            faded.pixels, first.pixels,
+            "fade must touch the local clone"
+        );
+        assert_eq!(flame_fallback_raster().pixels, first.pixels);
     }
 }

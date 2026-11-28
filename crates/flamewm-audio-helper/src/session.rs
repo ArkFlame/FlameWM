@@ -61,6 +61,9 @@ pub fn serve(
         };
         if std::mem::take(&mut first) && !wait_until_ready(backend, ready_wait) {
             eprintln!("flamewm-audio-helper: PulseAudio not ready after {ready_wait:?}");
+            // Record the absent backend immediately so the shell degrades its volume controls
+            // even when the first request is not a `get` and no write is ever attempted.
+            publish(&backend.snapshot());
         }
         match parse_request(&line) {
             Ok(AudioRequest::Get) => publish(&backend.snapshot()),
@@ -282,7 +285,33 @@ mod tests {
             Duration::ZERO,
         );
         assert!(backend.applied.borrow().is_empty());
+        // The failed first wait records absence; the rejected write then reconciles the true
+        // snapshot. Both are Unavailable, and neither may read as an applied key.
+        let published = published.borrow();
+        assert!(!published.is_empty());
+        assert!(
+            published
+                .iter()
+                .all(|availability| *availability == ServiceAvailability::Unavailable)
+        );
+    }
+
+    #[test]
+    fn absent_server_is_recorded_without_a_get_or_a_write() {
+        // A malformed line cannot publish on its own, so any snapshot seen here is the explicit
+        // absence record emitted when the first ready wait fails. `serve` still runs to idle.
+        let backend = FakeBackend::default();
+        let requests = feed(&["not-a-request"]);
+        let published = RefCell::new(Vec::new());
+        serve(
+            &backend,
+            &requests,
+            &|snapshot| published.borrow_mut().push(snapshot.availability),
+            Duration::from_millis(20),
+            Duration::ZERO,
+        );
         assert_eq!(*published.borrow(), vec![ServiceAvailability::Unavailable]);
+        assert!(backend.applied.borrow().is_empty());
     }
 
     #[test]
@@ -349,7 +378,14 @@ mod tests {
         let backend = FakeBackend::default();
         backend.device_volume.set(40);
         let levels = observed_levels(&backend, &[VOLUME_LINE], Duration::ZERO);
-        assert_eq!(levels, vec![(ServiceAvailability::Unavailable, 40)]);
+        // The failed first wait records absence, then the rejected write reconciles; every
+        // snapshot shows the unchanged device level, never the requested one.
+        assert!(!levels.is_empty());
+        assert!(
+            levels
+                .iter()
+                .all(|level| *level == (ServiceAvailability::Unavailable, 40))
+        );
         assert_eq!(backend.device_volume.get(), 40);
     }
 

@@ -36,6 +36,18 @@ pub const ICON_PREVIEW_NAMES: [&str; 4] = [
 /// Row image nodes per icon theme. Cursor rows carry one image.
 pub const ICON_ROW_IMAGES: usize = ICON_PREVIEW_NAMES.len();
 const ICON_PREVIEW_PX: u32 = 24;
+
+/// Example rasters decoded for a sorted icon-theme row. Only rows inside the visible
+/// window show all four examples; hidden rows keep just the first one, which is the
+/// image `ThemeRegistry::selected_preview` reads.
+#[must_use]
+pub(crate) fn preview_budget(slot: usize) -> usize {
+    if slot < THEME_ROW_SLOTS {
+        ICON_PREVIEW_NAMES.len()
+    } else {
+        1
+    }
+}
 /// Agent 1's selected-value image node, to the left of icon-theme-value text.
 pub const SELECTED_ICON_PREVIEW_NODE: &str = "icon-theme-selected-preview";
 
@@ -280,7 +292,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
             ThemeKind::Icon => registry.icon.push(ThemeItem {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
-                previews: icon_previews(&entry.id, data_dirs, &listings),
+                previews: Vec::new(),
             }),
             ThemeKind::Cursor => {
                 registry.cursor.push(ThemeItem {
@@ -295,35 +307,44 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
             }
         }
     }
+    // Sort icon themes before decoding so the visible window is known: decoding an
+    // example that is dropped immediately after sorting only allocates and frees a
+    // raster on the scan thread. Previews are per theme, so sorting first cannot
+    // change which pixels a row receives.
     registry.icon = with_bundled_icon_themes(registry.icon);
-    registry.cursor = with_installed_cursor_themes(registry.cursor);
-    // Only the first THEME_ROW_SLOTS rows upload previews, and the selected-value image
-    // uses `previews.first()`, so a hidden theme needs no other decoded examples.
-    for item in registry.icon.iter_mut().skip(THEME_ROW_SLOTS) {
-        item.previews.truncate(1);
+    for (slot, item) in registry.icon.iter_mut().enumerate() {
+        let previews = icon_previews(&item.id, data_dirs, &listings, preview_budget(slot));
+        item.previews = previews;
     }
+    registry.cursor = with_installed_cursor_themes(registry.cursor);
     registry
 }
 
-/// One small raster per example name that the theme resolves. The lookup index is
-/// built once per theme and each example is decoded once per scan, on the scan thread.
+/// Up to `keep` small rasters for the example names a theme resolves, in the same
+/// order as before. The lookup index is built once per theme on the scan thread.
 fn icon_previews(
     theme: &str,
     data_dirs: &[PathBuf],
     listings: &Arc<DirListings>,
+    keep: usize,
 ) -> Vec<PreviewImage> {
     let index = IconLookupIndex::build_shared(&[theme.to_owned()], data_dirs, 0, listings);
     let size = IconSize::new(ICON_PREVIEW_PX, ICON_PREVIEW_PX);
-    ICON_PREVIEW_NAMES
-        .iter()
-        .filter_map(|name| {
-            let (candidates, _) = index.lookup(name, ICON_PREVIEW_PX);
-            candidates
-                .iter()
-                .find_map(|path| rasterize_path(path, size).ok())
-                .map(raster_image)
-        })
-        .collect()
+    let mut previews = Vec::with_capacity(keep);
+    for name in ICON_PREVIEW_NAMES {
+        if previews.len() >= keep {
+            break;
+        }
+        let (candidates, _) = index.lookup(name, ICON_PREVIEW_PX);
+        if let Some(image) = candidates
+            .iter()
+            .find_map(|path| rasterize_path(path, size).ok())
+            .map(raster_image)
+        {
+            previews.push(image);
+        }
+    }
+    previews
 }
 
 fn raster_image(raster: Rgba8Raster) -> PreviewImage {
@@ -468,6 +489,18 @@ pub fn install_error_message(error: &ImportError) -> String {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn hidden_icon_rows_only_decode_the_selected_preview() {
+        assert_eq!(preview_budget(0), ICON_PREVIEW_NAMES.len());
+        assert_eq!(
+            preview_budget(THEME_ROW_SLOTS - 1),
+            ICON_PREVIEW_NAMES.len()
+        );
+        assert_eq!(preview_budget(THEME_ROW_SLOTS), 1);
+        assert_eq!(preview_budget(THEME_ROW_SLOTS + 40), 1);
+        assert!(preview_budget(THEME_ROW_SLOTS) < preview_budget(0));
+    }
 
     fn item(id: &str, name: &str) -> ThemeItem {
         ThemeItem {

@@ -253,6 +253,32 @@ impl Screen {
         self.scrollback_drops
     }
 
+    /// Appends one already-packed line to the bounded ring. The cap and the rebuild token are enforced in this one
+    /// place so both producers (resize drain and live scroll) share a single owner of the bound.
+    #[allow(dead_code)]
+    fn push_history(&mut self, history: History) {
+        Self::push_history_into(
+            &mut self.scrollback,
+            self.scrollback_limit,
+            &mut self.scrollback_drops,
+            history,
+        );
+    }
+
+    /// Field-wise scrollback push, so a caller holding a borrow of a grid can still record history.
+    fn push_history_into(
+        scrollback: &mut std::collections::VecDeque<History>,
+        limit: usize,
+        drops: &mut u64,
+        history: History,
+    ) {
+        scrollback.push_back(history);
+        if scrollback.len() > limit {
+            scrollback.pop_front();
+            *drops = drops.saturating_add(1);
+        }
+    }
+
     #[must_use]
     pub fn line_abs(&self, index: usize) -> Option<Cow<'_, Line>> {
         let history = self.scrollback_len();
@@ -341,12 +367,12 @@ impl Screen {
                     // One drain, packing each departing top line into scrollback as it leaves. The drain borrows only
                     // the primary grid, so the drops need no temporary list of removed lines.
                     for line in self.primary.drain(0..shift) {
-                        self.scrollback
-                            .push_back(History::pack(&line[..history_len(&line)]));
-                        if self.scrollback.len() > self.scrollback_limit {
-                            self.scrollback.pop_front();
-                            self.scrollback_drops = self.scrollback_drops.saturating_add(1);
-                        }
+                        Self::push_history_into(
+                            &mut self.scrollback,
+                            self.scrollback_limit,
+                            &mut self.scrollback_drops,
+                            History::pack(&line[..history_len(&line)]),
+                        );
                     }
                     self.primary
                         .extend((0..shift).map(|_| blank_line(cols, Color::Default)));
@@ -444,11 +470,12 @@ impl Screen {
             let packed = capture.then(|| History::pack(&row[..history_len(row)]));
             row.fill(blank);
             if let Some(history) = packed {
-                self.scrollback.push_back(history);
-                if self.scrollback.len() > self.scrollback_limit {
-                    self.scrollback.pop_front();
-                    self.scrollback_drops = self.scrollback_drops.saturating_add(1);
-                }
+                Self::push_history_into(
+                    &mut self.scrollback,
+                    self.scrollback_limit,
+                    &mut self.scrollback_drops,
+                    history,
+                );
             }
         }
     }

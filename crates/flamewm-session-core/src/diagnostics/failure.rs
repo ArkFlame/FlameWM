@@ -161,6 +161,73 @@ pub fn format_startup_failure(
     )
 }
 
+/// One startup stage's monotonic timestamp, in milliseconds from the session clock origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageTiming {
+    pub stage: String,
+    pub elapsed_ms: u64,
+}
+
+/// One monotonic timestamp per startup stage. The table is pure: the caller injects elapsed
+/// milliseconds from a monotonic clock, just as [`FailureRecord`] injects its wall-clock timestamp.
+/// A stage is recorded at most once (the first report wins) and stored values never decrease, so a
+/// retried stage or a corrected clock cannot reorder the timeline.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StageTimingTable {
+    timings: Vec<StageTiming>,
+}
+
+impl StageTimingTable {
+    /// An empty table; no startup stage has been reached yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record `elapsed_ms` for `stage`. Returns `true` only when a new entry was added: a second
+    /// report for the same stage is ignored, and an elapsed value below the last recorded one is
+    /// clamped up to it so the table stays monotonic.
+    pub fn note(&mut self, stage: impl Into<String>, elapsed_ms: u64) -> bool {
+        let stage = stage.into();
+        if self.timings.iter().any(|timing| timing.stage == stage) {
+            return false;
+        }
+        let last_ms = self.timings.last().map_or(0, |timing| timing.elapsed_ms);
+        self.timings.push(StageTiming {
+            stage,
+            elapsed_ms: elapsed_ms.max(last_ms),
+        });
+        true
+    }
+
+    /// Monotonic elapsed time recorded for `stage`, if it was reached.
+    #[must_use]
+    pub fn elapsed_ms(&self, stage: &str) -> Option<u64> {
+        self.timings
+            .iter()
+            .find(|timing| timing.stage == stage)
+            .map(|timing| timing.elapsed_ms)
+    }
+
+    /// All recorded timings in the order the stages were noted.
+    #[must_use]
+    pub fn timings(&self) -> &[StageTiming] {
+        &self.timings
+    }
+
+    /// Number of stages recorded so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.timings.len()
+    }
+
+    /// True when no stage has been recorded yet.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.timings.is_empty()
+    }
+}
+
 fn quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -392,6 +459,61 @@ mod tests {
         assert_eq!(FailureCode::Panic.as_str(), "panic");
         assert_eq!(FailureCode::RestartLimit.as_str(), "restart_limit");
         assert_eq!(FailureCode::SubsystemError.as_str(), "subsystem_error");
+    }
+
+    #[test]
+    fn stage_table_records_one_monotonic_timestamp_per_stage() {
+        let mut table = StageTimingTable::new();
+        assert!(table.is_empty());
+        assert!(table.note("x11 connect", 12));
+        assert!(table.note("window manager", 40));
+        assert!(table.note("desktop", 75));
+        assert_eq!(table.len(), 3);
+        assert!(!table.is_empty());
+        assert_eq!(table.elapsed_ms("x11 connect"), Some(12));
+        assert_eq!(table.elapsed_ms("window manager"), Some(40));
+        assert_eq!(table.elapsed_ms("desktop"), Some(75));
+        assert_eq!(table.elapsed_ms("shell"), None);
+        assert_eq!(
+            table.timings(),
+            [
+                StageTiming {
+                    stage: "x11 connect".into(),
+                    elapsed_ms: 12,
+                },
+                StageTiming {
+                    stage: "window manager".into(),
+                    elapsed_ms: 40,
+                },
+                StageTiming {
+                    stage: "desktop".into(),
+                    elapsed_ms: 75,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn stage_table_keeps_the_first_report_for_a_stage() {
+        let mut table = StageTimingTable::new();
+        assert!(table.note("desktop", 30));
+        assert!(!table.note("desktop", 90));
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.elapsed_ms("desktop"), Some(30));
+    }
+
+    #[test]
+    fn stage_table_never_moves_a_timestamp_backwards() {
+        let mut table = StageTimingTable::new();
+        assert!(table.note("window manager", 50));
+        assert!(table.note("desktop", 20));
+        assert_eq!(table.elapsed_ms("desktop"), Some(50));
+        let elapsed: Vec<u64> = table
+            .timings()
+            .iter()
+            .map(|timing| timing.elapsed_ms)
+            .collect();
+        assert_eq!(elapsed, [50, 50]);
     }
 
     #[test]

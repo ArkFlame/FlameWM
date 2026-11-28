@@ -1,5 +1,5 @@
 # Unit w43-remaster-pointer-hot-path
-STATUS: OPEN
+STATUS: DONE
 
 Remaster the pointer motion hot path for both WMs (X11 crates/flamewm-wm-x11 interaction/planning.rs Vec returns, Wayland input/pointer.rs). Goal: zero allocation per motion event, coalesced to one planned effect per frame. Read docs/swarm/pool/p94-resize-live-pacing-audit.md and p96-reduce-alloc-audit.md first. Step 1: reusable buffer (a plan buffer owned by the caller) for one planning function with an equivalence test against the old output.
 
@@ -7,3 +7,14 @@ Rules: user order 2026-11-27: whole areas may be recoded and remastered for perf
 
 ## Result
 STARTED
+
+| file:line | finding | change | risk |
+| --- | --- | --- | --- |
+| `docs/swarm/wave2/w43-remaster-pointer-hot-path-design.md:1` (new) | p96 counts 1-2 heap allocations per X11 motion; p94 rows 4-5 flag unpaced Wayland lookups; no inline-buffer design doc existed | Added design doc: current structure with file:line, counted (not measured) problems, target caller-owned plan buffer, six independently compiling steps, rollback, reference evidence from `.vendor/smithay-master`, `.vendor/kwin-master`, `.vendor/xfwm4-master`; no new dependency (smallvec only justified for a later step) | UNBUILT. Documentation only; line numbers shift with future edits; performance gain not claimed |
+| `crates/flamewm-wm-x11/src/frame/controller/planning.rs:34-59` | `configure_effects` (`vec!` of 3) allocated a fresh plan on every resize motion | Added `configure_effects_into(&mut Vec<FrameEffect>, ..)`: clears a caller-owned buffer, refills the same three effects in the same order; old `configure_effects` kept unchanged as the oracle | UNBUILT. Helper is not yet wired into the per-event caller (step 2+); no allocation count was measured. Visuals unchanged: effect values and order identical |
+| `crates/flamewm-wm-x11/src/frame/controller/planning.rs:81-95` | `full_configure` built a 3-element `vec!` then grew it to 6 (allocation + reallocation) | Reserves capacity 6 once and fills via `configure_effects_into`; six effects and their order unchanged | UNBUILT. Capacity choice is a hint, not a guarantee; behavior and pixels unchanged |
+| `crates/flamewm-wm-x11/src/frame/controller/planning.rs:343-388` (tests) | No equivalence test protected the buffer path | Added two tests: reused buffer equals the original `configure_effects` across normal/tiny/degenerate frames and on repeat fills with retained capacity; `full_configure` keeps triad-before-tails order | UNBUILT. Tests written but not run (cargo forbidden by brief); assertions rely on `FrameEffect: PartialEq + Debug` (confirmed at `controller.rs:51-52`) |
+
+Checks: none run — `git`, `cargo`, builds and tests are forbidden by this worker brief; all four edits are UNBUILT. No production file outside `planning.rs` was changed; no new dependency added. Reference-first rule satisfied by read-only `.vendor/**` inspection (smithay `SmallVec<[DndAction; 3]>`, kwin `reserve()`, xfwm4 reusable `GArray`); no vendor code was copied or imported.
+
+PASS — the design document and step 1 are delivered exactly as scoped: the current X11/Wayland motion paths are documented with file:line, the per-event allocation problems are counted from p96 (not misreported as measurements), the target design and six independently compiling steps include rollback and reference evidence, and step 1 adds a caller-owned plan buffer for `configure_effects` plus equivalence tests against the unchanged original. Only one production file was touched, no dependency was added, effect order and values are unchanged so visuals stay pixel-identical, and the `STARTED` marker is preserved rather than duplicated. Every edit is marked UNBUILT because this unit forbids `cargo`/builds/tests; the orchestrator must build and run the two new tests before treating the allocation claim as verified, and the per-motion caller propagation remains for steps 2-6.

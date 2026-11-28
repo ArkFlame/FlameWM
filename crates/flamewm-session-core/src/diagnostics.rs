@@ -13,8 +13,9 @@ use crate::{ChildExit, ProcessPlan, SessionRole};
 /// crates can use the stable `flamewm_session_core::diagnostics::FailureRecord` path.
 pub mod failure;
 pub use failure::{
-    BlastRadius, FailureCode, FailureRecord, RestartDecision, RestartPolicy, append_record,
-    format_startup_failure, guard, install_panic_hook, unix_seconds_now,
+    BlastRadius, FailureCode, FailureRecord, RestartDecision, RestartPolicy, StageTiming,
+    StageTimingTable, append_record, format_startup_failure, guard, install_panic_hook,
+    unix_seconds_now,
 };
 
 /// Severity ordered from least to most serious.

@@ -309,4 +309,37 @@ mod tests {
         assert!(!kept.contains(&"widget.corrupt-100.conf".to_owned()));
         fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn atomic_write_replaces_whole_file_with_0600_and_no_temp_left() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("atomic-write");
+        let path = dir.join("settings.conf");
+        fs::write(&path, b"old contents that must disappear").expect("old file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("old mode");
+
+        atomic_write_text(&path, "new contents").expect("atomic write");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("read back"),
+            "new contents"
+        );
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the private temp must become the file");
+        let leftovers: Vec<String> = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temp may survive: {leftovers:?}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn atomic_write_rejects_path_without_a_file_name() {
+        let error = atomic_write_text(Path::new("/"), "x").expect_err("no file name");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
 }

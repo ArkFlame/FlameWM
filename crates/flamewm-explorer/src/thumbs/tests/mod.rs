@@ -390,6 +390,28 @@ fn cache_evicts_least_recently_used_at_the_pixel_byte_budget() {
 }
 
 #[test]
+fn a_canvas_over_the_byte_budget_is_cached_as_a_failure() {
+    let mut cache = Thumbnails::default();
+    // A single canvas bigger than the whole budget is refused at insertion, so `bytes` stays a
+    // hard bound and the row keeps its type icon instead of holding the oversized pixels.
+    cache.complete(key("huge", 1), Some(vec![0; CACHE_BYTES + 1]));
+    assert_eq!(cache.bytes, 0);
+    assert!(matches!(cache.lookup(&key("huge", 1)), Lookup::Failed));
+    // A canvas exactly at the budget is still admitted.
+    cache.complete(key("exact", 1), Some(vec![0; CACHE_BYTES]));
+    assert_eq!(cache.bytes, CACHE_BYTES);
+    assert!(matches!(cache.lookup(&key("exact", 1)), Lookup::Ready(..)));
+    // A real thumbnail canvas is far below the budget, so the guard never fires for decoded rows.
+    let real = (THUMB_SIZE * THUMB_SIZE * 4) as usize;
+    assert!(real <= CACHE_BYTES);
+    cache.complete(key("real", 1), Some(vec![0; real]));
+    // `exact` already filled the budget, so the new canvas evicts the coldest entries and only
+    // `real` remains: `bytes` is its size, still a hard bound under `CACHE_BYTES`.
+    assert_eq!(cache.bytes, real);
+    assert!(matches!(cache.lookup(&key("real", 1)), Lookup::Ready(..)));
+}
+
+#[test]
 fn changed_mtime_is_a_different_key() {
     assert_ne!(key("a", 1), key("a", 2));
 }
