@@ -60,3 +60,6 @@ RESULT slot5: exit=0, 45 test binaries ok, no compile errors. Resize budget test
 
 ## HOUR 9 slot 6 (22:47): cargo test --no-fail-fast -p flamewm-wm-x11 -p flamewm-wm -p flamewm-api -p flamewm-session-core -p flamewm-shell -p flamewm-integrations-linux (p105 X11 startup classification, unbuilt since 313ce23a; safe_config/failure/icons edits from wave2)
 RESULT slot6: exit=0, 23 test binaries ok, no compile errors. p105 X11 classification now built and tested. Not run: release build, real-session resize, frames.
+
+## HOUR 10 slot 7 (23:55): cargo test --no-fail-fast -p flamewm-session-core -p flamewm-wm-wayland -p flamewm-wm -p flamewm-lock -p flamewm-x11-desktop -p flamewm-image-core -p flamewm-wm-x11 (wave2 worker edits: failure record, lock pam/respawn, restart backoff, decode cache, x11 manage)
+RESULT slot7: exit=0 after two fixes (flamewm-wm main.rs BlastRadius::new([] as [&str; 0], ..) inference; flamewm-session.rs import of fallback_plan_with_cause used by a worker edit); 26 test binaries ok. Not run: release build, real-session resize, frames. Backend note: OpenCode probes time out and wave3 (x01-x08) died with ECONNRESET; no wave3 edits landed.

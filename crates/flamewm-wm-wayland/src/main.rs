@@ -504,6 +504,26 @@ fn append_backend_failure_record(
     cause: impl std::fmt::Display,
     fallback_taken: bool,
 ) {
+    append_failure_record(
+        path,
+        stage,
+        cause,
+        ["process", "session_log", "wayland_socket"],
+        ["compositor_backend", "hardware_outputs", "input_devices"],
+        fallback_taken,
+    );
+}
+
+/// Appends one typed failure record with an explicit blast radius. A degraded-but-running session
+/// can name what still works without claiming that rendering or input died.
+fn append_failure_record(
+    path: &std::path::Path,
+    stage: &str,
+    cause: impl std::fmt::Display,
+    still_works: impl IntoIterator<Item = &'static str>,
+    degraded: impl IntoIterator<Item = &'static str>,
+    fallback_taken: bool,
+) {
     use flamewm_session_core::diagnostics::{
         BlastRadius, FailureCode, FailureRecord, append_record,
     };
@@ -511,10 +531,7 @@ fn append_backend_failure_record(
         stage,
         FailureCode::SubsystemError,
         cause.to_string(),
-        BlastRadius::new(
-            ["process", "session_log", "wayland_socket"],
-            ["compositor_backend", "hardware_outputs", "input_devices"],
-        ),
+        BlastRadius::new(still_works, degraded),
         fallback_taken,
     );
     if let Err(error) = append_record(path, &record) {

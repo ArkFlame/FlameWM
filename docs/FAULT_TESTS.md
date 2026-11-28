@@ -21,6 +21,7 @@ even though their file names have no `fault`; both declare a documented fault-in
 | `crates/flamewm-wm-x11/src/wm/mod.rs:593` -> `src/wm/startup_fault_tests.rs` | `flamewm-wm-x11` | `startup_fault_tests` | no extensions, no RandR, second WM on root `SubstructureRedirect` | u45 |
 | `crates/flamewm-wm-wayland/src/main.rs:121` -> `src/backend_fallback_tests.rs` | `flamewm-wm-wayland` | `backend_fallback_tests` | native DRM init failure, nested winit init failure, failure-record append | u36c |
 | `scripts/test-wrapper-faults:14` (shell script, no cargo) | n/a | n/a | missing-library `ldd` preflight vs all-resolved | u15b |
+| `scripts/x11-startup-faults` (shell script, no cargo) | n/a | n/a | DISPLAY unset and unreachable (`connect`), second WM on private Xvfb (`become-wm`), healthy WM 3 s timeout; asserts exit and `FLAMEWM-X11-STARTUP-FAIL stage=` with `blast_radius` | w01 |
 
 The Wayland suite is invoked twice, with default features and with `--features drm`, because u36c
 requires both feature states to be checked.

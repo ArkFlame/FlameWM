@@ -21,8 +21,8 @@ use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_session_core::diagnostics::{
     BlastRadius, CHECK_EXIT_FATAL, FailureCode, FailureRecord, Severity, append_record,
-    check_exit_code, describe_exit, fallback_plan, format_report, format_startup_failure,
-    unix_seconds_now,
+    check_exit_code, describe_exit, fallback_plan, fallback_plan_with_cause, format_report,
+    format_startup_failure, unix_seconds_now,
 };
 use flamewm_session_core::{
     ChildExit, Keyring, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,

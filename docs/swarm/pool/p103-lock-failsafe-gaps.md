@@ -44,6 +44,34 @@ Audit only. No crate edits, no git, no cargo. Evidence is static (source reads a
 - G1 is downgraded: `decide` returns a constant (`show_lock=true`, `unlock=false`; only `solid_colour` varies). Wiring it into the paint path would add no safety. The real checks are runtime ones: a wallpaper/font/PAM fault must still paint a cover (p01 covers wallpaper) and never release. Replace the G1 fix with one runtime fault test per fault (render, PAM dlopen miss, wallpaper) asserting the lock stays covered.
 - G2 fixed UNBUILT in `crates/flamewm-x11-desktop/src/lock.rs` (retry the respawn every LOCK_CRASH_LOOP_DELAY instead of ending supervision). A test needs an injectable spawn function.
 
+## w12: Wayland lock-client unclean exit — respawn with bounded backoff
+
+Read-only audit of `crates/flamewm-wm-wayland/src/session_lock.rs` at workspace version 0.1.7. Evidence is static source reads, so all runtime claims below are UNVERIFIED. No crate edits were made by this unit.
+
+### What happens today (file:line)
+
+- `session_lock.rs:171-193` `new_surface` is the only path that installs a live lock surface and marks its output covered (`:187`).
+- `render/mod.rs:840` calls `prune_dead_locks(state)` every frame. `session_lock.rs:280-309` finds surfaces whose client is gone (`!l.surface.alive()`, `:285`), calls `cover_dead_locker` (`:258-261`: `uncover` then `cover_placeholder`) for each dead output, drops the dead entries (`:291`) and refocuses only when no live surface remains (`:304-307`).
+- `session_lock.rs:215-221` `screen_for(true, None)` returns `Screen::Blank`; `render/mod.rs:850` paints `solid_lock_cover`, so the desktop is never revealed. `session_locked` is set only by `enter_lock` (`:199-203`) and cleared only by `unlock` (`:160-169`); `prune_dead_locks` never clears it. An unclean exit is therefore fail-closed: opaque placeholder, session still locked, keyboard shortcuts and window pointer reach still disabled (`:226-234`).
+- There is **no respawn** on this path. `docs/backlog/wayland-shared.md:112` records the design: "a dead locker leaves the session locked ... no respawn; WM owns no lock process." A grep of `crates/flamewm-wm-wayland/src` finds no lock-client `Command::new`/`spawn` or lock supervisor. The only crash supervision in the repo is X11 (`crates/flamewm-x11-desktop/src/lock.rs:54-66` `decide`, `:80-121` `supervise_lock`, constants `:35,38,41,42`). The user sees a permanently blank/placeholder screen with no password prompt until a VT switch or a manual client restart. This is gap G4 (`p103-lock-failsafe-gaps.md:27`) with no failure record.
+
+### Vendor precedents (`.vendor/**`, read-only evidence)
+
+- `smithay-master/src/wayland/session_lock/lock.rs:136-143`: on `destroyed` (client disconnected without unlocking) smithay sets `LockStatus::Defunct` and says it is "up to the compositor's policy to decide whether it is allowed for another client to connect and take over the session-locker responsibility." Smithay does not respawn. This matches the active `alive()` pruning: a dead lock stops being authoritative, so a respawned client may issue a fresh `lock()`.
+- `cosmic-epoch/cosmic-comp/src/wayland/handlers/session_lock.rs:19-43`: `lock()` rejects a second lock while the current one's client is still alive (`:22-31`), confirms immediately and seeds surfaces (`:33-38`). No respawn in the compositor; the lock client comes from the session (`cosmic-epoch/pop-launcher/scripts/session/session-lock.sh:10` `xdg-screensaver lock`).
+- `kwin-master/src/wayland_server.cpp:613-651`: KWin delegates lock-process lifecycle to `ScreenLocker::KSldApp` through a dedicated Wayland client connection (`createScreenLockerConnection`, `:672-680`) and recreates that connection on `aboutToStartGreeter` (`:620-631`). Respawn/backoff lives in kscreenlocker, not in KWin. kscreenlocker itself is not vendored (only a dependency reference in `kwin-master/.kde-ci.yml:35,48`), so its exact backoff is UNVERIFIED here — do not transplant it.
+
+### Precise fix spec
+
+Ownership: put the supervisor in the process that owns the Wayland `flamewm-lock` client, outside `SessionLockHandler`, mirroring X11 `supervise_lock` — `docs/backlog/wayland-shared.md:112` establishes the compositor owns no lock process. Leave the compositor protocol handler unchanged; it keeps painting the placeholder while no live surface exists.
+
+1. **Respawn on unclean exit.** Own the spawned client child. On any non-success exit (non-zero status or a signal, which also drops the `ext-session-lock` connection) respawn; on a success exit treat it as an unlock and stop. Never call `unlock()` on the compositor's behalf from this path.
+2. **Bounded backoff.** Mirror X11 `decide()` (`lock.rs:54-66`): short `LOCK_RESPAWN_DELAY` initially, escalate to `LOCK_CRASH_LOOP_DELAY` after `LOCK_RESPAWN_CAP` restarts in a rolling `LOCK_RESPAWN_WINDOW` (`:35,38,41,42`). Cap the escalation (doubling with a fixed maximum) so a crash loop neither hot-spins nor gives up: respawns are unbounded in count, bounded in rate. Inject `spawn`/`wait`/`sleep` closures so policy is testable without real processes, as X11 `respawn_until_started<T>` does at `:125-146`. No new dependencies.
+3. **Placeholder remains, visuals pixel-identical.** Keep `session_lock.rs:280-309`, `:215-221` and `render/mod.rs:840,850` exactly as-is. While the client is down the output stays covered by `cover_dead_locker` (`:258-261`) and `Screen::Blank`, identical to today's paint. When the respawned client connects, smithay's `Defunct` status (`vendor .../lock.rs:142`) lets its fresh `lock()` be accepted; `lock()` (`session_lock.rs:144-158`) re-seeds the cover and `new_surface` (`:171-193`) replaces placeholders with live surfaces. Do not weaken `shortcuts_active`/`windows_reachable` (`:226-234`) during the gap.
+4. **Record and test.** Emit one failure record per failed respawn with blast radius "session locked, prompt unavailable" (X11 precedent `lock.rs:135-137`), and add a pure unit test beside the backoff function asserting the ramp, the cap and that a success exit stops supervision (mirroring X11 `decide()` tests at `lock.rs:442-470`). Mark all resulting code UNBUILT until a build/test run is allowed.
+
+Risks: (a) if two lock clients ever race, cosmic-comp's alive-check (`handlers/session_lock.rs:22-31`) suggests rejecting the second, while the active `lock()` clears and re-seeds unconditionally (`session_lock.rs:150-151`); verify takeover semantics before enabling multi-client respawn. (b) kscreenlocker's exact backoff is absent from the corpus, so the delay values above are proposals copied from the X11 path, not proven optimal. (c) all of this is static evidence; no runtime capture confirms the observable placeholder paint or respawn timing.
+
 ## Result
 
 UNBUILT. No cargo, tests or gates were run; evidence is source only.

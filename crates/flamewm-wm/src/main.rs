@@ -83,7 +83,7 @@ fn append_startup_failure_record(path: &Path, line: &str) {
         "startup",
         FailureCode::SubsystemError,
         line.to_owned(),
-        BlastRadius::new([], ["wm"]),
+        BlastRadius::new([] as [&str; 0], ["wm"]),
         false,
     );
     if let Err(error) = append_record(path, &record) {

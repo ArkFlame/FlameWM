@@ -1,5 +1,5 @@
 # Unit w25-reference-lock
-STATUS: OPEN
+STATUS: DONE
 
 Reference-first, read-only: how .vendor/ kwin, cosmic-epoch and sddm/lightdm keep the session covered when the locker crashes. Compare with crates/flamewm-wm-wayland/src/session_lock.rs and the X11 lock supervisor; write ported-algorithm specs into docs/swarm/wave2/w25-result-lock-reference.md.
 

@@ -213,7 +213,11 @@ pub(super) fn supervise(
                         role_label(role),
                         "restart budget exhausted; starting the fallback instead",
                     );
-                    children[index] = spawn(fallback_plan(&role_plans[index], &log_path_text()))?;
+                    children[index] = spawn(fallback_plan_with_cause(
+                        &role_plans[index],
+                        &log_path_text(),
+                        "kept crashing and exhausted the restart budget",
+                    ))?;
                 }
                 SupervisorDecision::RestartAfter(delay) => {
                     if index == 0 {
