@@ -17,6 +17,7 @@ pub(crate) mod tracing {
     pub(crate) use flame_warn as warn;
 }
 
+pub mod absent_service;
 pub mod audio_helper;
 pub mod audio_protocol;
 pub mod background;
@@ -45,6 +46,7 @@ pub mod pulse;
 pub mod removable_mounts;
 pub mod themes;
 
+pub use absent_service::AbsentRetry;
 pub use icon_service::{
     IconJob, IconPriority, IconResult, IconService, IconSubmit, IconSubmitError,
 };

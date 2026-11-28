@@ -58,6 +58,59 @@ pub struct TextMask {
     pub coverage: Vec<u8>,
 }
 
+/// Typed facade for a render-core buffer shared across frames.
+///
+/// Follows the retained-backbuffer precedent in `.vendor/RustWebRender-0.0.9`
+/// (`crates/rustwebrender-x11/src/lib.rs:169-173,595-617`): keep one buffer,
+/// clear and refill it on the next frame, and give it back when the mask is no
+/// longer needed. Only CPU coverage bytes live here; native drawables stay in
+/// their own runtime owner. No pixel value is changed by the reuse.
+#[derive(Default)]
+pub struct SharedBuffers {
+    coverage: Vec<u8>,
+}
+
+impl SharedBuffers {
+    /// Creates an empty reusable buffer set.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Rasterizes `text` into this facade's reusable coverage buffer, returning
+    /// the same geometry and bytes as [`text_mask`]. The buffer's capacity is
+    /// retained; call [`Self::reclaim`] on the returned mask to reuse it again.
+    pub fn text_mask(
+        &mut self,
+        text: &str,
+        size: f32,
+        pen_x: f32,
+        baseline_y: f32,
+    ) -> Option<TextMask> {
+        let (x, y, width, height) =
+            rasterize_text_mask(&mut self.coverage, text, size, pen_x, baseline_y)?;
+        Some(TextMask {
+            x,
+            y,
+            width,
+            height,
+            coverage: std::mem::take(&mut self.coverage),
+        })
+    }
+
+    /// Returns the coverage buffer of a mask made by [`Self::text_mask`] so the
+    /// next rasterization clears and refills it instead of allocating a new one.
+    pub fn reclaim(&mut self, mask: TextMask) {
+        self.coverage = mask.coverage;
+    }
+
+    /// Reusable coverage capacity, observable so capacity reuse can be tested.
+    #[must_use]
+    pub fn coverage_capacity(&self) -> usize {
+        self.coverage.capacity()
+    }
+}
+
 /// One rasterized glyph plus the tick of its last use, so the cache can evict the coldest entry.
 struct GlyphEntry {
     mask: Arc<GlyphMask>,
@@ -494,6 +547,27 @@ pub fn char_index_at(text: &str, size: f32, x: f32) -> Option<usize> {
 /// layout matches a proportional font.
 #[must_use]
 pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<TextMask> {
+    let mut coverage = Vec::new();
+    let (x, y, width, height) = rasterize_text_mask(&mut coverage, text, size, pen_x, baseline_y)?;
+    Some(TextMask {
+        x,
+        y,
+        width,
+        height,
+        coverage,
+    })
+}
+
+/// Fills a caller-owned `coverage` buffer (clearing and reusing its capacity)
+/// and returns the mask geometry. Both [`text_mask`] and [`SharedBuffers::text_mask`]
+/// call this, so they cannot drift in geometry or pixel value.
+fn rasterize_text_mask(
+    coverage: &mut Vec<u8>,
+    text: &str,
+    size: f32,
+    pen_x: f32,
+    baseline_y: f32,
+) -> Option<(i32, i32, u32, u32)> {
     if size <= 0.0 || text.is_empty() {
         return None;
     }
@@ -515,18 +589,14 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
             max_y = max_y.max(top + glyph.height as i32);
         });
         if !inked {
-            return TextMask {
-                x: pen_x.round() as i32,
-                y: baseline_y.round() as i32,
-                width: 0,
-                height: 0,
-                coverage: Vec::new(),
-            };
+            coverage.clear();
+            return (pen_x.round() as i32, baseline_y.round() as i32, 0, 0);
         }
 
         let width = (max_x - min_x).max(0) as u32;
         let height = (max_y - min_y).max(0) as u32;
-        let mut coverage = vec![0u8; width as usize * height as usize];
+        coverage.clear();
+        coverage.resize(width as usize * height as usize, 0u8);
 
         for_each_glyph(text, &mut *run, |origin, glyph| {
             if glyph.width == 0 || glyph.height == 0 {
@@ -552,13 +622,12 @@ pub fn text_mask(text: &str, size: f32, pen_x: f32, baseline_y: f32) -> Option<T
             }
         });
 
-        TextMask {
-            x: pen_x.round() as i32 + min_x,
-            y: baseline_y.round() as i32 + min_y,
+        (
+            pen_x.round() as i32 + min_x,
+            baseline_y.round() as i32 + min_y,
             width,
             height,
-            coverage,
-        }
+        )
     })
 }
 

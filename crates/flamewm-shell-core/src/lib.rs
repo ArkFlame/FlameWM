@@ -468,15 +468,14 @@ pub struct ClockTimerPlan {
 
 #[must_use]
 pub fn clock_timer_plan(format: &str, now_epoch_ms: u64) -> ClockTimerPlan {
-    let has_seconds = ["%S", "%T", "%X", "%r"]
-        .iter()
-        .any(|token| format.contains(token));
+    // One typed owner for deadline math: `clock` returns the full interval on an
+    // exact boundary, so a tick never re-arms a zero delay and busy-loops at a
+    // minute/second edge. The old inline `interval - remainder` diverged here.
+    let has_seconds = clock::clock_shows_seconds(format);
     let interval_ms = if has_seconds { 1_000 } else { 60_000 };
-    let remainder = now_epoch_ms % interval_ms;
-    let initial_delay_ms = interval_ms - remainder;
     ClockTimerPlan {
         interval_ms,
-        initial_delay_ms,
+        initial_delay_ms: clock::wall_clock_delay_ms(now_epoch_ms, has_seconds),
     }
 }
 
@@ -1193,6 +1192,64 @@ mod tests {
     #[test]
     fn clock_timer_uses_one_second_for_second_formats() {
         assert_eq!(clock_timer_plan("%H:%M:%S", 1_250).interval_ms, 1_000);
+    }
+
+    #[test]
+    fn clock_timer_never_arms_zero_delay_on_a_boundary() {
+        // At an exact boundary the old `interval - remainder` returned 0, which
+        // re-armed the timer immediately and burned wakeups until the next tick.
+        for now in [0, 60_000, 120_000, 3_600_000] {
+            let plan = clock_timer_plan("%H:%M", now);
+            assert_eq!(plan.interval_ms, 60_000);
+            assert_eq!(plan.initial_delay_ms, 60_000, "minute edge at {now}");
+        }
+        for now in [0, 1_000, 60_000] {
+            let plan = clock_timer_plan("%H:%M:%S", now);
+            assert_eq!(plan.interval_ms, 1_000);
+            assert_eq!(plan.initial_delay_ms, 1_000, "second edge at {now}");
+        }
+    }
+
+    #[test]
+    fn clock_timer_matches_the_typed_facade_at_minute_edges() {
+        for now in [0, 1, 59_999, 60_000, 60_001, 61_234, 119_999, 120_000] {
+            let plan = clock_timer_plan("%H:%M", now);
+            assert_eq!(plan.interval_ms, 60_000);
+            assert_eq!(
+                plan.initial_delay_ms,
+                clock::wall_clock_delay_ms(now, false)
+            );
+            assert!(plan.initial_delay_ms > 0 && plan.initial_delay_ms <= 60_000);
+        }
+    }
+
+    #[test]
+    fn clock_timer_realigns_across_dst_and_minute_edges() {
+        // Epoch millis are timezone-independent: current DST offset changes are
+        // whole minutes (1 h, 30 min), so the next epoch-minute boundary is the
+        // next local-minute boundary. The display reads `Local::now()` on the
+        // tick, so the "%H:%M" text stays pixel-identical across the jump.
+        let base = 14_400_000u64; // 04:00:00, an exact minute boundary.
+        let now = base + 234;
+        let steady = clock_timer_plan("%H:%M", now);
+        // +1 h spring forward, -1 h autumn back, and a +30 min half-hour zone.
+        let spring = clock_timer_plan("%H:%M", now + 3_600_000);
+        let autumn = clock_timer_plan("%H:%M", now - 3_600_000);
+        let half_hour = clock_timer_plan("%H:%M", now + 1_800_000);
+        assert_eq!(steady.initial_delay_ms, 59_766);
+        assert_eq!(spring.initial_delay_ms, steady.initial_delay_ms);
+        assert_eq!(autumn.initial_delay_ms, steady.initial_delay_ms);
+        assert_eq!(half_hour.initial_delay_ms, steady.initial_delay_ms);
+        // A jump that lands exactly on a boundary still never arms zero.
+        assert_eq!(
+            clock_timer_plan("%H:%M", base + 3_600_000).initial_delay_ms,
+            60_000
+        );
+        // Seconds mode follows the same rule at its finer cadence.
+        assert_eq!(
+            clock_timer_plan("%H:%M:%S", now + 3_600_000).initial_delay_ms,
+            766
+        );
     }
 
     #[test]

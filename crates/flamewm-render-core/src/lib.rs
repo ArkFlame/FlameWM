@@ -12,6 +12,7 @@ pub mod soft;
 pub mod text_layout;
 
 pub use codec::{decode, decode_static, encode};
+pub use glyphs::SharedBuffers;
 pub use layout::{
     IntrinsicMeasureError, IntrinsicSize, LayoutBox, LayoutEngine, LayoutResult,
     layout_passes_on_this_thread,

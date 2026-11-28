@@ -354,6 +354,25 @@ fn gpu_failure_record(stage: &str, cause: &str, blast_radius: &str) {
     );
 }
 
+/// CPU mode skips the GL chain before any probe, so a default session needs one explicit record too.
+static CPU_SKIP_RECORDED: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// Counts CPU-skip records on this thread so the fault test can assert exactly one line.
+    static CPU_SKIP_RECORDS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn record_cpu_skip_once() {
+    if CPU_SKIP_RECORDED.swap(1, Ordering::Relaxed) == 0 {
+        #[cfg(test)]
+        CPU_SKIP_RECORDS.with(|records| records.set(records.get() + 1));
+        eprintln!(
+            "FLAMEWM-GPU-FALLBACK stage=cpu-default status=skip cause=render-acceleration-cpu blast_radius=works:cpu-raster|degraded:hardware-gl,software-gl"
+        );
+    }
+}
+
 /// Records a usable software-GL device: the GPU path is active, but the fallback reason records
 /// why it is not hardware acceleration.
 fn record_software(kind: RenderBackend, device: &str) {
@@ -427,6 +446,7 @@ fn try_gpu_with(
     open: &dyn Fn() -> GpuSlot,
 ) -> bool {
     if acceleration != RenderAcceleration::Gpu {
+        record_cpu_skip_once();
         return false;
     }
     release_if_stale();

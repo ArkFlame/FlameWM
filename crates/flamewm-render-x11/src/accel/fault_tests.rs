@@ -68,6 +68,37 @@ fn reset_slot() {
 }
 
 #[test]
+fn cpu_default_mode_skips_gl_probe_and_records_once() {
+    let _guard = STATUS_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_slot();
+    CPU_SKIP_RECORDED.store(0, Ordering::Relaxed);
+    CPU_SKIP_RECORDS.with(|records| records.set(0));
+    INIT_CALLS.with(|calls| calls.set(0));
+
+    // Fault injection: any GL probe or GPU op in CPU mode is an immediate test failure.
+    let open = || -> GpuSlot { panic!("CPU mode must not open the GL chain") };
+    let mut op = |_: &mut dyn PixelBackend| -> Result<(), String> {
+        panic!("CPU mode must not run a GPU pixel op")
+    };
+    assert!(!try_gpu_with(&mut op, RenderAcceleration::Cpu, &open));
+    assert!(!try_gpu_with(&mut op, RenderAcceleration::Cpu, &open));
+    assert_eq!(INIT_CALLS.with(|calls| calls.get()), 0);
+    assert_eq!(CPU_SKIP_RECORDS.with(|records| records.get()), 1);
+
+    // The once-guard must not suppress a later real GPU-mode probe.
+    let opened = Cell::new(0);
+    let open = || {
+        opened.set(opened.get() + 1);
+        GpuSlot::Failed
+    };
+    let mut op = |_: &mut dyn PixelBackend| -> Result<(), String> { Ok(()) };
+    assert!(!try_gpu_with(&mut op, RenderAcceleration::Gpu, &open));
+    assert_eq!(opened.get(), 1);
+}
+
+#[test]
 fn missing_helper_binary_falls_through_both_tiers_to_cpu() {
     let _guard = STATUS_LOCK
         .lock()

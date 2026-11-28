@@ -69,6 +69,22 @@ impl<C: Connection> Wm<'_, C> {
         let paced =
             live_resize && has_configure && !resize_configure_due(self.resize_configure_at, now);
         if commit.ungrab {
+            // Terminal edge: the last paced geometry must be drawn before the release hide.
+            let pending = self.outline_pending.take();
+            self.outline_raster.clear();
+            if let Some((_, geometry)) = pending {
+                let root = self.screen().root;
+                self.snap_preview.show_outline(
+                    self.conn,
+                    root,
+                    flamewm_api::Rect {
+                        x: geometry.x,
+                        y: geometry.y,
+                        width: geometry.w,
+                        height: geometry.h,
+                    },
+                );
+            }
             self.resize_configure_at = None;
             self.resize_deferred = None;
         }
@@ -230,19 +246,29 @@ impl<C: Connection> Wm<'_, C> {
                     }
                     FrameEffect::DragOutline { rect } => match rect {
                         Some(frame) => {
-                            let root = self.screen().root;
-                            self.snap_preview.show_outline(
-                                self.conn,
-                                root,
-                                flamewm_api::Rect {
-                                    x: frame.x,
-                                    y: frame.y,
-                                    width: frame.w,
-                                    height: frame.h,
-                                },
-                            );
+                            let geometry = flamewm_api::Rect {
+                                x: frame.x,
+                                y: frame.y,
+                                width: frame.w,
+                                height: frame.h,
+                            };
+                            match self.outline_raster.note(now, frame) {
+                                resize_raster::RasterDecision::Now => {
+                                    self.outline_pending = None;
+                                    let root = self.screen().root;
+                                    self.snap_preview.show_outline(self.conn, root, geometry);
+                                }
+                                resize_raster::RasterDecision::Wait(due) => {
+                                    // Newest geometry wins; the reactor wakes at `due`.
+                                    self.outline_pending = Some((due, frame));
+                                }
+                            }
                         }
-                        None => self.snap_preview.hide(self.conn),
+                        None => {
+                            self.outline_raster.clear();
+                            self.outline_pending = None;
+                            self.snap_preview.hide(self.conn);
+                        }
                     },
                     FrameEffect::Noop => {}
                 }
@@ -418,7 +444,33 @@ impl<C: Connection> Wm<'_, C> {
         self.snap_preview.hide(self.conn);
         // A cancelled resize must not leave a stale gate for the next grab.
         self.resize_configure_at = None;
+        self.outline_raster.clear();
+        self.outline_pending = None;
         self.release_pointer();
+    }
+
+    /// Presents the newest outline geometry held back by the gate once its deadline elapses.
+    /// One raster per due tick; nothing is scheduled while the gate is idle.
+    fn flush_outline_raster(&mut self, now: std::time::Instant) {
+        if !self.outline_pending.is_some_and(|(due, _)| now >= due) {
+            return;
+        }
+        let Some(geometry) = self.outline_raster.take_due(now) else {
+            self.outline_pending = None;
+            return;
+        };
+        self.outline_pending = None;
+        let root = self.screen().root;
+        self.snap_preview.show_outline(
+            self.conn,
+            root,
+            flamewm_api::Rect {
+                x: geometry.x,
+                y: geometry.y,
+                width: geometry.w,
+                height: geometry.h,
+            },
+        );
     }
 
     /// Replays the latest paced resize batch once its interval elapsed (trailing edge).
@@ -428,36 +480,45 @@ impl<C: Connection> Wm<'_, C> {
         now: std::time::Instant,
     ) -> Result<(), ReplyError> {
         let Some(client) = self.resize_deferred.as_ref().map(|(client, _)| *client) else {
+            self.flush_outline_raster(now);
             return Ok(());
         };
         if !matches!(self.session_of(client), InteractionSession::Resize(_)) {
             self.resize_deferred = None;
+            self.flush_outline_raster(now);
             return Ok(());
         }
         if !resize_configure_due(self.resize_configure_at, now) {
+            self.flush_outline_raster(now);
             return Ok(());
         }
         let Some((_, effects)) = self.resize_deferred.take() else {
+            self.flush_outline_raster(now);
             return Ok(());
         };
+        self.flush_outline_raster(now);
         self.execute_effects(client, &interaction::PointerCommit::plan(effects))
     }
 
-    /// Caps the reactor wait at the next resize pacing tick while a batch is stored.
+    /// Caps the reactor wait at the next resize pacing tick or queued outline raster.
+    /// Returns `wait` untouched when neither path has a deadline, so an idle loop never spins.
     pub(super) fn resize_deferred_wait(
         &self,
         wait: Option<std::time::Duration>,
     ) -> Option<std::time::Duration> {
-        if self.resize_deferred.is_none() {
-            return wait;
+        let mut wait = wait;
+        let now = std::time::Instant::now();
+        if self.resize_deferred.is_some() {
+            let deadline = self
+                .resize_configure_at
+                .map_or(now, |last| last + RESIZE_CONFIGURE_INTERVAL);
+            let remaining = deadline.saturating_duration_since(now);
+            wait = Some(wait.map_or(remaining, |wait| wait.min(remaining)));
         }
-        let deadline = self
-            .resize_configure_at
-            .map_or_else(std::time::Instant::now, |last| {
-                last + RESIZE_CONFIGURE_INTERVAL
-            });
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        Some(wait.map_or(remaining, |wait| wait.min(remaining)))
+        if self.outline_pending.is_some() {
+            wait = self.outline_raster.cap_wait(now, wait);
+        }
+        wait
     }
 
     pub(super) fn reduce_and_execute(

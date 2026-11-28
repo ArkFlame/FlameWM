@@ -560,6 +560,10 @@ pub(crate) struct Wm<'a, C: Connection> {
     resize_configure_at: Option<std::time::Instant>,
     /// Latest paced live-resize configure batch, replayed once the interval elapses (trailing edge).
     resize_deferred: Option<(Window, Vec<FrameEffect>)>,
+    /// Pure 60/s cap for outline-mode move/resize rasters; newest geometry wins while paced.
+    outline_raster: resize_raster::OutlineRasterGate<RootRect>,
+    /// Deadline and newest outline geometry held back by the gate; `None` when idle.
+    outline_pending: Option<(std::time::Instant, RootRect)>,
 }
 
 #[macro_use]
@@ -591,6 +595,7 @@ mod publish;
 mod raw_keys;
 mod rects;
 mod release;
+mod resize_raster;
 mod shake_locate;
 mod show_desktop;
 mod stack_layer;

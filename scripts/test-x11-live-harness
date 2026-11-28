@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Pure-shell tests for scripts/x11-live-facade.sh (z08 step 1). No X server, no
+# build, no cargo, no git. Prints one PASS/FAIL line per case plus SUMMARY.
+set -uo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd -P)"
+# shellcheck source=x11-live-facade.sh
+source "$HERE/x11-live-facade.sh"
+
+failed=0
+pass() { printf 'PASS %s\n' "$1"; }
+fail() { printf 'FAIL %s: %s\n' "$1" "$2"; failed=$((failed + 1)); }
+expect_eq() { # name expected actual
+  [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "expected '$2', got '$3'"
+}
+
+# Single typed owner of the display string.
+expect_eq display-name-pipe "$(x11_live_display_name 601)" ':601'
+expect_eq display-name-zero "$(x11_live_display_name 0)" ':0'
+out="$(x11_live_display_name abc 2>/dev/null)"; rc=$?
+[[ $rc -eq 2 && -z "$out" ]] && pass display-name-rejects-nonnumeric \
+  || fail display-name-rejects-nonnumeric "rc=$rc out='$out'"
+
+# Hermetic socket/lock roots: 700/703/704 have sockets, 702 has a stale lock; only 701 is free.
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/z08-harness-test.XXXXXX")" || exit 3
+trap 'rm -rf "$ROOT"' EXIT
+mkdir -p "$ROOT/socket" "$ROOT/lock"
+export X11_LIVE_SOCKET_DIR="$ROOT/socket" X11_LIVE_LOCK_DIR="$ROOT/lock"
+: >"$X11_LIVE_SOCKET_DIR/X700"
+: >"$X11_LIVE_SOCKET_DIR/X703"
+: >"$X11_LIVE_SOCKET_DIR/X704"
+: >"$X11_LIVE_LOCK_DIR/.X702-lock"
+
+expect_eq pick-skips-socket "$(x11_live_pick_display 700 704 700)" '701'
+expect_eq pick-skips-lock-and-wraps "$(x11_live_pick_display 700 704 702)" '701'
+expect_eq pick-wraps-from-end "$(x11_live_pick_display 700 704 704)" '701'
+out="$(x11_live_pick_display 703 704 703 2>/dev/null)"; rc=$?
+[[ $rc -eq 1 && -z "$out" ]] && pass pick-no-free-display \
+  || fail pick-no-free-display "rc=$rc out='$out'"
+out="$(x11_live_pick_display 700 abc 700 2>/dev/null)"; rc=$?
+[[ $rc -eq 2 && -z "$out" ]] && pass pick-rejects-bad-range \
+  || fail pick-rejects-bad-range "rc=$rc out='$out'"
+out="$(x11_live_pick_display 700 704 705 2>/dev/null)"; rc=$?
+[[ $rc -eq 2 && -z "$out" ]] && pass pick-rejects-out-of-range-hint \
+  || fail pick-rejects-out-of-range-hint "rc=$rc out='$out'"
+
+printf 'SUMMARY tests=9 failed=%d\n' "$failed"
+[[ $failed -eq 0 ]]

@@ -428,6 +428,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             chrome_paint_at: None,
             resize_configure_at: None,
             resize_deferred: None,
+            outline_raster: resize_raster::OutlineRasterGate::default(),
+            outline_pending: None,
         })
     }
 }

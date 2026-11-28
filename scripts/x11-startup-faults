@@ -15,6 +15,10 @@
 # No cargo, git, network, host display or host config is used. Exit 0 only if all cases pass.
 set -uo pipefail
 
+# Typed display facade (source-only, no new deps, no .vendor runtime input).
+# shellcheck source=x11-live-facade.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/x11-live-facade.sh"
+
 usage() { printf 'usage: %s [built-binary-dir]\n' "$0" >&2; exit 2; }
 (( $# <= 1 )) || usage
 [[ "${1:-}" == --help || "${1:-}" == -h ]] && usage
@@ -82,10 +86,12 @@ assert_failure_line() {
 
 # Private Xvfb with a display number outside the common :0-:99 range.
 start_xvfb() {
-  local dir="$1" num tries
-  num=$(( 600 + ($$ % 300) ))
-  while [[ -e "/tmp/.X11-unix/X$num" ]]; do num=$((num + 1)); done
-  export DISPLAY=":$num"
+  local dir="$1" num tries hint
+  hint=$(( 600 + ($$ % 300) ))
+  num="$(x11_live_pick_display 600 899 "$hint")" || {
+    report_fail 'no free Xvfb display in :600-:899'; return 1
+  }
+  export DISPLAY="$(x11_live_display_name "$num")"
   "$XVFB" "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -noreset \
     >"$dir/xvfb.log" 2>&1 &
   XPID=$!

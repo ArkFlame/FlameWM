@@ -94,17 +94,29 @@ pub(super) fn full_configure(frame: RootRect, extents: FrameExtents) -> Vec<Fram
     effects
 }
 
+/// Fill a caller-owned buffer with the position-only move plan. `out` is cleared first:
+/// capacity is retained across events so a caller can keep one buffer for the whole motion
+/// path instead of allocating a fresh `Vec` per event. Values and order match [`move_effects`].
+pub(super) fn move_effects_into(
+    out: &mut Vec<FrameEffect>,
+    frame: RootRect,
+    extents: FrameExtents,
+) {
+    out.clear();
+    out.push(FrameEffect::MoveFrameRoot {
+        x: frame.x,
+        y: frame.y,
+    });
+    out.push(notify_root(frame, extents));
+}
+
 /// Move plan: position-only frame origin + root notify. No client
 /// configure, no layout, no paint, no shape. Position-only by type:
 /// `MoveFrameRoot` carries no w/h so a move cannot resize.
 pub(super) fn move_effects(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
-    vec![
-        FrameEffect::MoveFrameRoot {
-            x: frame.x,
-            y: frame.y,
-        },
-        notify_root(frame, extents),
-    ]
+    let mut effects = Vec::with_capacity(2);
+    move_effects_into(&mut effects, frame, extents);
+    effects
 }
 
 /// Release tail: final geometry first, Ungrab last. A no-op release only ungrabs.
@@ -172,15 +184,22 @@ pub(super) fn move_reached_activation(start: RootPoint, current: RootPoint) -> b
         || dy <= -MOVE_ACTIVATION_THRESHOLD_PX
 }
 
-pub(super) fn move_step(
+/// Reusable-buffer variant of [`move_step`]: fills `out` (cleared first) with exactly the
+/// same effects in the same order, returning only the next state. Steady-state move motion
+/// (noop / outline / position-only move) reuses the caller's capacity; the two full-configure
+/// branches replace the buffer with a fresh six-effect plan, as before.
+pub(super) fn move_step_into(
     mut state: ControllerState,
     mut session: MoveSession,
     pointer: RootPoint,
     final_commit: bool,
-) -> (ControllerState, Vec<FrameEffect>) {
+    out: &mut Vec<FrameEffect>,
+) -> ControllerState {
     let first_activation = !session.anchor.is_activated();
     if first_activation && !move_reached_activation(session.start_pointer, pointer) {
-        return (state, vec![FrameEffect::Noop]);
+        out.clear();
+        out.push(FrameEffect::Noop);
+        return state;
     }
     let preview = !state.contents_while_dragging && !final_commit;
     let start_mode = session.start_placement.mode;
@@ -205,17 +224,19 @@ pub(super) fn move_step(
         // Leaving snapped/maximized restores the floating size now, also under the outline: the
         // press already recorded the start mode as floating, so release would only move the frame
         // and keep the tiled size (and paint chrome for the restored width).
-        let mut effects = full_configure(plan.frame, state.extents);
+        *out = full_configure(plan.frame, state.extents);
         if preview {
-            effects.push(FrameEffect::DragOutline {
+            out.push(FrameEffect::DragOutline {
                 rect: Some(plan.frame),
             });
         }
-        return (state, effects);
+        return state;
     }
 
     if plan.noop && (!final_commit || state.placement.current == session.start_placement.rect) {
-        return (state, vec![FrameEffect::Noop]);
+        out.clear();
+        out.push(FrameEffect::Noop);
+        return state;
     }
     let moved = plan.frame != state.placement.current;
     state.placement.current = plan.frame;
@@ -223,29 +244,41 @@ pub(super) fn move_step(
         state.placement.floating_restore = plan.frame;
     }
     if preview {
-        return (
-            state,
-            vec![FrameEffect::DragOutline {
-                rect: Some(plan.frame),
-            }],
-        );
+        out.clear();
+        out.push(FrameEffect::DragOutline {
+            rect: Some(plan.frame),
+        });
+        return state;
     }
     if !final_commit && !moved {
         // Pointer moved but the output clamp kept the frame where it was: the native
         // frame, its ConfigureNotify and the repaint are all already current.
-        return (state, vec![FrameEffect::Noop]);
+        out.clear();
+        out.push(FrameEffect::Noop);
+        return state;
     }
     if final_commit && !state.contents_while_dragging && start_mode != PlacementMode::Floating {
         // Preview left a snapped/maximized window untouched; apply its real size now.
-        let effects = full_configure(plan.frame, state.extents);
-        return (state, effects);
+        *out = full_configure(plan.frame, state.extents);
+        return state;
     }
-    let mut effects = move_effects(plan.frame, state.extents);
+    move_effects_into(out, plan.frame, state.extents);
     if moved || (final_commit && !state.contents_while_dragging) {
         // Titlebar pixels are frame-relative; repaint after the frame moves.
-        effects.push(FrameEffect::PaintChrome);
+        out.push(FrameEffect::PaintChrome);
     }
-    (state, effects)
+    state
+}
+
+pub(super) fn move_step(
+    state: ControllerState,
+    session: MoveSession,
+    pointer: RootPoint,
+    final_commit: bool,
+) -> (ControllerState, Vec<FrameEffect>) {
+    let mut out = Vec::with_capacity(6);
+    let next = move_step_into(state, session, pointer, final_commit, &mut out);
+    (next, out)
 }
 
 pub(super) fn resize_step(
@@ -384,5 +417,28 @@ mod reusable_buffer_tests {
             FrameEffect::ApplyShape,
         ]);
         assert_eq!(full_configure(frame, extents), expected);
+    }
+
+    /// Move-motion step equivalence: a reused caller-owned buffer yields exactly the
+    /// same effects, in the same order, as the allocating `move_step` for each branch.
+    #[test]
+    fn move_effects_into_matches_allocating_original_and_reuses_capacity() {
+        let extents = FrameExtents::new(31, 1);
+        let cases = [
+            RootRect::new(100, 100, 400, 300),
+            RootRect::new(0, 0, 1, 1),
+            RootRect::new(-7, 12, 0, -3),
+        ];
+        let mut buffer = Vec::new();
+        for frame in cases {
+            let expected = move_effects(frame, extents);
+            move_effects_into(&mut buffer, frame, extents);
+            assert_eq!(buffer, expected);
+            move_effects_into(&mut buffer, frame, extents);
+            assert_eq!(buffer, expected);
+        }
+        let capacity = buffer.capacity();
+        move_effects_into(&mut buffer, cases[0], extents);
+        assert_eq!(buffer.capacity(), capacity);
     }
 }

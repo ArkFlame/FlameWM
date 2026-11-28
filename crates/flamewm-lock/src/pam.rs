@@ -150,7 +150,16 @@ pub fn run_flow(session: &mut dyn PamSession) -> Outcome {
 /// Authenticates `username` with `password` through the `flamewm-lock` PAM service.
 #[must_use]
 pub fn authenticate(username: &str, password: &str) -> Outcome {
-    let library = match DynamicPam::load_from(&LIBRARY_NAMES) {
+    authenticate_with(&LIBRARY_NAMES, username, password)
+}
+
+/// Same fail-closed path as [`authenticate`], with the library names injected. Production
+/// passes the production `LIBRARY_NAMES`; tests pass a name that cannot load to fault-inject
+/// an absent PAM backend through the real entry point, without changing process state or
+/// adding a dependency.
+#[must_use]
+pub fn authenticate_with(names: &[&str], username: &str, password: &str) -> Outcome {
+    let library = match DynamicPam::load_from(names) {
         Ok(library) => library,
         Err(error) => {
             record_failure("pam", format!("PAM library unavailable: {error}"));
@@ -527,5 +536,34 @@ mod tests {
         assert!(!state.finish(Outcome::Unavailable, now));
         assert_eq!(state.status(), Status::Unavailable);
         assert!(state.accepts_input(now));
+    }
+
+    /// Fault injection through the entry point itself: an absent PAM backend never returns
+    /// `Unlocked`, whatever the credentials, and the reducer keeps the cover up.
+    #[test]
+    fn absent_pam_backend_never_unlocks() {
+        use std::time::Instant;
+
+        use crate::state::{LockState, Status};
+
+        let names = ["libflamewm-no-such-pam.so.0"];
+        for (user, password) in [("alice", "secret"), ("", ""), ("root\0", "pw")] {
+            let outcome = authenticate_with(&names, user, password);
+            assert_eq!(outcome, Outcome::Unavailable);
+            let now = Instant::now();
+            let mut state = LockState::default();
+            state.begin_authentication();
+            assert!(!state.finish(outcome, now));
+            assert_eq!(state.status(), Status::Unavailable);
+        }
+    }
+
+    /// The unknown-account branch is a denial, not a success: an account that may not log in
+    /// must never release the lock even when the account-management double would accept it.
+    #[test]
+    fn unknown_pam_user_is_denied_not_unlocked() {
+        let mut session = mock(Ok(()), PAM_USER_UNKNOWN, PAM_SUCCESS);
+        assert_eq!(run_flow(&mut session), Outcome::Denied);
+        assert_eq!(session.ended_with, Some(PAM_AUTH_ERR));
     }
 }

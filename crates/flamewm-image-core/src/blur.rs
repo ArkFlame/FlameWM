@@ -253,6 +253,50 @@ mod kernel;
 
 use kernel::*;
 
+/// Typed cost description of the blur pipeline for one radius.
+///
+/// Mirrors `blur_stage` and `blur_boxes` exactly: `downsample` is the grid
+/// reduction factor and `radii` are the three box-pass radii applied on that
+/// grid (each radius means one horizontal plus one vertical sliding-window
+/// pass). This is a pure accounting view: it reads no pixels, changes no output
+/// and loosens no validation gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlurPassTable {
+    /// Integer grid reduction: 1 = full resolution, 2 = half, 4 = quarter.
+    pub downsample: usize,
+    /// Box-pass radii on the downsampled grid, in execution order.
+    pub radii: [usize; 3],
+}
+
+impl BlurPassTable {
+    /// Number of separable sliding-window passes: two (horizontal and
+    /// vertical) per non-zero box radius.
+    #[must_use]
+    pub fn separable_passes(&self) -> usize {
+        self.radii.iter().filter(|&&radius| radius != 0).count() * 2
+    }
+
+    /// Resampling passes: none at full resolution, one box downsample and one
+    /// bilinear upsample otherwise.
+    #[must_use]
+    pub fn resample_passes(&self) -> usize {
+        if self.downsample == 1 { 0 } else { 2 }
+    }
+}
+
+/// Returns the [`BlurPassTable`] for `radius` in the domain accepted by
+/// [`gaussian_blur_rgba`]: finite, at least `MIN_BLUR_RADIUS` and at most
+/// [`MAX_BLUR_RADIUS`].
+#[must_use]
+pub fn blur_pass_table(radius: f32) -> BlurPassTable {
+    let downsample = blur_factor(radius);
+    let sigma = (radius / 2.0) / downsample as f32;
+    BlurPassTable {
+        downsample,
+        radii: box_radii(sigma),
+    }
+}
+
 mod frosted_profile;
 
 mod horizontal_golden;

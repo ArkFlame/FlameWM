@@ -1003,4 +1003,22 @@ mod tests {
         );
         assert_eq!(client.state.status(), Status::Unavailable);
     }
+
+    /// Fault injection for the absent-worker branch: the PAM helper exits before it sends a
+    /// verdict. The disconnected channel must resolve to `Unavailable`, keep the cover up and
+    /// repaint the status line; no `Unlocked` verdict is ever fabricated.
+    #[test]
+    fn a_pam_worker_that_exits_without_a_verdict_keeps_the_lock() {
+        let mut client = client();
+        let (tx, rx) = std::sync::mpsc::channel();
+        client.outcomes = Some(rx);
+        drop(tx);
+        client.poll_outcome();
+        assert!(
+            !client.unlock,
+            "a worker with no verdict must leave the session locked"
+        );
+        assert_eq!(client.state.status(), Status::Unavailable);
+        assert!(client.dirty, "the unavailable status must be repainted");
+    }
 }

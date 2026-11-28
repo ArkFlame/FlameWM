@@ -259,6 +259,30 @@ pub fn reduce_owned(
     }
 }
 
+/// Reusable-buffer variant of [`reduce_owned`] for the pointer motion hot path.
+///
+/// `out` is cleared and filled with exactly the effects [`reduce_owned`] would return; its
+/// heap capacity is retained across calls, so a steady-state move motion reuses one
+/// allocation instead of allocating a fresh `Vec` per `MotionNotify`. Resize/control/idle
+/// motion and every non-motion event delegate to [`reduce_owned`] and move its plan into
+/// `out`, so effects, ordering, and pixels are unchanged. Step 1 of the hot-path plan:
+/// callers still use [`reduce_owned`]; wiring one long-lived buffer into `Wm` is step 2.
+#[must_use]
+pub fn reduce_owned_into(
+    state: ControllerState,
+    event: FrameEvent,
+    out: &mut Vec<FrameEffect>,
+) -> ControllerState {
+    if let FrameEvent::Motion { pointer } = event {
+        if let InteractionSession::Move(session) = state.session {
+            return move_step_into(state, session, pointer, false, out);
+        }
+    }
+    let (next, effects) = reduce_owned(state, event);
+    *out = effects;
+    next
+}
+
 /// Title release that never activated a move. Second such release from the
 /// same client within the window (same slop) toggles maximize; otherwise it
 /// is recorded as the pending first click.
@@ -340,4 +364,41 @@ pub(super) fn toggle_fullscreen(mut state: ControllerState) -> (ControllerState,
         state.extents = FrameExtents::new(0, 0);
     }
     toggle_placement(state, PlacementMode::Fullscreen, screen_rect)
+}
+
+#[cfg(test)]
+mod reusable_buffer_reducer_tests {
+    use super::*;
+    use crate::frame::controller::tests::{floating_state, motion, press};
+
+    fn moved() -> ControllerState {
+        reduce(&floating_state(), press(1, 150, 120)).0
+    }
+
+    /// Step 1 equivalence: the reusable-buffer motion reducer matches the allocating
+    /// reducer exactly (effects and next state) and retains capacity across events.
+    #[test]
+    fn move_motion_into_matches_allocating_reducer() {
+        for (x, y) in [(200, 170), (150, 120), (400, 300), (1950, 1100)] {
+            let (expected_next, expected_effects) = reduce(&moved(), motion(x, y));
+            let mut out = Vec::new();
+            let next = reduce_owned_into(moved(), motion(x, y), &mut out);
+            assert_eq!(next.placement, expected_next.placement);
+            assert_eq!(next.session, expected_next.session);
+            assert_eq!(out, expected_effects);
+            let capacity = out.capacity();
+            reduce_owned_into(moved(), motion(x, y), &mut out);
+            assert_eq!(out.capacity(), capacity);
+        }
+    }
+
+    #[test]
+    fn non_move_event_into_matches_allocating_reducer() {
+        let mut out = Vec::new();
+        let (expected_next, expected_effects) = reduce(&floating_state(), press(3, 10, 10));
+        let next = reduce_owned_into(floating_state(), press(3, 10, 10), &mut out);
+        assert_eq!(next.placement, expected_next.placement);
+        assert_eq!(next.session, expected_next.session);
+        assert_eq!(out, expected_effects);
+    }
 }

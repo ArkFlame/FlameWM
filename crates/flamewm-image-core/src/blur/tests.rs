@@ -515,6 +515,59 @@ mod cases {
     }
 
     #[test]
+    fn pass_table_downsample_matches_blur_stage_thresholds() {
+        // Same thresholds as kernel::blur_factor: full resolution up to
+        // HALF_DOWNSCALE_RADIUS, 2x up to DOWNSCALE_RADIUS, 4x above it.
+        for (radius, expected) in [
+            (0.5, 1),
+            (6.0, 1),
+            (6.01, 2),
+            (12.0, 2),
+            (12.01, 4),
+            (64.0, 4),
+        ] {
+            assert_eq!(
+                blur_pass_table(radius).downsample,
+                expected,
+                "radius {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn pass_table_radii_match_the_kernel_used_to_blur() {
+        for radius in [0.5f32, 3.0, 6.0, 6.5, 11.0, 12.0, 12.5, 24.0, 40.0, 64.0] {
+            let table = blur_pass_table(radius);
+            let expected_sigma = (radius / 2.0) / table.downsample as f32;
+            assert_eq!(table.radii, box_radii(expected_sigma), "radius {radius}");
+            assert!(
+                table.radii.iter().all(|&r| r <= MAX_BLUR_RADIUS as usize),
+                "radius {radius} radii {:?}",
+                table.radii
+            );
+        }
+    }
+
+    #[test]
+    fn pass_table_counts_passes_and_caps_radius_work() {
+        for radius in [0.5f32, 3.0, 6.5, 12.5, 24.0, 64.0] {
+            let table = blur_pass_table(radius);
+            assert_eq!(
+                table.separable_passes(),
+                table.radii.iter().filter(|&&r| r != 0).count() * 2
+            );
+            assert_eq!(
+                table.resample_passes(),
+                if table.downsample == 1 { 0 } else { 2 }
+            );
+            // Per-frame work is bounded: at most six separable passes and two
+            // resampling passes regardless of radius.
+            assert!(table.separable_passes() <= 6, "radius {radius}");
+            assert!(table.resample_passes() <= 2, "radius {radius}");
+        }
+    }
+
+    #[test]
     #[ignore = "timing; run with --release --include-ignored --nocapture"]
     fn timing_1920x1080_frosted_blur() {
         const W: u32 = 1920;

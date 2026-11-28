@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::AbsentRetry;
 use crate::network_manager::{item_string, item_strings, item_u32, unwrap_variant};
 use dbus::Message;
 use dbus::arg::messageitem::{MessageItem, MessageItemArray};
@@ -48,6 +49,18 @@ fn portal_absent() -> FlameError {
 /// Only a missing portal service is skipped; other D-Bus failures keep their original cause.
 fn is_portal_absent(error: &FlameError) -> bool {
     error.message.contains("ServiceUnknown") && error.message.contains(PORTAL_SERVICE)
+}
+
+/// Consume one step of the portal backoff. The absence is recorded once by `portal_absent()`; then
+/// either a wait is yielded for another `OpenFile` attempt, or the clear error is returned once the
+/// retry budget is spent. The caller owns the wait, so no second timing loop is created.
+fn portal_absent_step(retry: &mut AbsentRetry, error: &FlameError) -> Result<Duration, FlameError> {
+    debug_assert!(is_portal_absent(error));
+    let degraded = portal_absent();
+    match retry.next_wait() {
+        Some(wait) => Ok(wait),
+        None => Err(degraded),
+    }
 }
 
 /// One-session-bus `FileChooser` provider. Calls intentionally block the caller;
@@ -123,23 +136,26 @@ impl PortalFileChooser {
         let expected_request_path = self.expected_request_path(&handle_token)?;
         self.add_response_match(&expected_request_path)?;
         let options = options(&handle_token)?;
-        let call = method_call(
-            PORTAL_SERVICE,
-            PORTAL_PATH,
-            FILE_CHOOSER_INTERFACE,
-            OPEN_FILE,
-        )?
-        .append3(parent_window.to_owned(), title.to_owned(), options);
-        let reply = self
-            .pump
-            .send_with_reply(call, self.timeout)
-            .map_err(|error| {
-                if is_portal_absent(&error) {
-                    portal_absent()
-                } else {
-                    error
+        let mut retry = AbsentRetry::PORTAL;
+        let reply = loop {
+            let call = method_call(
+                PORTAL_SERVICE,
+                PORTAL_PATH,
+                FILE_CHOOSER_INTERFACE,
+                OPEN_FILE,
+            )?
+            .append3(parent_window.to_owned(), title.to_owned(), options.clone());
+            match self.pump.send_with_reply(call, self.timeout) {
+                Ok(reply) => break reply,
+                Err(error) if is_portal_absent(&error) => {
+                    match portal_absent_step(&mut retry, &error) {
+                        Ok(wait) => std::thread::sleep(wait),
+                        Err(degraded) => return Err(degraded),
+                    }
                 }
-            })?;
+                Err(error) => return Err(error),
+            }
+        };
         let request_path = one_object_path(&reply.get_items(), "portal OpenFile handle")?;
         if request_path != expected_request_path {
             self.add_response_match(&request_path)?;
@@ -485,6 +501,33 @@ mod tests {
                 .to_owned(),
         );
         assert!(!is_portal_absent(&other_service));
+    }
+
+    #[test]
+    fn portal_absent_spends_backoff_then_degrades_to_one_clear_message() {
+        let absent = FlameError::unavailable(format!(
+            "D-Bus reply failed: org.freedesktop.DBus.Error.ServiceUnknown: The name {PORTAL_SERVICE} was not provided by any .service files"
+        ));
+        let mut retry = AbsentRetry::PORTAL;
+        let mut waits = Vec::new();
+        loop {
+            match portal_absent_step(&mut retry, &absent) {
+                Ok(wait) => waits.push(wait),
+                Err(error) => {
+                    assert_eq!(error, FlameError::unavailable(PORTAL_ABSENT_MESSAGE));
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            waits,
+            [
+                Duration::from_millis(20),
+                Duration::from_millis(40),
+                Duration::from_millis(80),
+            ]
+        );
+        assert_eq!(retry.used(), 3);
     }
 
     #[test]
