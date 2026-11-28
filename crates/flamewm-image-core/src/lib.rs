@@ -2,8 +2,8 @@
 //!
 //! Single owner for PPM/SVG/PNG/WebP/JPEG/GIF decoding into straight (non-premultiplied)
 //! RGBA8. PPM and JPEG inputs are always opaque (alpha=255); SVG/PNG/WebP/GIF preserve alpha.
-//! Decoded dimensions are limited only by the source format, platform address
-//! space, and available memory.
+//! Decoded dimensions are bounded by [`MAX_DECODE_PIXELS`] as well as the source
+//! format, platform address space, and available memory.
 
 use std::path::Path;
 
@@ -227,9 +227,21 @@ pub fn rgba8_alpha_at(pixels: &[u8], width: u32, height: u32, x: u32, y: u32) ->
     pixels.get(index).copied()
 }
 
+/// Total RGBA pixels any decoded buffer may hold. A header-only bomb must be refused before a
+/// `width * height * 4` allocation. The viewer applies the same budget to its decode target;
+/// `.vendor/xfdesktop-master/settings/xfdesktop-background-settings.c` uses
+/// `gdk_pixbuf_new_from_file_at_scale` to decode at a bounded target rather than natural size.
+pub const MAX_DECODE_PIXELS: u64 = 100_000_000;
+
 pub fn check_size_limits(width: u32, height: u32) -> Result<(), String> {
     if width == 0 || height == 0 {
         return Err("image dimensions must be non-zero".to_string());
+    }
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > MAX_DECODE_PIXELS {
+        return Err(format!(
+            "image dimensions {width}x{height} exceed the {MAX_DECODE_PIXELS} pixel decode budget"
+        ));
     }
     (width as usize)
         .checked_mul(height as usize)
@@ -334,6 +346,16 @@ mod tests {
         assert!(check_size_limits(8192, 8192).is_ok());
         assert!(check_size_limits(u32::MAX, u32::MAX).is_err());
         assert!(check_size_limits(64, 64).is_ok());
+    }
+
+    #[test]
+    fn pixel_budget_refuses_a_header_bomb() {
+        // 20 000 x 20 000 is 400 MP: refuse before any `width * height * 4` allocation.
+        let error = check_size_limits(20_000, 20_000).expect_err("400 MP is over budget");
+        assert!(error.contains("pixel decode budget"), "{error}");
+        // Modest images keep their natural size and pixels.
+        assert!(check_size_limits(10_000, 10_000).is_ok());
+        assert!(check_size_limits(8192, 8192).is_ok());
     }
 
     #[test]

@@ -378,3 +378,41 @@ fn notification_daemon_follows_spec_on_private_bus() {
     );
     provider.set_dnd(false);
 }
+
+#[test]
+fn duplicate_notify_coalesces_on_the_live_dbus_path() {
+    let dir = std::env::temp_dir().join(format!("flamewm-notify-e2e-dup-{}", std::process::id()));
+    let Some(daemon) = start_daemon(&dir) else {
+        eprintln!("skipped: dbus-daemon unavailable");
+        return;
+    };
+    let mut provider = NotificationProvider::connect_address(&daemon.address).expect("provider");
+    assert!(
+        provider.start().expect("start"),
+        "private bus name must be free"
+    );
+    let mut client = Client {
+        pump: BusPump::connect_address(&daemon.address).expect("client"),
+        inbox: Vec::new(),
+    };
+    let first = notify(
+        &mut client,
+        &mut provider,
+        0,
+        0,
+        urgency(1),
+        &[],
+        "duplicate",
+    );
+    let again = notify(
+        &mut client,
+        &mut provider,
+        0,
+        0,
+        urgency(1),
+        &[],
+        "duplicate",
+    );
+    assert_eq!(again, first, "live Notify reuses the active toast id");
+    assert_eq!(provider.active().len(), 1, "bounded queue holds one toast");
+}

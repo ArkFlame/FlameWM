@@ -98,8 +98,9 @@ fn state() -> &'static Mutex<State> {
 }
 
 /// Resolved once: the environment cannot change the logging gate mid-process,
-/// and `emit` is called from hot paths.
-fn enabled() -> bool {
+/// and `emit` is called from hot paths. Telemetry producers share this gate so
+/// their hot paths can skip recording entirely while the facility is off.
+pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| enabled_for(std::env::var_os("FLAMEWM_DEBUG")))
 }

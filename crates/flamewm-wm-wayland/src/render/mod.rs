@@ -842,6 +842,8 @@ fn render_into(
     // other clients' content back on the output the lock exists to cover. A dead locker leaves an
     // opaque cover (`screen_for`), it never reveals the desktop.
     crate::session_lock::prune_dead_locks(state);
+    // Surfaces destroyed without a role-destroy callback keep their output entry otherwise.
+    state.prune_dead_surface_outputs();
     // A lock screen owns the output; its elements (or the opaque cover) must never be reused as a
     // desktop scene once the lock is gone.
     let cached = WINIT_SCENE.with(|slot| slot.borrow_mut().take());

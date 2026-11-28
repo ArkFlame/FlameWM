@@ -128,3 +128,42 @@ owns compilation and the post-batch run.
 | X11 startup | `crates/flamewm-wm-x11/src/wm/startup_fault_tests.rs` (`mod` at `crates/flamewm-wm-x11/src/wm/mod.rs:593`) — `:22` `randr_present_with_successful_selection_has_no_fault`; `:27` `randr_absent_degrades_to_root_geometry_with_a_record`; `:72` `second_wm_on_root_selection_is_fatal_with_a_clear_record`; `:89` `missing_extension_degrades_with_a_record`; `:189` `lost_connection_is_fatal_with_a_blast_radius_record`; `:287` `startup_failure_line_names_each_stage`; `:305` `missing_display_is_named_in_the_connect_cause` | Missing RandR/extensions, second WM on root, lost connection, missing display; each degrades with a classified record/fatal line. |
 | Resize budget — snap preview | `crates/flamewm-wm-wayland/src/snap_preview.rs:261` `hundred_translation_motions_rasterise_once`; `:282` `one_second_of_outline_resize_stays_within_raster_budget` | One simulated second of 1 kHz outline resize stays within the 70-raster budget with injected clock. |
 | Resize budget — X11 configure pacing | `crates/flamewm-wm-x11/src/wm/effects.rs:596` `one_second_of_1khz_resize_stays_budgeted_and_flushes_last_batch` (module at `:576` `resize_configure_pacing_tests`) | One second of 1 kHz resize: configure batches <= 70 and trailing deferred batch flushed after the last event. |
+
+## Fallback symbol index (b06)
+
+Built from `rg 'fallback_plan'`, `rg 'FLAMEWM-[A-Z0-9_-]*-(FALLBACK|FAIL)'` and a read of every
+quarantine call site under `crates/**`. A test path is `file:line` (the real test name).
+`MISSING` means no test asserted that fallback's fault path when the index was taken; the three
+MISSING rows below now have tests. All rows are UNBUILT: no `git`, `cargo`, build, test, Python or
+sleep loop was run in this unit; the orchestrator owns compilation and the post-batch run.
+`.vendor/**` was read-only evidence (kwin, smithay, xfwm4 are present); no vendor code is a
+dependency or runtime input. The atomic-write precedent already recorded at
+`crates/flamewm-api/src/safe_config.rs:221` (`.vendor/kensaku-master/src-tauri/src/config.rs:500-526`)
+was kept, not re-ported; no named vendor reference was supplied for this index.
+
+| Fallback symbol (definition / call site) | Fault-injection test (`file:line` — name) | Coverage |
+| --- | --- | --- |
+| `fallback_plan` / `fallback_plan_with_cause` — `crates/flamewm-session-core/src/diagnostics.rs:382`, `:388` | `crates/flamewm-session-core/src/diagnostics.rs:615` `fallback_plan_keeps_role_environment_and_stays_alive`; `:630` `shell_fallback_has_no_dialog`; `:638` `window_manager_fallback_shows_a_truthful_notice`; `:650` `restart_exhaustion_fallback_notice_names_the_cause`; `:669` `fallback_message_quotes_hostile_paths` | Covered: environment preserved, per-role notice, exhausted-restart cause, hostile paths quoted. |
+| `fallback_plan` supervisor callers — `crates/flamewm-wm/src/bin/flamewm-session/supervision.rs:95`, `:216`, `:247`, `:263`; `crates/flamewm-wm/src/bin/flamewm-session.rs:370`, `:405` | `crates/flamewm-session-core/src/diagnostics.rs:615` (plan shape only) | Partial: no test drives a supervised child through the fallback spawn. |
+| `FLAMEWM-GPU-FALLBACK stage=cpu-default status=skip` — `crates/flamewm-render-x11/src/accel/mod.rs:376` | `crates/flamewm-render-x11/src/accel/fault_tests.rs:86` `cpu_default_mode_skips_gl_probe_and_records_once` | Covered: exactly one skip record, GL probe never called. |
+| `FLAMEWM-GPU-FALLBACK stage=... status=fail` — `crates/flamewm-render-x11/src/accel/mod.rs:351` (`gpu_failure_line`), emitted by `gpu_failure_record` at `:358` | MISSING before this unit; now `crates/flamewm-render-x11/src/accel/fault_tests.rs:71` `gpu_failure_line_names_stage_cause_and_blast_radius` | Covered: exact line shape asserted; formatter is pure, emitted text unchanged. |
+| `FLAMEWM-X11-STARTUP-FAIL` — `crates/flamewm-wm-x11/src/startup_failure.rs:57` | `crates/flamewm-wm-x11/src/wm/startup_fault_tests.rs:287` `startup_failure_line_names_each_stage`; `:305` `missing_display_is_named_in_the_connect_cause` | Covered: stage, cause and blast radius in one line. |
+| `FLAMEWM-X11-STARTUP-FAIL stage=connect` — `crates/flamewm-wm/src/main.rs:476` | `scripts/x11-startup-faults:81`, `:82`, `:167`, `:168` | Covered by shell fault test: DISPLAY unset/unreachable, second WM on private Xvfb. |
+
+| Quarantine path | Fault-injection test (`file:line` — name) | Coverage |
+| --- | --- | --- |
+| `crates/flamewm-api/src/safe_config.rs:94` `quarantine`, `:122` `prune_quarantine` | `crates/flamewm-api/src/safe_config.rs:290` `quarantine_keeps_only_newest_copies` | Covered: bounded retention on six injected bad writes. |
+| `crates/flamewm-api/src/safe_config.rs:162` `quarantine_and_warn`, `:179` `load_or_default` | MISSING before this unit; now `crates/flamewm-api/src/safe_config.rs:314` `quarantine_and_warn_reports_one_notice_and_preserves_bad_bytes` | Covered: notice names path, cause, defaults and blast radius; bad bytes preserved under a `.corrupt-` copy. |
+| `crates/flamewm-api/src/safe_config.rs:203` `quarantine_before_save` | MISSING before this unit; now `crates/flamewm-api/src/safe_config.rs:343` `quarantine_before_save_preserves_bad_bytes_and_passes_valid_file` | Covered: bad bytes quarantined before save, valid file left untouched. |
+| `crates/flamewm-api/src/config_store.rs:5` notice contract | `crates/flamewm-api/src/config_store.rs:181` `load_notice_is_delivered_once` | Partial: in-memory notice delivered once; no on-disk fault injected here. |
+| `crates/flamewm-explorer/src/prefs.rs:110`, `:126` load, `:119`, `:136` before-save | `crates/flamewm-explorer/src/prefs.rs:280` `corrupt_prefs_load_defaults_are_quarantined_and_survive_save`; `:302` `missing_prefs_are_silent_defaults_and_create_no_quarantine` | Covered: corrupt quarantined and survives save; missing silent. |
+| `crates/flamewm-platform/src/host.rs:95` load, `:100` notice-to-failure-record | `crates/flamewm-platform/src/host/tests.rs:724` `start_falls_back_to_defaults_for_non_utf8_settings_file`; `:735` `start_falls_back_to_defaults_for_malformed_settings_value` | Partial: default fallback asserted; the failure-record append is not asserted. |
+| `crates/flamewm-platform/src/services/workspaces.rs:39`, `:47` | `crates/flamewm-platform/src/services/workspaces.rs:302` `corrupt_count_file_is_quarantined_and_bytes_survive_save`; `:331` `missing_count_file_is_silent_none` | Covered. |
+| `crates/flamewm-platform/src/settings/load.rs:143`, `:154`, `:162`, `:175`, `:182` (`corrupt_name`) | same file at `:143`, `:154`, `:162`, `:175`, `:182` (`corrupt_name_*`) | Covered: naming, extension, collisions, same-directory and bad-path rejection. |
+| `crates/flamewm-platform/src/settings/load_tests.rs:53` | `:53` `corrupt_json_is_quarantined_once_and_defaults_are_used`; `:92` `missing_file_loads_defaults_without_quarantine`; `:151` `truncated_file_is_quarantined_and_defaults_are_used`; `:176` `binary_junk_is_quarantined_and_defaults_are_used`; `:196` `huge_file_is_quarantined_and_defaults_are_used` | Covered. |
+| `crates/flamewm-terminal/src/store.rs:553` | `crates/flamewm-terminal/src/store.rs:587` `unparsable_terminal_toml_is_quarantined_and_defaults_used`; `:603` `oversized_terminal_toml_is_quarantined_and_defaults_used`; `:621` `missing_terminal_toml_is_silent_defaults` | Covered. |
+| `crates/flamewm-terminal/src/app/preferences.rs` saved-config load | `crates/flamewm-terminal/src/app/preferences.rs:172` `corrupt_saved_config_is_quarantined_and_defaults_used` | Covered. |
+
+Three MISSING fallbacks were written as tests; no production behavior changed. The only source
+edit beyond tests is the pure `gpu_failure_line` formatter, which emits the identical string as
+before, so visuals and log output stay pixel/text-identical. No new dependencies were added.

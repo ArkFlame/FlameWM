@@ -346,12 +346,17 @@ fn record_fallback(reason: FallbackReason) {
     }
 }
 
-/// Emits one failure record for a GPU init stage: the stage that failed, the concrete cause and
-/// what still works afterwards. Kept as a single line so each stage is greppable in the log.
-fn gpu_failure_record(stage: &str, cause: &str, blast_radius: &str) {
-    eprintln!(
+/// The single greppable line emitted for a failed GPU init stage: stage, concrete cause and what
+/// still works afterwards. Kept pure so a fault test can assert its exact shape.
+fn gpu_failure_line(stage: &str, cause: &str, blast_radius: &str) -> String {
+    format!(
         "FLAMEWM-GPU-FALLBACK stage={stage} status=fail cause={cause} blast_radius={blast_radius}"
-    );
+    )
+}
+
+/// Emits one failure record for a GPU init stage.
+fn gpu_failure_record(stage: &str, cause: &str, blast_radius: &str) {
+    eprintln!("{}", gpu_failure_line(stage, cause, blast_radius));
 }
 
 /// CPU mode skips the GL chain before any probe, so a default session needs one explicit record too.

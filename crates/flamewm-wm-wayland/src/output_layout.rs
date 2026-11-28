@@ -167,6 +167,13 @@ impl<K: Eq + std::hash::Hash> SurfaceOutputs<K> {
     pub(crate) fn retain_outputs(&mut self, live: &[String]) {
         self.map.retain(|_, output| live.contains(output));
     }
+
+    /// Drops entries whose key no longer denotes a live surface. Role-destroy callbacks cover the
+    /// normal unmap path, but a client that disconnects before its surface is mapped has no callback
+    /// to remove the entry; without this sweep the map keeps that id forever.
+    pub(crate) fn retain_keys(&mut self, live: impl Fn(&K) -> bool) {
+        self.map.retain(|key, _| live(key));
+    }
 }
 
 /// Name of the output holding most of `rect`, or `primary` when it overlaps none. `names[i]` names
@@ -664,6 +671,28 @@ mod tests {
         assert_eq!(map.output_of(&1), None, "gone output is dropped");
         assert_eq!(map.output_of(&2), Some("DP-1"), "live output is kept");
         assert_eq!(scale_for_output(&scales, map.output_of(&1), 1.0), 1.0);
+    }
+
+    #[test]
+    fn dead_surface_ids_are_dropped_but_live_ones_keep_their_output() {
+        let mut map: SurfaceOutputs<u32> = SurfaceOutputs::default();
+        map.assign(1, "DP-2".to_owned()); // a window whose client is gone
+        map.assign(2, "DP-1".to_owned()); // a still-live layer surface
+        let live = [2];
+        map.retain_keys(|key| live.contains(key));
+        assert_eq!(
+            map.output_of(&1),
+            None,
+            "destroyed surface no longer has an output"
+        );
+        assert_eq!(
+            map.output_of(&2),
+            Some("DP-1"),
+            "live surface keeps its home"
+        );
+        // A second sweep is idempotent: the dead id is simply not there to visit again.
+        map.retain_keys(|key| live.contains(key));
+        assert_eq!(map.output_of(&2), Some("DP-1"));
     }
 
     #[test]

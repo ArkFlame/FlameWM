@@ -66,6 +66,20 @@ impl State {
         self.surface_outputs.remove(&key);
     }
 
+    /// Drops output entries for surfaces whose client is gone.
+    ///
+    /// Precedent: `.vendor/smithay-master/src/desktop/space/mod.rs:427` prunes dead elements on
+    /// `refresh`, and `.vendor/cosmic-epoch/cosmic-comp/src/shell/mod.rs:1675` and `:2763` keep
+    /// only live surfaces in long-lived collections. A destroyed `wl_surface` can no longer be
+    /// resolved by id, so one sweep per paint bounds this map to live surfaces.
+    pub fn prune_dead_surface_outputs(&mut self) {
+        use smithay::reexports::wayland_server::Resource as _;
+        let display = self.display.clone();
+        self.surface_outputs.retain_keys(|key| {
+            WlSurface::from_id(&display, key.clone()).is_ok_and(|s| s.is_alive())
+        });
+    }
+
     /// Leaves every surface on a removed output and moves its layer surfaces to the primary output's
     /// layer map, so their panels keep their exclusive zone on the output that is still present.
     #[cfg_attr(not(feature = "drm"), allow(dead_code))] // called only by the drm output sync

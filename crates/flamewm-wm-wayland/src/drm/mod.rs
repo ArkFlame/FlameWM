@@ -300,6 +300,13 @@ impl Drm {
         }
         // Client dmabufs queued by `DmabufHandler` are imported here, where the renderer is.
         crate::dmabuf::settle_pending(state, &mut self.renderer);
+        // Same per-paint stale-surface sweep as the nested path (`render/mod.rs:846`): a client
+        // that dies before its role-destroy callback keeps its home output otherwise. Only dead
+        // keys are removed, so no live element, geometry or pixel changes. Precedent:
+        // `.vendor/smithay-master/src/desktop/space/mod.rs:427` and
+        // `.vendor/cosmic-epoch/cosmic-comp/src/shell/mod.rs:1675,2763` retain only live surfaces
+        // on each refresh.
+        state.prune_dead_surface_outputs();
         // A paint answers the frame callbacks, and a client that wants another frame commits a
         // buffer, which calls `State::request_redraw` (see `handlers::commit`). The dirty flag is
         // therefore this compositor's "a client frame callback is outstanding" signal, read before
@@ -797,6 +804,24 @@ mod tests {
         assert!(
             !pauses_scanout(card, 13, 64),
             "an evdev node released by libinput"
+        );
+    }
+
+    #[test]
+    fn drm_paint_sweeps_dead_surface_outputs() {
+        // A real `Drm` backend needs a scanout device, so this pins the per-paint sweep on the DRM
+        // path the same way `render/mod.rs:846` does for the nested path, without hardware.
+        let src = include_str!("mod.rs");
+        let paint = src
+            .split("fn paint(&mut self, state: &mut State")
+            .nth(1)
+            .expect("DRM paint path exists")
+            .split("\n    fn ")
+            .next()
+            .expect("paint body ends at the next method");
+        assert!(
+            paint.contains("state.prune_dead_surface_outputs();"),
+            "the DRM paint path must sweep dead surface homes like render_into does"
         );
     }
 }

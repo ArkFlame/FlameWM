@@ -311,6 +311,70 @@ mod tests {
     }
 
     #[test]
+    fn quarantine_and_warn_reports_one_notice_and_preserves_bad_bytes() {
+        let dir = temp_dir("quarantine-notice");
+        let path = dir.join("widget.conf");
+        fs::write(&path, b"\xff\xfe junk").expect("write bad file");
+
+        let notice = quarantine_and_warn(&path, "unparsable", "custom settings");
+
+        assert!(
+            notice.starts_with(&format!("flamewm: {}", path.display())),
+            "the notice must name the file: {notice}"
+        );
+        assert!(notice.contains("unparsable"), "{notice}");
+        assert!(notice.contains("using defaults"), "{notice}");
+        assert!(notice.contains("custom settings"), "{notice}");
+        assert!(!path.exists(), "the unusable file must be moved away");
+        let kept = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("widget.corrupt-")
+            });
+        assert!(kept, "a quarantined copy must remain");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn quarantine_before_save_preserves_bad_bytes_and_passes_valid_file() {
+        let dir = temp_dir("before-save");
+        let path = dir.join("widget.conf");
+        fs::write(&path, b"not-a-number\n").expect("write bad file");
+
+        quarantine_before_save(&path, |text| text.trim().parse::<usize>().is_ok())
+            .expect("quarantine bad bytes");
+        assert!(
+            !path.exists(),
+            "a bad file must not survive at the live path"
+        );
+        let kept = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("widget.corrupt-")
+            });
+        assert!(kept, "a quarantined copy must remain");
+
+        // A valid file is left untouched so the caller may overwrite it normally.
+        fs::write(&path, b"7\n").expect("write valid file");
+        quarantine_before_save(&path, |text| text.trim().parse::<usize>().is_ok())
+            .expect("valid file passes");
+        assert_eq!(
+            fs::read(&path).expect("read valid file"),
+            b"7\n",
+            "a valid file must not be quarantined"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn atomic_write_replaces_whole_file_with_0600_and_no_temp_left() {
         use std::os::unix::fs::PermissionsExt;
 

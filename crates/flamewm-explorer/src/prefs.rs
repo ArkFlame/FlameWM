@@ -1,10 +1,12 @@
 //! Explorer preferences kept in `explorer.toml` under the `FlameWM` config directory.
+#[cfg(test)]
+use std::fs;
 use std::{
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
-use flamewm_api::safe_config::{load_or_default, quarantine_before_save};
+use flamewm_api::safe_config::{atomic_write_text, load_or_default, quarantine_before_save};
 
 /// Column widths in pixels as persisted; the Name column takes the remaining width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,8 +130,8 @@ pub fn load(dir: &Path) -> Prefs {
     )
 }
 
-/// Writes through a temporary file so a crash never leaves a half-written preference file.
-/// A bad existing file is quarantined first and its bytes are never overwritten.
+/// Writes atomically through the shared facade so a crash never leaves a half-written preference
+/// file. A bad existing file is quarantined first and its bytes are never overwritten.
 pub fn save(dir: &Path, prefs: &Prefs) -> io::Result<()> {
     quarantine_before_save(&prefs_path(dir), |_| true)?;
     let recent = load_recent(dir);
@@ -137,10 +139,7 @@ pub fn save(dir: &Path, prefs: &Prefs) -> io::Result<()> {
 }
 
 fn write_atomic(dir: &Path, text: &str) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    let temp = dir.join("explorer.toml.tmp");
-    fs::write(&temp, text)?;
-    fs::rename(temp, dir.join("explorer.toml"))
+    atomic_write_text(&prefs_path(dir), text)
 }
 
 #[cfg(test)]
@@ -214,6 +213,36 @@ mod tests {
         let parsed = parse("col_size = wide\nshow_type = true");
         assert_eq!(parsed.col_size, Prefs::default().col_size);
         assert!(parsed.show_type);
+    }
+
+    #[test]
+    fn save_uses_the_shared_atomic_writer_with_owner_only_mode_and_no_stale_temp() {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-explorer-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        save(&dir, &Prefs::default()).expect("save through shared atomic writer");
+        let path = prefs_path(&dir);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read prefs"),
+            render(&Prefs::default())
+        );
+        assert!(
+            !dir.join("explorer.toml.tmp").exists(),
+            "fixed-name temp must not survive a completed save"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "prefs file must be owner-only");
+        }
+        fs::remove_dir_all(&dir).expect("cleanup");
     }
 }
 

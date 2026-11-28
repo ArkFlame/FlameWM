@@ -449,6 +449,30 @@ mod tests {
     }
 
     #[test]
+    fn result_seam_motion_burst_dispatches_newest_before_boundary() {
+        // The production `next()` seam (`poll_for_event` -> `pump_next_result`)
+        // must hand the drain only the newest motion of a contiguous burst,
+        // stash the boundary once, and never cross the release.
+        let mut pump = WmEventPump::new();
+        let events = vec![motion(7, 0, 1), motion(7, 0, 2), motion(7, 0, 3), release()];
+        let mut iter = events.into_iter();
+        let mut fetch = || -> Result<Option<Event>, FetchErr> { Ok(iter.next()) };
+        let dispatched = pump
+            .pump_next_result(&mut fetch)
+            .expect("event")
+            .expect("some");
+        assert_eq!(root_x_of(&dispatched.event), 3);
+        assert_eq!((dispatched.received, dispatched.coalesced), (3, 2));
+        assert!(pump.has_pending());
+        let boundary = pump
+            .pump_next_result(&mut fetch)
+            .expect("event")
+            .expect("some");
+        assert!(matches!(boundary.event, Event::ButtonRelease(_)));
+        assert!(!pump.has_pending());
+    }
+
+    #[test]
     fn configure_x3_merges_axes_and_masks() {
         let mut pump = WmEventPump::new();
         let out = pump

@@ -21,8 +21,8 @@ use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_session_core::diagnostics::{
     BlastRadius, CHECK_EXIT_FATAL, FailureCode, FailureRecord, Severity, append_record,
-    check_exit_code, describe_exit, fallback_plan, fallback_plan_with_cause, format_report,
-    format_startup_failure, unix_seconds_now,
+    check_exit_code, describe_exit, fallback_log_path, fallback_plan, fallback_plan_with_cause,
+    format_report, format_startup_failure, install_panic_hook, session_log_path, unix_seconds_now,
 };
 use flamewm_session_core::{
     ChildExit, Keyring, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
@@ -30,7 +30,9 @@ use flamewm_session_core::{
     installed_kwallet_generations, parse_gnome_keyring_environment, resolve_kwallet_version,
     select_keyring,
 };
-use rustix::process::{Pid, Signal, getppid, kill_process, set_parent_process_death_signal};
+use rustix::process::{
+    Pid, Signal, getppid, getuid, kill_process, set_parent_process_death_signal,
+};
 use signal_hook::consts::signal::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
 use signal_hook::flag;
 use signal_hook::low_level::pipe;
@@ -67,6 +69,13 @@ const KDE_SESSION_IDENTITY: [&str; 3] =
 const SUPERVISOR_SAFETY_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn main() {
+    let fallback = fallback_log_path(getuid().as_raw());
+    let home = env::var_os("HOME").map(PathBuf::from);
+    install_panic_hook(session_log_path(
+        env::var_os("XDG_STATE_HOME").as_deref(),
+        home.as_deref(),
+        &fallback,
+    ));
     if env::args().nth(1).as_deref() == Some("--check") {
         std::process::exit(run_check());
     }

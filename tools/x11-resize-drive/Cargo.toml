@@ -1,0 +1,21 @@
+[package]
+name = "x11-resize-drive"
+version = "0.1.7"
+edition = "2024"
+rust-version = "1.89"
+license = "LGPL-2.0-only"
+publish = false
+
+# Standalone crate: the root workspace glob is `crates/*`, so a crate under `tools/` is
+# not a workspace member. Declaring a workspace root here keeps Cargo from treating it
+# as an undeclared member of the parent workspace.
+[workspace]
+
+[[bin]]
+name = "x11-resize-drive"
+path = "src/main.rs"
+
+# Same pinned version as the workspace x11rb dependency, plus the XTEST extension.
+# No path dependencies, no new dependencies.
+[dependencies]
+x11rb = { version = "=0.14.0", default-features = false, features = ["xtest"] }

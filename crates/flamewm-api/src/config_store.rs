@@ -4,6 +4,19 @@
 //! behaviour and persisted bytes stay unchanged. A store owns bounded reading, parsing,
 //! quarantine, defaults, atomic write and at most one user-visible notice; [`ConfigWatch`] is the
 //! push path that replaces mtime polling.
+//!
+//! No polling reload exists in this crate or in `flamewm-settings`: state is read on [`TypedConfigStore::load`],
+//! persisted on [`TypedConfigStore::save`], and changes arrive only as pushes drained by the caller's main loop.
+//! The `stat` stamps used by `flamewm-settings` to latch XDG projections are a repaint cache, not a reload timer.
+//! If a native source is added later, register its inotify descriptor with
+//! `flamewm_reactor::Reactor::register_fd_with_source_action` and push [`ConfigChange::External`] from the
+//! readiness callback; no timer, polling loop or new dependency is needed.
+//!
+//! Debounce precedent: `.vendor/xfdesktop-master/src/xfdesktop-backdrop-manager.c`
+//! (`backdrop_image_file_changed`) reacts once on `G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT` and ignores
+//! intermediate write events, while xfconf delivers settings as a `property-changed` push signal. Choice:
+//! port that push-plus-debounce pattern behind [`ConfigWatch`] as [`DebouncedConfigWatch`], which coalesces a
+//! burst of queued changes into one delivery. Persisted bytes and visuals are unchanged.
 
 use std::collections::VecDeque;
 use std::fmt::Debug;
@@ -38,6 +51,34 @@ pub trait ConfigWatch {
     fn next_change(&self) -> Option<ConfigChange>;
 }
 
+/// Debounce adapter: drains a whole burst of pushed changes and reports only its final state.
+///
+/// Native notifiers emit several events for one user edit. Like xfdesktop's
+/// `G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT` handler, this reacts once per main-loop turn instead
+/// of reloading on every intermediate event. The most recent change in the burst wins.
+#[derive(Debug)]
+pub struct DebouncedConfigWatch<W> {
+    inner: W,
+}
+
+impl<W: ConfigWatch> DebouncedConfigWatch<W> {
+    /// Wrap `inner` so that each drain coalesces all currently queued changes into one.
+    #[must_use]
+    pub fn new(inner: W) -> Self {
+        Self { inner }
+    }
+}
+
+impl<W: ConfigWatch> ConfigWatch for DebouncedConfigWatch<W> {
+    fn next_change(&self) -> Option<ConfigChange> {
+        let mut latest = None;
+        while let Some(change) = self.inner.next_change() {
+            latest = Some(change);
+        }
+        latest
+    }
+}
+
 /// One typed owner for a config file.
 pub trait TypedConfigStore {
     /// Typed value owned by this store.
@@ -55,6 +96,15 @@ pub trait TypedConfigStore {
     /// Create a handle that receives changes pushed by this store.
     #[must_use]
     fn watch(&self) -> Self::Watch;
+
+    /// Create a watch that coalesces a burst of pushed changes into one delivery.
+    #[must_use]
+    fn debounced_watch(&self) -> DebouncedConfigWatch<Self::Watch>
+    where
+        Self: Sized,
+    {
+        DebouncedConfigWatch::new(self.watch())
+    }
 }
 
 #[derive(Debug)]
@@ -219,6 +269,39 @@ mod tests {
         let watch = store.watch();
         store.notify_external();
         assert_eq!(watch.next_change(), Some(ConfigChange::External));
+        assert_eq!(watch.next_change(), None);
+    }
+
+    #[test]
+    fn debounced_watch_collapses_a_burst_into_one_change() {
+        let store = MemoryConfigStore::<Prefs>::default();
+        let watch = store.debounced_watch();
+        store.notify_external();
+        store.notify_external();
+        store.notify_external();
+        assert_eq!(watch.next_change(), Some(ConfigChange::External));
+        assert_eq!(watch.next_change(), None);
+    }
+
+    #[test]
+    fn debounced_watch_keeps_only_the_latest_change_of_a_burst() {
+        let store = MemoryConfigStore::<Prefs>::default();
+        let watch = store.debounced_watch();
+        store.save(&Prefs { hidden: true }).expect("save");
+        store.notify_external();
+        assert_eq!(watch.next_change(), Some(ConfigChange::External));
+        assert_eq!(watch.next_change(), None);
+
+        store.notify_external();
+        store.save(&Prefs { hidden: false }).expect("save");
+        assert_eq!(watch.next_change(), Some(ConfigChange::Saved));
+        assert_eq!(watch.next_change(), None);
+    }
+
+    #[test]
+    fn debounced_watch_drains_nothing_when_no_change_was_pushed() {
+        let store = MemoryConfigStore::<Prefs>::default();
+        let watch = store.debounced_watch();
         assert_eq!(watch.next_change(), None);
     }
 }

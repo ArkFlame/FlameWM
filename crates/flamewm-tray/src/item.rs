@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::icon_cache::IconCacheKey;
+
 pub const ITEM_INTERFACE: &str = "org.kde.StatusNotifierItem";
 pub const DEFAULT_ITEM_PATH: &str = "/StatusNotifierItem";
 const MAX_NAME_BYTES: usize = 255;
@@ -175,7 +177,9 @@ pub struct ItemProps {
     pub tooltip_title: String,
     pub menu_path: Option<String>,
     pub item_is_menu: bool,
-    pub icon_pixmaps: Vec<IconPixmap>,
+    /// Stable, byte-bounded-cache keys for the item's decoded icons. The ARGB bytes
+    /// themselves live in the shared [`crate::IconCache`], not in this snapshot.
+    pub icon_pixmaps: Vec<IconCacheKey>,
 }
 
 fn take_text(props: &mut BTreeMap<String, PropValue>, key: &str) -> String {
@@ -209,8 +213,12 @@ impl ItemProps {
             Some(PropValue::Tooltip(title)) => title,
             _ => String::new(),
         };
+        // Keep only the stable content keys: the cache owns the bounded ARGB bytes, so
+        // cloning an item snapshot cannot grow icon RAM without limit.
         let icon_pixmaps = match props.remove("IconPixmap") {
-            Some(PropValue::Pixmaps(pixmaps)) => pixmaps,
+            Some(PropValue::Pixmaps(pixmaps)) => {
+                pixmaps.iter().map(IconCacheKey::for_pixmap).collect()
+            }
             _ => Vec::new(),
         };
         Self {

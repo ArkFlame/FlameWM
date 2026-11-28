@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Bounded XTEST resize check: Xvfb :99 + flamewm + xterm + x11-resize-drive.
+# No Python, no sleep polling: readiness is bounded by `timeout`, children are reaped by `wait`.
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
+[[ "$TARGET_DIR" == /* ]] || TARGET_DIR="$ROOT/$TARGET_DIR"
+FLAMEWM_BIN="${FLAMEWM_BIN:-$TARGET_DIR/release/flamewm}"
+DRIVER_BIN="${X11_RESIZE_DRIVE_BIN:-$ROOT/tools/x11-resize-drive/target/release/x11-resize-drive}"
+DISPLAY_NAME=":${X11_RESIZE_DISPLAY_NUM:-99}"
+TITLE="FlameWM-Resize-Check"
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/flamewm-x11-resize-check.XXXXXX")"
+
+xvfb_pid=''
+wm_pid=''
+xterm_pid=''
+
+cleanup() {
+  for pid in "$xterm_pid" "$wm_pid" "$xvfb_pid"; do
+    [[ -n "$pid" ]] || continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for pid in "$xterm_pid" "$wm_pid" "$xvfb_pid"; do
+    [[ -n "$pid" ]] || continue
+    timeout 3s bash -c 'while kill -0 "$1" 2>/dev/null; do :; done' _ "$pid" || {
+      kill -KILL "$pid" 2>/dev/null || true
+    }
+    wait "$pid" 2>/dev/null || true
+  done
+  rm -rf "$LOG_DIR"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$1" >&2
+  exit 1
+}
+
+command -v timeout >/dev/null || fail 'timeout utility is required'
+for tool in Xvfb xprop xterm; do
+  command -v "$tool" >/dev/null || fail "$tool is required"
+done
+[[ -x "$FLAMEWM_BIN" ]] || fail "flamewm binary not executable: $FLAMEWM_BIN"
+[[ -x "$DRIVER_BIN" ]] || fail "driver binary not executable: $DRIVER_BIN"
+
+# -noreset keeps the server alive across client probes (same rule as scripts/break/lib.sh).
+Xvfb "$DISPLAY_NAME" -screen 0 1280x800x24 -nolisten tcp -noreset +extension RANDR \
+  >"$LOG_DIR/xvfb.log" 2>&1 &
+xvfb_pid=$!
+
+# A real X round-trip, bounded by timeout; no sleep loop.
+timeout 10s bash -c 'until xprop -root >/dev/null 2>&1; do :; done' \
+  || fail "Xvfb $DISPLAY_NAME did not accept clients (see $LOG_DIR/xvfb.log)"
+
+mkdir -p "$LOG_DIR/debug"
+env -u WAYLAND_DISPLAY DISPLAY="$DISPLAY_NAME" FLAMEWM_DEBUG=1 FLAMEWM_DEBUG_DIR="$LOG_DIR/debug" \
+  "$FLAMEWM_BIN" >"$LOG_DIR/flamewm.log" 2>&1 &
+wm_pid=$!
+
+env -u WAYLAND_DISPLAY DISPLAY="$DISPLAY_NAME" \
+  xterm -T "$TITLE" -n "$TITLE" -geometry 80x24+120+120 \
+  >"$LOG_DIR/xterm.log" 2>&1 &
+xterm_pid=$!
+
+# Wait for the mapped client window by title, again bounded by timeout.
+timeout 10s bash -c 'until xprop -name "$1" WM_NAME >/dev/null 2>&1; do :; done' _ "$TITLE" \
+  || fail "xterm window $TITLE did not appear (see $LOG_DIR/xterm.log)"
+
+set +e
+output="$(DISPLAY="$DISPLAY_NAME" timeout 10s "$DRIVER_BIN" "$TITLE" \
+  --mode corner --steps 600 --duration-ms 1000 2>"$LOG_DIR/driver.log")"
+status=$?
+set -e
+
+[[ $status -eq 0 ]] || fail "driver exited $status: $(cat "$LOG_DIR/driver.log")"
+[[ "$output" =~ ^RESIZE-DRIVE\ steps=600\ elapsed_ms=[0-9]+$ ]] \
+  || fail "unexpected driver output: $output"
+kill -0 "$wm_pid" 2>/dev/null || fail 'flamewm exited during the resize'
+kill -0 "$xterm_pid" 2>/dev/null || fail 'xterm exited during the resize'
+
+# Outline raster rate from the WM's own resize summary (cap is 60/s, resize_raster.rs).
+max_rate="$(grep -rhoE 'rasters_per_sec=[0-9]+' "$LOG_DIR/debug" 2>/dev/null \
+  | cut -d= -f2 | sort -n | tail -n 1 || true)"
+if [[ -z "$max_rate" ]]; then
+  printf 'PASS (rate UNVERIFIED, no summary line): %s\n' "$output"
+  exit 0
+fi
+(( max_rate <= 60 )) || fail "outline rasters per second $max_rate exceeds the 60 cap"
+printf 'PASS: %s max_rasters_per_sec=%s\n' "$output" "$max_rate"

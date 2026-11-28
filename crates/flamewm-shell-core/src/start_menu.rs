@@ -209,6 +209,78 @@ fn sorted_indices(entries: &[StartEntry]) -> Vec<usize> {
     order
 }
 
+/// Writes the exact bytes `str::to_lowercase()` would produce for the trimmed
+/// query into a reusable buffer. ASCII (the common keystroke) writes in place
+/// with no allocation; other scripts fall back to std's full Unicode mapping,
+/// so the result stays byte-identical to the one-shot path.
+fn normalize_into(buf: &mut String, query: &str) {
+    let trimmed = query.trim();
+    buf.clear();
+    if trimmed.is_ascii() {
+        buf.extend(
+            trimmed
+                .bytes()
+                .map(|byte| byte.to_ascii_lowercase() as char),
+        );
+    } else {
+        buf.push_str(&trimmed.to_lowercase());
+    }
+}
+
+/// Caller-owned scratch buffers for per-keystroke Start search. `needle` keeps
+/// its lowercasing capacity and `results` keeps its result-vector capacity, so
+/// steady typing allocates once per buffer instead of once per keystroke.
+/// Precedent: `.vendor/vela-main/settings/qml/Main.qml` normalizes the query
+/// once (`text.trim().toLowerCase()`) and filters a precomputed search index.
+#[derive(Debug, Default)]
+pub struct StartSearchBuffers<'a> {
+    needle: String,
+    results: Vec<&'a DesktopApplication>,
+}
+
+impl<'a> StartSearchBuffers<'a> {
+    #[must_use]
+    pub fn results(&self) -> &[&'a DesktopApplication] {
+        &self.results
+    }
+
+    /// Stable capacity across keystrokes means no fresh result-vector allocation.
+    #[must_use]
+    pub fn result_capacity(&self) -> usize {
+        self.results.capacity()
+    }
+
+    /// Stable capacity across keystrokes means no fresh lowercase-buffer allocation.
+    #[must_use]
+    pub fn needle_capacity(&self) -> usize {
+        self.needle.capacity()
+    }
+}
+
+impl<'a> StartModel {
+    /// Same results, order and category admission as [`Self::filter_view`], but
+    /// written into caller-owned buffers so repeated keystrokes reuse both
+    /// allocations. Buffers borrow from `self`; replace them with the model.
+    pub fn filter_view_into(
+        &'a self,
+        category: StartCategory,
+        query: &str,
+        buffers: &mut StartSearchBuffers<'a>,
+    ) {
+        normalize_into(&mut buffers.needle, query);
+        buffers.results.clear();
+        let needle = &buffers.needle;
+        buffers.results.extend(
+            self.sorted
+                .iter()
+                .copied()
+                .filter(|&index| self.admits(category, index))
+                .filter(|&index| self.entries[index].matches(needle))
+                .map(|index| &self.applications[index]),
+        );
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartModel {
     applications: Vec<DesktopApplication>,
@@ -314,7 +386,8 @@ impl StartModel {
     /// Borrowed generation view: category plus ad-hoc query.
     #[must_use]
     pub fn filter_view(&self, category: StartCategory, query: &str) -> Vec<&DesktopApplication> {
-        let needle = query.trim().to_lowercase();
+        let mut needle = String::new();
+        normalize_into(&mut needle, query);
         self.sorted
             .iter()
             .filter(|&&index| self.admits(category, index))
@@ -650,5 +723,71 @@ mod tests {
         let model = StartModel::new(Vec::new());
         assert_eq!(model.view, StartView::Categories);
         assert!(!model.show_all_by_default);
+    }
+
+    #[test]
+    fn reused_search_buffers_match_one_shot_filter_view() {
+        let mut game = application("Zulu Game");
+        game.categories = vec!["Game".to_owned()];
+        game.keywords = vec!["Arcade".to_owned()];
+        game.comment = "Arcade cabinet".to_owned();
+        let mut dev = application("Alpha Editor");
+        dev.generic_name = "Code Writer".to_owned();
+        dev.categories = vec!["Development".to_owned()];
+        let model = StartModel::new(vec![game, dev]);
+
+        let mut buffers = StartSearchBuffers::default();
+        for query in [
+            "", "  ", "a", "AL", "alpha", "writer", "ARCADE", "game", "zzz",
+        ] {
+            model.filter_view_into(StartCategory::All, query, &mut buffers);
+            let reused: Vec<&str> = buffers
+                .results()
+                .iter()
+                .map(|app| app.name.as_str())
+                .collect();
+            let one_shot: Vec<&str> = model
+                .filter_view(StartCategory::All, query)
+                .iter()
+                .map(|app| app.name.as_str())
+                .collect();
+            assert_eq!(reused, one_shot, "query {query:?}");
+        }
+    }
+
+    #[test]
+    fn reused_search_buffers_do_not_reallocate_per_keystroke() {
+        let applications: Vec<DesktopApplication> = (0..16)
+            .map(|index| application(&format!("App {index}")))
+            .collect();
+        let model = StartModel::new(applications);
+        let mut buffers = StartSearchBuffers::default();
+
+        // Warm up the longest needle and the widest result list first.
+        model.filter_view_into(StartCategory::All, "APP 1", &mut buffers);
+        model.filter_view_into(StartCategory::All, "", &mut buffers);
+        let needle_capacity = buffers.needle_capacity();
+        let result_capacity = buffers.result_capacity();
+        assert!(needle_capacity >= 5);
+        assert!(result_capacity >= 16);
+
+        // Every later keystroke keeps both capacities: zero fresh allocations.
+        for query in ["", "A", "AP", "APP", "APP 1", "app", "zzz"] {
+            model.filter_view_into(StartCategory::All, query, &mut buffers);
+            assert_eq!(
+                buffers.needle_capacity(),
+                needle_capacity,
+                "query {query:?}"
+            );
+            assert_eq!(
+                buffers.result_capacity(),
+                result_capacity,
+                "query {query:?}"
+            );
+            assert_eq!(
+                buffers.results().len(),
+                model.filter_view(StartCategory::All, query).len()
+            );
+        }
     }
 }

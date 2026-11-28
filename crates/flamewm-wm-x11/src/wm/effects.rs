@@ -73,17 +73,12 @@ impl<C: Connection> Wm<'_, C> {
             let pending = self.outline_pending.take();
             self.outline_raster.clear();
             if let Some((_, geometry)) = pending {
-                let root = self.screen().root;
-                self.snap_preview.show_outline(
-                    self.conn,
-                    root,
-                    flamewm_api::Rect {
-                        x: geometry.x,
-                        y: geometry.y,
-                        width: geometry.w,
-                        height: geometry.h,
-                    },
-                );
+                self.show_outline_raster(flamewm_api::Rect {
+                    x: geometry.x,
+                    y: geometry.y,
+                    width: geometry.w,
+                    height: geometry.h,
+                });
             }
             self.resize_configure_at = None;
             self.resize_deferred = None;
@@ -255,8 +250,7 @@ impl<C: Connection> Wm<'_, C> {
                             match self.outline_raster.note(now, frame) {
                                 resize_raster::RasterDecision::Now => {
                                     self.outline_pending = None;
-                                    let root = self.screen().root;
-                                    self.snap_preview.show_outline(self.conn, root, geometry);
+                                    self.show_outline_raster(geometry);
                                 }
                                 resize_raster::RasterDecision::Wait(due) => {
                                     // Newest geometry wins; the reactor wakes at `due`.
@@ -449,6 +443,12 @@ impl<C: Connection> Wm<'_, C> {
         self.release_pointer();
     }
 
+    /// One outline raster: record telemetry (free when debug is off), then present it.
+    fn show_outline_raster(&mut self, geometry: flamewm_api::Rect) {
+        resize_counters().record_show_outline_raster();
+        let root = self.screen().root;
+        self.snap_preview.show_outline(self.conn, root, geometry);
+    }
     /// Presents the newest outline geometry held back by the gate once its deadline elapses.
     /// One raster per due tick; nothing is scheduled while the gate is idle.
     fn flush_outline_raster(&mut self, now: std::time::Instant) {
@@ -460,17 +460,12 @@ impl<C: Connection> Wm<'_, C> {
             return;
         };
         self.outline_pending = None;
-        let root = self.screen().root;
-        self.snap_preview.show_outline(
-            self.conn,
-            root,
-            flamewm_api::Rect {
-                x: geometry.x,
-                y: geometry.y,
-                width: geometry.w,
-                height: geometry.h,
-            },
-        );
+        self.show_outline_raster(flamewm_api::Rect {
+            x: geometry.x,
+            y: geometry.y,
+            width: geometry.w,
+            height: geometry.h,
+        });
     }
 
     /// Replays the latest paced resize batch once its interval elapsed (trailing edge).

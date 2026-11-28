@@ -480,9 +480,10 @@ fn is_supported_wallpaper(path: &Path) -> bool {
     )
 }
 
-/// Decodes once, composes to output size, then drops the full-resolution source: the block
-/// ends before any raster is retained, so no second, source-sized copy stays resident beside
-/// the composed output pixels.
+/// Decodes once at output size and drops the full-resolution source: full-root placement
+/// goes through the decode-cache facade, so a repeat load returns the cached output-sized
+/// raster without materialising a natural-size buffer. Multi-output placement still needs
+/// the natural image and keeps its scoped decode/compose path.
 fn decode_bytes_at(
     path: &Path,
     fit: WallpaperFit,
@@ -490,11 +491,14 @@ fn decode_bytes_at(
     monitors: &[Rect],
     share: bool,
 ) -> Result<Rgba8Raster, String> {
-    let image = {
+    let full_root = share || monitors.is_empty() || single_full_root_output(monitors, target);
+    let image = if full_root {
+        flamewm_image_core::wallpaper::decode_file_composed(path, target.0, target.1, fit)?
+    } else {
         let natural = flamewm_image_core::wallpaper::decode_file(path)?;
         compose_decoded(natural, target, monitors, fit, share)
-    }
-    .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
+            .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?
+    };
     Ok(Rgba8Raster {
         source: path.to_string_lossy().into_owned(),
         width: image.width,
@@ -982,6 +986,55 @@ mod tests {
         loader.shutdown();
         let _ = fs::remove_file(custom);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn full_root_wallpaper_is_cached_at_output_size_not_natural_size() {
+        // CONTRACT: the full-root decode is cached as the composed output raster; no natural-size
+        // buffer is kept. FAILURE MUTATION: route via `decode_file` instead of `decode_file_composed`
+        // and the on-disk entry for this source is 2x1, turning this red.
+        let path = temp_path("ppm");
+        fs::write(&path, b"P6\n2 1\n255\n\x09\x09\x09\x07\x07\x07").expect("write 2x1 PPM");
+        let mut loader = WallpaperLoader::new(4, 2, packaged_root()).expect("start loader");
+        let generation = loader
+            .request_layout(&path, WallpaperFit::Fill, &[], true)
+            .expect("request fill");
+        wait_applied(&mut loader, generation);
+        let WallpaperPresentation::Image(image) = &loader.state().presentation else {
+            panic!("image expected");
+        };
+        assert_eq!((image.width, image.height), (4, 2));
+
+        let base = std::env::var_os("XDG_CACHE_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+            .expect("cache dir")
+            .join("flamewm")
+            .join("decoded");
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in path.to_string_lossy().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let owner = format!("{hash:016x}-");
+        let entry = fs::read_dir(base)
+            .expect("read cache dir")
+            .flatten()
+            .map(|item| item.path())
+            .find(|entry| {
+                entry.file_name().is_some_and(|name| {
+                    let name = name.to_string_lossy();
+                    name.starts_with(&owner) && name.ends_with(".rgba")
+                })
+            })
+            .expect("cached entry for wallpaper");
+        let bytes = fs::read(entry).expect("read cached entry");
+        assert!(bytes.len() >= 16, "short cache entry");
+        assert_eq!(&bytes[8..12], &4u32.to_le_bytes(), "cached width");
+        assert_eq!(&bytes[12..16], &2u32.to_le_bytes(), "cached height");
+        loader.shutdown();
+        let _ = fs::remove_file(path);
     }
 
     #[test]

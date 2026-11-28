@@ -9,6 +9,7 @@ use flamewm_dbus_reactor::{
     MessageType, Signature,
 };
 
+use crate::icon_cache::{IconCache, IconCacheKey};
 use crate::item::{ITEM_INTERFACE, IconPixmap, ItemKey, ItemProps, PropValue, parse_registration};
 use crate::menu::{MenuNode, MenuValue};
 use crate::registry::{Registration, Registry};
@@ -71,6 +72,8 @@ struct WatcherState {
     pending: HashMap<u32, Pending>,
     layouts: BTreeMap<ItemKey, LayoutReply>,
     iconless_reported: BTreeSet<ItemKey>,
+    /// Single byte-bounded owner of decoded ARGB. Item snapshots keep only keys.
+    icons: IconCache,
 }
 
 pub struct TrayWatcher {
@@ -119,6 +122,19 @@ impl TrayWatcher {
             .items()
             .map(|(key, item)| (key.clone(), item.props.clone()))
             .collect()
+    }
+
+    /// Borrows the decoded ARGB for a key held by an [`ItemProps`] snapshot. The
+    /// cache is the single bounded owner; a miss means the entry was LRU-evicted.
+    #[must_use]
+    pub fn cached_pixmap(&self, key: &IconCacheKey) -> Option<&IconPixmap> {
+        self.state.icons.peek(key)
+    }
+
+    /// Exact bytes currently retained by the icon cache (including per-entry overhead).
+    #[must_use]
+    pub fn icon_cache_bytes(&self) -> usize {
+        self.state.icons.memory_estimate_bytes()
     }
 
     /// Changes whenever the item set or an item's props change.
@@ -291,7 +307,14 @@ impl WatcherState {
         match self.pending.remove(&serial) {
             Some(Pending::Props(key)) => {
                 if let [MessageItem::Dict(dict)] = items.as_slice() {
-                    let props = props_from_entries(dict);
+                    let mut props = props_from_entries(dict);
+                    // Feed decoded ARGB into the one bounded cache before the snapshot
+                    // reduces it to keys, so item clones cannot grow icon RAM.
+                    if let Some(PropValue::Pixmaps(pixmaps)) = props.get("IconPixmap") {
+                        for pixmap in pixmaps {
+                            let _ = self.icons.insert(pixmap.clone());
+                        }
+                    }
                     let item = crate::item::ItemProps::from_owned_props(props);
                     if item.icon_name.is_empty()
                         && item.icon_pixmaps.is_empty()
@@ -718,6 +741,32 @@ mod tests {
         assert_eq!(item.tooltip_title, "Network connected");
         assert_eq!(item.icon_pixmaps.len(), 1);
         assert_eq!(item.icon_name, "network-wired");
+    }
+
+    #[test]
+    fn item_snapshot_key_resolves_through_the_bounded_icon_cache() {
+        let props = props_from_entries(&[(
+            MessageItem::Str("IconPixmap".into()),
+            MessageItem::Variant(Box::new(array(
+                "a(iiay)",
+                vec![pixmap_item(1, 1, vec![9, 9, 9, 9])],
+            ))),
+        )]);
+        let item = ItemProps::from_owned_props(props);
+        let key = item.icon_pixmaps[0];
+        let mut cache = IconCache::new();
+        assert_eq!(
+            cache.insert(IconPixmap {
+                width: 1,
+                height: 1,
+                argb: vec![9, 9, 9, 9],
+            }),
+            Some(key)
+        );
+        assert_eq!(
+            cache.peek(&key).map(|p| p.argb.clone()),
+            Some(vec![9, 9, 9, 9])
+        );
     }
 
     #[test]

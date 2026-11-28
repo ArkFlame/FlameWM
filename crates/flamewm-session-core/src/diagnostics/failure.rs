@@ -681,4 +681,31 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn panic_hook_record_text_names_stage_cause_and_blast_radius() {
+        let dir = std::env::temp_dir().join(format!("flamewm-panic-hook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test dir");
+        let log = dir.join("session.log");
+        install_panic_hook(log.clone());
+        assert!(
+            std::panic::catch_unwind(|| {
+                panic!("hook record boom");
+            })
+            .is_err()
+        );
+        let contents = std::fs::read_to_string(&log).expect("panic record file");
+        let line = contents
+            .lines()
+            .find(|line| line.contains("cause=\"hook record boom\""))
+            .expect("the installed hook recorded the panic");
+        assert!(line.contains("stage=\"process\""), "{line}");
+        assert!(line.contains("code=panic"), "{line}");
+        assert!(line.contains("cause=\"hook record boom\""), "{line}");
+        assert!(line.contains("still_works=\"\""), "{line}");
+        assert!(line.contains("degraded=\"\""), "{line}");
+        assert!(line.ends_with("fallback_taken=false"), "{line}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -68,6 +68,21 @@ fn reset_slot() {
 }
 
 #[test]
+fn gpu_failure_line_names_stage_cause_and_blast_radius() {
+    let line = gpu_failure_line(
+        "hardware",
+        "helper exited with status 1",
+        "works:software-gl,cpu-raster",
+    );
+    assert_eq!(
+        line,
+        "FLAMEWM-GPU-FALLBACK stage=hardware status=fail cause=helper exited with status 1 \
+         blast_radius=works:software-gl,cpu-raster"
+    );
+    assert!(line.contains("status=fail"), "{line}");
+}
+
+#[test]
 fn cpu_default_mode_skips_gl_probe_and_records_once() {
     let _guard = STATUS_LOCK
         .lock()

@@ -6,14 +6,11 @@
 //! the list. Clicks forward to the item: primary = `Activate`, middle = `SecondaryActivate`,
 //! secondary = `ContextMenu`.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
 use flamewm_api::Point;
 use flamewm_dbus_reactor::BusWatch;
 use flamewm_tray::{
-    parse_layout, plan_overflow, top_level_rows, IconPixmap, ItemAction, ItemKey, ItemProps,
-    LayoutReply, TrayMenuRow, TrayWatcher,
+    parse_layout, plan_overflow, top_level_rows, IconCacheKey, IconPixmap, ItemAction, ItemKey,
+    ItemProps, LayoutReply, TrayMenuRow, TrayWatcher,
 };
 use flamewm_ui_x11::{
     ActionPhase, PointerButton, RuntimeImage, SurfaceEvent, SurfaceRuntime, UiDocumentAccess,
@@ -88,17 +85,16 @@ pub fn icon_device_px() -> u32 {
     (ICON_CSS_PX * taskbar_scale::factor()).round().max(1.0) as u32
 }
 
-/// Pixmap closest to the target edge from above, else the largest one available.
+/// Key of the pixmap closest to the target edge from above, else the largest one.
+/// Item snapshots carry keys only; the bytes live in the watcher's bounded cache.
 #[must_use]
-pub fn best_pixmap(pixmaps: &[IconPixmap], edge: u32) -> Option<&IconPixmap> {
-    pixmaps
-        .iter()
-        .filter(|pixmap| pixmap.width >= edge && pixmap.height >= edge)
-        .min_by_key(|pixmap| pixmap.width.max(pixmap.height))
+pub fn best_pixmap(keys: &[IconCacheKey], edge: u32) -> Option<&IconCacheKey> {
+    keys.iter()
+        .filter(|key| key.width >= edge && key.height >= edge)
+        .min_by_key(|key| key.width.max(key.height))
         .or_else(|| {
-            pixmaps
-                .iter()
-                .max_by_key(|pixmap| u64::from(pixmap.width) * u64::from(pixmap.height))
+            keys.iter()
+                .max_by_key(|key| u64::from(key.width) * u64::from(key.height))
         })
 }
 
@@ -144,10 +140,10 @@ struct MenuRequest {
 }
 
 /// Converts one `ARGB32` (network order) pixmap to straight RGBA8 for the UI document.
+/// The identity comes from the cache key, computed once at decode time, so repeated
+/// projections do not re-hash the whole buffer and identical icons share one source.
 #[must_use]
-pub fn pixmap_to_image(pixmap: &IconPixmap) -> RuntimeImage {
-    let mut hasher = DefaultHasher::new();
-    pixmap.argb.hash(&mut hasher);
+pub fn pixmap_to_image(pixmap: &IconPixmap, key: &IconCacheKey) -> RuntimeImage {
     let pixels = pixmap
         .argb
         .as_chunks::<4>()
@@ -158,9 +154,7 @@ pub fn pixmap_to_image(pixmap: &IconPixmap) -> RuntimeImage {
     RuntimeImage {
         source: format!(
             "tray-sni-{:016x}-{}x{}",
-            hasher.finish(),
-            pixmap.width,
-            pixmap.height
+            key.fingerprint, pixmap.width, pixmap.height
         ),
         width: pixmap.width,
         height: pixmap.height,
@@ -381,9 +375,13 @@ impl TrayHost {
             };
             document.visible(&slot_id, true)?;
             project_tray_button(document, &slot_id, true)?;
-            if let Some(pixmap) = best_pixmap(&props.icon_pixmaps, edge) {
-                document.image_rgba8(&icon_id, pixmap_to_image(pixmap))?;
-                continue;
+            if let Some(key) = best_pixmap(&props.icon_pixmaps, edge) {
+                if let Some(pixmap) = self.watcher.cached_pixmap(key) {
+                    document.image_rgba8(&icon_id, pixmap_to_image(pixmap, key))?;
+                    continue;
+                }
+                // A key whose bytes were LRU-evicted falls through to the item's
+                // named icon (or the fallback glyph), never to a fresh buffer copy.
             }
             let name = if props.icon_name.is_empty() {
                 FALLBACK_ICON
@@ -494,26 +492,29 @@ mod tests {
 
     #[test]
     fn best_pixmap_prefers_smallest_size_at_or_above_edge() {
-        let make = |edge: u32| IconPixmap {
+        let make = |edge: u32| IconCacheKey {
             width: edge,
             height: edge,
-            argb: vec![0; (edge * edge * 4) as usize],
+            fingerprint: 0,
         };
-        let pixmaps = [make(16), make(32), make(24)];
-        assert_eq!(best_pixmap(&pixmaps, 17).map(|p| p.width), Some(24));
-        assert_eq!(best_pixmap(&pixmaps, 40).map(|p| p.width), Some(32));
+        let keys = [make(16), make(32), make(24)];
+        assert_eq!(best_pixmap(&keys, 17).map(|key| key.width), Some(24));
+        assert_eq!(best_pixmap(&keys, 40).map(|key| key.width), Some(32));
         assert_eq!(best_pixmap(&[], 17), None);
     }
 
     #[test]
-    fn pixmap_conversion_rotates_argb_to_rgba() {
+    fn pixmap_conversion_rotates_argb_to_rgba_and_uses_stable_cache_source() {
         let pixmap = IconPixmap {
             width: 1,
             height: 1,
             argb: vec![0x80, 0x11, 0x22, 0x33],
         };
-        let image = pixmap_to_image(&pixmap);
+        let key = IconCacheKey::for_pixmap(&pixmap);
+        let image = pixmap_to_image(&pixmap, &key);
         assert_eq!(image.pixels, vec![0x11, 0x22, 0x33, 0x80]);
         assert_eq!((image.width, image.height), (1, 1));
+        assert_eq!(image.source, pixmap_to_image(&pixmap, &key).source);
+        assert!(image.source.contains(&format!("{:016x}", key.fingerprint)));
     }
 }
