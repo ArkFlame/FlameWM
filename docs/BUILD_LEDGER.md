@@ -57,3 +57,6 @@ RESULT slot4: exit=0 after one fix (icon_service.rs Arc<F> -> move || factory())
 
 ## HOUR 9 slot 5 (22:02): cargo test --no-fail-fast -p flamewm-api -p flamewm-platform -p flamewm-explorer -p flamewm-terminal -p flamewm-lock -p flamewm-wm -p flamewm-wm-wayland -p flamewm-x11-desktop -p flamewm-wm-x11 -p flamewm-render-x11 -p flamewm-shell (config quarantine, backend records, HOME fallback, lock retry, resize budget test)
 RESULT slot5: exit=0, 45 test binaries ok, no compile errors. Resize budget test passed (<=70 rasters/second at 1 kHz). Not run: release build, real-session resize, frames.
+
+## HOUR 9 slot 6 (22:47): cargo test --no-fail-fast -p flamewm-wm-x11 -p flamewm-wm -p flamewm-api -p flamewm-session-core -p flamewm-shell -p flamewm-integrations-linux (p105 X11 startup classification, unbuilt since 313ce23a; safe_config/failure/icons edits from wave2)
+RESULT slot6: exit=0, 23 test binaries ok, no compile errors. p105 X11 classification now built and tested. Not run: release build, real-session resize, frames.

@@ -49,8 +49,41 @@ const NOTIFICATION_CENTER_CLEARANCE: i32 = 44 + 16;
 /// Once the startup burst (icon loads, backdrop decode, first paints) has settled, its freed
 /// heap is handed back; later churn is trimmed on the minute clock tick.
 const STARTUP_HEAP_TRIM_DELAY: Duration = Duration::from_secs(10);
-/// Degraded-start retry cadence for the session control bus: at most one attempt per interval.
+/// First retry delay for a degraded-start session control bus. Each consecutive failure doubles
+/// it, up to [`BUS_RETRY_CAP`]. A successful attach stops the chain, so starting a fresh chain
+/// begins again at this base.
 const BUS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Upper bound on the control-bus retry delay: a long absence stops growing the cadence.
+const BUS_RETRY_CAP: Duration = Duration::from_secs(300);
+
+/// Caps the shift so `1 << shift` stays small; the delay itself is capped separately.
+const BUS_RETRY_MAX_SHIFT: u32 = 6;
+
+/// Delay before the attempt numbered `attempt` (0-based): doubles from [`BUS_RETRY_INTERVAL`]
+/// and saturates at [`BUS_RETRY_CAP`]. Pure so the schedule is unit-testable without a reactor.
+/// Mirrors `flamewm_shell::weather_host::weather_retry_delay`; kept local so main gains no import.
+fn bus_retry_delay(attempt: u32) -> Duration {
+    BUS_RETRY_INTERVAL
+        .saturating_mul(1_u32 << attempt.min(BUS_RETRY_MAX_SHIFT))
+        .min(BUS_RETRY_CAP)
+}
+
+#[cfg(test)]
+mod bus_retry_tests {
+    use super::*;
+
+    #[test]
+    fn delay_doubles_until_the_cap_and_never_overflows() {
+        assert_eq!(bus_retry_delay(0), Duration::from_secs(30));
+        assert_eq!(bus_retry_delay(1), Duration::from_secs(60));
+        assert_eq!(bus_retry_delay(2), Duration::from_secs(120));
+        assert_eq!(bus_retry_delay(3), Duration::from_secs(240));
+        assert_eq!(bus_retry_delay(4), Duration::from_secs(300));
+        assert_eq!(bus_retry_delay(5), Duration::from_secs(300));
+        assert_eq!(bus_retry_delay(u32::MAX), Duration::from_secs(300));
+    }
+}
 
 struct NotificationHost {
     provider: flamewm_integrations_linux::notifications::NotificationProvider,
@@ -133,6 +166,71 @@ fn record_notifications_unavailable(cause: impl std::fmt::Display) {
     }
 }
 
+/// Pure snapshot of the notification D-Bus startup handshake. No bus, timer or reactor resource is
+/// held, so the degrade decision can be tested without a session bus.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NotificationStartup {
+    /// Session bus connected and `RequestName` returned 1: keep the notification host.
+    Owned,
+    /// Connected, but `org.freedesktop.Notifications` is already owned by another daemon.
+    NameAlreadyOwned,
+    /// Connected, but the name request failed or returned a malformed reply.
+    NameRequestFailed(String),
+    /// No session bus: `NotificationProvider::connect()` failed.
+    SessionBusUnavailable(String),
+}
+
+/// The one startup decision: `None` keeps the host; `Some(cause)` is the single notice to record
+/// before degrading to `None`. Only an owned name continues; every other outcome degrades, so a
+/// missing session bus or a taken name never aborts the shell, WM, panel or dock.
+fn notification_degrade_cause(startup: &NotificationStartup) -> Option<String> {
+    match startup {
+        NotificationStartup::Owned => None,
+        NotificationStartup::NameAlreadyOwned => {
+            Some("org.freedesktop.Notifications is already owned by another daemon".to_owned())
+        }
+        NotificationStartup::NameRequestFailed(message) => {
+            Some(format!("notification D-Bus name request failed: {message}"))
+        }
+        NotificationStartup::SessionBusUnavailable(message) => Some(format!(
+            "notification D-Bus session bus unavailable: {message}"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod notification_startup_tests {
+    use super::*;
+
+    #[test]
+    fn only_owned_name_keeps_the_host_and_each_failure_degrades_with_one_notice() {
+        // The success path emits no notice and keeps the host.
+        assert_eq!(
+            notification_degrade_cause(&NotificationStartup::Owned),
+            None
+        );
+
+        // Each failure degrades with exactly one notice and never an abort path.
+        let failures = [
+            (
+                NotificationStartup::NameAlreadyOwned,
+                "org.freedesktop.Notifications is already owned by another daemon",
+            ),
+            (
+                NotificationStartup::NameRequestFailed("request failed".to_owned()),
+                "notification D-Bus name request failed: request failed",
+            ),
+            (
+                NotificationStartup::SessionBusUnavailable("no session bus".to_owned()),
+                "notification D-Bus session bus unavailable: no session bus",
+            ),
+        ];
+        for (startup, cause) in failures {
+            assert_eq!(notification_degrade_cause(&startup).as_deref(), Some(cause));
+        }
+    }
+}
+
 impl NotificationHost {
     fn connect(
         runtime: &mut SurfaceRuntime,
@@ -143,28 +241,31 @@ impl NotificationHost {
             match flamewm_integrations_linux::notifications::NotificationProvider::connect() {
                 Ok(provider) => provider,
                 Err(error) => {
-                    record_notifications_unavailable(format!(
-                        "notification D-Bus session bus unavailable: {}",
-                        error.message
-                    ));
+                    let startup = NotificationStartup::SessionBusUnavailable(error.message);
+                    if let Some(cause) = notification_degrade_cause(&startup) {
+                        record_notifications_unavailable(cause);
+                    }
                     return Ok(None);
                 }
             };
-        match provider.start() {
-            Ok(true) => {}
-            Ok(false) => {
-                record_notifications_unavailable(
-                    "org.freedesktop.Notifications is already owned by another daemon",
-                );
-                return Ok(None);
-            }
+        let owned = match provider.start() {
+            Ok(owned) => owned,
             Err(error) => {
-                record_notifications_unavailable(format!(
-                    "notification D-Bus name request failed: {}",
-                    error.message
-                ));
+                let startup = NotificationStartup::NameRequestFailed(error.message);
+                if let Some(cause) = notification_degrade_cause(&startup) {
+                    record_notifications_unavailable(cause);
+                }
                 return Ok(None);
             }
+        };
+        let startup = if owned {
+            NotificationStartup::Owned
+        } else {
+            NotificationStartup::NameAlreadyOwned
+        };
+        if let Some(cause) = notification_degrade_cause(&startup) {
+            record_notifications_unavailable(cause);
+            return Ok(None);
         }
         let Some(output) = snapshot
             .displays
@@ -852,7 +953,7 @@ fn execute() -> Result<(), String> {
         Err(error) => {
             // Logged once. The retry timer below attaches the bus if it appears later.
             eprintln!(
-                "flamewm-shell: session control bus unavailable, running without it (retry every {}s): {error}",
+                "flamewm-shell: session control bus unavailable, running without it (retry backoff from {}s): {error}",
                 BUS_RETRY_INTERVAL.as_secs()
             );
             (bus_offline::offline_snapshot(root), None, true)
@@ -1509,24 +1610,40 @@ fn fetch_settings(client: &ControlClient) -> Option<SettingsSnapshot> {
     }
 }
 
-/// Arms one degraded-start bus attach retry. A repeating timer would keep a 30 s wake forever
-/// after the bus came back (its callback only checked a flag and returned); this one-shot chain
-/// stops the moment an attach succeeds, so the recovered shell parks at zero timer wakeups.
+/// Arms the degraded-start bus attach retry chain at its base delay. A repeating timer would keep
+/// a wake forever after the bus came back (its callback only checked a flag and returned); this
+/// one-shot chain stops the moment an attach succeeds, so the recovered shell parks at zero timer
+/// wakeups and any later chain starts back at [`BUS_RETRY_INTERVAL`].
 fn arm_bus_retry(
     reactor: &flamewm_reactor::ReactorHandle,
     state: Rc<RefCell<ShellLoop>>,
 ) -> Result<(), String> {
+    arm_bus_retry_attempt(reactor, state, 0)
+}
+
+/// One link of the retry chain. `attempt` counts consecutive failures so far and sets this link's
+/// delay through [`bus_retry_delay`]; a success ends the chain instead of re-arming it.
+fn arm_bus_retry_attempt(
+    reactor: &flamewm_reactor::ReactorHandle,
+    state: Rc<RefCell<ShellLoop>>,
+    attempt: u32,
+) -> Result<(), String> {
     let retry_reactor = reactor.clone();
     let retry_state = Rc::clone(&state);
     reactor
-        .register_timer(BUS_RETRY_INTERVAL, move || {
+        .register_timer(bus_retry_delay(attempt), move || {
             // Failures stay silent: the one-time startup line already explains the degraded state.
             if attach_control_bus(&retry_state, &retry_reactor).is_ok() {
                 eprintln!("flamewm-shell: session control bus attached");
             } else {
                 // Inserting a fresh one-shot from inside this callback is supported; the source
-                // that just fired drops itself after the callback returns.
-                let _ = arm_bus_retry(&retry_reactor, Rc::clone(&retry_state));
+                // that just fired drops itself after the callback returns. The next attempt waits
+                // longer, bounded by `bus_retry_delay`.
+                let _ = arm_bus_retry_attempt(
+                    &retry_reactor,
+                    Rc::clone(&retry_state),
+                    attempt.saturating_add(1),
+                );
             }
         })
         .map(|_| ())

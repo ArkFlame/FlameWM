@@ -809,9 +809,24 @@ fn missing_packaged_glyph_uses_generated_fallback() {
 #[test]
 fn builtin_glyph_is_opaque_inside_and_clear_at_corners() {
     let glyph = super::builtin_glyph(20);
-    assert_eq!((glyph.width, glyph.height), (20, 20));
+    assert_eq!(
+        (glyph.width, glyph.height),
+        (20, 20),
+        "raster must be square"
+    );
     assert_eq!(glyph.pixels.len(), 20 * 20 * 4);
-    assert_eq!(glyph.pixels[3], 0, "top-left corner must be transparent");
-    let centre = (10 * 20 + 10) * 4;
-    assert_eq!(glyph.pixels[centre + 3], 255, "centre must be opaque");
+    let alpha = |x: usize, y: usize| glyph.pixels[(y * 20 + x) * 4 + 3];
+    for (x, y) in [(0, 0), (19, 0), (0, 19), (19, 19)] {
+        assert_eq!(alpha(x, y), 0, "corner ({x}, {y}) must be transparent");
+    }
+    assert!(
+        glyph
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] != 0),
+        "raster must not be empty"
+    );
+    assert_eq!(alpha(10, 10), 255, "centre must be opaque");
 }

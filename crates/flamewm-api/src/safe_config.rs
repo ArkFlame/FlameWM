@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 
 /// Quarantine copies kept per config file; older copies are removed after a new quarantine.
-pub const KEEP_QUARANTINED: usize = 5;
+pub const KEEP_QUARANTINED: usize = 4;
 
 /// Why a config file could not be used as text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,8 +237,11 @@ mod tests {
             .filter(|name| name.starts_with("widget.corrupt-"))
             .collect();
         kept.sort();
+        assert_eq!(KEEP_QUARANTINED, 4);
         assert_eq!(kept.len(), KEEP_QUARANTINED);
         assert!(kept.contains(&"widget.corrupt-105.conf".to_owned()));
+        assert!(kept.contains(&"widget.corrupt-102.conf".to_owned()));
+        assert!(!kept.contains(&"widget.corrupt-101.conf".to_owned()));
         assert!(!kept.contains(&"widget.corrupt-100.conf".to_owned()));
         fs::remove_dir_all(&dir).ok();
     }

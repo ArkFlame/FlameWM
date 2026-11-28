@@ -16,7 +16,7 @@ Unit: `docs/swarm/pool/p88-panic-abort-decision.md`. Nothing here is built or me
 
 ### 1.2 Call sites of `guard`
 
-| Site | Subsystem label | What it protects |
+| Site | Subsystem label | What it would protect under unwinding (no-op in release `panic = "abort"`) |
 | --- | --- | --- |
 | `crates/flamewm-lock/src/run.rs:346` | `frame-pacer` | Frame-pacing work in the lock screen. |
 | `crates/flamewm-desktop/src/input.rs:62` | `desktop-paste` | Clipboard paste handling. |

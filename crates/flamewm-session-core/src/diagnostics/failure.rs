@@ -2,9 +2,11 @@
 //!
 //! This is the typed owner for "something failed and the session kept going". Records are pure
 //! values; [`FailureRecord::to_log_line`] is a stable one-line `key=value` serialization and
-//! [`append_record`] is the only filesystem write. [`guard`] is the opt-in panic boundary that
-//! keeps the process alive; [`install_panic_hook`] records panics, including ones that escape a
-//! guard, with the name of the subsystem active on that thread.
+//! [`append_record`] is the only filesystem write. [`guard`] can keep the process alive only in
+//! builds that unwind (tests and debug): the release profile sets `panic = "abort"`, so there
+//! [`guard`] is a no-op that only labels the active subsystem. [`install_panic_hook`] records
+//! panics, including ones that escape a guard, with the name of the subsystem active on that
+//! thread; in release the hook logs the panic and the process then aborts.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -22,7 +24,8 @@ use crate::{ChildExit, ProcessSupervisorPolicy, SupervisorDecision, SupervisorPo
 /// variant must not change the text of an existing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureCode {
-    /// A panic was captured by [`guard`] or observed by the installed hook.
+    /// A panic was observed by the installed hook, or captured by [`guard`] only in builds that
+    /// unwind; release builds set `panic = "abort"`, so no capture happens there.
     Panic,
     /// A restart was refused because the per-window limit was reached.
     RestartLimit,
@@ -246,7 +249,9 @@ fn payload_text(payload: &(dyn Any + Send)) -> String {
 /// every panic, then calls the previously installed hook. The subsystem is the name passed to the
 /// innermost active [`guard`], or `process` for a panic outside any guard. Installation is
 /// idempotent: the first call wins, so pass the resolved `session_log_path` once at process start.
-/// The hook records and continues; keeping the process alive is the caller's opt-in via [`guard`].
+/// The hook records the panic and returns, but it does not keep the process alive: in release
+/// builds (`panic = "abort"`) the process aborts right after the hook runs. Only unwinding builds
+/// let [`guard`] turn a panic into `Err(FailureRecord)`.
 pub fn install_panic_hook(log_path: impl Into<PathBuf>) {
     let path = log_path.into();
     HOOK_INSTALLED.call_once(move || {
@@ -266,10 +271,13 @@ pub fn install_panic_hook(log_path: impl Into<PathBuf>) {
     });
 }
 
-/// Run `operation` behind an unwind boundary. A panic becomes `Err(FailureRecord)` instead of
-/// killing the process, so the caller can start a fallback or skip just this subsystem. The
-/// subsystem name is visible to an installed panic hook for the duration of the call; nesting is
-/// supported and restores the outer name on return.
+/// Run `operation` behind an unwind boundary, but only in builds that unwind (tests and debug).
+/// Release builds set `panic = "abort"`: a panic runs the hook and aborts the process, so this
+/// function is a no-op there apart from setting and restoring the subsystem name, and never
+/// returns `Err`. Only with unwinding does a panic become `Err(FailureRecord)`, letting the caller
+/// start a fallback or skip just this subsystem. The subsystem name is visible to an installed
+/// panic hook for the duration of the call; nesting is supported and restores the outer name on
+/// return.
 pub fn guard<F, T>(subsystem: impl Into<String>, operation: F) -> Result<T, FailureRecord>
 where
     F: FnOnce() -> T,
