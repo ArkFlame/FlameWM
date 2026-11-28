@@ -72,25 +72,56 @@ fn find(root: &Path, name: &str, depth: u32) -> Option<PathBuf> {
     dirs.into_iter().find_map(|dir| find(&dir, name, depth - 1))
 }
 
-fn load() -> Option<TitleFont> {
+/// One line for the single report of a titlebar font that could not be loaded.
+fn missing_font_notice(cause: &str) -> String {
+    format!(
+        "flamewm-wayland: titlebar font unavailable ({cause}); skipping titlebar text; blast_radius=works:titlebar-decoration|degraded:titlebar-text"
+    )
+}
+
+fn load() -> Result<TitleFont, String> {
     let roots = search_roots();
+    let mut unusable: Option<String> = None;
     for name in CANDIDATES {
         for root in &roots {
             let Some(path) = find(root, name, 4) else {
                 continue;
             };
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
-            };
-            if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
-                return Some(TitleFont {
-                    font,
-                    cache: HashMap::new(),
+            let parsed = std::fs::read(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    Font::from_bytes(bytes, FontSettings::default())
+                        .map_err(|error| error.to_string())
                 });
+            match parsed {
+                Ok(font) => {
+                    return Ok(TitleFont {
+                        font,
+                        cache: HashMap::new(),
+                    });
+                }
+                Err(cause) => {
+                    unusable.get_or_insert_with(|| format!("{}: {cause}", path.display()));
+                }
             }
         }
     }
-    None
+    Err(unusable.map_or_else(
+        || "no candidate font found".to_owned(),
+        |cause| format!("unreadable font {cause}"),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::missing_font_notice;
+
+    #[test]
+    fn font_notice_names_cause_and_blast_radius() {
+        let notice = missing_font_notice("unreadable font /x/a.ttf: bad table");
+        assert!(notice.contains("unreadable font /x/a.ttf: bad table"));
+        assert!(notice.contains("blast_radius=works:titlebar-decoration|degraded:titlebar-text"));
+    }
 }
 
 /// Runs `f` with a glyph lookup, or returns `None` when no usable font is installed so the
@@ -102,14 +133,10 @@ pub fn with_glyphs<R>(
     let mut guard = FONT.lock().ok()?;
     if matches!(*guard, FontSlot::Unloaded) {
         *guard = match load() {
-            Some(font) => FontSlot::Loaded(font),
-            None => {
+            Ok(font) => FontSlot::Loaded(font),
+            Err(cause) => {
                 static NO_FONT_LOG: std::sync::Once = std::sync::Once::new();
-                NO_FONT_LOG.call_once(|| {
-                    eprintln!(
-                        "flamewm-wayland: no system font found; skipping titlebar text; blast_radius=works:titlebar-decoration|degraded:titlebar-text"
-                    );
-                });
+                NO_FONT_LOG.call_once(|| eprintln!("{}", missing_font_notice(&cause)));
                 FontSlot::Missing
             }
         };

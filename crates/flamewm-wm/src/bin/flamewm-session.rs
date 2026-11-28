@@ -137,12 +137,43 @@ fn session_paths() -> Result<(flamewm_session_core::SessionPaths, PathBuf), Stri
         .parent()
         .ok_or_else(|| "session executable has no parent directory".to_owned())?
         .to_path_buf();
-    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
+    let home = match home_from_env(env::var_os("HOME")) {
+        Ok(home) => home,
+        Err(cause) => {
+            record_startup_failure("session-paths", cause, &[], &["session"], false);
+            return Err(cause.to_owned());
+        }
+    };
     let mut paths = default_paths_from_home(&bindir, home.clone());
     if let Some(config) = env::var_os("XDG_CONFIG_HOME") {
         paths.config_home = PathBuf::from(config);
     }
     Ok((paths, home))
+}
+
+/// The user's home from `HOME`. Unset or empty fails the stage: guessing `/root` would point the
+/// session at another account's config and state.
+fn home_from_env(home: Option<std::ffi::OsString>) -> Result<PathBuf, &'static str> {
+    match home {
+        Some(home) if !home.is_empty() => Ok(PathBuf::from(home)),
+        _ => Err("HOME is unset; refusing to fall back to /root"),
+    }
+}
+
+#[cfg(test)]
+mod home_from_env_tests {
+    use super::home_from_env;
+    use std::path::PathBuf;
+
+    #[test]
+    fn unset_or_empty_home_fails_instead_of_using_root() {
+        assert!(home_from_env(None).is_err());
+        assert!(home_from_env(Some(std::ffi::OsString::new())).is_err());
+        assert_eq!(
+            home_from_env(Some("/home/user".into())),
+            Ok(PathBuf::from("/home/user"))
+        );
+    }
 }
 
 /// Start the window manager with bounded readiness recovery. A WM that exits before EWMH

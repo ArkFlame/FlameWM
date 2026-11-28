@@ -2,6 +2,13 @@
 
 STATUS: OPEN
 
+## Result
+UNBUILT. Source edits only; no cargo, tests or wrapper run.
+- flamewm-session.rs: `HOME` unset/empty fails `session-paths` stage with failure record (degraded: session), no `/root` fallback; unit test `home_from_env_tests`.
+- scripts/flamewm-wayland-session: one stderr notice on no-bus path with blast radius (works: compositor,shell | degraded: dbus-activation,settings-services). No test (bash).
+- wm-wayland font.rs: unusable/missing title font reported once with blast radius; fallback unchanged; unit test `font::tests`.
+- Note: the spec file has no actual fix text (stub only, contained a tool-call string), so the blast-radius tokens were chosen here and need review.
+
 Scope: startup reads that depend on a missing system font, a missing session bus (D-Bus / portal), or missing XDG dirs / HOME / XDG_RUNTIME_DIR. Static read only. No crate edits, no git, no cargo, no python, no sleep. Compared against `docs/FAULT_TESTS.md`, which indexes five fault suites (accel, settings load, x11 startup, wayland backend, wrapper ldd) and none for fonts, D-Bus or HOME.
 
 ## Gap table

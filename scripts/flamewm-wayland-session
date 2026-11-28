@@ -478,6 +478,9 @@ if [[ "$session_bus" == absent && -z "${FLAMEWM_WAYLAND_DBUS_WRAPPED:-}" ]] \
     fi
     exec dbus-run-session -- "$0"
 fi
+if [[ "$session_bus" == absent ]]; then
+    printf 'flamewm-wayland-session: no session bus and no dbus-run-session; continuing without one; blast_radius=works:compositor,shell|degraded:dbus-activation,settings-services\n' >&2
+fi
 
 # Session identity is stated here instead of inherited: a display manager hands the greeter's own
 # values to the login session, and a stale `XDG_SESSION_TYPE=x11` or another desktop's name would
