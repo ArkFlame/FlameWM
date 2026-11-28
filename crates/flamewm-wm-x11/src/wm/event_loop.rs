@@ -11,7 +11,8 @@ pub(crate) fn next_wait_timeout(
 }
 
 /// Drains buffered X events through the coalescing pump, dispatching each one,
-/// then records the batch size. Callers own the commit boundary after it.
+/// then records the batch size. Native resize commits are counted by the
+/// configure pacer in `effects.rs`, not by the number of dispatched events.
 pub(super) fn drain_pumped_events(
     wm: &mut Wm<'_, RustConnection>,
     pump: &mut WmEventPump,
@@ -28,7 +29,6 @@ pub(super) fn drain_pumped_events(
             wm.handle_event(pumped.event)?;
         }
     }
-    resize_counters().record_committed(batch as u64);
     if batch > resize_counters().max_batch() {
         resize_counters().set_max_batch(batch);
     }

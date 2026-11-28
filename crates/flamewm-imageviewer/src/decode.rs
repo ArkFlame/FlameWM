@@ -15,8 +15,9 @@ use flamewm_image_core::{ImageSourceFormat, RgbaImage, decode_bytes, decode_byte
 
 /// Refuse source files larger than this before reading them.
 pub const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
-/// Refuse decoded images above this pixel count (RGBA is 4 bytes per pixel).
-pub const MAX_PIXELS: u64 = 100_000_000;
+/// Refuse decoded images above this pixel count (RGBA is 4 bytes per pixel). Aliased to the
+/// image-core facade so the viewer and every decoder enforce one budget.
+pub const MAX_PIXELS: u64 = flamewm_image_core::MAX_DECODE_PIXELS;
 /// Longest edge of a decoded raster. A 100 MP source would hold ~400 MiB of RGBA; decoding at
 /// this cap instead keeps one modest raster, without changing the natural size of small images.
 const MAX_DECODE_EDGE: u32 = 4096;
@@ -560,6 +561,20 @@ mod tests {
         fs::write(&gif_path, &gif).unwrap();
         let error = decode_file(&gif_path).expect_err("huge gif is rejected");
         assert!(error.contains("too many pixels"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ppm_bomb_is_rejected_by_the_shared_decode_budget() {
+        // PPM has no binary header probe here, so the facade's check_size_limits is the backstop
+        // that must fire before a width * height * 4 allocation.
+        assert_eq!(MAX_PIXELS, flamewm_image_core::MAX_DECODE_PIXELS);
+        let dir = std::env::temp_dir().join(format!("imgv-ppm-bomb-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge.ppm");
+        fs::write(&path, b"P6\n20000 20000\n255\n").unwrap();
+        let error = decode_file(&path).expect_err("huge ppm is rejected");
+        assert!(error.contains("pixel"), "{error}");
         let _ = fs::remove_dir_all(&dir);
     }
 

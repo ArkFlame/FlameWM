@@ -1,11 +1,12 @@
 use super::*;
 
-/// Native configure cadence for live interactive resize (~60 Hz). Outline mode
-/// configures nothing during a drag; when content-while-dragging is on, only one
-/// configure batch per interval reaches X and the rest coalesce into the next
-/// motion or the always-unthrottled release.
+/// Native configure cadence for live interactive resize (60 Hz, interval rounded
+/// *up* so a 1 kHz motion stream cannot exceed 60/s). Outline mode configures
+/// nothing during a drag; with content-while-dragging on, only one configure
+/// batch per interval reaches X and the rest coalesce into the next motion or
+/// the always-unthrottled release. Shared with the outline raster gate's slot.
 pub(super) const RESIZE_CONFIGURE_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(16);
+    resize_raster::RESIZE_PACE_INTERVAL;
 
 /// Pure pacing decision: due when no configure ran yet or the interval elapsed.
 #[must_use]
@@ -68,6 +69,16 @@ impl<C: Connection> Wm<'_, C> {
         });
         let paced =
             live_resize && has_configure && !resize_configure_due(self.resize_configure_at, now);
+        // `commit` counts native resize work, not dispatched MotionNotifies: one
+        // admitted configure batch (frame geometry + client configure) is one commit.
+        // Paced batches are coalesced into the next motion or the release, so this
+        // stays within the 60/s slot shared with the outline raster gate.
+        if has_configure
+            && !paced
+            && matches!(self.session_of(client), InteractionSession::Resize(_))
+        {
+            resize_counters().record_committed(1);
+        }
         if commit.ungrab {
             // Terminal edge: the last paced geometry must be drawn before the release hide.
             let pending = self.outline_pending.take();
@@ -86,42 +97,35 @@ impl<C: Connection> Wm<'_, C> {
         if paced {
             resize_counters().record_configure_throttled(1);
             // Latest batch wins: configure rects are absolute, so the newest skipped batch supersedes older ones.
-            let deferred: Vec<FrameEffect> = commit
-                .effects
-                .iter()
-                .copied()
-                .filter(|effect| {
-                    matches!(
-                        *effect,
-                        FrameEffect::ConfigureFrameRoot { .. }
-                            | FrameEffect::ConfigureClientLocal { .. }
-                            | FrameEffect::NotifyClientRoot { .. }
-                            | FrameEffect::LayoutInput
-                            | FrameEffect::PaintChrome
-                            | FrameEffect::ApplyShape
-                    )
-                })
-                .collect();
+            // Reuse the previous throttled plan's allocation: a drag is steady state, so one Vec
+            // serves every paced motion instead of allocating a fresh one per throttled event.
+            let mut deferred = self
+                .resize_deferred
+                .take()
+                .map_or_else(Vec::new, |(_, effects)| effects);
+            deferred.clear();
+            deferred.extend(commit.effects.iter().copied().filter(|effect| {
+                matches!(
+                    *effect,
+                    FrameEffect::ConfigureFrameRoot { .. }
+                        | FrameEffect::ConfigureClientLocal { .. }
+                        | FrameEffect::NotifyClientRoot { .. }
+                        | FrameEffect::LayoutInput
+                        | FrameEffect::PaintChrome
+                        | FrameEffect::ApplyShape
+                )
+            }));
             self.resize_deferred = Some((client, deferred));
         } else if live_resize {
             // A fresh unpaced live batch carries newer rects; drop the stale deferred one.
             self.resize_deferred = None;
         }
+        // A throttled plan is already stored verbatim in `resize_deferred` for trailing
+        // replay; every live-resize motion effect belongs to that set, so re-walking the
+        // original plan here only repeats the same six-way match on every throttled event.
+        let effects_to_run: &[FrameEffect] = if paced { &[] } else { &commit.effects };
         let result: Result<(), ReplyError> = (|| {
-            for effect in &commit.effects {
-                if paced
-                    && matches!(
-                        *effect,
-                        FrameEffect::ConfigureFrameRoot { .. }
-                            | FrameEffect::ConfigureClientLocal { .. }
-                            | FrameEffect::NotifyClientRoot { .. }
-                            | FrameEffect::LayoutInput
-                            | FrameEffect::PaintChrome
-                            | FrameEffect::ApplyShape
-                    )
-                {
-                    continue;
-                }
+            for effect in effects_to_run {
                 match *effect {
                     // PointerCommit owns the single native grab transaction.
                     FrameEffect::Grab { .. } => {}
@@ -644,6 +648,33 @@ mod resize_configure_pacing_tests {
         assert!(!resize_configure_due(Some(last), now));
         let later = now + std::time::Duration::from_millis(17);
         assert!(resize_configure_due(Some(last), later));
+    }
+
+    #[test]
+    fn one_khz_stream_caps_native_commits_at_sixty_and_ends_on_final_geometry() {
+        let start = std::time::Instant::now();
+        let mut last_configure: Option<std::time::Instant> = None;
+        let mut commits = 0u32;
+        let mut pending_geometry: Option<u32> = None;
+        for millis in 0..1_000u64 {
+            let now = start + std::time::Duration::from_millis(millis);
+            if resize_configure_due(last_configure, now) {
+                last_configure = Some(now);
+                commits += 1;
+                pending_geometry = None;
+            } else {
+                // Paced motion: its batch is superseded by the newest held geometry.
+                pending_geometry = Some(millis as u32);
+            }
+        }
+        // Trailing edge: the newest held geometry is always committed on release.
+        let final_geometry = pending_geometry.expect("the last motion is paced");
+        commits += 1;
+        assert_eq!(final_geometry, 999, "final geometry wins");
+        assert!(
+            commits <= 60,
+            "1 kHz resize produced {commits} native commits, cap is 60"
+        );
     }
 
     // The real replay path (flush_deferred_resize) needs a live Wm and native

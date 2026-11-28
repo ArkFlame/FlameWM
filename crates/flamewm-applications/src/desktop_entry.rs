@@ -1,4 +1,7 @@
 use super::*;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopEntry {
@@ -295,6 +298,56 @@ pub(super) fn desktop_environment_matches(
             .any(|value| names.iter().any(|name| name.eq_ignore_ascii_case(value)))
 }
 
+/// One readdir per PATH directory, indexed by file name. A catalog checks
+/// `TryExec` for every launcher, so one program in one directory used to be
+/// stat'ed once per launcher. The snapshot is keyed by the PATH value and
+/// replaced (never mutated), so a changed PATH sees the new directories while
+/// repeated checks over the same PATH are memory-only.
+fn path_names(paths: &OsStr) -> Arc<HashSet<OsString>> {
+    type Snapshots = HashMap<OsString, Arc<OnceLock<Arc<HashSet<OsString>>>>>;
+    static SNAPSHOTS: OnceLock<Mutex<Snapshots>> = OnceLock::new();
+    let snapshots = SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let snapshot = {
+        let mut guard = snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Bound memory if a long-lived process sees many different PATH values.
+        if guard.len() >= 8 {
+            guard.clear();
+        }
+        Arc::clone(guard.entry(paths.to_os_string()).or_default())
+    };
+    // No lock is held across the reads: concurrent callers may build the same
+    // snapshot, but each publishes one identical Arc through the OnceLock.
+    let build = || {
+        let mut names = HashSet::new();
+        // Same lossy colon split as the previous per-candidate probe, including
+        // the skip of empty components.
+        for directory in paths
+            .to_string_lossy()
+            .split(':')
+            .filter(|directory| !directory.is_empty())
+        {
+            let Ok(read) = fs::read_dir(directory) else {
+                continue;
+            };
+            for entry in read.flatten() {
+                // `file_type` uses d_type on Linux; only symlinks need a stat
+                // to keep the exact `Path::is_file` answer.
+                let is_file = match entry.file_type() {
+                    Ok(kind) if !kind.is_symlink() => kind.is_file(),
+                    _ => entry.path().is_file(),
+                };
+                if is_file {
+                    names.insert(entry.file_name());
+                }
+            }
+        }
+        Arc::new(names)
+    };
+    Arc::clone(snapshot.get_or_init(build))
+}
+
 pub(super) fn try_exec_is_available(value: Option<&String>) -> bool {
     let Some(program) = value
         .map(|value| value.trim())
@@ -309,11 +362,55 @@ pub(super) fn try_exec_is_available(value: Option<&String>) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;
     };
-    paths
-        .as_os_str()
-        .to_string_lossy()
-        .split(':')
-        .filter(|directory| !directory.is_empty())
-        .map(|directory| Path::new(directory).join(program))
-        .any(|candidate| candidate.is_file())
+    path_names(&paths).contains(OsStr::new(program))
+}
+
+#[cfg(test)]
+mod try_exec_path_index_tests {
+    use super::*;
+
+    fn direct_names(dirs: &[PathBuf]) -> HashSet<OsString> {
+        dirs.iter()
+            .flat_map(|dir| fs::read_dir(dir).unwrap().flatten())
+            .filter(|entry| entry.path().is_file())
+            .map(|entry| entry.file_name())
+            .collect()
+    }
+
+    #[test]
+    fn indexed_path_names_match_direct_probes_on_a_temp_fixture() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-tryexec-{}-{unique}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("tool"), b"x").unwrap();
+        fs::write(first.join("other.svg"), b"x").unwrap();
+        fs::create_dir(first.join("subdir")).unwrap();
+        fs::write(second.join("second-tool"), b"x").unwrap();
+        std::os::unix::fs::symlink(first.join("tool"), second.join("linked-tool")).unwrap();
+        std::os::unix::fs::symlink(&first, second.join("linked-dir")).unwrap();
+        std::os::unix::fs::symlink(first.join("missing"), second.join("dangling")).unwrap();
+
+        let dirs = [first, second];
+        let paths = std::env::join_paths(dirs.iter().map(PathBuf::as_path)).unwrap();
+        let expected = direct_names(&dirs);
+        for _ in 0..3 {
+            assert_eq!(*path_names(&paths), expected);
+        }
+        assert!(path_names(&paths).contains(OsStr::new("tool")));
+        assert!(path_names(&paths).contains(OsStr::new("linked-tool")));
+        assert!(!path_names(&paths).contains(OsStr::new("subdir")));
+        assert!(!path_names(&paths).contains(OsStr::new("linked-dir")));
+        assert!(!path_names(&paths).contains(OsStr::new("dangling")));
+        fs::remove_dir_all(&root).unwrap();
+    }
 }

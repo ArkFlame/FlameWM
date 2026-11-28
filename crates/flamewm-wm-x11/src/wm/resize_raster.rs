@@ -18,6 +18,11 @@ pub(super) const OUTLINE_RASTER_CAP_PER_SEC: u32 = 60;
 const OUTLINE_RASTER_INTERVAL: Duration =
     Duration::from_millis(1_000_u64.div_ceil(OUTLINE_RASTER_CAP_PER_SEC as u64));
 
+/// One 60/s pacing slot. The outline raster gate and the native resize commit pacer
+/// each own their own state and share only this interval, so a 1 kHz motion stream
+/// cannot exceed the cap in either mechanism. No timer is created here.
+pub(super) const RESIZE_PACE_INTERVAL: Duration = OUTLINE_RASTER_INTERVAL;
+
 /// What the caller does with one motion's outline geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RasterDecision {
@@ -78,11 +83,13 @@ impl<T> OutlineRasterGate<T> {
     }
 
     /// Caps a reactor wait so the trailing raster lands on its deadline.
+    /// Returns `wait` untouched when no raster is pending, so an idle loop never spins.
     #[must_use]
     pub(super) fn cap_wait(&self, now: Instant, wait: Option<Duration>) -> Option<Duration> {
-        let remaining = self.trailing.as_ref().map_or(Duration::ZERO, |(due, _)| {
-            due.saturating_duration_since(now)
-        });
+        let Some((due, _)) = self.trailing.as_ref() else {
+            return wait;
+        };
+        let remaining = due.saturating_duration_since(now);
         Some(wait.map_or(remaining, |wait| wait.min(remaining)))
     }
 
@@ -182,6 +189,23 @@ mod tests {
         assert_eq!(g.take_due(start + Duration::from_millis(10)), None);
         assert_eq!(g.take_due(deadline), Some(12), "latest geometry wins");
         assert!(g.take_due(deadline).is_none(), "a flush is one-shot");
+    }
+
+    #[test]
+    fn cap_wait_is_none_without_a_pending_raster() {
+        let now = Instant::now();
+        let g = gate();
+        assert_eq!(
+            g.cap_wait(now, None),
+            None,
+            "an idle gate must not arm a zero-timeout wake"
+        );
+        let held = Duration::from_millis(50);
+        assert_eq!(
+            g.cap_wait(now, Some(held)),
+            Some(held),
+            "an idle gate must not shorten an existing wait"
+        );
     }
 
     #[test]

@@ -32,15 +32,17 @@ pub(crate) fn chrome_paint_due(last: Option<std::time::Instant>, now: std::time:
 }
 
 /// Caps `wait` at the time left until the next chrome paint is due.
+/// Returns `wait` untouched when no paint is pending, so an idle loop never spins.
 #[must_use]
 pub(crate) fn chrome_wait_cap(
     last: Option<std::time::Instant>,
     now: std::time::Instant,
     wait: Option<std::time::Duration>,
 ) -> Option<std::time::Duration> {
-    let remaining = last.map_or(std::time::Duration::ZERO, |last| {
-        (last + MOVE_CHROME_INTERVAL).saturating_duration_since(now)
-    });
+    let Some(last) = last else {
+        return wait;
+    };
+    let remaining = (last + MOVE_CHROME_INTERVAL).saturating_duration_since(now);
     Some(wait.map_or(remaining, |wait| wait.min(remaining)))
 }
 
@@ -624,6 +626,14 @@ mod chrome_pacing_tests {
             chrome_wait_cap(Some(t0), t0 + Duration::from_millis(40), None),
             Some(Duration::ZERO)
         );
+    }
+
+    #[test]
+    fn wait_is_none_without_a_pending_tick() {
+        let now = Instant::now();
+        assert_eq!(chrome_wait_cap(None, now, None), None);
+        let held = Duration::from_millis(50);
+        assert_eq!(chrome_wait_cap(None, now, Some(held)), Some(held));
     }
 }
 
