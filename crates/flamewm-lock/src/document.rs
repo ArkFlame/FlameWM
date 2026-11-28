@@ -191,34 +191,66 @@ fn crop_runtime_image(
     })
 }
 
-/// Built-in wallpaper pixels, shared by every output while the lock is shown. Held behind a mutex
-/// so the decoded raster can be dropped on unlock instead of living for the whole process.
-static BUILTIN_CACHE: OnceLock<std::sync::Mutex<Option<std::sync::Arc<RgbaImage>>>> =
-    OnceLock::new();
-
-/// The built-in wallpaper, decoded once while the lock is shown. Every output crops from the same
-/// pixels, and re-showing the lock after DPMS or a suspend reuses them; the raster is released once
-/// the lock surfaces are gone, so the process does not retain it after unlock.
-fn builtin_background() -> Option<std::sync::Arc<RgbaImage>> {
-    let mut cache = BUILTIN_CACHE
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if cache.is_none() {
-        *cache = Some(std::sync::Arc::new(
-            decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok()?,
-        ));
-    }
-    cache.clone()
+/// Identity of one cached cover-scaled wallpaper raster. Output size is part of the key: a fresh
+/// output geometry must not reuse pixels composed for a different geometry.
+#[derive(Clone, PartialEq, Eq)]
+struct OutputRasterKey {
+    source: String,
+    width: u32,
+    height: u32,
 }
 
-/// Drops the process-local wallpaper rasters after unlock. A later lock show decodes the same
-/// bytes again, so every presented pixel is unchanged.
+/// Bound on retained wallpaper rasters. One entry per source and output size; the least recently
+/// used entry is evicted, so a changing monitor layout cannot grow the cache without limit.
+const MAX_OUTPUT_RASTERS: usize = 8;
+
+static OUTPUT_RASTERS: OnceLock<std::sync::Mutex<Vec<(OutputRasterKey, RuntimeImage)>>> =
+    OnceLock::new();
+
+fn output_rasters() -> &'static std::sync::Mutex<Vec<(OutputRasterKey, RuntimeImage)>> {
+    OUTPUT_RASTERS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Returns the cached raster for `key`, decoding only on a miss. The full-resolution image is
+/// owned by the decode closure and dropped as soon as `cover_rgba` returns, so no second,
+/// source-sized copy stays resident beside the output-sized one.
+fn cached_cover(
+    key: OutputRasterKey,
+    decode: impl FnOnce() -> Option<RgbaImage>,
+    width: u32,
+    height: u32,
+) -> Option<RuntimeImage> {
+    {
+        let mut cache = output_rasters()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(index) = cache.iter().position(|(cached, _)| *cached == key) {
+            let (_, image) = cache.remove(index);
+            let result = image.clone();
+            cache.push((key, result.clone()));
+            return Some(result);
+        }
+    }
+    let natural = decode()?;
+    let image = RuntimeImage::from_rgba(key.source.clone(), cover_rgba(&natural, width, height)?);
+    // `natural` ends here; only the output-sized raster is retained below.
+    let mut cache = output_rasters()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= MAX_OUTPUT_RASTERS {
+        cache.remove(0);
+    }
+    cache.push((key, image.clone()));
+    Some(image)
+}
+
+/// Drops the cached output-sized rasters after unlock. A later lock show decodes the same bytes
+/// and composes them with the same cover, so every presented pixel is unchanged.
 pub fn release_wallpaper_caches() {
-    if let Some(cache) = BUILTIN_CACHE.get()
+    if let Some(cache) = OUTPUT_RASTERS.get()
         && let Ok(mut guard) = cache.lock()
     {
-        *guard = None;
+        guard.clear();
     }
     flamewm_image_core::decode_cache::release_shared_raster();
 }
@@ -231,21 +263,26 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         settings.background_mode,
         settings.background_image.as_deref(),
     ) {
-        (LockBackgroundMode::Custom, Some(path)) => {
-            // Reuse the shared on-disk decode cache and its in-process decoded handle: an
-            // unchanged path+len+mtime is decoded once, then borrowed by every output and lock
-            // show instead of being decoded or copied again. Both paths fall back to the same
-            // plain decode, so the pixels are identical.
-            let natural = flamewm_image_core::wallpaper::decode_file_shared(path).ok()?;
-            Some(RuntimeImage::from_rgba(
-                path.display().to_string(),
-                cover_rgba(&natural, width, height)?,
-            ))
-        }
-        (LockBackgroundMode::Default, _) => Some(RuntimeImage::from_rgba(
-            BUILTIN_BACKGROUND_SOURCE.to_string(),
-            cover_rgba(&*builtin_background()?, width, height)?,
-        )),
+        (LockBackgroundMode::Custom, Some(path)) => cached_cover(
+            OutputRasterKey {
+                source: path.display().to_string(),
+                width,
+                height,
+            },
+            || flamewm_image_core::wallpaper::decode_file(path).ok(),
+            width,
+            height,
+        ),
+        (LockBackgroundMode::Default, _) => cached_cover(
+            OutputRasterKey {
+                source: BUILTIN_BACKGROUND_SOURCE.to_string(),
+                width,
+                height,
+            },
+            || decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok(),
+            width,
+            height,
+        ),
         // Solid colour, or a custom mode without a saved path: the caller paints the colour.
         _ => None,
     }

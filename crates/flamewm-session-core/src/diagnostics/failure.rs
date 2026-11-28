@@ -134,6 +134,30 @@ impl FailureRecord {
     }
 }
 
+/// Format a startup-stage failure into the canonical typed record. Pure: `timestamp` is injected so
+/// the caller owns the clock and this function never touches the filesystem. The blast radius takes
+/// subsystem ids for what still works and what is degraded, matching the records produced by
+/// supervisor aborts so failures from different stages can be compared field by field.
+#[must_use]
+pub fn format_startup_failure(
+    stage: impl Into<String>,
+    code: FailureCode,
+    cause: impl Into<String>,
+    still_works: &[&str],
+    degraded: &[&str],
+    fallback_taken: bool,
+    timestamp: u64,
+) -> FailureRecord {
+    FailureRecord::new(
+        stage,
+        code,
+        cause,
+        BlastRadius::new(still_works.iter().copied(), degraded.iter().copied()),
+        fallback_taken,
+        timestamp,
+    )
+}
+
 fn quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -339,6 +363,30 @@ mod tests {
         assert_eq!(FailureCode::Panic.as_str(), "panic");
         assert_eq!(FailureCode::RestartLimit.as_str(), "restart_limit");
         assert_eq!(FailureCode::SubsystemError.as_str(), "subsystem_error");
+    }
+
+    #[test]
+    fn startup_failure_formats_stage_code_cause_and_blast_radius() {
+        let record = format_startup_failure(
+            "preflight",
+            FailureCode::SubsystemError,
+            "preflight failed: no DISPLAY",
+            &[],
+            &["session"],
+            false,
+            21,
+        );
+        assert_eq!(record.stage, "preflight");
+        assert_eq!(record.code, FailureCode::SubsystemError);
+        assert_eq!(record.cause, "preflight failed: no DISPLAY");
+        assert!(record.blast_radius.still_works.is_empty());
+        assert_eq!(record.blast_radius.degraded, ["session"]);
+        assert!(!record.fallback_taken);
+        assert_eq!(record.timestamp, 21);
+        assert_eq!(
+            record.to_log_line(),
+            "timestamp=21 stage=\"preflight\" code=subsystem_error cause=\"preflight failed: no DISPLAY\" still_works=\"\" degraded=\"session\" fallback_taken=false"
+        );
     }
 
     #[test]

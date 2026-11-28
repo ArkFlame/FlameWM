@@ -21,7 +21,8 @@ use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_session_core::diagnostics::{
     BlastRadius, CHECK_EXIT_FATAL, FailureCode, FailureRecord, Severity, append_record,
-    check_exit_code, describe_exit, fallback_plan, format_report, unix_seconds_now,
+    check_exit_code, describe_exit, fallback_plan, format_report, format_startup_failure,
+    unix_seconds_now,
 };
 use flamewm_session_core::{
     ChildExit, Keyring, ProcessPlan, ProcessSupervisorPolicy, SessionRole, SupervisorDecision,
@@ -102,6 +103,30 @@ fn log_path_text() -> String {
         || "(no writable session log)".to_owned(),
         |(path, _)| path.display().to_string(),
     )
+}
+
+/// Record a startup-stage failure that is not a supervisor abort. A readable line goes to the
+/// session log and the typed failure record is appended to the resolved failure record file (the
+/// same session log), built by the pure formatter so stage, code, cause and blast radius stay
+/// comparable with supervisor records.
+fn record_startup_failure(
+    stage: &str,
+    cause: &str,
+    still_works: &[&str],
+    degraded: &[&str],
+    fallback_taken: bool,
+) {
+    let record = format_startup_failure(
+        stage,
+        FailureCode::SubsystemError,
+        cause,
+        still_works,
+        degraded,
+        fallback_taken,
+        unix_seconds_now(),
+    );
+    session_diagnostics::log(stage, &format!("{}: {cause}", record.code.as_str()));
+    record_failure(&record);
 }
 
 /// Install directory layout and the user's home, shared by the launch and `--check` paths.
