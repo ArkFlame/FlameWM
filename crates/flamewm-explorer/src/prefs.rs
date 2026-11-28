@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use flamewm_api::safe_config::{load_or_default, quarantine_before_save};
+
 /// Column widths in pixels as persisted; the Name column takes the remaining width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Prefs {
@@ -93,30 +95,43 @@ pub fn render_with_recent(prefs: &Prefs, recent: &[String]) -> String {
     text
 }
 
+/// Blast radius named in the notice when `explorer.toml` is quarantined.
+const BLAST_RADIUS: &str =
+    "explorer view preferences and recent remote locations reset to defaults";
+
+fn prefs_path(dir: &Path) -> PathBuf {
+    dir.join("explorer.toml")
+}
+
 #[must_use]
 pub fn load_recent(dir: &Path) -> Vec<String> {
-    fs::read_to_string(dir.join("explorer.toml"))
-        .map(|text| recent_remotes(&text))
-        .unwrap_or_default()
+    load_or_default(
+        &prefs_path(dir),
+        |text| Ok::<_, std::convert::Infallible>(recent_remotes(text)),
+        BLAST_RADIUS,
+    )
 }
 
 /// Replaces the recent remote list and keeps the stored view preferences.
 pub fn save_recent(dir: &Path, recent: &[String]) -> io::Result<()> {
-    let prefs = fs::read_to_string(dir.join("explorer.toml"))
-        .map(|text| parse(&text))
-        .unwrap_or_default();
+    quarantine_before_save(&prefs_path(dir), |_| true)?;
+    let prefs = load(dir);
     write_atomic(dir, &render_with_recent(&prefs, recent))
 }
 
 #[must_use]
 pub fn load(dir: &Path) -> Prefs {
-    fs::read_to_string(dir.join("explorer.toml"))
-        .map(|text| parse(&text))
-        .unwrap_or_default()
+    load_or_default(
+        &prefs_path(dir),
+        |text| Ok::<_, std::convert::Infallible>(parse(text)),
+        BLAST_RADIUS,
+    )
 }
 
 /// Writes through a temporary file so a crash never leaves a half-written preference file.
+/// A bad existing file is quarantined first and its bytes are never overwritten.
 pub fn save(dir: &Path, prefs: &Prefs) -> io::Result<()> {
+    quarantine_before_save(&prefs_path(dir), |_| true)?;
     let recent = load_recent(dir);
     write_atomic(dir, &render_with_recent(prefs, &recent))
 }
@@ -199,5 +214,61 @@ mod tests {
         let parsed = parse("col_size = wide\nshow_type = true");
         assert_eq!(parsed.col_size, Prefs::default().col_size);
         assert!(parsed.show_type);
+    }
+}
+
+#[cfg(test)]
+mod corrupt_file_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        std::env::temp_dir().join(format!(
+            "flamewm-explorer-{tag}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn quarantined(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("explorer.corrupt-"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn corrupt_prefs_load_defaults_are_quarantined_and_survive_save() {
+        let dir = temp_dir("corrupt");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let bad: &[u8] = &[0xff, 0xfe, 0x00, b'x'];
+        fs::write(dir.join("explorer.toml"), bad).expect("write bad prefs");
+
+        assert_eq!(load(&dir), Prefs::default());
+        let copies = quarantined(&dir);
+        assert_eq!(copies.len(), 1);
+        assert_eq!(fs::read(&copies[0]).expect("read copy"), bad);
+
+        let custom = Prefs {
+            show_hidden: true,
+            ..Prefs::default()
+        };
+        save(&dir, &custom).expect("save after quarantine");
+        assert_eq!(load(&dir), custom);
+        assert_eq!(fs::read(&copies[0]).expect("copy intact"), bad);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_prefs_are_silent_defaults_and_create_no_quarantine() {
+        let dir = temp_dir("missing");
+        assert_eq!(load(&dir), Prefs::default());
+        assert!(!dir.exists());
     }
 }

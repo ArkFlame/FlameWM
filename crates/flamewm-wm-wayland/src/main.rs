@@ -531,6 +531,24 @@ pub(crate) fn record_backend_failure(
     append_backend_failure_record(&backend_failure_log_path(), stage, cause, fallback_taken);
 }
 
+/// Appends the typed record for entering the headless step. Headless is itself a fallback taken, so
+/// it is recorded with `fallback_taken=true`. Taking the path as an argument keeps it testable.
+fn append_headless_entry_record(path: &std::path::Path) {
+    append_backend_failure_record(
+        path,
+        "headless",
+        "nested backend unavailable; headless/minimal compositor without outputs or input",
+        true,
+    );
+}
+
+/// Whether a failed startup stage leaves a fallback running. A missing logind seat exits with
+/// [`EXIT_NO_SEAT`] and takes no fallback, so it records `false`; a DRM or output gap falls through
+/// to the nested window and records `true`.
+pub(crate) fn stage_failure_fallback(stage: Stage) -> bool {
+    matches!(stage, Stage::Drm | Stage::Outputs)
+}
+
 /// Emits one structured startup line (see [`stage_text`]). Every hard failure of a backend init
 /// stage also leaves a typed failure record, so a falling-back compositor is diagnosable even when
 /// the wrapper throws its stderr away.
@@ -543,11 +561,7 @@ pub(crate) fn stage_line(stage: Stage, status: StageStatus, detail: &str) {
             Stage::Seat | Stage::Drm | Stage::Outputs | Stage::Libinput
         )
     {
-        record_backend_failure(
-            stage.name(),
-            detail,
-            matches!(stage, Stage::Seat | Stage::Drm | Stage::Outputs),
-        );
+        record_backend_failure(stage.name(), detail, stage_failure_fallback(stage));
     }
 }
 
@@ -1207,6 +1221,7 @@ fn start_nested_or_headless(
             // The pure rule turns the second failed attempt into the headless step; the other arm
             // keeps the pre-extraction behaviour if the rule is ever widened.
             if next_backend(BackendFallbackOutcome::NestedFailed) == NextBackend::Headless {
+                append_headless_entry_record(&backend_failure_log_path());
                 // `init_winit` installs the renderer before it registers the source, so a late
                 // failure can leave a half-started window behind. Drop it before the socket-only run.
                 state.backend = None;

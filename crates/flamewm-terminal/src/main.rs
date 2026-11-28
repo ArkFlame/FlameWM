@@ -22,7 +22,7 @@ use flamewm_terminal::app::App;
 use flamewm_terminal::pty::Launch;
 use flamewm_terminal::session::SessionEvent;
 use flamewm_terminal::settings_cache;
-use flamewm_terminal::store::{self, TerminalConfig, ThemeStore};
+use flamewm_terminal::store::{self, ThemeStore};
 use flamewm_terminal::theme;
 use flamewm_terminal::wake::{self, ALL_TABS_CLOSED};
 
@@ -124,10 +124,7 @@ fn run() -> Result<(), String> {
         .transpose()?;
     let config_dir = store::config_dir();
     let config_path = config_dir.join("terminal.toml");
-    let config = fs::read_to_string(&config_path)
-        .ok()
-        .and_then(|text| TerminalConfig::from_toml(&text).ok())
-        .unwrap_or_default();
+    let config = store::load_config(&config_path);
     let store = ThemeStore::new(config_dir.join("themes"));
     let (events_tx, events) = mpsc::channel::<SessionEvent>();
     let (mut reader, writer) = UnixStream::pair().map_err(|error| error.to_string())?;

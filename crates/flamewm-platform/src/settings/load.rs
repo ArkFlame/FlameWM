@@ -5,79 +5,27 @@
 //! `settings.corrupt-<epoch>` name so a bad file is never silently destroyed. The caller receives
 //! at most one notice string, already emitted once through the existing `flamewm:` error line.
 
-use std::fs;
+#[cfg(test)]
 use std::io;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use super::{ConfigStore, ProductSettings};
 
-/// Upper bound for a settings snapshot. A larger file is a fault, not something to read into
-/// memory: a runaway writer or a corrupted file must never make startup stall or exhaust RAM.
-pub(crate) const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
-
-/// Read at most one byte past the limit so an oversized file is detected without loading it whole.
-fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
-    let mut file = fs::File::open(path)?;
-    let mut bytes = Vec::new();
-    file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
+// Bounded read, quarantine and failure classification are shared with the explorer, terminal
+// and workspace-count loaders; see `flamewm_api::safe_config`.
+#[cfg(test)]
+pub(crate) use flamewm_api::safe_config::{MAX_CONFIG_BYTES as MAX_SETTINGS_BYTES, corrupt_name};
+pub(crate) use flamewm_api::safe_config::{
+    ReadFailure, decode_read, failure_reason, quarantine, read_bounded,
+};
 
 /// Result of a startup load: usable settings plus at most one user-visible notice.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LoadOutcome {
     pub(crate) settings: ProductSettings,
     pub(crate) notice: Option<String>,
-}
-
-/// Pure classification of a read that has already been attempted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReadFailure {
-    NotFound,
-    Unreadable,
-    NotUtf8,
-    TooLarge,
-}
-
-/// Decode bytes that were already read. No IO side effects, so the mapping is unit-testable.
-pub(crate) fn decode_read(bytes: io::Result<Vec<u8>>) -> Result<String, ReadFailure> {
-    match bytes {
-        Ok(bytes) if bytes.len() as u64 > MAX_SETTINGS_BYTES => Err(ReadFailure::TooLarge),
-        Ok(bytes) => String::from_utf8(bytes).map_err(|_| ReadFailure::NotUtf8),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(ReadFailure::NotFound),
-        Err(_) => Err(ReadFailure::Unreadable),
-    }
-}
-
-/// Pure reason text for a read failure, used in the single notification line.
-pub(crate) fn failure_reason(failure: ReadFailure) -> &'static str {
-    match failure {
-        ReadFailure::NotFound => "missing",
-        ReadFailure::Unreadable => "unreadable",
-        ReadFailure::NotUtf8 => "not UTF-8",
-        ReadFailure::TooLarge => "too large",
-    }
-}
-
-/// Candidate quarantine path for a corrupt settings file.
-///
-/// `<stem>.corrupt-<epoch>[.<n>][.<ext>]` next to the original, e.g.
-/// `settings.corrupt-1764200000`. `attempt` disambiguates same-second collisions without
-/// overwriting an earlier quarantine. Pure: no filesystem access.
-pub(crate) fn corrupt_name(path: &Path, epoch_secs: u64, attempt: u16) -> Option<PathBuf> {
-    let stem = path.file_stem()?;
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
-    let mut name = stem.to_os_string();
-    name.push(format!(".corrupt-{epoch_secs}"));
-    if attempt > 0 {
-        name.push(format!(".{attempt}"));
-    }
-    if let Some(extension) = path.extension() {
-        name.push(".");
-        name.push(extension);
-    }
-    Some(parent.join(name))
 }
 
 /// Build the one user-visible notification. Pure: no printing, no IO.
@@ -95,30 +43,6 @@ pub(crate) fn notice_text(path: &Path, backup: Option<&Path>, reason: &str) -> S
             reason
         ),
     }
-}
-
-/// Move the unusable file aside without ever overwriting an earlier quarantine.
-fn quarantine(path: &Path, epoch_secs: u64) -> io::Result<PathBuf> {
-    for attempt in 0..=u16::MAX {
-        let candidate = corrupt_name(path, epoch_secs, attempt).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "settings quarantine path must name a file",
-            )
-        })?;
-        if fs::symlink_metadata(&candidate).is_ok() {
-            continue;
-        }
-        match fs::rename(path, &candidate) {
-            Ok(()) => return Ok(candidate),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no free corrupt settings quarantine name",
-    ))
 }
 
 /// Emit exactly one error-line notice and return it for callers/tests that need the text.

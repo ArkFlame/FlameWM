@@ -1,7 +1,9 @@
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use flamewm_api::ports::WorkspacePort;
+use flamewm_api::safe_config::{load_or_default, quarantine_before_save};
 use flamewm_api::workspace::{
     MAX_WORKSPACES, WORKSPACE_COUNT_KEY, WorkspacePlan, WorkspaceSnapshot,
 };
@@ -18,10 +20,10 @@ pub fn count_store_path(settings_path: &Path) -> PathBuf {
     settings_path.with_file_name("workspaces.conf")
 }
 
-/// Persisted workspace count, or `None` when the file is missing, malformed, or outside 1..=MAX.
-#[must_use]
-pub fn load_persisted_count(path: &Path) -> Option<usize> {
-    let text = fs::read_to_string(path).ok()?;
+/// Blast radius named in the notice when `workspaces.conf` is quarantined.
+const BLAST_RADIUS: &str = "workspace count reverts to the default";
+
+fn parse_count(text: &str) -> Option<usize> {
     let (_, value) = text
         .lines()
         .filter_map(|line| line.trim().split_once('='))
@@ -30,7 +32,19 @@ pub fn load_persisted_count(path: &Path) -> Option<usize> {
     (1..=MAX_WORKSPACES).contains(&count).then_some(count)
 }
 
+/// Persisted workspace count, or `None` when the file is missing, malformed, or outside 1..=MAX.
+/// A present but unusable file is quarantined and reported once.
+#[must_use]
+pub fn load_persisted_count(path: &Path) -> Option<usize> {
+    load_or_default(
+        path,
+        |text| parse_count(text).map(Some).ok_or(()),
+        BLAST_RADIUS,
+    )
+}
+
 fn persist_count(path: &Path, count: usize) -> FlameResult<()> {
+    quarantine_before_save(path, |text| parse_count(text).is_some()).map_err(FlameError::io)?;
     write_atomic_text(path, &format!("{WORKSPACE_COUNT_KEY}={count}\n")).map_err(FlameError::io)
 }
 
@@ -267,5 +281,56 @@ mod tests {
             assert_eq!(load_persisted_count(&path), None, "{text:?}");
         }
         assert_eq!(load_persisted_count(&dir.join("missing.conf")), None);
+    }
+}
+
+#[cfg(test)]
+mod corrupt_count_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        std::env::temp_dir().join(format!(
+            "flamewm-workspaces-{tag}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn corrupt_count_file_is_quarantined_and_bytes_survive_save() {
+        let dir = temp_dir("corrupt");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("workspaces.conf");
+        // Zero is outside 1..=MAX_WORKSPACES, so this is an unusable count.
+        let bad = format!("{WORKSPACE_COUNT_KEY}=0\n").into_bytes();
+        fs::write(&path, &bad).expect("write bad count");
+
+        assert_eq!(load_persisted_count(&path), None);
+        assert!(!path.exists());
+        let copies: Vec<PathBuf> = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("workspaces.corrupt-"))
+            })
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(fs::read(&copies[0]).expect("read copy"), bad);
+
+        persist_count(&path, 2).expect("persist after quarantine");
+        assert_eq!(load_persisted_count(&path), Some(2));
+        assert_eq!(fs::read(&copies[0]).expect("copy intact"), bad);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_count_file_is_silent_none() {
+        let dir = temp_dir("missing");
+        assert_eq!(load_persisted_count(&dir.join("workspaces.conf")), None);
+        assert!(!dir.exists());
     }
 }

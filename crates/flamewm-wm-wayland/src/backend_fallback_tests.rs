@@ -6,8 +6,9 @@
 
 use super::{
     Backend, BackendFallbackOutcome, EXIT_NO_SEAT, NativeAvailability, NativeFallbackDecision,
-    NextBackend, append_backend_failure_record, choose_native_fallback,
-    native_unavailable_falls_back, next_backend, select_backend,
+    NextBackend, Stage, append_backend_failure_record, append_headless_entry_record,
+    choose_native_fallback, native_unavailable_falls_back, next_backend, select_backend,
+    stage_failure_fallback,
 };
 
 #[test]
@@ -143,4 +144,34 @@ fn failed_stage_names_the_missing_prerequisite() {
         choose_native_fallback(NativeAvailability::complete()),
         NativeFallbackDecision::KeepNative
     );
+}
+
+/// A missing logind seat exits without a fallback, so its failure record must say `fallback_taken=false`.
+/// DRM and output gaps still fall through to the nested window and record `true`.
+#[test]
+fn seat_failure_takes_no_fallback() {
+    assert!(!stage_failure_fallback(Stage::Seat));
+    assert!(stage_failure_fallback(Stage::Drm));
+    assert!(stage_failure_fallback(Stage::Outputs));
+    assert!(!stage_failure_fallback(Stage::Libinput));
+}
+
+/// Entering the headless step leaves exactly one record, stage `headless`, with `fallback_taken=true`.
+#[test]
+fn headless_entry_appends_a_record() {
+    let path = std::env::temp_dir().join(format!(
+        "flamewm-g2-headless-record-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    append_headless_entry_record(&path);
+
+    let text = std::fs::read_to_string(&path).expect("headless entry record log");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "one headless record: {text}");
+    assert!(lines[0].contains("stage=\"headless\""), "{}", lines[0]);
+    assert!(lines[0].contains("fallback_taken=true"), "{}", lines[0]);
+
+    let _ = std::fs::remove_file(&path);
 }

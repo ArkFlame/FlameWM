@@ -542,3 +542,88 @@ mod tests {
         assert!(config_dir().ends_with("flamewm/terminal"));
     }
 }
+
+/// Blast radius named in the notice when `terminal.toml` is quarantined.
+const CONFIG_BLAST_RADIUS: &str = "terminal colors, font and shell settings reset to defaults";
+
+/// Load `terminal.toml`. An unreadable, oversized or unparsable file is quarantined and the
+/// terminal starts on defaults; the bad bytes are kept beside the original.
+#[must_use]
+pub fn load_config(path: &Path) -> TerminalConfig {
+    flamewm_api::safe_config::load_or_default(
+        path,
+        |text| TerminalConfig::from_toml(text),
+        CONFIG_BLAST_RADIUS,
+    )
+}
+
+#[cfg(test)]
+mod load_config_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        std::env::temp_dir().join(format!(
+            "flamewm-terminal-{tag}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn quarantine_copies(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("terminal.corrupt-"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unparsable_terminal_toml_is_quarantined_and_defaults_used() {
+        let dir = temp_dir("unparsable");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("terminal.toml");
+        let bad = b"this line has no equals sign\n".to_vec();
+        fs::write(&path, &bad).expect("write bad config");
+
+        assert_eq!(load_config(&path), TerminalConfig::default());
+        assert!(!path.exists());
+        let copies = quarantine_copies(&dir);
+        assert_eq!(copies.len(), 1);
+        assert_eq!(fs::read(&copies[0]).expect("read copy"), bad);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn oversized_terminal_toml_is_quarantined_and_defaults_used() {
+        let dir = temp_dir("oversized");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("terminal.toml");
+        let huge = vec![b'#'; flamewm_api::safe_config::MAX_CONFIG_BYTES as usize + 1];
+        fs::write(&path, &huge).expect("write oversized config");
+
+        assert_eq!(load_config(&path), TerminalConfig::default());
+        let copies = quarantine_copies(&dir);
+        assert_eq!(copies.len(), 1);
+        assert_eq!(
+            fs::metadata(&copies[0]).expect("copy").len(),
+            huge.len() as u64
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_terminal_toml_is_silent_defaults() {
+        let dir = temp_dir("missing");
+        assert_eq!(
+            load_config(&dir.join("terminal.toml")),
+            TerminalConfig::default()
+        );
+        assert!(!dir.exists());
+    }
+}
